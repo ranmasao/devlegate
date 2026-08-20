@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-ENV_FILE=${ENV_FILE:-"$SCRIPT_DIR/.env"}
+ENV_FILE=${ENV_FILE:-"$PWD/.env"}
 
 usage() {
   printf 'Usage: %s [--watch] [--once] [--env FILE]\n' "$(basename "$0")"
@@ -23,7 +23,7 @@ while (($#)); do
   esac
 done
 
-[[ -f "$ENV_FILE" ]] || die "configuration file not found: $ENV_FILE (copy .env.example to .env)"
+[[ -f "$ENV_FILE" ]] || die "configuration file not found: $ENV_FILE (copy devlegate's .env.example to $PWD/.env)"
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
