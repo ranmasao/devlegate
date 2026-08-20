@@ -12,7 +12,7 @@ usage() {
 die() { printf 'devlegate: %s\n' "$*" >&2; exit 1; }
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
-WATCH=false
+WATCH=true
 while (($#)); do
   case "$1" in
     --watch) WATCH=true; shift ;;
