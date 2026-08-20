@@ -21,16 +21,16 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and configure at least `OPENCODE_MODEL` and the ticket paths if they differ from the defaults.
+1. From the project root, copy `/path/to/devlegate/.env.example` to `$PWD/.env` and configure at least `OPENCODE_MODEL` and the ticket paths if they differ from the defaults. The `.env` file belongs to the managed project, not to the Devlegate checkout, and should be ignored by that project's Git configuration.
 2. Configure the project's normal Git remote/authentication outside Devlegate. The default remote is `origin`.
-3. Run Devlegate from the root of the project checkout (`$PWD` is the workspace):
+3. Run Devlegate from the root of the project checkout (`$PWD` is the workspace and the default configuration file is `$PWD/.env`):
 
 ```sh
 /path/to/devlegate/devlegate.sh --once
 /path/to/devlegate/devlegate.sh --watch
 ```
 
-`REMOTE_BRANCH` defaults to the currently checked-out branch. If it is set explicitly, the current branch must match it.
+`REMOTE_BRANCH` defaults to the currently checked-out branch. If it is set explicitly, the current branch must match it. `--env FILE` can override the project-local configuration path when needed.
 
 ## Current safety rules
 
