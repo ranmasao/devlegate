@@ -9,6 +9,12 @@ description = "A minimal workflow orchestrator skeleton."
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.9",
+]
+
 [project.scripts]
 devlegate = "devlegate.cli:main"
 

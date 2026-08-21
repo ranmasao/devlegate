@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Legacy compatibility entry point. Use ./dev run for the primary interface.
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
