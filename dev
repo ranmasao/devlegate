@@ -35,6 +35,14 @@ require_venv() {
   fi
 }
 
+require_devlegate() {
+  require_venv
+  if [[ ! -x "$DEVLEGATE" ]]; then
+    printf 'dev: installed devlegate CLI is missing; run ./dev setup first\n' >&2
+    exit 1
+  fi
+}
+
 setup() {
   if [[ ! -x "$PYTHON" ]]; then
     "${PYTHON_BIN:-python3}" -m venv "$VENV"
@@ -97,8 +105,8 @@ case "$command" in
   lint) lint "$@" ;;
   check) check "$@" ;;
   run)
-    require_venv
-    (cd "$ROOT" && "$DEVLEGATE" "$@")
+    require_devlegate
+    exec "$DEVLEGATE" "$@"
     ;;
   clean) clean "$@" ;;
   purge) purge "$@" ;;

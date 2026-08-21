@@ -18,10 +18,10 @@ Devlegate runs from the root of the target project checkout. Copy `.env.example`
 
 ## Execution
 
-Run the installed CLI through the helper:
+From the target project's repository root, run the installed CLI through the helper in the Devlegate checkout:
 
 ```sh
-./dev run
+/path/to/devlegate/dev run
 ```
 
 The default mode is a foreground polling loop. Use `--once` for one synchronization/execution pass. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
@@ -70,4 +70,4 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
 
-`devlegate.sh` remains as a legacy compatibility entry point. It is not the primary development interface and contains the older shell implementation; use `./dev run` instead.
+`devlegate.sh` remains as a legacy compatibility entry point. It is a thin wrapper around the installed Python CLI in this checkout, preserves arguments, and does not implement the workflow itself. Run it from the target project's repository root, or use the `dev` helper instead.
