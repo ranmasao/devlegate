@@ -258,6 +258,29 @@ def test_failed_agent_changes_are_recovered_on_next_poll(git_fixture, monkeypatc
     assert not (git_fixture["working"] / "kanban/todo/ticket.md").exists()
 
 
+def test_clean_recovery_pending_still_runs_one_recovery(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
+    monkeypatch.setenv("FAKE_MODE", "fail")
+
+    assert Devlegate(config).run_once() == 7
+    monkeypatch.setenv("FAKE_MODE", "success")
+    assert Devlegate(config).run_once() == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
+
+
 def test_failed_recovery_is_not_retried_and_manual_cleanup_resumes(
     git_fixture, monkeypatch
 ):
@@ -324,16 +347,13 @@ def test_pending_revision_is_resumed_before_new_remote_revision(
     revision_b = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()
 
     monkeypatch.setenv("FAKE_MODE", "observe")
-    assert Devlegate(config).run_once() == 1
-    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == revision_a
+    assert Devlegate(config).run_once() == 0
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == revision_b
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
         == revision_b
     )
-
-    monkeypatch.setenv("FAKE_MODE", "success")
-    assert Devlegate(config).run_once() == 0
-    assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
 
 
 def test_completed_merge_is_resumed_before_agent_start(git_fixture, monkeypatch):
@@ -369,6 +389,43 @@ def test_completed_merge_is_resumed_before_agent_start(git_fixture, monkeypatch)
 
     assert Devlegate(config).run_once() == 0
     assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
+
+
+def test_merge_pending_at_old_head_performs_persisted_merge(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+    devlegate = Devlegate(config)
+    old_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    git(git_fixture["working"], "fetch", "origin", "main")
+    target_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+    changed_paths = git(
+        git_fixture["working"], "diff", "--name-only", old_head, target_head
+    ).stdout
+    devlegate._save_state(
+        "merge_pending",
+        local_head=old_head,
+        remote_head=target_head,
+        changed_paths=changed_paths,
+    )
+
+    assert devlegate.run_once() == 0
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() != old_head
     assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
 
 

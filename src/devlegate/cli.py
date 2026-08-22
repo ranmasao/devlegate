@@ -263,7 +263,7 @@ class Devlegate:
             self._save_state("idle")
             self._recovery_pending = False
             _log("working tree cleaned manually; recovery state cleared")
-        recovery = bool(status and self._recovery_pending)
+        recovery = self._recovery_pending
         if status and not recovery:
             _log("working tree is dirty; refusing to pull or start the agent")
             return 1
@@ -293,22 +293,77 @@ class Devlegate:
                 _log(f"remote branch not found: {remote_ref}")
                 return 1
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
-            persisted_head = self._state.get("remote_head")
+            persisted_head = str(self._state.get("remote_head", ""))
             pending_execution = state_phase in {"agent_pending", "merge_pending"}
-            if pending_execution and local_head != persisted_head:
-                raise DevlegateError(
-                    "persisted execution revision does not match the local HEAD"
-                )
             if pending_execution:
-                changed_paths = str(self._state.get("changed_paths", ""))
-                remote_head = local_head
+                old_head = str(self._state.get("local_head", ""))
+                target_head = persisted_head
                 if state_phase == "merge_pending":
+                    if local_head not in {old_head, target_head}:
+                        raise DevlegateError(
+                            "persisted merge revision does not match the local HEAD"
+                        )
+                elif local_head != target_head:
+                    raise DevlegateError(
+                        "persisted execution revision does not match the local HEAD"
+                    )
+
+                target_is_current = target_head == remote_head
+                target_is_ancestor = (
+                    _git(
+                        self.repo,
+                        "merge-base",
+                        "--is-ancestor",
+                        target_head,
+                        remote_head,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+                if not target_is_current and not target_is_ancestor:
+                    raise DevlegateError(
+                        "new remote revision is not a descendant of the pending "
+                        "revision"
+                    )
+                if target_is_ancestor:
+                    target_head = remote_head
+                    if target_head != persisted_head:
+                        _log(
+                            f"superseding pending revision {persisted_head[:12]} "
+                            f"with descendant {target_head[:12]}"
+                        )
+                if local_head != target_head:
+                    changed_paths = _git(
+                        self.repo,
+                        "diff",
+                        "--name-only",
+                        local_head,
+                        target_head,
+                        check=False,
+                    ).stdout.rstrip()
                     self._save_state(
-                        "agent_pending",
+                        "merge_pending",
                         local_head=local_head,
-                        remote_head=persisted_head,
+                        remote_head=target_head,
                         changed_paths=changed_paths,
                     )
+                    if _git(
+                        self.repo, "merge", "--ff-only", remote_ref, check=False
+                    ).returncode:
+                        _log("cannot fast-forward local checkout")
+                        return 1
+                    local_head = target_head
+                    _log(f"updated {self.current_branch} to {target_head[:12]}")
+                else:
+                    changed_paths = str(self._state.get("changed_paths", ""))
+                remote_head = target_head
+                self._save_state(
+                    "agent_pending",
+                    local_head=local_head,
+                    remote_head=target_head,
+                    changed_paths=changed_paths,
+                )
+                if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
                 if self._recovery_pending:

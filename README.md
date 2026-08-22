@@ -70,7 +70,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - After an agent failure, the next poll can run one recovery attempt against its dirty working tree. A failed recovery enters `recovery_failed` and requires manual intervention before another recovery can run.
 - Recovery instructions are loaded from `RECOVERY_PROMPT_FILE`, defaulting to Devlegate's `recovery-prompt.txt`.
 - Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
-- Merge and agent-dispatch intent is persisted before each transition. Restarted work remains bound to the exact revision that was merged; a newer remote revision is handled by a later normal poll.
+- Merge and agent-dispatch intent is persisted before each transition. A merge interrupted before agent execution can be superseded by a newer descendant revision; once agent execution has started, recovery handles the original work instead.
 - The agent is expected to leave intended changes committed and pushed; after it exits, Devlegate verifies that the working tree is clean and the local and remote branch heads match.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
