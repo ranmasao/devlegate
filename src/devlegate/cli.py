@@ -299,11 +299,11 @@ class Devlegate:
             ) from error
         self._state = state
 
-    def _observe_worktree(self, status: str) -> None:
+    def _observe_worktree(self, status: str) -> bool:
         if status:
             fingerprint = _status_fingerprint(status)
             if fingerprint == self._dirty_fingerprint:
-                return
+                return False
             self._dirty_fingerprint = fingerprint
             summary = _status_summary(status)
             _log("working tree became dirty; automatic work suspended")
@@ -318,9 +318,12 @@ class Devlegate:
                 "conflicted",
             ):
                 _log(f"{name.replace('_', ' ')}: {summary[name]}")
+            return True
         elif self._dirty_fingerprint is not None:
             self._dirty_fingerprint = None
             _log("working tree is clean again")
+            return True
+        return False
 
     def _log_sync_failure(
         self, local_head: str, remote_ref: str, stderr: str = ""
@@ -366,30 +369,33 @@ class Devlegate:
 
     def run_once(self) -> int:
         status = _git(self.repo, "status", "--porcelain").stdout
-        self._observe_worktree(status)
+        dirty_changed = self._observe_worktree(status)
         if self._state.get("phase") == "recovery_running":
             self._save_state("recovery_failed")
             self._recovery_pending = False
             _log("interrupted recovery treated as failed recovery")
         if self._state.get("phase") == "recovery_failed":
             if status:
-                _log(
-                    "recovery failed; working tree is still dirty; manual "
-                    "intervention is required"
-                )
+                if dirty_changed:
+                    _log(
+                        "recovery failed; working tree is still dirty; manual "
+                        "intervention is required"
+                    )
                 return 1
             self._save_state("idle")
             self._recovery_pending = False
             _log("working tree cleaned manually; recovery state cleared")
         recovery = self._recovery_pending
         if status and not recovery:
-            _log("working tree is dirty; refusing to pull or start the agent")
+            if dirty_changed:
+                _log("working tree is dirty; refusing to pull or start the agent")
             return 1
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
         pending_execution = state_phase in {"agent_pending", "merge_pending"}
         had_remote_change = False
+        local_ahead = False
         if recovery:
             self._recovery_pending = False
             remote_head = local_head
@@ -452,6 +458,7 @@ class Devlegate:
                 if target_is_ancestor:
                     target_head = remote_head
                     if target_head != persisted_head:
+                        had_remote_change = True
                         _log(
                             f"superseding pending revision {persisted_head[:12]} "
                             f"with descendant {target_head[:12]}"
@@ -479,7 +486,12 @@ class Devlegate:
                             local_head, remote_ref, merge.stderr
                         )
                         return 1
-                    local_head = target_head
+                    local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+                    if local_head != target_head:
+                        raise DevlegateError(
+                            "fast-forward completed without reaching the target "
+                            "revision"
+                        )
                     _log(f"updated {self.current_branch} to {target_head[:12]}")
                 else:
                     changed_paths = str(self._state.get("changed_paths", ""))
@@ -497,7 +509,14 @@ class Devlegate:
                     self._recovery_pending = False
                     self._save_state("idle")
                 changed_paths = ""
-            else:
+            elif _git(
+                self.repo,
+                "merge-base",
+                "--is-ancestor",
+                local_head,
+                remote_head,
+                check=False,
+            ).returncode == 0:
                 had_remote_change = True
                 changed_paths = _git(
                     self.repo,
@@ -519,17 +538,48 @@ class Devlegate:
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)
                     return 1
+                actual_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+                if actual_head != remote_head:
+                    raise DevlegateError(
+                        "fast-forward completed without reaching the remote "
+                        "revision"
+                    )
                 _log(
                     f"updated {self.current_branch} from {local_head[:12]} "
                     f"to {remote_head[:12]}"
                 )
-                local_head = remote_head
+                local_head = actual_head
                 self._save_state(
                     "agent_pending",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
                 )
+            elif _git(
+                self.repo,
+                "merge-base",
+                "--is-ancestor",
+                remote_head,
+                local_head,
+                check=False,
+            ).returncode == 0:
+                local_ahead = True
+                changed_paths = _git(
+                    self.repo,
+                    "diff",
+                    "--name-only",
+                    remote_head,
+                    local_head,
+                    check=False,
+                ).stdout.rstrip()
+                _log(
+                    f"local branch is ahead of {self.remote_name}/"
+                    f"{self.remote_branch}; preserving local HEAD {local_head[:12]}"
+                )
+            else:
+                had_remote_change = True
+                self._log_sync_failure(local_head, remote_ref)
+                return 1
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -545,7 +595,12 @@ class Devlegate:
                     handled_remote_head=remote_head,
                     handled_todo_fingerprint=todo_fingerprint,
                 )
-                if not had_remote_change:
+                if local_ahead:
+                    _log(
+                        "local branch is ahead; no actionable ticket files in "
+                        f"{self.todo_path}"
+                    )
+                elif not had_remote_change:
                     _log("no remote changes")
                 else:
                     _log(f"no actionable ticket files in {self.todo_path}")
@@ -637,7 +692,8 @@ class Devlegate:
                     _log(f"run failed: {detail.strip()}")
                     status = 1
                 if status:
-                    _log(f"run failed with status {status}")
+                    if not (status == 1 and self._dirty_fingerprint is not None):
+                        _log(f"run failed with status {status}")
                 if once:
                     return status
                 time.sleep(int(self.poll_interval))

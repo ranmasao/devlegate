@@ -215,6 +215,33 @@ def test_changed_todo_fingerprint_starts_new_generation(git_fixture):
     assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
 
 
+def test_local_ahead_changed_todo_generation_preserves_heads(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    assert run_devlegate(git_fixture, mode="blocked").returncode == 0
+    remote_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+
+    ticket = git_fixture["working"] / "kanban/todo/ticket.md"
+    ticket.write_text("changed local work\n")
+    git(git_fixture["working"], "add", "kanban/todo/ticket.md")
+    git(git_fixture["working"], "commit", "-m", "local todo update")
+    local_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+
+    result = run_devlegate(git_fixture, mode="blocked")
+
+    assert result.returncode == 1
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == local_head
+    assert git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip() == remote_head
+    state_file = next((git_fixture["tmp"] / "state").glob("*.json"))
+    state = state_file.read_text()
+    assert f'"local_head": "{local_head}"' in state
+    assert f'"remote_head": "{remote_head}"' in state
+
+
 def test_unchanged_blocked_todo_is_not_redispatched(git_fixture):
     add_remote_revision(git_fixture, ticket=True)
 
@@ -310,6 +337,28 @@ def test_dirty_diagnostics_are_suppressed_until_state_changes(
     assert "working tree became dirty" not in second
     assert "other.txt" in changed
     assert "working tree is clean again" in clean
+
+
+def test_unchanged_dirty_polls_do_not_repeat_refusal(capsys, git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "config.env"
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("POLL_INTERVAL", "0")
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+    devlegate = Devlegate(config)
+
+    assert devlegate.run_once() == 1
+    first = capsys.readouterr().out
+    assert devlegate.run_once() == 1
+    second = capsys.readouterr().out
+
+    assert "refusing to pull or start the agent" in first
+    assert "refusing to pull or start the agent" not in second
 
 
 def test_dirty_worktree_refuses_execution(git_fixture):
@@ -512,7 +561,7 @@ def test_failed_recovery_is_not_retried_and_manual_cleanup_resumes(
 
 
 def test_pending_revision_is_resumed_before_new_remote_revision(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, capsys
 ):
     add_remote_revision(git_fixture, ticket=True)
     config = git_fixture["tmp"] / "config.env"
@@ -547,12 +596,14 @@ def test_pending_revision_is_resumed_before_new_remote_revision(
 
     monkeypatch.setenv("FAKE_MODE", "observe")
     assert Devlegate(config).run_once() == 0
+    output = capsys.readouterr().out
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == revision_b
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
         == revision_b
     )
     assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert "no remote changes" not in output
 
 
 def test_completed_merge_is_resumed_before_agent_start(git_fixture, monkeypatch):
