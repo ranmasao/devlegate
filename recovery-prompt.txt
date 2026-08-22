@@ -1,0 +1,3 @@
+The previous agent attempt failed with a non-zero exit status.
+
+Do not start implementing todo tickets from scratch. First review the current working tree, diff, and test state as unfinished work from that attempt. Preserve useful changes, fix or complete them, and only then process tickets if appropriate.

@@ -6,6 +6,23 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.2.1 -- 2026-08-22
+
+Persistent execution state and recovery.
+
+### Added
+
+- Added atomic per-repository state for synchronization and execution intent, including persisted merge-to-agent handoff.
+- Added bounded dirty-work recovery, configurable recovery prompts, prompt-variable substitution, and state-directory configuration.
+
+### Changed
+
+- Distinguished normal and recovery execution in durable lifecycle state.
+
+### Fixed
+
+- Preserved synchronization intent across interruption, made state writes atomic, and improved recovery and startup failure visibility.
+
 ## 0.2.0 -- 2026-08-22
 
 Python runtime and package distribution for the original bootstrap behavior.
