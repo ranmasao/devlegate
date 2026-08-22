@@ -296,8 +296,9 @@ def test_interrupted_recovery_with_dirty_tree_requires_manual_intervention(
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
     devlegate._save_state("recovery_running")
+    restarted = Devlegate(config)
 
-    assert devlegate.run_once() == 1
+    assert restarted.run_once() == 1
     assert not git_fixture["marker"].exists()
     state_file = next((config.parent / "state").glob("*.json"))
     assert '"phase": "recovery_failed"' in state_file.read_text()
@@ -317,8 +318,9 @@ def test_interrupted_recovery_with_clean_tree_clears_state(
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
     devlegate._save_state("recovery_running")
+    restarted = Devlegate(config)
 
-    assert devlegate.run_once() == 0
+    assert restarted.run_once() == 0
     assert not git_fixture["marker"].exists()
     state_file = next((config.parent / "state").glob("*.json"))
     assert '"phase": "idle"' in state_file.read_text()
@@ -339,9 +341,10 @@ def test_interrupted_recovery_is_never_retried(
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
     devlegate._save_state("recovery_running")
+    restarted = Devlegate(config)
 
-    assert devlegate.run_once() == 1
-    assert devlegate.run_once() == 1
+    assert restarted.run_once() == 1
+    assert restarted.run_once() == 1
     assert not git_fixture["marker"].exists()
 
 
