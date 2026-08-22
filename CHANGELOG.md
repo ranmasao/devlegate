@@ -6,6 +6,24 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.2.3 -- 2026-08-22
+
+Observability and work-generation hardening.
+
+### Added
+
+- Added work-generation identity derived from the observed remote revision and todo contents.
+- Added richer dirty-tree and divergent-history diagnostics with persisted generation handling.
+
+### Changed
+
+- Allowed valid local-ahead pending executions to survive restart when their ancestry remained provable.
+- Made remote changes and todo changes independently produce new work generations.
+
+### Fixed
+
+- Prevented repeated dispatch of unchanged blocked work, hardened pending-revision reconciliation, and restored exact terminal state after worker execution.
+
 ## 0.2.2 -- 2026-08-22
 
 Recovery, synchronization, and preflight hardening.

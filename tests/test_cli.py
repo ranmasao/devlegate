@@ -1,12 +1,14 @@
 import os
+import pty
 import shutil
 import subprocess
 import sys
+import termios
 from pathlib import Path
 
 import pytest
 
-from devlegate.cli import Devlegate, build_parser, main
+from devlegate.cli import Devlegate, _preserve_terminal, build_parser, main
 
 
 @pytest.fixture
@@ -56,6 +58,8 @@ def git_fixture(tmp_path):
         "    sys.exit(0)\n"
         "if mode == 'dirty':\n"
         "    Path('agent-output.txt').write_text('uncommitted\\n')\n"
+        "    sys.exit(0)\n"
+        "if mode == 'blocked':\n"
         "    sys.exit(0)\n"
         "ticket = next((p for p in Path('kanban/todo').iterdir()\n"
         "               if p.is_file() and p.name != '.gitkeep'), None)\n"
@@ -149,6 +153,26 @@ def test_version(capsys):
     assert output.startswith("devlegate ")
 
 
+def test_terminal_state_is_restored_after_worker_changes_pty(capsys, monkeypatch):
+    master, slave = pty.openpty()
+    stream = os.fdopen(os.dup(slave), "r")
+    monkeypatch.setattr(sys, "stdin", stream)
+    original = termios.tcgetattr(slave)
+    changed = list(original)
+    changed[1] ^= termios.ONLCR
+
+    try:
+        with _preserve_terminal():
+            termios.tcsetattr(slave, termios.TCSANOW, changed)
+            assert termios.tcgetattr(slave) == changed
+        assert termios.tcgetattr(slave) == original
+    finally:
+        stream.close()
+        os.close(master)
+        os.close(slave)
+    capsys.readouterr()
+
+
 def test_no_remote_change_does_not_start_agent(git_fixture):
     result = run_devlegate(git_fixture)
 
@@ -185,6 +209,212 @@ def test_ticket_starts_agent_and_next_poll_does_not_repeat(git_fixture):
     assert "no remote changes" in second.stdout
 
 
+def test_synchronized_checkout_still_detects_new_todo_generation(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    git(git_fixture["working"], "fetch", "origin", "main")
+    git(git_fixture["working"], "merge", "--ff-only", "origin/main")
+
+    result = run_devlegate(git_fixture)
+
+    assert result.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_changed_todo_fingerprint_starts_new_generation(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    first = run_devlegate(git_fixture)
+    assert first.returncode == 0
+
+    todo = git_fixture["working"] / "kanban/todo"
+    (todo / "new-ticket.md").write_text("new work\n")
+    git(git_fixture["working"], "add", ".")
+    git(git_fixture["working"], "commit", "-m", "local todo update")
+    git(git_fixture["working"], "push", "origin", "main")
+
+    result = run_devlegate(git_fixture)
+
+    assert result.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+
+
+def test_local_ahead_changed_todo_generation_preserves_heads(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    assert run_devlegate(git_fixture, mode="blocked").returncode == 0
+    remote_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+
+    ticket = git_fixture["working"] / "kanban/todo/ticket.md"
+    ticket.write_text("changed local work\n")
+    git(git_fixture["working"], "add", "kanban/todo/ticket.md")
+    git(git_fixture["working"], "commit", "-m", "local todo update")
+    local_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+
+    result = run_devlegate(git_fixture, mode="blocked")
+
+    assert result.returncode == 1
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == local_head
+    assert git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip() == remote_head
+    state_file = next((git_fixture["tmp"] / "state").glob("*.json"))
+    state = state_file.read_text()
+    assert f'"local_head": "{local_head}"' in state
+    assert f'"remote_head": "{remote_head}"' in state
+
+
+def test_local_ahead_agent_pending_restart_executes_once(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    assert run_devlegate(git_fixture, mode="blocked").returncode == 0
+    config = git_fixture["tmp"] / "config.env"
+    remote_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+    ticket = git_fixture["working"] / "kanban/todo/ticket.md"
+    ticket.write_text("changed local work\n")
+    git(git_fixture["working"], "add", "kanban/todo/ticket.md")
+    git(git_fixture["working"], "commit", "-m", "local todo update")
+    local_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "blocked")
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=local_head,
+        remote_head=remote_head,
+        changed_paths="",
+    )
+
+    assert Devlegate(config).run_once() == 1
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == local_head
+    assert (
+        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
+        == remote_head
+    )
+
+
+def test_unchanged_blocked_todo_is_not_redispatched(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    first = run_devlegate(git_fixture, mode="blocked")
+    second = run_devlegate(git_fixture, mode="blocked")
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert "unchanged todo is already handled" in second.stdout
+
+
+def test_remote_revision_reconsiders_unchanged_blocked_todo_once(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    assert run_devlegate(git_fixture, mode="blocked").returncode == 0
+    add_remote_revision(git_fixture)
+
+    result = run_devlegate(git_fixture, mode="blocked")
+
+    assert result.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+
+
+def test_dirty_diagnostics_include_paths_and_classes(git_fixture):
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+    (git_fixture["working"] / "staged.txt").write_text("staged\n")
+    git(git_fixture["working"], "add", "staged.txt")
+    (git_fixture["working"] / "untracked.txt").write_text("untracked\n")
+
+    result = run_devlegate(git_fixture)
+
+    assert result.returncode == 1
+    assert " M tracked.txt" in result.stdout
+    assert "A  staged.txt" in result.stdout
+    assert "?? untracked.txt" in result.stdout
+    assert "tracked modified: 1" in result.stdout
+    assert "staged: 1" in result.stdout
+    assert "untracked: 1" in result.stdout
+
+
+def test_dirty_diagnostics_report_conflicted_paths(git_fixture):
+    publisher = git_fixture["publisher"]
+    (publisher / "tracked.txt").write_text("remote change\n")
+    git(publisher, "add", "tracked.txt")
+    git(publisher, "commit", "-m", "remote conflicting update")
+    git(publisher, "push")
+    (git_fixture["working"] / "tracked.txt").write_text("local change\n")
+    git(git_fixture["working"], "add", "tracked.txt")
+    git(git_fixture["working"], "commit", "-m", "local conflicting update")
+    git(git_fixture["working"], "fetch", "origin", "main")
+    subprocess.run(
+        ["git", "merge", "origin/main"],
+        cwd=git_fixture["working"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    result = run_devlegate(git_fixture)
+
+    assert result.returncode == 1
+    assert "UU tracked.txt" in result.stdout
+    assert "conflicted: 1" in result.stdout
+
+
+def test_dirty_diagnostics_are_suppressed_until_state_changes(
+    git_fixture, monkeypatch, capsys
+):
+    config = git_fixture["tmp"] / "config.env"
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+
+    assert devlegate.run_once() == 1
+    first = capsys.readouterr().out
+    assert devlegate.run_once() == 1
+    second = capsys.readouterr().out
+    (git_fixture["working"] / "other.txt").write_text("other\n")
+    assert devlegate.run_once() == 1
+    changed = capsys.readouterr().out
+    (git_fixture["working"] / "tracked.txt").write_text("initial\n")
+    (git_fixture["working"] / "other.txt").unlink()
+    assert devlegate.run_once() == 0
+    clean = capsys.readouterr().out
+
+    assert "working tree became dirty" in first
+    assert "working tree became dirty" not in second
+    assert "other.txt" in changed
+    assert "working tree is clean again" in clean
+
+
+def test_unchanged_dirty_polls_do_not_repeat_refusal(capsys, git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "config.env"
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("POLL_INTERVAL", "0")
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+    devlegate = Devlegate(config)
+
+    assert devlegate.run_once() == 1
+    first = capsys.readouterr().out
+    assert devlegate.run_once() == 1
+    second = capsys.readouterr().out
+
+    assert "refusing to pull or start the agent" in first
+    assert "refusing to pull or start the agent" not in second
+
+
 def test_dirty_worktree_refuses_execution(git_fixture):
     (git_fixture["working"] / "tracked.txt").write_text("changed\n")
 
@@ -206,6 +436,11 @@ def test_non_fast_forward_update_is_refused(git_fixture):
     assert result.returncode == 1
     assert not git_fixture["marker"].exists()
     assert "cannot fast-forward" in result.stdout
+    assert "local HEAD:" in result.stdout
+    assert "remote HEAD:" in result.stdout
+    assert "merge base:" in result.stdout
+    assert "local ahead:" in result.stdout
+    assert "local behind:" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -380,7 +615,7 @@ def test_failed_recovery_is_not_retried_and_manual_cleanup_resumes(
 
 
 def test_pending_revision_is_resumed_before_new_remote_revision(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, capsys
 ):
     add_remote_revision(git_fixture, ticket=True)
     config = git_fixture["tmp"] / "config.env"
@@ -415,12 +650,14 @@ def test_pending_revision_is_resumed_before_new_remote_revision(
 
     monkeypatch.setenv("FAKE_MODE", "observe")
     assert Devlegate(config).run_once() == 0
+    output = capsys.readouterr().out
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == revision_b
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
         == revision_b
     )
     assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert "no remote changes" not in output
 
 
 def test_completed_merge_is_resumed_before_agent_start(git_fixture, monkeypatch):
@@ -570,10 +807,26 @@ def test_check_is_read_only_and_reports_ready(git_fixture):
     result = run_devlegate(git_fixture, "--check")
 
     assert result.returncode == 0
-    assert "Devlegate 0.2.2 preflight" in result.stdout
+    assert "Devlegate 0.2.3 preflight" in result.stdout
     assert "Ready." in result.stdout
     assert not (git_fixture["working"] / "remote.txt").exists()
     assert not git_fixture["marker"].exists()
+    assert "known remote HEAD:" in result.stdout
+    assert "todo files: 0" in result.stdout
+    assert "todo fingerprint:" in result.stdout
+    assert "work generation differs from persisted: True" in result.stdout
+    assert "--check does not fetch" in result.stdout
+
+
+def test_check_reports_dirty_details(git_fixture):
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+
+    result = run_devlegate(git_fixture, "--check")
+
+    assert result.returncode == 1
+    assert "working tree clean" in result.stdout
+    assert "Dirty working tree details:" in result.stdout
+    assert " M tracked.txt" in result.stdout
 
 
 def test_check_reports_invalid_configuration(git_fixture):
