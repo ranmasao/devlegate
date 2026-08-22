@@ -65,6 +65,53 @@ def _has_todo_files(repo: Path, todo_path: str) -> bool:
     )
 
 
+def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
+    todo_dir = repo / todo_path
+    entries: list[str] = []
+    if todo_dir.is_dir():
+        for item in todo_dir.rglob("*"):
+            if item.is_file() and not item.is_symlink() and item.name != ".gitkeep":
+                relative = item.relative_to(todo_dir).as_posix()
+                digest = hashlib.sha256(item.read_bytes()).hexdigest()
+                entries.append(f"{relative}\0{digest}\n")
+    entries.sort()
+    return hashlib.sha256("".join(entries).encode()).hexdigest(), len(entries)
+
+
+_CONFLICT_CODES = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
+
+
+def _status_summary(status: str) -> dict[str, int]:
+    summary = {
+        "tracked_modified": 0,
+        "staged": 0,
+        "untracked": 0,
+        "deleted": 0,
+        "renamed": 0,
+        "conflicted": 0,
+    }
+    for line in status.splitlines():
+        code = line[:2]
+        if code == "??":
+            summary["untracked"] += 1
+            continue
+        if code in _CONFLICT_CODES:
+            summary["conflicted"] += 1
+        if code[0] != " ":
+            summary["staged"] += 1
+        if code[1] != " ":
+            summary["tracked_modified"] += 1
+        if "D" in code:
+            summary["deleted"] += 1
+        if "R" in code:
+            summary["renamed"] += 1
+    return summary
+
+
+def _status_fingerprint(status: str) -> str:
+    return hashlib.sha256(status.encode()).hexdigest()
+
+
 def _render_prompt(template: str, values: dict[str, str]) -> str:
     """Render configured prompt values while leaving unknown variables intact."""
     rendered = string.Template(template).safe_substitute(values)
@@ -118,6 +165,7 @@ class Devlegate:
         self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
         self._state_file = self.state_dir / f"{self._state_key}.json"
         self._state: dict[str, object] = {"phase": "idle"}
+        self._dirty_fingerprint: str | None = None
         self._recovery_pending = False
         self._validate()
         self._state = self._load_state()
@@ -219,7 +267,7 @@ class Devlegate:
 
     def _save_state(self, phase: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        state: dict[str, object] = {"phase": phase, **fields}
+        state: dict[str, object] = {**self._state, "phase": phase, **fields}
         temporary_name = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -251,8 +299,74 @@ class Devlegate:
             ) from error
         self._state = state
 
+    def _observe_worktree(self, status: str) -> None:
+        if status:
+            fingerprint = _status_fingerprint(status)
+            if fingerprint == self._dirty_fingerprint:
+                return
+            self._dirty_fingerprint = fingerprint
+            summary = _status_summary(status)
+            _log("working tree became dirty; automatic work suspended")
+            for line in status.rstrip().splitlines():
+                _log(f"  {line}")
+            for name in (
+                "tracked_modified",
+                "staged",
+                "untracked",
+                "deleted",
+                "renamed",
+                "conflicted",
+            ):
+                _log(f"{name.replace('_', ' ')}: {summary[name]}")
+        elif self._dirty_fingerprint is not None:
+            self._dirty_fingerprint = None
+            _log("working tree is clean again")
+
+    def _log_sync_failure(
+        self, local_head: str, remote_ref: str, stderr: str = ""
+    ) -> None:
+        remote_result = _git(
+            self.repo, "rev-parse", remote_ref, check=False
+        )
+        remote_head = remote_result.stdout.strip() or "<unknown>"
+        base_result = _git(
+            self.repo, "merge-base", local_head, remote_head, check=False
+        )
+        merge_base = base_result.stdout.strip() or "<none>"
+        counts_result = _git(
+            self.repo,
+            "rev-list",
+            "--left-right",
+            "--count",
+            local_head,
+            remote_head,
+            check=False,
+        )
+        counts = counts_result.stdout.strip().split()
+        ahead = counts[0] if len(counts) == 2 else "unknown"
+        behind = counts[1] if len(counts) == 2 else "unknown"
+        if ahead != "unknown" and behind != "unknown":
+            if ahead != "0" and behind != "0":
+                classification = "histories have diverged"
+            elif ahead != "0":
+                classification = "local branch is ahead of remote"
+            else:
+                classification = "remote branch is ahead of local"
+        else:
+            classification = "fast-forward was rejected"
+        _log("cannot fast-forward local checkout")
+        _log(f"local HEAD: {local_head}")
+        _log(f"remote HEAD: {remote_head}")
+        _log(f"merge base: {merge_base}")
+        _log(f"local ahead: {ahead}")
+        _log(f"local behind: {behind}")
+        _log(f"classification: {classification}")
+        if stderr.strip():
+            _log(f"git stderr: {stderr.strip()}")
+
     def run_once(self) -> int:
         status = _git(self.repo, "status", "--porcelain").stdout
+        self._observe_worktree(status)
         if self._state.get("phase") == "recovery_running":
             self._save_state("recovery_failed")
             self._recovery_pending = False
@@ -274,6 +388,8 @@ class Devlegate:
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
+        pending_execution = state_phase in {"agent_pending", "merge_pending"}
+        had_remote_change = False
         if recovery:
             self._recovery_pending = False
             remote_head = local_head
@@ -281,24 +397,28 @@ class Devlegate:
             self._save_state("recovery_running")
             _log("starting recovery for unfinished agent work")
         else:
-            if _git(
+            fetch = _git(
                 self.repo,
                 "fetch",
                 "--prune",
                 self.remote_name,
                 self.remote_branch,
                 check=False,
-            ).returncode:
-                _log("fetch failed")
+            )
+            if fetch.returncode:
+                _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
                 return 1
-            if _git(
+            remote_result = _git(
                 self.repo, "rev-parse", "--verify", remote_ref, check=False
-            ).returncode:
-                _log(f"remote branch not found: {remote_ref}")
+            )
+            if remote_result.returncode:
+                _log(
+                    f"remote branch not found: {remote_ref}; "
+                    f"git stderr: {remote_result.stderr.strip() or 'unknown git error'}"
+                )
                 return 1
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
-            pending_execution = state_phase in {"agent_pending", "merge_pending"}
             if pending_execution:
                 old_head = str(self._state.get("local_head", ""))
                 target_head = persisted_head
@@ -351,10 +471,13 @@ class Devlegate:
                         remote_head=target_head,
                         changed_paths=changed_paths,
                     )
-                    if _git(
+                    merge = _git(
                         self.repo, "merge", "--ff-only", remote_ref, check=False
-                    ).returncode:
-                        _log("cannot fast-forward local checkout")
+                    )
+                    if merge.returncode:
+                        self._log_sync_failure(
+                            local_head, remote_ref, merge.stderr
+                        )
                         return 1
                     local_head = target_head
                     _log(f"updated {self.current_branch} to {target_head[:12]}")
@@ -373,9 +496,9 @@ class Devlegate:
                 if self._recovery_pending:
                     self._recovery_pending = False
                     self._save_state("idle")
-                _log("no remote changes")
-                return 0
+                changed_paths = ""
             else:
+                had_remote_change = True
                 changed_paths = _git(
                     self.repo,
                     "diff",
@@ -390,25 +513,57 @@ class Devlegate:
                     remote_head=remote_head,
                     changed_paths=changed_paths,
                 )
-                if _git(
+                merge = _git(
                     self.repo, "merge", "--ff-only", remote_ref, check=False
-                ).returncode:
-                    _log("cannot fast-forward local checkout")
+                )
+                if merge.returncode:
+                    self._log_sync_failure(local_head, remote_ref, merge.stderr)
                     return 1
                 _log(
                     f"updated {self.current_branch} from {local_head[:12]} "
                     f"to {remote_head[:12]}"
                 )
+                local_head = remote_head
                 self._save_state(
                     "agent_pending",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
                 )
-        if not recovery and not _has_todo_files(self.repo, self.todo_path):
-            self._save_state("idle")
-            _log(f"no actionable ticket files in {self.todo_path}")
-            return 0
+        if not recovery:
+            todo_fingerprint, todo_count = _todo_fingerprint(
+                self.repo, self.todo_path
+            )
+            generation_is_same = (
+                str(self._state.get("handled_remote_head", "")) == remote_head
+                and str(self._state.get("handled_todo_fingerprint", ""))
+                == todo_fingerprint
+            )
+            if not todo_count:
+                self._save_state(
+                    "idle",
+                    handled_remote_head=remote_head,
+                    handled_todo_fingerprint=todo_fingerprint,
+                )
+                if not had_remote_change:
+                    _log("no remote changes")
+                else:
+                    _log(f"no actionable ticket files in {self.todo_path}")
+                return 0
+            if generation_is_same and not pending_execution:
+                _log(
+                    "no new work generation; unchanged todo is already "
+                    "handled"
+                )
+                return 0
+            self._save_state(
+                "agent_pending",
+                local_head=local_head,
+                remote_head=remote_head,
+                changed_paths=changed_paths,
+                handled_remote_head=remote_head,
+                handled_todo_fingerprint=todo_fingerprint,
+            )
 
         prompt_values = {
             "REPO_ROOT": str(self.repo),
@@ -478,7 +633,8 @@ class Devlegate:
                 try:
                     status = self.run_once()
                 except (OSError, subprocess.CalledProcessError) as error:
-                    _log(f"run failed: {error}")
+                    detail = getattr(error, "stderr", None) or str(error)
+                    _log(f"run failed: {detail.strip()}")
                     status = 1
                 if status:
                     _log(f"run failed with status {status}")
@@ -489,22 +645,24 @@ class Devlegate:
     def check(self) -> int:
         """Run read-only configuration and checkout diagnostics."""
         print(f"Devlegate {__version__} preflight")
+        status = _git(self.repo, "status", "--porcelain").stdout
+        todo_fingerprint, todo_count = _todo_fingerprint(self.repo, self.todo_path)
+        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        remote_ref = f"{self.remote_name}/{self.remote_branch}"
+        remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
+        remote_head = remote_result.stdout.strip()
+        generation_differs = (
+            str(self._state.get("handled_remote_head", "")) != remote_head
+            or str(self._state.get("handled_todo_fingerprint", ""))
+            != todo_fingerprint
+        )
         checks = [
             ("configuration", True, ""),
             ("repository root", self.repo.is_dir(), str(self.repo)),
             ("branch", bool(self.current_branch), self.current_branch),
             (
                 "remote",
-                bool(
-                    _git(
-                        self.repo,
-                        "rev-parse",
-                        "--verify",
-                        f"{self.remote_name}/{self.remote_branch}",
-                        check=False,
-                    ).returncode
-                    == 0
-                ),
+                remote_result.returncode == 0,
                 f"{self.remote_name}/{self.remote_branch}",
             ),
             (
@@ -525,7 +683,7 @@ class Devlegate:
             ("state directory", self.state_dir.is_dir(), str(self.state_dir)),
             (
                 "working tree clean",
-                not bool(_git(self.repo, "status", "--porcelain").stdout),
+                not bool(status),
                 "",
             ),
         ]
@@ -535,6 +693,32 @@ class Devlegate:
             suffix = f": {detail}" if detail else ""
             print(f"{label:4}  {name}{suffix}")
             failed |= not passed
+        if status:
+            print("Dirty working tree details:")
+            for line in status.rstrip().splitlines():
+                print(f"  {line}")
+            for name, count in _status_summary(status).items():
+                print(f"{name.replace('_', ' ')}: {count}")
+        print(f"local HEAD: {local_head}")
+        print(f"known remote HEAD: {remote_head or '<unknown>'}")
+        if remote_head:
+            counts = _git(
+                self.repo,
+                "rev-list",
+                "--left-right",
+                "--count",
+                local_head,
+                remote_head,
+                check=False,
+            ).stdout.strip()
+            print(f"ahead/behind: {counts or '<unknown>'}")
+        print(f"todo files: {todo_count}")
+        print(f"todo fingerprint: {todo_fingerprint}")
+        print(f"work generation differs from persisted: {generation_differs}")
+        print(
+            "remote information is from the existing remote-tracking ref; "
+            "--check does not fetch"
+        )
         if failed:
             print("\nNot ready.")
             return 1

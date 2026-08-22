@@ -1,6 +1,6 @@
 # Devlegate
 
-Devlegate is a minimal bootstrap orchestrator for a software-development workflow. It runs from the root of an already configured Git checkout, watches the configured remote branch for new commits, fast-forwards the local checkout, and starts a fresh OpenCode implementation agent when actionable tickets exist in `TODO_PATH`.
+Devlegate is a minimal bootstrap orchestrator for a software-development workflow. It runs from the root of an already configured Git checkout, synchronizes the configured remote branch, and starts a fresh OpenCode implementation agent when a new work generation contains actionable files in `TODO_PATH`.
 
 During this bootstrap phase, responsibilities that will later move into deterministic orchestration modules are intentionally delegated to the implementation agent. In particular, the agent currently owns ticket movement from `todo` to `review`, Git commits, and pushes.
 
@@ -51,7 +51,7 @@ All commands use the local `.venv`:
 ```text
 external Architect/Reviewer
     -> pushes new or hardening tickets into todo
-    -> Devlegate notices a new remote revision
+    -> Devlegate notices a new repository revision or todo generation
     -> fast-forward pull/sync
     -> OpenCode processes actionable todo tickets
     -> completed tickets move todo -> review
@@ -65,8 +65,9 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
 - Prompt files support `${TODO_PATH}`, `${REVIEW_PATH}`, `${TODO_DIRECTORY}`, `${REVIEW_DIRECTORY}`, `${REPO_ROOT}`, `${REMOTE_NAME}`, and `${REMOTE_BRANCH}` substitutions. The `*_PATH` values are configured paths; the `*_DIRECTORY` values are resolved filesystem paths.
-- Devlegate only starts the agent after observing a new remote revision and finding ticket files in `TODO_PATH`.
-- A subsequent poll with no new remote revision does not run the agent again merely because `todo` is non-empty.
+- A work generation combines the known remote HEAD with a deterministic fingerprint of regular files under `TODO_PATH`; remote HEAD is no longer the sole work trigger.
+- Devlegate persists the handled generation, so unchanged todo is not redispatched on every poll or after restart.
+- Dirty and divergent Git states are diagnosed with paths and topology, but Devlegate never automatically destroys local changes or reconciles divergent history.
 - After an agent failure, Devlegate may run one automatic recovery attempt. If recovery fails or is interrupted, Devlegate enters `recovery_failed` and requires manual intervention before automatic work resumes.
 - Recovery instructions are loaded from `RECOVERY_PROMPT_FILE`, defaulting to Devlegate's `recovery-prompt.txt`.
 - Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
