@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,8 @@ def git_fixture(tmp_path):
         "if mode == 'fail-dirty':\n"
         "    Path('agent-output.txt').write_text('unfinished\\n')\n"
         "    sys.exit(7)\n"
+        "if mode == 'observe':\n"
+        "    sys.exit(0)\n"
         "if mode == 'dirty':\n"
         "    Path('agent-output.txt').write_text('uncommitted\\n')\n"
         "    sys.exit(0)\n"
@@ -85,7 +88,10 @@ def git(cwd, *args):
 
 def add_remote_revision(fixture, *, ticket=False):
     publisher = fixture["publisher"]
-    (publisher / "remote.txt").write_text("remote\n")
+    remote_file = publisher / "remote.txt"
+    remote_file.write_text(
+        remote_file.read_text() + "remote\n" if remote_file.exists() else "remote\n"
+    )
     if ticket:
         (publisher / "kanban/todo").mkdir(parents=True, exist_ok=True)
         (publisher / "kanban/todo/ticket.md").write_text("implement\n")
@@ -252,6 +258,84 @@ def test_failed_agent_changes_are_recovered_on_next_poll(git_fixture, monkeypatc
     assert not (git_fixture["working"] / "kanban/todo/ticket.md").exists()
 
 
+def test_failed_recovery_is_not_retried_and_manual_cleanup_resumes(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
+    monkeypatch.setenv("FAKE_MODE", "fail-dirty")
+
+    assert Devlegate(config).run_once() == 7
+    assert Devlegate(config).run_once() == 7
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    state_files = list((config.parent / "state").glob("*.json"))
+    assert '"phase": "recovery_failed"' in state_files[0].read_text()
+
+    (git_fixture["working"] / "agent-output.txt").unlink()
+    add_remote_revision(git_fixture)
+    monkeypatch.setenv("FAKE_MODE", "success")
+    assert Devlegate(config).run_once() == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run", "run"]
+
+
+def test_pending_revision_is_resumed_before_new_remote_revision(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
+    old_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    git(git_fixture["working"], "fetch", "origin", "main")
+    revision_a = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+    changed_paths = git(
+        git_fixture["working"], "diff", "--name-only", old_head, revision_a
+    ).stdout
+    git(git_fixture["working"], "merge", "--ff-only", "origin/main")
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=revision_a,
+        remote_head=revision_a,
+        changed_paths=changed_paths,
+    )
+    add_remote_revision(git_fixture)
+    revision_b = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.setenv("FAKE_MODE", "observe")
+    assert Devlegate(config).run_once() == 1
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == revision_a
+    assert (
+        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
+        == revision_b
+    )
+
+    monkeypatch.setenv("FAKE_MODE", "success")
+    assert Devlegate(config).run_once() == 0
+    assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
+
+
 def test_completed_merge_is_resumed_before_agent_start(git_fixture, monkeypatch):
     add_remote_revision(git_fixture, ticket=True)
     config = git_fixture["tmp"] / "config.env"
@@ -303,3 +387,77 @@ def test_watch_is_rejected(git_fixture):
 
     assert result.returncode == 2
     assert "unrecognized arguments: --watch" in result.stderr
+
+
+def test_default_state_directory_uses_xdg(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("XDG_STATE_HOME", str(git_fixture["tmp"] / "xdg-state"))
+    assert Devlegate(config).state_dir == git_fixture["tmp"] / "xdg-state/devlegate"
+
+
+def test_default_state_directory_uses_home_without_xdg(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(
+        "devlegate.cli.Path.home", lambda: git_fixture["tmp"] / "home"
+    )
+    assert (
+        Devlegate(config).state_dir
+        == git_fixture["tmp"] / "home/.local/state/devlegate"
+    )
+
+
+def test_external_flock_executable_is_not_required(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "devlegate.cli.shutil.which",
+        lambda name: None if name == "flock" else real_which(name),
+    )
+    assert Devlegate(config).current_branch == "main"
+
+
+def test_env_example_uses_optional_prompt_paths():
+    content = Path(__file__).parents[1].joinpath(".env.example").read_text()
+    assert "AGENT_PROMPT_FILE=/path/to/agent-prompt.txt" not in content
+    assert "# AGENT_PROMPT_FILE=" in content
+
+
+def test_check_is_read_only_and_reports_ready(git_fixture):
+    add_remote_revision(git_fixture)
+    result = run_devlegate(git_fixture, "--check")
+
+    assert result.returncode == 0
+    assert "Devlegate 0.2.2 preflight" in result.stdout
+    assert "Ready." in result.stdout
+    assert not (git_fixture["working"] / "remote.txt").exists()
+    assert not git_fixture["marker"].exists()
+
+
+def test_check_reports_invalid_configuration(git_fixture):
+    config = git_fixture["tmp"] / "invalid.env"
+    config.write_text("REMOTE_BRANCH=main\n")
+
+    result = run_devlegate(git_fixture, "--check", env_file=config)
+
+    assert result.returncode == 1
+    assert "FAIL  configuration" in result.stdout
+    assert "OPENCODE_MODEL is required" in result.stdout
