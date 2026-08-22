@@ -6,6 +6,22 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.2.2 -- 2026-08-22
+
+Recovery, synchronization, and preflight hardening.
+
+### Added
+
+- Added side-effect-free preflight checks, user-level state defaults, and deterministic interruption handling during recovery.
+
+### Changed
+
+- Bound pending synchronization to exact persisted revisions and replaced message heuristics with ancestry-based Git reasoning.
+
+### Fixed
+
+- Prevented stale revisions and ambiguous history from being reused, and hardened restart, state-directory, and startup validation before side effects.
+
 ## 0.2.1 -- 2026-08-22
 
 Persistent execution state and recovery.

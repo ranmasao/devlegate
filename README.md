@@ -26,7 +26,7 @@ From the target project's repository root, run the installed CLI through the hel
 
 The default mode is a foreground polling loop. Use `--once` for one synchronization/execution pass. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
-The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed.
+The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed. Use `--check` for a side-effect-free configuration and checkout preflight.
 
 `REMOTE_BRANCH` defaults to the currently checked-out branch. If set explicitly, the current branch must match it. See `.env.example` for the available runtime settings.
 
@@ -67,11 +67,10 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Prompt files support `${TODO_PATH}`, `${REVIEW_PATH}`, `${TODO_DIRECTORY}`, `${REVIEW_DIRECTORY}`, `${REPO_ROOT}`, `${REMOTE_NAME}`, and `${REMOTE_BRANCH}` substitutions. The `*_PATH` values are configured paths; the `*_DIRECTORY` values are resolved filesystem paths.
 - Devlegate only starts the agent after observing a new remote revision and finding ticket files in `TODO_PATH`.
 - A subsequent poll with no new remote revision does not run the agent again merely because `todo` is non-empty.
-- After an agent failure, the next poll can run one recovery attempt against its dirty working tree. The recovery prompt tells the agent to review unfinished changes before starting ticket work.
+- After an agent failure, Devlegate may run one automatic recovery attempt. If recovery fails or is interrupted, Devlegate enters `recovery_failed` and requires manual intervention before automatic work resumes.
 - Recovery instructions are loaded from `RECOVERY_PROMPT_FILE`, defaulting to Devlegate's `recovery-prompt.txt`.
-- Devlegate stores per-repository iteration state atomically under `/var/lib/devlegate` by default. Set `STATE_DIR` when that location is not writable or a different state volume is required. Lock files are stored under its `locks` subdirectory.
-- State-directory access is checked at startup. If the default is not writable, interactive Devlegate offers to use `~/.local/state/devlegate` for the current run, use it and persist `STATE_DIR` in `.env`, or exit. Non-interactive runs exit with these choices instead of prompting.
-- Merge and agent-dispatch intent is persisted before each transition, so a restart after a completed merge resumes agent dispatch instead of treating the checkout as an ordinary no-change poll.
+- Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
+- Merge and agent-dispatch intent is persisted before each transition. A merge interrupted before agent execution can be superseded by a newer descendant revision; once agent execution has started, recovery handles the original work instead.
 - The agent is expected to leave intended changes committed and pushed; after it exits, Devlegate verifies that the working tree is clean and the local and remote branch heads match.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
