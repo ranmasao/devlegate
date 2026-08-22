@@ -1,8 +1,50 @@
 # Devlegate
 
-Devlegate is currently a minimal bootstrap orchestrator for a software-development workflow. It runs from the root of an already configured Git checkout, watches the configured remote branch for new commits, fast-forwards the local checkout, and starts a fresh OpenCode implementation agent when actionable tickets exist in `TODO_PATH`.
+Devlegate is a minimal bootstrap orchestrator for a software-development workflow. It runs from the root of an already configured Git checkout, watches the configured remote branch for new commits, fast-forwards the local checkout, and starts a fresh OpenCode implementation agent when actionable tickets exist in `TODO_PATH`.
 
 During this bootstrap phase, responsibilities that will later move into deterministic orchestration modules are intentionally delegated to the implementation agent. In particular, the agent currently owns ticket movement from `todo` to `review`, Git commits, and pushes.
+
+## Python setup
+
+Run the development helper from this repository's root:
+
+```sh
+./dev setup
+```
+
+This creates the local `.venv`, installs Devlegate in editable mode, and installs the pytest and Ruff development tools. The virtual environment is local to this checkout and is not used for project files that Devlegate manages.
+
+Devlegate runs from the root of the target project checkout. Copy `.env.example` to that project's `$PWD/.env` and configure at least `OPENCODE_MODEL` and the ticket paths if they differ from the defaults. The project must also have its normal Git remote and authentication configured.
+
+## Execution
+
+From the target project's repository root, run the installed CLI through the helper in the Devlegate checkout:
+
+```sh
+/path/to/devlegate/dev run
+```
+
+The default mode is a foreground polling loop. Use `--once` for one synchronization/execution pass. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
+
+The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed.
+
+`REMOTE_BRANCH` defaults to the currently checked-out branch. If set explicitly, the current branch must match it. See `.env.example` for the available runtime settings.
+
+## Development commands
+
+All commands use the local `.venv`:
+
+```text
+./dev setup             Create the environment and install dependencies
+./dev test              Run pytest
+./dev lint              Run Ruff check
+./dev check             Run tests and lint
+./dev run [args...]     Run devlegate with arguments
+./dev clean             Remove named caches and build artifacts
+./dev purge             Also remove .venv and named development artifacts
+```
+
+`clean` and `purge` use an explicit allowlist. They do not use `git clean` and preserve source files, configuration, `.env`, and user files.
 
 ## Bootstrap workflow
 
@@ -19,20 +61,6 @@ external Architect/Reviewer
 
 A ticket that is not actually complete must remain in `todo`. If implementation is blocked on an architectural decision, the agent should leave the ticket there and report the blocker instead of moving it to `review`.
 
-## Setup
-
-1. From the project root, copy `/path/to/devlegate/.env.example` to `$PWD/.env` and configure at least `OPENCODE_MODEL` and the ticket paths if they differ from the defaults. The `.env` file belongs to the managed project, not to the Devlegate checkout, and should be ignored by that project's Git configuration.
-2. Configure the project's normal Git remote/authentication outside Devlegate. The default remote is `origin`.
-3. Run Devlegate from the root of the project checkout (`$PWD` is the workspace and the default configuration file is `$PWD/.env`):
-
-```sh
-/path/to/devlegate/devlegate.sh
-```
-
-The default mode is a foreground polling loop. Devlegate checks for remote changes, then sleeps for `POLL_INTERVAL` seconds before checking again. Use `--once` for a single synchronization/execution pass. `--watch` remains available as an explicit alias for the default polling mode.
-
-`REMOTE_BRANCH` defaults to the currently checked-out branch. If it is set explicitly, the current branch must match it. `--env FILE` can override the project-local configuration path when needed.
-
 ## Current safety rules
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
@@ -42,4 +70,4 @@ The default mode is a foreground polling loop. Devlegate checks for remote chang
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
 
-This is deliberately not yet the final authority model. Later versions may move ticket transitions, commit/push ownership, attempts, review dispatch, and failure handling into deterministic modules.
+`devlegate.sh` remains as a legacy compatibility entry point. It is a thin wrapper around the installed Python CLI in this checkout, preserves arguments, and does not implement the workflow itself. Run it from the target project's repository root, or use the `dev` helper instead.

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+VENV="$ROOT/.venv"
+PYTHON="$VENV/bin/python"
+DEVLEGATE="$VENV/bin/devlegate"
+
+usage() {
+  cat <<'EOF'
+Usage: ./dev <command> [args...]
+
+Local development helper for Devlegate.
+
+Commands:
+  setup             Create .venv and install the project and development tools
+  test [args...]    Run pytest
+  lint [args...]    Run Ruff check
+  check             Run tests and lint
+  run [args...]     Run the installed devlegate CLI
+  clean             Remove named caches and build artifacts
+  purge             Clean, then remove .venv and named development artifacts
+
+Options:
+  -h, --help        Show this help message
+
+Run ./dev setup before test, lint, check, or run.
+EOF
+}
+
+require_venv() {
+  if [[ ! -x "$PYTHON" ]]; then
+    printf 'dev: .venv is missing; run ./dev setup first\n' >&2
+    exit 1
+  fi
+}
+
+require_devlegate() {
+  require_venv
+  if [[ ! -x "$DEVLEGATE" ]]; then
+    printf 'dev: installed devlegate CLI is missing; run ./dev setup first\n' >&2
+    exit 1
+  fi
+}
+
+setup() {
+  if [[ ! -x "$PYTHON" ]]; then
+    "${PYTHON_BIN:-python3}" -m venv "$VENV"
+  fi
+  "$PYTHON" -m pip install -e "$ROOT[dev]"
+}
+
+test() {
+  require_venv
+  "$PYTHON" -m pytest "$@"
+}
+
+lint() {
+  require_venv
+  "$PYTHON" -m ruff check "$@"
+}
+
+check() {
+  local status=0
+  test || status=$?
+  lint || { local lint_status=$?; ((status == 0)) && status=$lint_status; }
+  return "$status"
+}
+
+remove_path() {
+  [[ -e "$1" ]] && rm -rf -- "$1"
+}
+
+clean() {
+  remove_path "$ROOT/.pytest_cache"
+  remove_path "$ROOT/.ruff_cache"
+  remove_path "$ROOT/build"
+  remove_path "$ROOT/dist"
+  remove_path "$ROOT/src/devlegate/__pycache__"
+  remove_path "$ROOT/tests/__pycache__"
+  remove_path "$ROOT/devlegate.egg-info"
+  remove_path "$ROOT/src/devlegate.egg-info"
+}
+
+purge() {
+  clean
+  remove_path "$ROOT/.venv"
+  remove_path "$ROOT/.coverage"
+  remove_path "$ROOT/htmlcov"
+  remove_path "$ROOT/.tox"
+  remove_path "$ROOT/.nox"
+  remove_path "$ROOT/.mypy_cache"
+}
+
+if (($# == 0)) || [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+command=$1
+shift
+case "$command" in
+  setup) setup "$@" ;;
+  test) test "$@" ;;
+  lint) lint "$@" ;;
+  check) check "$@" ;;
+  run)
+    require_devlegate
+    exec "$DEVLEGATE" "$@"
+    ;;
+  clean) clean "$@" ;;
+  purge) purge "$@" ;;
+  *)
+    printf 'dev: unknown command: %s\n\n' "$command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
