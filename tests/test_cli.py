@@ -1,12 +1,14 @@
 import os
+import pty
 import shutil
 import subprocess
 import sys
+import termios
 from pathlib import Path
 
 import pytest
 
-from devlegate.cli import Devlegate, build_parser, main
+from devlegate.cli import Devlegate, _preserve_terminal, build_parser, main
 
 
 @pytest.fixture
@@ -149,6 +151,26 @@ def test_version(capsys):
 
     output = capsys.readouterr().out
     assert output.startswith("devlegate ")
+
+
+def test_terminal_state_is_restored_after_worker_changes_pty(capsys, monkeypatch):
+    master, slave = pty.openpty()
+    stream = os.fdopen(os.dup(slave), "r")
+    monkeypatch.setattr(sys, "stdin", stream)
+    original = termios.tcgetattr(slave)
+    changed = list(original)
+    changed[1] ^= termios.ONLCR
+
+    try:
+        with _preserve_terminal():
+            termios.tcsetattr(slave, termios.TCSANOW, changed)
+            assert termios.tcgetattr(slave) == changed
+        assert termios.tcgetattr(slave) == original
+    finally:
+        stream.close()
+        os.close(master)
+        os.close(slave)
+    capsys.readouterr()
 
 
 def test_no_remote_change_does_not_start_agent(git_fixture):

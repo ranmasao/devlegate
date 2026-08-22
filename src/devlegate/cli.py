@@ -10,7 +10,9 @@ import string
 import subprocess
 import sys
 import tempfile
+import termios
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from devlegate import __version__
@@ -56,6 +58,30 @@ def _git(
 
 def _log(message: str) -> None:
     print(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}")
+
+
+@contextmanager
+def _preserve_terminal():
+    terminal_fd = None
+    terminal_state = None
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            fd = stream.fileno()
+            if not os.isatty(fd):
+                continue
+            terminal_state = termios.tcgetattr(fd)
+            terminal_fd = fd
+            break
+        except (OSError, ValueError):
+            continue
+    try:
+        yield
+    finally:
+        if terminal_fd is not None and terminal_state is not None:
+            try:
+                termios.tcsetattr(terminal_fd, termios.TCSANOW, terminal_state)
+            except OSError as error:
+                _log(f"could not restore terminal state: {error}")
 
 
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
@@ -688,7 +714,8 @@ class Devlegate:
         command = [self.opencode_bin, "run", "--auto", "--model", self.opencode_model]
         if self.opencode_agent:
             command += ["--agent", self.opencode_agent]
-        agent = subprocess.run(command + [prompt], check=False)
+        with _preserve_terminal():
+            agent = subprocess.run(command + [prompt], check=False)
         if agent.returncode:
             phase = "recovery_failed" if recovery else "recovery_pending"
             self._recovery_pending = False if recovery else True
