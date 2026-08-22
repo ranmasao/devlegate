@@ -433,9 +433,9 @@ class Devlegate:
                         raise DevlegateError(
                             "persisted merge revision does not match the local HEAD"
                         )
-                elif local_head != target_head:
+                elif local_head != old_head:
                     raise DevlegateError(
-                        "persisted execution revision does not match the local HEAD"
+                        "persisted execution local_head does not match the local HEAD"
                     )
 
                 target_is_current = target_head == remote_head
@@ -463,7 +463,44 @@ class Devlegate:
                             f"superseding pending revision {persisted_head[:12]} "
                             f"with descendant {target_head[:12]}"
                         )
-                if local_head != target_head:
+                local_ahead_pending = state_phase == "agent_pending" and (
+                    local_head != target_head
+                )
+                preserve_local_ahead = False
+                if local_ahead_pending:
+                    local_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            local_head,
+                            target_head,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
+                    remote_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            target_head,
+                            local_head,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
+                    if not local_is_ancestor and not remote_is_ancestor:
+                        self._log_sync_failure(local_head, remote_ref)
+                        return 1
+                    if remote_is_ancestor:
+                        preserve_local_ahead = True
+                        changed_paths = str(self._state.get("changed_paths", ""))
+                        _log(
+                            "resuming local-ahead pending execution; preserving "
+                            f"local HEAD {local_head[:12]}"
+                        )
+                if local_head != target_head and not preserve_local_ahead:
                     changed_paths = _git(
                         self.repo,
                         "diff",

@@ -242,6 +242,38 @@ def test_local_ahead_changed_todo_generation_preserves_heads(git_fixture):
     assert f'"remote_head": "{remote_head}"' in state
 
 
+def test_local_ahead_agent_pending_restart_executes_once(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    assert run_devlegate(git_fixture, mode="blocked").returncode == 0
+    config = git_fixture["tmp"] / "config.env"
+    remote_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+    ticket = git_fixture["working"] / "kanban/todo/ticket.md"
+    ticket.write_text("changed local work\n")
+    git(git_fixture["working"], "add", "kanban/todo/ticket.md")
+    git(git_fixture["working"], "commit", "-m", "local todo update")
+    local_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "blocked")
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=local_head,
+        remote_head=remote_head,
+        changed_paths="",
+    )
+
+    assert Devlegate(config).run_once() == 1
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == local_head
+    assert (
+        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
+        == remote_head
+    )
+
+
 def test_unchanged_blocked_todo_is_not_redispatched(git_fixture):
     add_remote_revision(git_fixture, ticket=True)
 
