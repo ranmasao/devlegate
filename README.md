@@ -67,7 +67,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Prompt files support `${TODO_PATH}`, `${REVIEW_PATH}`, `${TODO_DIRECTORY}`, `${REVIEW_DIRECTORY}`, `${REPO_ROOT}`, `${REMOTE_NAME}`, and `${REMOTE_BRANCH}` substitutions. The `*_PATH` values are configured paths; the `*_DIRECTORY` values are resolved filesystem paths.
 - Devlegate only starts the agent after observing a new remote revision and finding ticket files in `TODO_PATH`.
 - A subsequent poll with no new remote revision does not run the agent again merely because `todo` is non-empty.
-- After an agent failure, the next poll can run one recovery attempt against its dirty working tree. A failed recovery enters `recovery_failed` and requires manual intervention before another recovery can run.
+- After an agent failure, Devlegate may run one automatic recovery attempt. If recovery fails or is interrupted, Devlegate enters `recovery_failed` and requires manual intervention before automatic work resumes.
 - Recovery instructions are loaded from `RECOVERY_PROMPT_FILE`, defaulting to Devlegate's `recovery-prompt.txt`.
 - Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
 - Merge and agent-dispatch intent is persisted before each transition. A merge interrupted before agent execution can be superseded by a newer descendant revision; once agent execution has started, recovery handles the original work instead.

@@ -281,6 +281,70 @@ def test_clean_recovery_pending_still_runs_one_recovery(git_fixture, monkeypatch
     assert (git_fixture["working"] / "kanban/review/ticket.md").exists()
 
 
+def test_interrupted_recovery_with_dirty_tree_requires_manual_intervention(
+    git_fixture, monkeypatch
+):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    (git_fixture["working"] / "unfinished.txt").write_text("unfinished\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    devlegate = Devlegate(config)
+    devlegate._save_state("recovery_running")
+
+    assert devlegate.run_once() == 1
+    assert not git_fixture["marker"].exists()
+    state_file = next((config.parent / "state").glob("*.json"))
+    assert '"phase": "recovery_failed"' in state_file.read_text()
+
+
+def test_interrupted_recovery_with_clean_tree_clears_state(
+    git_fixture, monkeypatch
+):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    devlegate = Devlegate(config)
+    devlegate._save_state("recovery_running")
+
+    assert devlegate.run_once() == 0
+    assert not git_fixture["marker"].exists()
+    state_file = next((config.parent / "state").glob("*.json"))
+    assert '"phase": "idle"' in state_file.read_text()
+
+
+def test_interrupted_recovery_is_never_retried(
+    git_fixture, monkeypatch
+):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    (git_fixture["working"] / "unfinished.txt").write_text("unfinished\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    devlegate = Devlegate(config)
+    devlegate._save_state("recovery_running")
+
+    assert devlegate.run_once() == 1
+    assert devlegate.run_once() == 1
+    assert not git_fixture["marker"].exists()
+
+
 def test_failed_recovery_is_not_retried_and_manual_cleanup_resumes(
     git_fixture, monkeypatch
 ):

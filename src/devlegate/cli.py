@@ -253,6 +253,10 @@ class Devlegate:
 
     def run_once(self) -> int:
         status = _git(self.repo, "status", "--porcelain").stdout
+        if self._state.get("phase") == "recovery_running":
+            self._save_state("recovery_failed")
+            self._recovery_pending = False
+            _log("interrupted recovery treated as failed recovery")
         if self._state.get("phase") == "recovery_failed":
             if status:
                 _log(
