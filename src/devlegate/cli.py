@@ -3,10 +3,14 @@
 import argparse
 import fcntl
 import hashlib
+import json
 import os
+import re
 import shutil
+import string
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -62,6 +66,14 @@ def _has_todo_files(repo: Path, todo_path: str) -> bool:
     )
 
 
+def _render_prompt(template: str, values: dict[str, str]) -> str:
+    """Render configured prompt values while leaving unknown variables intact."""
+    rendered = string.Template(template).safe_substitute(values)
+    for name, value in values.items():
+        rendered = rendered.replace("{{" + name + "}}", value)
+    return rendered
+
+
 class Devlegate:
     """Run the repository polling and agent execution workflow."""
 
@@ -71,6 +83,7 @@ class Devlegate:
                 f"configuration file not found: {env_file} "
                 f"(copy devlegate's .env.example to $PWD/.env)"
             )
+        self.env_file = env_file
         config = _read_env(env_file)
         self.repo = self._repository_root()
         if Path.cwd().resolve() != self.repo:
@@ -84,23 +97,39 @@ class Devlegate:
         self.todo_path = setting("TODO_PATH", "kanban/todo")
         self.review_path = setting("REVIEW_PATH", "kanban/review")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
-        default_prompt = Path(__file__).resolve().parents[2] / "agent-prompt.txt"
+        prompt_root = Path(__file__).resolve().parents[2]
+        default_prompt = prompt_root / "agent-prompt.txt"
         self.agent_prompt_file = Path(
             setting("AGENT_PROMPT_FILE", str(default_prompt))
+        )
+        default_recovery_prompt = prompt_root / "recovery-prompt.txt"
+        self.recovery_prompt_file = Path(
+            setting("RECOVERY_PROMPT_FILE", str(default_recovery_prompt))
         )
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
+        self._recovery_pending = False
         self.state_dir = Path(
             config.get(
                 "STATE_DIR",
                 os.environ.get(
                     "STATE_DIR",
-                    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")),
+                    "/var/lib/devlegate",
                 ),
             )
-        )
+        ).expanduser()
+        self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
+        self._state_file = self.state_dir / f"{self._state_key}.json"
+        self._state: dict[str, object] = {"phase": "idle"}
+        self._recovery_pending = False
         self._validate()
+        self._state = self._load_state()
+        self._recovery_pending = self._state.get("phase") in {
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
 
     @staticmethod
     def _repository_root() -> Path:
@@ -119,6 +148,10 @@ class Devlegate:
         if not self.agent_prompt_file.is_file():
             raise DevlegateError(
                 f"agent prompt file not found: {self.agent_prompt_file}"
+            )
+        if not self.recovery_prompt_file.is_file():
+            raise DevlegateError(
+                f"recovery prompt file not found: {self.recovery_prompt_file}"
             )
         if not self.poll_interval.isdecimal():
             raise DevlegateError("POLL_INTERVAL must be an integer")
@@ -144,12 +177,96 @@ class Devlegate:
             self.repo, "remote", "get-url", self.remote_name, check=False
         ).returncode:
             raise DevlegateError(f"git remote not found: {self.remote_name}")
+        self._validate_state_access()
+
+    def _validate_state_access(self) -> None:
+        try:
+            self._probe_state_access()
+        except OSError as error:
+            fallback = Path.home() / ".local/state/devlegate"
+            message = (
+                f"state directory is not writable: {self.state_dir}: {error}\n"
+                "Choose an action: [1] use a home-directory state directory for "
+                "this run, [2] use it and save STATE_DIR to the .env file, "
+                "or [3] exit."
+            )
+            if not sys.stdin.isatty():
+                raise DevlegateError(message) from error
+            print(message, file=sys.stderr)
+            try:
+                choice = input("> ").strip()
+            except EOFError:
+                choice = "3"
+            if choice not in {"1", "2"}:
+                raise DevlegateError(
+                    "exiting without changing the state directory"
+                ) from error
+            if choice == "2":
+                try:
+                    self._persist_state_dir(fallback)
+                except OSError as persist_error:
+                    raise DevlegateError(
+                        f"cannot update {self.env_file} with STATE_DIR={fallback}: "
+                        f"{persist_error}"
+                    ) from persist_error
+            self.state_dir = fallback
+            self._state_file = self.state_dir / f"{self._state_key}.json"
+            try:
+                self._probe_state_access()
+            except OSError as fallback_error:
+                raise DevlegateError(
+                    f"home-directory state directory is not writable: {fallback}: "
+                    f"{fallback_error}"
+                ) from fallback_error
+
+    def _probe_state_access(self) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=self.state_dir,
+            prefix=f".{self._state_key}.access.",
+            delete=True,
+        ):
+            pass
+
+    def _persist_state_dir(self, state_dir: Path) -> None:
+        content = self.env_file.read_text()
+        lines = content.splitlines(keepends=True)
+        replacement = f"STATE_DIR={state_dir}\n"
+        for index, line in enumerate(lines):
+            if re.match(r"^\s*(?:export\s+)?STATE_DIR=", line):
+                lines[index] = replacement
+                break
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(replacement)
+        updated = "".join(lines)
+        temporary_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.env_file.parent,
+                prefix=f".{self.env_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_name = temporary.name
+                temporary.write(updated)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_name, self.env_file)
+        except OSError:
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+            raise
 
     def _lock(self):
-        key = hashlib.sha256(str(self.repo).encode()).hexdigest()
-        lock_root = self.state_dir / "devlegate"
+        lock_root = self.state_dir / "locks"
         lock_root.mkdir(parents=True, exist_ok=True)
-        lock_file = lock_root / f"{key}.lock"
+        lock_file = lock_root / f"{self._state_key}.lock"
         handle = lock_file.open("w")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -160,44 +277,157 @@ class Devlegate:
             ) from error
         return handle
 
+    def _load_state(self) -> dict[str, object]:
+        try:
+            with self._state_file.open() as state_file:
+                state = json.load(state_file)
+        except FileNotFoundError:
+            return {"phase": "idle"}
+        except (OSError, json.JSONDecodeError) as error:
+            raise DevlegateError(
+                f"cannot read state file {self._state_file}: {error}"
+            ) from error
+        if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
+            raise DevlegateError(f"invalid state file: {self._state_file}")
+        return state
+
+    def _save_state(self, phase: str, **fields: object) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        state: dict[str, object] = {"phase": phase, **fields}
+        temporary_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.state_dir,
+                prefix=f".{self._state_key}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_name = temporary.name
+                json.dump(state, temporary)
+                temporary.write("\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_name, self._state_file)
+            directory_fd = os.open(self.state_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as error:
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+            raise DevlegateError(
+                f"cannot write state file {self._state_file}: {error}"
+            ) from error
+        self._state = state
+
     def run_once(self) -> int:
-        if _git(self.repo, "status", "--porcelain").stdout:
+        status = _git(self.repo, "status", "--porcelain").stdout
+        recovery = bool(status and self._recovery_pending)
+        if status and not recovery:
             _log("working tree is dirty; refusing to pull or start the agent")
             return 1
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
-        if _git(
-            self.repo,
-            "fetch",
-            "--prune",
-            self.remote_name,
-            self.remote_branch,
-            check=False,
-        ).returncode:
-            _log("fetch failed")
-            return 1
-        if _git(self.repo, "rev-parse", "--verify", remote_ref, check=False).returncode:
-            _log(f"remote branch not found: {remote_ref}")
-            return 1
-        remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
-        if local_head == remote_head:
-            _log("no remote changes")
-            return 0
-        changed_paths = _git(
-            self.repo, "diff", "--name-only", local_head, remote_head, check=False
-        ).stdout.rstrip()
-        if _git(self.repo, "merge", "--ff-only", remote_ref, check=False).returncode:
-            _log("cannot fast-forward local checkout")
-            return 1
-        _log(
-            f"updated {self.current_branch} from {local_head[:12]} "
-            f"to {remote_head[:12]}"
-        )
-        if not _has_todo_files(self.repo, self.todo_path):
+        state_phase = self._state.get("phase")
+        if recovery:
+            self._recovery_pending = False
+            remote_head = local_head
+            changed_paths = status.rstrip()
+            self._save_state("recovery_running")
+            _log("starting recovery for unfinished agent work")
+        else:
+            if _git(
+                self.repo,
+                "fetch",
+                "--prune",
+                self.remote_name,
+                self.remote_branch,
+                check=False,
+            ).returncode:
+                _log("fetch failed")
+                return 1
+            if _git(
+                self.repo, "rev-parse", "--verify", remote_ref, check=False
+            ).returncode:
+                _log(f"remote branch not found: {remote_ref}")
+                return 1
+            remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
+            pending_agent = (
+                state_phase == "agent_pending"
+                and local_head == self._state.get("remote_head")
+            )
+            merge_was_completed = (
+                state_phase == "merge_pending"
+                and local_head == self._state.get("remote_head")
+            )
+            if pending_agent or merge_was_completed:
+                changed_paths = str(self._state.get("changed_paths", ""))
+                remote_head = local_head
+                if merge_was_completed:
+                    self._save_state(
+                        "agent_pending",
+                        local_head=local_head,
+                        remote_head=remote_head,
+                        changed_paths=changed_paths,
+                    )
+                    _log("resumed after completed merge")
+            elif local_head == remote_head:
+                if self._recovery_pending:
+                    self._recovery_pending = False
+                    self._save_state("idle")
+                _log("no remote changes")
+                return 0
+            changed_paths = _git(
+                self.repo, "diff", "--name-only", local_head, remote_head, check=False
+            ).stdout.rstrip()
+            self._save_state(
+                "merge_pending",
+                local_head=local_head,
+                remote_head=remote_head,
+                changed_paths=changed_paths,
+            )
+            if _git(
+                self.repo, "merge", "--ff-only", remote_ref, check=False
+            ).returncode:
+                _log("cannot fast-forward local checkout")
+                return 1
+            _log(
+                f"updated {self.current_branch} from {local_head[:12]} "
+                f"to {remote_head[:12]}"
+            )
+            self._save_state(
+                "agent_pending",
+                local_head=local_head,
+                remote_head=remote_head,
+                changed_paths=changed_paths,
+            )
+        if not recovery and not _has_todo_files(self.repo, self.todo_path):
+            self._save_state("idle")
             _log(f"no actionable ticket files in {self.todo_path}")
             return 0
+
+        prompt_values = {
+            "REPO_ROOT": str(self.repo),
+            "REMOTE_NAME": self.remote_name,
+            "REMOTE_BRANCH": self.remote_branch,
+            "TODO_PATH": self.todo_path,
+            "REVIEW_PATH": self.review_path,
+            "TODO_DIRECTORY": str(self.repo / self.todo_path),
+            "REVIEW_DIRECTORY": str(self.repo / self.review_path),
+        }
+        recovery_prompt = ""
+        if recovery:
+            recovery_prompt = "\n\n" + _render_prompt(
+                self.recovery_prompt_file.read_text(), prompt_values
+            ).strip("\n")
+        self._save_state("agent_running")
         prompt = (
-            self.agent_prompt_file.read_text()
+            _render_prompt(self.agent_prompt_file.read_text(), prompt_values)
             + "\n\n--- Devlegate context ---\n"
             + f"Repository root: {self.repo}\nRemote: {self.remote_name}\n"
             + f"Branch: {self.remote_branch}\n"
@@ -207,15 +437,20 @@ class Devlegate:
             + "\nChanged paths from the pulled revision:\n"
             + f"{changed_paths or '<none>'}\n"
         ).rstrip("\n")
+        prompt += recovery_prompt
         _log(f"running OpenCode for tickets in {self.todo_path}")
         command = [self.opencode_bin, "run", "--auto", "--model", self.opencode_model]
         if self.opencode_agent:
             command += ["--agent", self.opencode_agent]
         agent = subprocess.run(command + [prompt], check=False)
         if agent.returncode:
+            self._recovery_pending = True
+            self._save_state("recovery_pending")
             _log(f"agent exited with status {agent.returncode}")
             return agent.returncode
         if _git(self.repo, "status", "--porcelain").stdout:
+            self._recovery_pending = True
+            self._save_state("recovery_pending")
             _log("agent exited successfully but left uncommitted repository changes")
             return 1
         local_after = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
@@ -226,11 +461,13 @@ class Devlegate:
             return 1
         remote_after = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
         if local_after != remote_after:
+            self._save_state("idle")
             _log(
                 "agent did not leave the local branch synchronized with the remote "
                 "branch; expected it to commit and push"
             )
             return 1
+        self._save_state("idle")
         _log("agent completed; local and remote branch heads are synchronized")
         return 0
 

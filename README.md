@@ -64,8 +64,14 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 ## Current safety rules
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
+- Prompt files support `${TODO_PATH}`, `${REVIEW_PATH}`, `${TODO_DIRECTORY}`, `${REVIEW_DIRECTORY}`, `${REPO_ROOT}`, `${REMOTE_NAME}`, and `${REMOTE_BRANCH}` substitutions. The `*_PATH` values are configured paths; the `*_DIRECTORY` values are resolved filesystem paths.
 - Devlegate only starts the agent after observing a new remote revision and finding ticket files in `TODO_PATH`.
 - A subsequent poll with no new remote revision does not run the agent again merely because `todo` is non-empty.
+- After an agent failure, the next poll can run one recovery attempt against its dirty working tree. The recovery prompt tells the agent to review unfinished changes before starting ticket work.
+- Recovery instructions are loaded from `RECOVERY_PROMPT_FILE`, defaulting to Devlegate's `recovery-prompt.txt`.
+- Devlegate stores per-repository iteration state atomically under `/var/lib/devlegate` by default. Set `STATE_DIR` when that location is not writable or a different state volume is required. Lock files are stored under its `locks` subdirectory.
+- State-directory access is checked at startup. If the default is not writable, interactive Devlegate offers to use `~/.local/state/devlegate` for the current run, use it and persist `STATE_DIR` in `.env`, or exit. Non-interactive runs exit with these choices instead of prompting.
+- Merge and agent-dispatch intent is persisted before each transition, so a restart after a completed merge resumes agent dispatch instead of treating the checkout as an ordinary no-change poll.
 - The agent is expected to leave intended changes committed and pushed; after it exits, Devlegate verifies that the working tree is clean and the local and remote branch heads match.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
