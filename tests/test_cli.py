@@ -41,6 +41,7 @@ def git_fixture(tmp_path):
 
     fake.write_text(
         "#!/usr/bin/env python3\n"
+        "import json\n"
         "import os\n"
         "import subprocess\n"
         "import sys\n"
@@ -48,7 +49,25 @@ def git_fixture(tmp_path):
         "Path(os.environ['FAKE_MARKER']).open('a').write('run\\n')\n"
         "if os.environ.get('FAKE_PROMPT'):\n"
         "    Path(os.environ['FAKE_PROMPT']).write_text(sys.argv[-1])\n"
+        "if os.environ.get('FAKE_STDIN'):\n"
+        "    Path(os.environ['FAKE_STDIN']).write_text(\n"
+        "        f'{sys.stdin.isatty()}:{sys.stdin.read(1)!r}'\n"
+        "    )\n"
         "mode = os.environ.get('FAKE_MODE', 'success')\n"
+        "output_mode = os.environ.get('FAKE_OUTPUT_MODE')\n"
+        "payload = ('before\\n\\x1b[?1049h\\ninside\\n'\n"
+        "           '\\x1b[1;24r\\nafter\\n\\x1b[?1h\\n')\n"
+        "if output_mode == 'stdout':\n"
+        "    event = {'type': 'text', 'part': {'text': payload}}\n"
+        "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'stderr':\n"
+        "    print(payload, file=sys.stderr, end='', flush=True)\n"
+        "elif output_mode == 'ordinary':\n"
+        "    event = {'type': 'text', 'part': {'text':\n"
+        "        'Starting worker\\nProgress: compiling ' + chr(0x2603)}}\n"
+        "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'malformed':\n"
+        "    print('not-json', flush=True)\n"
         "if mode == 'fail':\n"
         "    sys.exit(7)\n"
         "if mode == 'fail-dirty':\n"
@@ -66,11 +85,16 @@ def git_fixture(tmp_path):
         "if ticket is not None:\n"
         "    Path('kanban/review').mkdir(parents=True, exist_ok=True)\n"
         "    ticket.rename(Path('kanban/review') / ticket.name)\n"
-        "    subprocess.run(['git', 'add', '-A'], check=True)\n"
-        "    subprocess.run(['git', 'commit', '-m', 'agent work'], check=True)\n"
+        "    subprocess.run(['git', 'add', '-A'], check=True, capture_output=True)\n"
+        "    subprocess.run(\n"
+        "        ['git', 'commit', '-m', 'agent work'],\n"
+        "        check=True, capture_output=True\n"
+        "    )\n"
         "if mode == 'no-push':\n"
         "    sys.exit(0)\n"
-        "subprocess.run(['git', 'push', 'origin', 'main'], check=True)\n"
+        "subprocess.run(\n"
+        "    ['git', 'push', 'origin', 'main'], check=True, capture_output=True\n"
+        ")\n"
     )
     fake.chmod(0o755)
     return {
@@ -104,7 +128,7 @@ def add_remote_revision(fixture, *, ticket=False):
     git(publisher, "push")
 
 
-def run_devlegate(fixture, *args, env_file=None, mode="success"):
+def run_devlegate(fixture, *args, env_file=None, mode="success", output_mode=None):
     config = env_file or fixture["tmp"] / "config.env"
     if not config.exists():
         config.write_text(
@@ -120,7 +144,10 @@ def run_devlegate(fixture, *args, env_file=None, mode="success"):
         FAKE_MARKER=str(fixture["marker"]),
         FAKE_MODE=mode,
         FAKE_PROMPT=str(fixture["prompt_capture"]),
+        FAKE_STDIN=str(fixture["tmp"] / "stdin-observation.txt"),
     )
+    if output_mode:
+        environment["FAKE_OUTPUT_MODE"] = output_mode
     environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
     return subprocess.run(
         [sys.executable, "-m", "devlegate", "--once", *args, "--env", config],
@@ -171,6 +198,44 @@ def test_terminal_state_is_restored_after_worker_changes_pty(capsys, monkeypatch
         os.close(master)
         os.close(slave)
     capsys.readouterr()
+
+
+@pytest.mark.parametrize("output_mode", ["stdout", "stderr"])
+def test_worker_control_sequences_are_rendered_as_inert_text(git_fixture, output_mode):
+    add_remote_revision(git_fixture, ticket=True)
+
+    direct = run_devlegate(git_fixture, mode="observe", output_mode=output_mode)
+
+    assert direct.returncode == 0
+    output = direct.stdout + direct.stderr
+    assert "before" in output
+    assert "inside" in output
+    assert "after" in output
+    assert "\\x1b[?1049h" in output
+    assert "\\x1b[1;24r" in output
+    assert "\\x1b[?1h" in output
+    assert "\x1b" not in output
+
+
+def test_worker_ordinary_output_remains_readable_and_stdin_is_headless(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    result = run_devlegate(git_fixture, mode="observe", output_mode="ordinary")
+
+    assert result.returncode == 0
+    assert "Starting worker" in result.stdout
+    assert "Progress: compiling" in result.stdout
+    assert chr(0x2603) in result.stdout
+    assert (git_fixture["tmp"] / "stdin-observation.txt").read_text() == "False:''"
+
+
+def test_malformed_worker_output_fails_closed(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    result = run_devlegate(git_fixture, mode="observe", output_mode="malformed")
+
+    assert result.returncode == 1
+    assert "OpenCode protocol error: invalid JSON event on stdout" in result.stdout
+    assert "not-json" not in result.stdout
+    assert "not-json" not in result.stderr
 
 
 def test_no_remote_change_does_not_start_agent(git_fixture):
@@ -807,7 +872,7 @@ def test_check_is_read_only_and_reports_ready(git_fixture):
     result = run_devlegate(git_fixture, "--check")
 
     assert result.returncode == 0
-    assert "Devlegate 0.2.3 preflight" in result.stdout
+    assert "Devlegate 0.2.4 preflight" in result.stdout
     assert "Ready." in result.stdout
     assert not (git_fixture["working"] / "remote.txt").exists()
     assert not git_fixture["marker"].exists()

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -82,6 +83,110 @@ def _preserve_terminal():
                 termios.tcsetattr(terminal_fd, termios.TCSANOW, terminal_state)
             except OSError as error:
                 _log(f"could not restore terminal state: {error}")
+
+
+def _render_worker_text(text: str) -> str:
+    """Make worker-controlled text inert before it reaches an operator TTY."""
+    rendered: list[str] = []
+    for character in text:
+        codepoint = ord(character)
+        if character in "\n\t":
+            rendered.append(character)
+        elif 0x20 <= codepoint <= 0x7E or character.isprintable():
+            rendered.append(character)
+        elif codepoint <= 0x7F:
+            rendered.append(f"\\x{codepoint:02x}")
+        elif codepoint <= 0x9F:
+            rendered.append(f"\\u{codepoint:04x}")
+        else:
+            rendered.append(f"\\u{codepoint:04x}")
+    return "".join(rendered)
+
+
+_OPENCODE_JSON_TYPES = {
+    "error",
+    "reasoning",
+    "step_finish",
+    "step_start",
+    "text",
+    "tool_use",
+}
+
+
+def _write_worker_text(text: str, stream) -> None:
+    rendered = _render_worker_text(text)
+    if not rendered:
+        return
+    stream.write(rendered)
+    stream.flush()
+
+
+def _run_opencode(command: list[str], prompt: str) -> int:
+    """Run OpenCode headlessly and render its worker output as inert text."""
+    process = subprocess.Popen(
+        command + [prompt],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output_lock = threading.Lock()
+    protocol_failed = False
+
+    def write(text: str, stream) -> None:
+        with output_lock:
+            _write_worker_text(text, stream)
+
+    def consume_stdout() -> None:
+        nonlocal protocol_failed
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                protocol_failed = True
+                _log("OpenCode protocol error: invalid JSON event on stdout")
+                continue
+            if (
+                not isinstance(event, dict)
+                or event.get("type") not in _OPENCODE_JSON_TYPES
+            ):
+                protocol_failed = True
+                _log("OpenCode protocol error: unsupported event on stdout")
+                continue
+            event_type = event["type"]
+            if event_type == "text" or event_type == "reasoning":
+                part = event.get("part")
+                if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+                    protocol_failed = True
+                    _log("OpenCode protocol error: text event has no text part")
+                    continue
+                write(part["text"] + "\n", sys.stdout)
+            elif event_type == "tool_use":
+                part = event.get("part")
+                if isinstance(part, dict) and isinstance(part.get("tool"), str):
+                    write(f"OpenCode tool: {part['tool']}\n", sys.stdout)
+            elif event_type == "error":
+                error = event.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message") or error.get("name")
+                if isinstance(error, str):
+                    write(f"OpenCode error: {error}\n", sys.stdout)
+
+    def consume_stderr() -> None:
+        assert process.stderr is not None
+        while raw_chunk := process.stderr.read(4096):
+            write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
+
+    stdout_thread = threading.Thread(target=consume_stdout)
+    stderr_thread = threading.Thread(target=consume_stderr)
+    stdout_thread.start()
+    stderr_thread.start()
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+    if protocol_failed:
+        return 1
+    return returncode
 
 
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
@@ -711,17 +816,25 @@ class Devlegate:
         ).rstrip("\n")
         prompt += recovery_prompt
         _log(f"running OpenCode for tickets in {self.todo_path}")
-        command = [self.opencode_bin, "run", "--auto", "--model", self.opencode_model]
+        command = [
+            self.opencode_bin,
+            "run",
+            "--format",
+            "json",
+            "--auto",
+            "--model",
+            self.opencode_model,
+        ]
         if self.opencode_agent:
             command += ["--agent", self.opencode_agent]
         with _preserve_terminal():
-            agent = subprocess.run(command + [prompt], check=False)
-        if agent.returncode:
+            agent_status = _run_opencode(command, prompt)
+        if agent_status:
             phase = "recovery_failed" if recovery else "recovery_pending"
             self._recovery_pending = False if recovery else True
             self._save_state(phase)
-            _log(f"agent exited with status {agent.returncode}")
-            return agent.returncode
+            _log(f"agent exited with status {agent_status}")
+            return agent_status
         if _git(self.repo, "status", "--porcelain").stdout:
             phase = "recovery_failed" if recovery else "recovery_pending"
             self._recovery_pending = False if recovery else True

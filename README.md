@@ -75,5 +75,10 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - The agent is expected to leave intended changes committed and pushed; after it exits, Devlegate verifies that the working tree is clean and the local and remote branch heads match.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
+- Worker output is untrusted data and is never raw-forwarded to the operator
+  terminal. OpenCode runs headlessly with stdin disconnected, structured stdout
+  decoding, captured stderr, and a safe text renderer for both output streams.
+  TTY-dependent automated tests must eventually create and own their own PTY
+  rather than relying on the operator terminal.
 
 `devlegate.sh` remains as a legacy compatibility entry point. It is a thin wrapper around the installed Python CLI in this checkout, preserves arguments, and does not implement the workflow itself. Run it from the target project's repository root, or use the `dev` helper instead.
