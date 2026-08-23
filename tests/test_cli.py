@@ -415,6 +415,142 @@ def test_recovery_keeps_persisted_ticket_identity(git_fixture, monkeypatch):
     assert "first body" not in prompt
 
 
+def test_merge_pending_resume_settles_blocked_graph_without_worker(
+    git_fixture, monkeypatch, capsys
+):
+    add_remote_revision(git_fixture, ticket=True)
+    replace_remote_tickets(
+        git_fixture, [("ED-11", "Blocked", "blocked body", ["ED-10"])]
+    )
+    review = git_fixture["publisher"] / "kanban/review/ED-10.md"
+    review.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Under review"\n'
+        "---\nreview body\n"
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "add blocked dependency")
+    git(git_fixture["publisher"], "push")
+
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    old_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    git(git_fixture["working"], "fetch", "origin", "main")
+    remote_head = git(
+        git_fixture["working"], "rev-parse", "origin/main"
+    ).stdout.strip()
+    devlegate = Devlegate(config)
+    devlegate._save_state(
+        "merge_pending",
+        local_head=old_head,
+        remote_head=remote_head,
+        changed_paths="",
+    )
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "observe")
+
+    assert devlegate.run_once() == 0
+    assert not git_fixture["marker"].exists()
+    state_file = next((config.parent / "state").glob("*.json"))
+    state = state_file.read_text()
+    assert '"phase": "idle"' in state
+    assert "selected_ticket_id" not in state
+    assert "blocked by unfinished dependencies" in capsys.readouterr().out
+    assert Devlegate(config).run_once() == 0
+    assert not git_fixture["marker"].exists()
+
+
+def test_recovery_uses_review_artifact_and_persisted_body(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    replace_remote_tickets(
+        git_fixture,
+        [("ED-18", "Other", "other body", [])],
+    )
+    review = git_fixture["publisher"] / "kanban/review/ED-17.md"
+    review.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Assigned"\n'
+        "---\nbody B\n"
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "move assigned ticket")
+    git(git_fixture["publisher"], "push")
+    config = git_fixture["tmp"] / "config.env"
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    result = run_devlegate(git_fixture, mode="observe")
+    assert result.returncode == 0
+    monkeypatch.chdir(git_fixture["working"])
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    Devlegate(config)._save_state(
+        "recovery_pending",
+        local_head=head,
+        remote_head=head,
+        changed_paths="",
+        selected_ticket_id="ED-17",
+        selected_ticket_body="body A\n",
+    )
+    monkeypatch.setenv("FAKE_MODE", "observe")
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
+
+    assert Devlegate(config).run_once() == 0
+    prompt = git_fixture["prompt_capture"].read_text()
+    review_path = git_fixture["working"] / "kanban/review/ED-17.md"
+    todo_path = git_fixture["working"] / "kanban/todo/ED-17.md"
+    assert "Assigned ticket ID: ED-17" in prompt
+    assert f"Assigned ticket file: {review_path}" in prompt
+    assert "Assigned ticket state: review" in prompt
+    assert "body A" in prompt
+    assert "body B" not in prompt
+    assert f"Assigned ticket file: {todo_path}" not in prompt
+    assert "ED-18" not in prompt
+    assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
+
+
+def test_recovery_unexpected_done_ticket_fails_closed(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    replace_remote_tickets(git_fixture, [("ED-18", "Other", "other body", [])])
+    done = git_fixture["publisher"] / "kanban/done/ED-17.md"
+    done.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Assigned"\n'
+        "---\nbody\n"
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "complete assigned ticket")
+    git(git_fixture["publisher"], "push")
+    config = git_fixture["tmp"] / "config.env"
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    assert run_devlegate(git_fixture, mode="observe").returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.chdir(git_fixture["working"])
+    Devlegate(config)._save_state(
+        "recovery_pending",
+        local_head=head,
+        remote_head=head,
+        changed_paths="",
+        selected_ticket_id="ED-17",
+        selected_ticket_body="body\n",
+    )
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "observe")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "devlegate", "--once", "--env", config],
+        cwd=git_fixture["working"],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert "unexpected recovery state done" in result.stderr
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
 def test_no_remote_change_does_not_start_agent(git_fixture):
     result = run_devlegate(git_fixture)
 
@@ -449,6 +585,11 @@ def test_ticket_starts_agent_and_next_poll_does_not_repeat(git_fixture):
         git_fixture["working"], "rev-parse", "origin/main"
     ).stdout
     assert "no remote changes" in second.stdout
+    state_file = next((git_fixture["tmp"] / "state").glob("*.json"))
+    state = state_file.read_text()
+    assert '"phase": "idle"' in state
+    assert "selected_ticket_id" not in state
+    assert "selected_ticket_body" not in state
 
 
 def test_synchronized_checkout_still_detects_new_todo_generation(git_fixture):

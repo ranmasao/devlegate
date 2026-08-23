@@ -376,6 +376,11 @@ class Devlegate:
                     "persisted selected ticket is not in managed storage: "
                     f"{selected_id}"
                 )
+            if selected.state not in {"todo", "review"}:
+                raise DevlegateError(
+                    f"selected ticket {selected.id} has unexpected recovery state "
+                    f"{selected.state}"
+                )
             if recovery:
                 body = self._state.get("selected_ticket_body")
                 if not isinstance(body, str):
@@ -480,6 +485,9 @@ class Devlegate:
     def _save_state(self, phase: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
+        if phase == "idle":
+            state.pop("selected_ticket_id", None)
+            state.pop("selected_ticket_body", None)
         temporary_name = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -605,7 +613,8 @@ class Devlegate:
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
-        pending_execution = state_phase in {"agent_pending", "merge_pending"}
+        pending_sync = state_phase in {"agent_pending", "merge_pending"}
+        pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
         if recovery:
@@ -637,7 +646,7 @@ class Devlegate:
                 return 1
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
-            if pending_execution:
+            if pending_sync:
                 old_head = str(self._state.get("local_head", ""))
                 target_head = persisted_head
                 if state_phase == "merge_pending":
@@ -750,6 +759,16 @@ class Devlegate:
                     local_head=local_head,
                     remote_head=target_head,
                     changed_paths=changed_paths,
+                    selected_ticket_id=(
+                        self._state.get("selected_ticket_id")
+                        if state_phase == "agent_pending"
+                        else None
+                    ),
+                    selected_ticket_body=(
+                        self._state.get("selected_ticket_body")
+                        if state_phase == "agent_pending"
+                        else None
+                    ),
                 )
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
@@ -803,6 +822,8 @@ class Devlegate:
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
+                    selected_ticket_id=None,
+                    selected_ticket_body=None,
                 )
             elif _git(
                 self.repo,
@@ -844,7 +865,7 @@ class Devlegate:
                 == todo_fingerprint
             )
             runnable_count = len(ticket_store.runnable)
-            if not runnable_count and not pending_execution:
+            if not runnable_count and not pending_agent_execution:
                 self._save_state(
                     "idle",
                     handled_remote_head=remote_head,
@@ -864,7 +885,7 @@ class Devlegate:
                 else:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
-            if generation_is_same and not pending_execution:
+            if generation_is_same and not pending_agent_execution:
                 _log(
                     "no new work generation; unchanged todo is already "
                     "handled"
@@ -902,8 +923,12 @@ class Devlegate:
             selected_ticket_id=selected_ticket.id,
             selected_ticket_body=selected_ticket.body,
         )
-        ticket_file = self.repo / self.todo_path / f"{selected_ticket.id}.md"
-        review_file = self.repo / self.review_path / f"{selected_ticket.id}.md"
+        ticket_file = selected_ticket.path
+        review_file = (
+            self.repo / self.review_path / f"{selected_ticket.id}.md"
+            if selected_ticket.state == "todo"
+            else None
+        )
         execution_context = (
             "\n\n--- Devlegate execution context ---\n"
             f"Repository root: {self.repo}\n"
@@ -912,8 +937,13 @@ class Devlegate:
             f"Pulled revision: {local_head} -> {remote_head}\n"
             f"Assigned ticket ID: {selected_ticket.id}\n"
             f"Assigned ticket file: {ticket_file}\n"
-            f"Review destination: {review_file}\n"
-            f"Changed paths from the pulled revision:\n{changed_paths or '<none>'}\n"
+            f"Assigned ticket state: {selected_ticket.state}\n"
+            + (
+                f"Review destination: {review_file}\n"
+                if review_file is not None
+                else "Review destination: already in review; do not move again\n"
+            )
+            + f"Changed paths from the pulled revision:\n{changed_paths or '<none>'}\n"
             "\n--- Assigned work ---\n"
             f"{selected_ticket.body}"
         )
