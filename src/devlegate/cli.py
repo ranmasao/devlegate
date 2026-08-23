@@ -1,6 +1,7 @@
 """Command-line interface and runtime for Devlegate."""
 
 import argparse
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -361,7 +362,7 @@ class Devlegate:
             raise DevlegateError(str(error)) from error
 
     def _selected_ticket(
-        self, store: TicketStore, bound_execution: bool
+        self, store: TicketStore, bound_execution: bool, recovery: bool
     ) -> Ticket | None:
         selected_id = self._state.get("selected_ticket_id")
         if bound_execution:
@@ -375,6 +376,13 @@ class Devlegate:
                     "persisted selected ticket is not in managed storage: "
                     f"{selected_id}"
                 )
+            if recovery:
+                body = self._state.get("selected_ticket_body")
+                if not isinstance(body, str):
+                    raise DevlegateError(
+                        "recovery state has no persisted selected ticket body"
+                    )
+                selected = dataclasses.replace(selected, body=body)
             return selected
         return store.selected()
 
@@ -823,7 +831,9 @@ class Devlegate:
                 return 1
         ticket_store = self._ticket_store()
         bound_execution = recovery or state_phase == "agent_pending"
-        selected_ticket = self._selected_ticket(ticket_store, bound_execution)
+        selected_ticket = self._selected_ticket(
+            ticket_store, bound_execution, recovery
+        )
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -868,6 +878,7 @@ class Devlegate:
                 handled_remote_head=remote_head,
                 handled_todo_fingerprint=todo_fingerprint,
                 selected_ticket_id=selected_ticket.id,
+                selected_ticket_body=selected_ticket.body,
             )
 
         prompt_values = {
@@ -886,7 +897,11 @@ class Devlegate:
             recovery_prompt = "\n\n" + _render_prompt(
                 self.recovery_prompt_file.read_text(), prompt_values
             ).strip("\n")
-        self._save_state("agent_running", selected_ticket_id=selected_ticket.id)
+        self._save_state(
+            "agent_running",
+            selected_ticket_id=selected_ticket.id,
+            selected_ticket_body=selected_ticket.body,
+        )
         ticket_file = self.repo / self.todo_path / f"{selected_ticket.id}.md"
         review_file = self.repo / self.review_path / f"{selected_ticket.id}.md"
         execution_context = (
