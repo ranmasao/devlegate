@@ -121,6 +121,27 @@ def _write_worker_text(text: str, stream) -> None:
     stream.flush()
 
 
+def _extract_error_message(error: object) -> str | None:
+    if isinstance(error, str):
+        return error
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if isinstance(message, str):
+        return message
+    data = error.get("data")
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, str):
+            return message
+    name = error.get("name")
+    return name if isinstance(name, str) else None
+
+
+def _write_worker_line(text: str, stream) -> None:
+    _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
+
+
 def _run_opencode(command: list[str], prompt: str) -> int:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -163,13 +184,30 @@ def _run_opencode(command: list[str], prompt: str) -> int:
                 write(part["text"] + "\n", sys.stdout)
             elif event_type == "tool_use":
                 part = event.get("part")
-                if isinstance(part, dict) and isinstance(part.get("tool"), str):
-                    write(f"OpenCode tool: {part['tool']}\n", sys.stdout)
+                if (
+                    not isinstance(part, dict)
+                    or not isinstance(part.get("tool"), str)
+                    or not isinstance(part.get("state"), dict)
+                    or part["state"].get("status")
+                    not in {"pending", "running", "completed", "error"}
+                ):
+                    protocol_failed = True
+                    _log("OpenCode protocol error: invalid tool event on stdout")
+                    continue
+                tool = part["tool"]
+                write(f"OpenCode tool: {tool}\n", sys.stdout)
+                state = part["state"]
+                if state.get("status") == "completed":
+                    output = state.get("output")
+                    if isinstance(output, str):
+                        _write_worker_line(output, sys.stdout)
+                elif state.get("status") == "error":
+                    error = _extract_error_message(state.get("error"))
+                    if error:
+                        _write_worker_line(f"OpenCode tool failed: {error}", sys.stdout)
             elif event_type == "error":
-                error = event.get("error")
-                if isinstance(error, dict):
-                    error = error.get("message") or error.get("name")
-                if isinstance(error, str):
+                error = _extract_error_message(event.get("error"))
+                if error:
                     write(f"OpenCode error: {error}\n", sys.stdout)
 
     def consume_stderr() -> None:

@@ -60,6 +60,23 @@ def git_fixture(tmp_path):
         "if output_mode == 'stdout':\n"
         "    event = {'type': 'text', 'part': {'text': payload}}\n"
         "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'tool':\n"
+        "    event = {'type': 'tool_use', 'part': {'tool': 'bash',\n"
+        "        'state': {'status': 'completed', 'output': payload}}}\n"
+        "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'tool-error':\n"
+        "    event = {'type': 'tool_use', 'part': {'tool': 'bash',\n"
+        "        'state': {'status': 'error', 'error': payload}}}\n"
+        "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'tool-ordinary':\n"
+        "    output = 'collecting tests...\\ntest_a PASSED\\ntest_b FAILED'\n"
+        "    event = {'type': 'tool_use', 'part': {'tool': 'bash',\n"
+        "        'state': {'status': 'completed', 'output': output}}}\n"
+        "    print(json.dumps(event), flush=True)\n"
+        "elif output_mode == 'error-event':\n"
+        "    event = {'type': 'error', 'error': {'name': 'APIError',\n"
+        "        'data': {'message': payload}}}\n"
+        "    print(json.dumps(event), flush=True)\n"
         "elif output_mode == 'stderr':\n"
         "    print(payload, file=sys.stderr, end='', flush=True)\n"
         "elif output_mode == 'ordinary':\n"
@@ -200,14 +217,14 @@ def test_terminal_state_is_restored_after_worker_changes_pty(capsys, monkeypatch
     capsys.readouterr()
 
 
-@pytest.mark.parametrize("output_mode", ["stdout", "stderr"])
-def test_worker_control_sequences_are_rendered_as_inert_text(git_fixture, output_mode):
+def test_tool_output_control_sequences_are_rendered_as_inert_text(git_fixture):
     add_remote_revision(git_fixture, ticket=True)
 
-    direct = run_devlegate(git_fixture, mode="observe", output_mode=output_mode)
+    direct = run_devlegate(git_fixture, mode="observe", output_mode="tool")
 
     assert direct.returncode == 0
     output = direct.stdout + direct.stderr
+    assert "OpenCode tool: bash" in output
     assert "before" in output
     assert "inside" in output
     assert "after" in output
@@ -215,6 +232,52 @@ def test_worker_control_sequences_are_rendered_as_inert_text(git_fixture, output
     assert "\\x1b[1;24r" in output
     assert "\\x1b[?1h" in output
     assert "\x1b" not in output
+
+
+def test_worker_control_sequences_on_stderr_are_rendered_as_inert_text(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(git_fixture, mode="observe", output_mode="stderr")
+
+    assert result.returncode == 0
+    assert "before" in result.stderr
+    assert "\\x1b[?1049h" in result.stderr
+    assert "\x1b" not in result.stderr
+
+
+def test_failed_tool_output_is_visible_and_inert(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(git_fixture, mode="observe", output_mode="tool-error")
+
+    assert result.returncode == 0
+    assert "OpenCode tool: bash" in result.stdout
+    assert "OpenCode tool failed: before" in result.stdout
+    assert "\\x1b[?1049h" in result.stdout
+    assert "\x1b" not in result.stdout
+
+
+def test_successful_tool_output_remains_readable(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(
+        git_fixture, mode="observe", output_mode="tool-ordinary"
+    )
+
+    assert result.returncode == 0
+    assert "OpenCode tool: bash" in result.stdout
+    assert "collecting tests...\ntest_a PASSED\ntest_b FAILED" in result.stdout
+
+
+def test_open_code_error_event_message_is_visible_and_inert(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(git_fixture, mode="observe", output_mode="error-event")
+
+    assert result.returncode == 0
+    assert "OpenCode error: before" in result.stdout
+    assert "\\x1b[?1049h" in result.stdout
+    assert "\x1b" not in result.stdout
 
 
 def test_worker_ordinary_output_remains_readable_and_stdin_is_headless(git_fixture):
