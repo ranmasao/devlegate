@@ -1,6 +1,7 @@
 """Command-line interface and runtime for Devlegate."""
 
 import argparse
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -11,11 +12,13 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from devlegate import __version__
+from devlegate.tickets import Ticket, TicketError, TicketStore, load_ticket_store
 
 
 class DevlegateError(Exception):
@@ -82,6 +85,148 @@ def _preserve_terminal():
                 termios.tcsetattr(terminal_fd, termios.TCSANOW, terminal_state)
             except OSError as error:
                 _log(f"could not restore terminal state: {error}")
+
+
+def _render_worker_text(text: str) -> str:
+    """Make worker-controlled text inert before it reaches an operator TTY."""
+    rendered: list[str] = []
+    for character in text:
+        codepoint = ord(character)
+        if character in "\n\t":
+            rendered.append(character)
+        elif 0x20 <= codepoint <= 0x7E or character.isprintable():
+            rendered.append(character)
+        elif codepoint <= 0x7F:
+            rendered.append(f"\\x{codepoint:02x}")
+        elif codepoint <= 0x9F:
+            rendered.append(f"\\u{codepoint:04x}")
+        else:
+            rendered.append(f"\\u{codepoint:04x}")
+    return "".join(rendered)
+
+
+_OPENCODE_JSON_TYPES = {
+    "error",
+    "reasoning",
+    "step_finish",
+    "step_start",
+    "text",
+    "tool_use",
+}
+
+
+def _write_worker_text(text: str, stream) -> None:
+    rendered = _render_worker_text(text)
+    if not rendered:
+        return
+    stream.write(rendered)
+    stream.flush()
+
+
+def _extract_error_message(error: object) -> str | None:
+    if isinstance(error, str):
+        return error
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if isinstance(message, str):
+        return message
+    data = error.get("data")
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, str):
+            return message
+    name = error.get("name")
+    return name if isinstance(name, str) else None
+
+
+def _write_worker_line(text: str, stream) -> None:
+    _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
+
+
+def _run_opencode(command: list[str], prompt: str) -> int:
+    """Run OpenCode headlessly and render its worker output as inert text."""
+    process = subprocess.Popen(
+        command + [prompt],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output_lock = threading.Lock()
+    protocol_failed = False
+
+    def write(text: str, stream) -> None:
+        with output_lock:
+            _write_worker_text(text, stream)
+
+    def consume_stdout() -> None:
+        nonlocal protocol_failed
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                protocol_failed = True
+                _log("OpenCode protocol error: invalid JSON event on stdout")
+                continue
+            if (
+                not isinstance(event, dict)
+                or event.get("type") not in _OPENCODE_JSON_TYPES
+            ):
+                protocol_failed = True
+                _log("OpenCode protocol error: unsupported event on stdout")
+                continue
+            event_type = event["type"]
+            if event_type == "text" or event_type == "reasoning":
+                part = event.get("part")
+                if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+                    protocol_failed = True
+                    _log("OpenCode protocol error: text event has no text part")
+                    continue
+                write(part["text"] + "\n", sys.stdout)
+            elif event_type == "tool_use":
+                part = event.get("part")
+                if (
+                    not isinstance(part, dict)
+                    or not isinstance(part.get("tool"), str)
+                    or not isinstance(part.get("state"), dict)
+                    or part["state"].get("status")
+                    not in {"pending", "running", "completed", "error"}
+                ):
+                    protocol_failed = True
+                    _log("OpenCode protocol error: invalid tool event on stdout")
+                    continue
+                tool = part["tool"]
+                write(f"OpenCode tool: {tool}\n", sys.stdout)
+                state = part["state"]
+                if state.get("status") == "completed":
+                    output = state.get("output")
+                    if isinstance(output, str):
+                        _write_worker_line(output, sys.stdout)
+                elif state.get("status") == "error":
+                    error = _extract_error_message(state.get("error"))
+                    if error:
+                        _write_worker_line(f"OpenCode tool failed: {error}", sys.stdout)
+            elif event_type == "error":
+                error = _extract_error_message(event.get("error"))
+                if error:
+                    write(f"OpenCode error: {error}\n", sys.stdout)
+
+    def consume_stderr() -> None:
+        assert process.stderr is not None
+        while raw_chunk := process.stderr.read(4096):
+            write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
+
+    stdout_thread = threading.Thread(target=consume_stdout)
+    stderr_thread = threading.Thread(target=consume_stderr)
+    stdout_thread.start()
+    stderr_thread.start()
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+    if protocol_failed:
+        return 1
+    return returncode
 
 
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
@@ -166,8 +311,10 @@ class Devlegate:
 
         self.remote_name = setting("REMOTE_NAME", "origin")
         self.remote_branch = setting("REMOTE_BRANCH", "")
+        self.backlog_path = setting("BACKLOG_PATH", "kanban/backlog")
         self.todo_path = setting("TODO_PATH", "kanban/todo")
         self.review_path = setting("REVIEW_PATH", "kanban/review")
+        self.done_path = setting("DONE_PATH", "kanban/done")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
         prompt_root = Path(__file__).resolve().parents[2]
         default_prompt = prompt_root / "agent-prompt.txt"
@@ -199,6 +346,50 @@ class Devlegate:
             "agent_running",
             "recovery_pending",
         }
+
+    def _workflow_paths(self) -> dict[str, str]:
+        return {
+            "backlog": self.backlog_path,
+            "todo": self.todo_path,
+            "review": self.review_path,
+            "done": self.done_path,
+        }
+
+    def _ticket_store(self) -> TicketStore:
+        try:
+            return load_ticket_store(self.repo, self._workflow_paths())
+        except TicketError as error:
+            raise DevlegateError(str(error)) from error
+
+    def _selected_ticket(
+        self, store: TicketStore, bound_execution: bool, recovery: bool
+    ) -> Ticket | None:
+        selected_id = self._state.get("selected_ticket_id")
+        if bound_execution:
+            if not isinstance(selected_id, str):
+                raise DevlegateError(
+                    "recovery state has no persisted selected ticket identity"
+                )
+            selected = store.by_id.get(selected_id)
+            if selected is None:
+                raise DevlegateError(
+                    "persisted selected ticket is not in managed storage: "
+                    f"{selected_id}"
+                )
+            if selected.state not in {"todo", "review"}:
+                raise DevlegateError(
+                    f"selected ticket {selected.id} has unexpected recovery state "
+                    f"{selected.state}"
+                )
+            if recovery:
+                body = self._state.get("selected_ticket_body")
+                if not isinstance(body, str):
+                    raise DevlegateError(
+                        "recovery state has no persisted selected ticket body"
+                    )
+                selected = dataclasses.replace(selected, body=body)
+            return selected
+        return store.selected()
 
     @staticmethod
     def _repository_root() -> Path:
@@ -294,6 +485,9 @@ class Devlegate:
     def _save_state(self, phase: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
+        if phase == "idle":
+            state.pop("selected_ticket_id", None)
+            state.pop("selected_ticket_body", None)
         temporary_name = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -419,7 +613,8 @@ class Devlegate:
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
-        pending_execution = state_phase in {"agent_pending", "merge_pending"}
+        pending_sync = state_phase in {"agent_pending", "merge_pending"}
+        pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
         if recovery:
@@ -451,7 +646,7 @@ class Devlegate:
                 return 1
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
-            if pending_execution:
+            if pending_sync:
                 old_head = str(self._state.get("local_head", ""))
                 target_head = persisted_head
                 if state_phase == "merge_pending":
@@ -564,6 +759,16 @@ class Devlegate:
                     local_head=local_head,
                     remote_head=target_head,
                     changed_paths=changed_paths,
+                    selected_ticket_id=(
+                        self._state.get("selected_ticket_id")
+                        if state_phase == "agent_pending"
+                        else None
+                    ),
+                    selected_ticket_body=(
+                        self._state.get("selected_ticket_body")
+                        if state_phase == "agent_pending"
+                        else None
+                    ),
                 )
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
@@ -617,6 +822,8 @@ class Devlegate:
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
+                    selected_ticket_id=None,
+                    selected_ticket_body=None,
                 )
             elif _git(
                 self.repo,
@@ -643,6 +850,11 @@ class Devlegate:
                 had_remote_change = True
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
+        ticket_store = self._ticket_store()
+        bound_execution = recovery or state_phase == "agent_pending"
+        selected_ticket = self._selected_ticket(
+            ticket_store, bound_execution, recovery
+        )
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -652,13 +864,18 @@ class Devlegate:
                 and str(self._state.get("handled_todo_fingerprint", ""))
                 == todo_fingerprint
             )
-            if not todo_count:
+            runnable_count = len(ticket_store.runnable)
+            if not runnable_count and not pending_agent_execution:
                 self._save_state(
                     "idle",
                     handled_remote_head=remote_head,
                     handled_todo_fingerprint=todo_fingerprint,
                 )
-                if local_ahead:
+                if todo_count and ticket_store.tickets:
+                    _log(
+                        "todo tickets are currently blocked by unfinished dependencies"
+                    )
+                elif local_ahead:
                     _log(
                         "local branch is ahead; no actionable ticket files in "
                         f"{self.todo_path}"
@@ -668,7 +885,7 @@ class Devlegate:
                 else:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
-            if generation_is_same and not pending_execution:
+            if generation_is_same and not pending_agent_execution:
                 _log(
                     "no new work generation; unchanged todo is already "
                     "handled"
@@ -681,14 +898,18 @@ class Devlegate:
                 changed_paths=changed_paths,
                 handled_remote_head=remote_head,
                 handled_todo_fingerprint=todo_fingerprint,
+                selected_ticket_id=selected_ticket.id,
+                selected_ticket_body=selected_ticket.body,
             )
 
         prompt_values = {
             "REPO_ROOT": str(self.repo),
             "REMOTE_NAME": self.remote_name,
             "REMOTE_BRANCH": self.remote_branch,
+            "BACKLOG_PATH": self.backlog_path,
             "TODO_PATH": self.todo_path,
             "REVIEW_PATH": self.review_path,
+            "DONE_PATH": self.done_path,
             "TODO_DIRECTORY": str(self.repo / self.todo_path),
             "REVIEW_DIRECTORY": str(self.repo / self.review_path),
         }
@@ -697,31 +918,60 @@ class Devlegate:
             recovery_prompt = "\n\n" + _render_prompt(
                 self.recovery_prompt_file.read_text(), prompt_values
             ).strip("\n")
-        self._save_state("agent_running")
+        self._save_state(
+            "agent_running",
+            selected_ticket_id=selected_ticket.id,
+            selected_ticket_body=selected_ticket.body,
+        )
+        ticket_file = selected_ticket.path
+        review_file = (
+            self.repo / self.review_path / f"{selected_ticket.id}.md"
+            if selected_ticket.state == "todo"
+            else None
+        )
+        execution_context = (
+            "\n\n--- Devlegate execution context ---\n"
+            f"Repository root: {self.repo}\n"
+            f"Remote: {self.remote_name}\n"
+            f"Branch: {self.remote_branch}\n"
+            f"Pulled revision: {local_head} -> {remote_head}\n"
+            f"Assigned ticket ID: {selected_ticket.id}\n"
+            f"Assigned ticket file: {ticket_file}\n"
+            f"Assigned ticket state: {selected_ticket.state}\n"
+            + (
+                f"Review destination: {review_file}\n"
+                if review_file is not None
+                else "Review destination: already in review; do not move again\n"
+            )
+            + f"Changed paths from the pulled revision:\n{changed_paths or '<none>'}\n"
+            "\n--- Assigned work ---\n"
+            f"{selected_ticket.body}"
+        )
         prompt = (
             _render_prompt(self.agent_prompt_file.read_text(), prompt_values)
-            + "\n\n--- Devlegate context ---\n"
-            + f"Repository root: {self.repo}\nRemote: {self.remote_name}\n"
-            + f"Branch: {self.remote_branch}\n"
-            + f"Pulled revision: {local_head} -> {remote_head}\n"
-            + f"Todo directory: {self.todo_path}\n"
-            + f"Review directory: {self.review_path}\n"
-            + "\nChanged paths from the pulled revision:\n"
-            + f"{changed_paths or '<none>'}\n"
+            + execution_context
         ).rstrip("\n")
         prompt += recovery_prompt
         _log(f"running OpenCode for tickets in {self.todo_path}")
-        command = [self.opencode_bin, "run", "--auto", "--model", self.opencode_model]
+        command = [
+            self.opencode_bin,
+            "run",
+            "--format",
+            "json",
+            "--auto",
+            "--model",
+            self.opencode_model,
+        ]
         if self.opencode_agent:
             command += ["--agent", self.opencode_agent]
         with _preserve_terminal():
-            agent = subprocess.run(command + [prompt], check=False)
-        if agent.returncode:
+            agent_status = _run_opencode(command, prompt)
+        if agent_status:
             phase = "recovery_failed" if recovery else "recovery_pending"
             self._recovery_pending = False if recovery else True
             self._save_state(phase)
-            _log(f"agent exited with status {agent.returncode}")
-            return agent.returncode
+            _log(f"agent exited with status {agent_status}")
+            return agent_status
         if _git(self.repo, "status", "--porcelain").stdout:
             phase = "recovery_failed" if recovery else "recovery_pending"
             self._recovery_pending = False if recovery else True
@@ -767,6 +1017,12 @@ class Devlegate:
         print(f"Devlegate {__version__} preflight")
         status = _git(self.repo, "status", "--porcelain").stdout
         todo_fingerprint, todo_count = _todo_fingerprint(self.repo, self.todo_path)
+        ticket_store = None
+        ticket_error = ""
+        try:
+            ticket_store = self._ticket_store()
+        except DevlegateError as error:
+            ticket_error = str(error)
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
@@ -806,6 +1062,8 @@ class Devlegate:
                 not bool(status),
                 "",
             ),
+            ("ticket schema", not ticket_error, ticket_error),
+            ("dependency graph", not ticket_error, ticket_error),
         ]
         failed = False
         for name, passed, detail in checks:
@@ -834,6 +1092,20 @@ class Devlegate:
             print(f"ahead/behind: {counts or '<unknown>'}")
         print(f"todo files: {todo_count}")
         print(f"todo fingerprint: {todo_fingerprint}")
+        if ticket_store is not None:
+            counts = {
+                state: sum(ticket.state == state for ticket in ticket_store.tickets)
+                for state in ("backlog", "todo", "review", "done")
+            }
+            print("Ticket storage:")
+            for state in ("backlog", "todo", "review", "done"):
+                print(f"  {state}: {counts[state]}")
+            print(f"Runnable tickets: {len(ticket_store.runnable)}")
+            selected = ticket_store.selected()
+            if selected is not None:
+                print(f"Next runnable: {selected.id} - {selected.title}")
+        elif ticket_error:
+            print(f"Ticket storage: invalid: {ticket_error}")
         print(f"work generation differs from persisted: {generation_differs}")
         print(
             "remote information is from the existing remote-tracking ref; "

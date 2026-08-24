@@ -1,3 +1,5 @@
-The previous agent attempt failed with a non-zero exit status.
+The previous execution attempt for this same assigned ticket failed with a non-zero exit status.
 
-Do not start implementing todo tickets from scratch. First review the current working tree, diff, and test state as unfinished work from that attempt. Preserve useful changes, fix or complete them, and only then process tickets if appropriate.
+Continue this ticket only. Inspect the existing working tree, diff, validation state, and the exact assigned ticket artifact supplied by Devlegate. Preserve useful work from the previous attempt. Do not select or implement other tickets.
+
+If the ticket is still in todo and recovery completes it, update the Executor report, move that exact ticket to the supplied review destination, commit, and push. If the ticket is already in review, do not fabricate or repeat the move; complete remaining implementation, report, commit, and push work for that same ticket. If recovery cannot be completed safely, report the blocker and do not substitute another ticket.

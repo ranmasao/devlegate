@@ -6,6 +6,25 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.2.4 -- 2026-08-24
+
+Structured tickets, deterministic dependency scheduling, and worker-output safety.
+
+### Added
+
+- Added restricted NanoYAML ticket metadata with canonical ticket identity and explicit backlog, todo, review, and done workflow paths.
+- Added dependency validation, cycle detection, and deterministic selection of one runnable ticket whose dependencies are done.
+- Added persisted selected-ticket identity and body binding for restart and recovery.
+
+### Changed
+
+- Switched worker execution to headless structured events and rendered worker output as inert terminal data.
+- Restricted worker input to the selected assignment and required execution context.
+
+### Fixed
+
+- Prevented terminal-control injection and invalid ticket or dependency graphs from reaching worker execution, and hardened selected-ticket recovery across restart.
+
 ## 0.2.3 -- 2026-08-22
 
 Observability and work-generation hardening.
