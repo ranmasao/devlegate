@@ -647,17 +647,49 @@ class Devlegate:
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
             if pending_sync:
-                old_head = str(self._state.get("local_head", ""))
+                persisted_local_head = str(self._state.get("local_head", ""))
                 target_head = persisted_head
                 if state_phase == "merge_pending":
-                    if local_head not in {old_head, target_head}:
+                    if local_head not in {persisted_local_head, target_head}:
                         raise DevlegateError(
                             "persisted merge revision does not match the local HEAD"
                         )
-                elif local_head != old_head:
-                    raise DevlegateError(
-                        "persisted execution local_head does not match the local HEAD"
+                elif local_head != persisted_local_head:
+                    persisted_local_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            persisted_local_head,
+                            local_head,
+                            check=False,
+                        ).returncode
+                        == 0
                     )
+                    current_local_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            local_head,
+                            persisted_local_head,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
+                    if current_local_is_ancestor:
+                        raise DevlegateError(
+                            "current local HEAD is behind the persisted execution "
+                            "HEAD; refusing rollback "
+                            f"(persisted {persisted_local_head[:12]}, "
+                            f"current {local_head[:12]}, remote {target_head[:12]})"
+                        )
+                    if not persisted_local_is_ancestor:
+                        raise DevlegateError(
+                            "current local HEAD diverged from the persisted execution "
+                            f"history (persisted {persisted_local_head[:12]}, "
+                            f"current {local_head[:12]}, remote {target_head[:12]})"
+                        )
 
                 target_is_current = target_head == remote_head
                 target_is_ancestor = (

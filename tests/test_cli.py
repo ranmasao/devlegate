@@ -701,6 +701,137 @@ def test_local_ahead_agent_pending_restart_executes_once(git_fixture, monkeypatc
     )
 
 
+def test_agent_pending_descendant_of_persisted_head_is_reconciled(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture, ticket=True)
+    replace_remote_tickets(
+        git_fixture,
+        [
+            ("ticket", "Persisted", "implement", []),
+            ("other", "Other", "do not select", []),
+        ],
+    )
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    working = git_fixture["working"]
+    monkeypatch.chdir(working)
+    git(working, "fetch", "origin", "main")
+    git(working, "merge", "--ff-only", "origin/main")
+    persisted_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=persisted_head,
+        remote_head=persisted_head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+        selected_ticket_body="implement",
+    )
+    (working / "local-progress.txt").write_text("local progress\n")
+    git(working, "add", "local-progress.txt")
+    git(working, "commit", "-m", "local progress")
+    descendant_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    result = run_devlegate(git_fixture, mode="success")
+
+    assert result.returncode == 0
+    assert "persisted execution local_head does not match" not in result.stderr
+    assert (
+        git(working, "merge-base", "--is-ancestor", descendant_head, "HEAD").returncode
+        == 0
+    )
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert "Assigned ticket ID: ticket" in git_fixture["prompt_capture"].read_text()
+    assert "do not select" not in git_fixture["prompt_capture"].read_text()
+
+
+def test_agent_pending_rollback_fails_closed(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    working = git_fixture["working"]
+    monkeypatch.chdir(working)
+    git(working, "fetch", "origin", "main")
+    git(working, "merge", "--ff-only", "origin/main")
+    persisted_remote_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    (working / "persisted-progress.txt").write_text("persisted progress\n")
+    git(working, "add", "persisted-progress.txt")
+    git(working, "commit", "-m", "persisted progress")
+    persisted_local_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "update-ref", "refs/heads/main", persisted_remote_head)
+    git(working, "checkout", "-f", "main")
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=persisted_local_head,
+        remote_head=persisted_remote_head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+    )
+
+    result = run_devlegate(git_fixture, mode="observe")
+
+    assert result.returncode == 1
+    assert "behind the persisted execution HEAD" in result.stderr
+    assert not git_fixture["marker"].exists()
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == persisted_remote_head
+
+
+def test_agent_pending_divergence_fails_closed(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    working = git_fixture["working"]
+    monkeypatch.chdir(working)
+    git(working, "fetch", "origin", "main")
+    git(working, "merge", "--ff-only", "origin/main")
+    persisted_remote_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    (working / "persisted-progress.txt").write_text("persisted progress\n")
+    git(working, "add", "persisted-progress.txt")
+    git(working, "commit", "-m", "persisted progress")
+    persisted_local_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "update-ref", "refs/heads/main", persisted_remote_head)
+    git(working, "checkout", "-f", "main")
+    (working / "diverged-progress.txt").write_text("diverged progress\n")
+    git(working, "add", "diverged-progress.txt")
+    git(working, "commit", "-m", "diverged progress")
+    divergent_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    Devlegate(config)._save_state(
+        "agent_pending",
+        local_head=persisted_local_head,
+        remote_head=persisted_remote_head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+    )
+
+    result = run_devlegate(git_fixture, mode="observe")
+
+    assert result.returncode == 1
+    assert "diverged from the persisted execution history" in result.stderr
+    assert not git_fixture["marker"].exists()
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == divergent_head
+
+
 def test_unchanged_blocked_todo_is_not_redispatched(git_fixture):
     add_remote_revision(git_fixture, ticket=True)
 
@@ -1215,7 +1346,7 @@ def test_check_is_read_only_and_reports_ready(git_fixture):
     result = run_devlegate(git_fixture, "--check")
 
     assert result.returncode == 0
-    assert "Devlegate 0.2.4 preflight" in result.stdout
+    assert "Devlegate 0.2.5 preflight" in result.stdout
     assert "Ready." in result.stdout
     assert not (git_fixture["working"] / "remote.txt").exists()
     assert not git_fixture["marker"].exists()
