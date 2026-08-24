@@ -484,6 +484,12 @@ def test_recovery_uses_review_artifact_and_persisted_body(git_fixture, monkeypat
     result = run_devlegate(git_fixture, mode="observe")
     assert result.returncode == 0
     monkeypatch.chdir(git_fixture["working"])
+    config.write_text(
+        config.read_text().replace(
+            str(git_fixture["tmp"] / "prompt.txt"),
+            str(Path(__file__).parents[1] / "agent-prompt.txt"),
+        )
+    )
     head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
     Devlegate(config)._save_state(
         "recovery_pending",
@@ -508,6 +514,12 @@ def test_recovery_uses_review_artifact_and_persisted_body(git_fixture, monkeypat
     assert "body B" not in prompt
     assert f"Assigned ticket file: {todo_path}" not in prompt
     assert "ED-18" not in prompt
+    assert "ticket is already in review" in prompt
+    assert "do not fabricate or repeat the move" in prompt
+    assert "do not change the assigned ticket's current workflow state" in prompt
+    assert "leave that ticket in todo" not in prompt
+    assert "review -> todo" not in prompt
+    assert "do not substitute another ticket" in prompt
     assert git_fixture["marker"].read_text().splitlines() == ["run", "run"]
 
 
