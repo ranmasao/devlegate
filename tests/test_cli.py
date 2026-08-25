@@ -920,6 +920,215 @@ def test_no_remote_change_does_not_start_agent(git_fixture):
     assert "no remote changes" in result.stdout
 
 
+def test_run_once_duplicate_ticket_is_a_workflow_blocker(git_fixture):
+    publisher = git_fixture["publisher"]
+    (publisher / "kanban/review/CORPUS-019.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Review"\n---\nreview\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "add review ticket")
+    git(publisher, "push")
+    (publisher / "kanban/todo/CORPUS-019.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Duplicate"\n---\ntodo\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "introduce duplicate ticket")
+    git(publisher, "push")
+
+    result = run_devlegate(git_fixture)
+
+    assert result.returncode == 1
+    assert "workflow became blocked" in result.stdout
+    assert "duplicate ticket ID CORPUS-019" in result.stdout
+    assert not git_fixture["marker"].exists()
+    state = next((git_fixture["tmp"] / "state").glob("*.json")).read_text()
+    assert '"phase": "merge_pending"' in state
+    assert "handled_remote_head" not in state
+
+
+def test_long_running_run_recovers_after_duplicate_ticket_fix(
+    git_fixture, monkeypatch, capsys
+):
+    publisher = git_fixture["publisher"]
+    (publisher / "kanban/review/CORPUS-019.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Review"\n---\nreview\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "add review ticket")
+    git(publisher, "push")
+    (publisher / "kanban/todo/CORPUS-019.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Duplicate"\n---\ntodo\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "introduce duplicate ticket")
+    git(publisher, "push")
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+    devlegate = Devlegate(config)
+    sleeps = 0
+
+    def controlled_sleep(_interval):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            (publisher / "kanban/review/CORPUS-019.md").unlink()
+            git(publisher, "add", ".")
+            git(publisher, "commit", "-m", "repair duplicate ticket")
+            git(publisher, "push")
+        else:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.cli.time.sleep", controlled_sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        devlegate.run(once=False)
+    output = capsys.readouterr().out
+    assert output.count("workflow became blocked") == 1
+    assert "workflow is valid again" in output
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_missing_managed_directory_blocks_run_once(git_fixture):
+    config = git_fixture["tmp"] / "missing.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/missing\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+
+    result = run_devlegate(git_fixture, env_file=config)
+
+    assert result.returncode == 1
+    assert "managed workflow directory is unavailable" in result.stdout
+    assert not git_fixture["marker"].exists()
+
+
+def test_graph_blocker_recovers_after_dependency_is_published(git_fixture):
+    add_remote_revision(git_fixture)
+    replace_remote_tickets(
+        git_fixture, [("ED-18", "Blocked", "work", ["ED-17"])]
+    )
+
+    blocked = run_devlegate(git_fixture)
+
+    assert blocked.returncode == 1
+    assert "workflow became blocked" in blocked.stdout
+    assert not git_fixture["marker"].exists()
+    done = git_fixture["publisher"] / "kanban/done/ED-17.md"
+    done.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\ndone\n'
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "publish dependency")
+    git(git_fixture["publisher"], "push")
+
+    repaired = run_devlegate(git_fixture)
+
+    assert repaired.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_malformed_canonical_ticket_recovers_after_remote_repair(git_fixture):
+    add_remote_revision(git_fixture)
+    malformed = git_fixture["publisher"] / "kanban/todo/ED-17.md"
+    malformed.write_text("not a ticket\n")
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "publish malformed ticket")
+    git(git_fixture["publisher"], "push")
+
+    blocked = run_devlegate(git_fixture)
+
+    assert blocked.returncode == 1
+    assert "workflow became blocked" in blocked.stdout
+    assert not git_fixture["marker"].exists()
+    malformed.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Fixed"\n---\nwork\n'
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "repair malformed ticket")
+    git(git_fixture["publisher"], "push")
+
+    repaired = run_devlegate(git_fixture)
+
+    assert repaired.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_long_running_run_recovers_after_missing_workflow_directory(
+    git_fixture, monkeypatch, capsys
+):
+    config = git_fixture["tmp"] / "missing.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/missing\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    polls = 0
+
+    def controlled_sleep(_interval):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            missing = git_fixture["working"] / "kanban/missing"
+            missing.mkdir()
+            (missing / ".gitkeep").touch()
+            git(git_fixture["working"], "add", "kanban/missing/.gitkeep")
+            git(git_fixture["working"], "commit", "-m", "restore workflow directory")
+        else:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.cli.time.sleep", controlled_sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        devlegate.run(once=False)
+    output = capsys.readouterr().out
+    assert "workflow became blocked" in output
+    assert "workflow is valid again" in output
+    assert not git_fixture["marker"].exists()
+
+
+def test_identical_workflow_blockers_are_suppressed(git_fixture, monkeypatch, capsys):
+    config = git_fixture["tmp"] / "missing.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/missing\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def stop_after_two_polls(_interval):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.cli.time.sleep", stop_after_two_polls)
+
+    with pytest.raises(KeyboardInterrupt):
+        devlegate.run(once=False)
+    assert capsys.readouterr().out.count("workflow became blocked") == 1
+
+
 def test_new_revision_without_tickets_fast_forwards_without_agent(git_fixture):
     add_remote_revision(git_fixture)
 

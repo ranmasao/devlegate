@@ -31,6 +31,10 @@ class DevlegateError(Exception):
     """A user-facing startup error."""
 
 
+class WorkflowBlockedError(DevlegateError):
+    """The repository cannot currently be interpreted safely for scheduling."""
+
+
 class SnapshotChanged(Exception):
     """The observed project changed during a status snapshot attempt."""
 
@@ -437,6 +441,7 @@ class Devlegate:
         self._state_file = self.state_dir / f"{self._state_key}.json"
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
+        self._workflow_blocker_fingerprint: str | None = None
         self._recovery_pending = False
         self._validate()
         self._state = self._load_state()
@@ -454,10 +459,21 @@ class Devlegate:
         }
 
     def _ticket_store(self) -> TicketStore:
+        for state, configured_path in self._workflow_paths().items():
+            directory = self.repo / configured_path
+            if not directory.is_dir():
+                raise WorkflowBlockedError(
+                    f"managed workflow directory is unavailable: {directory} "
+                    f"({state})"
+                )
         try:
             return load_ticket_store(self.repo, self._workflow_paths())
         except TicketError as error:
-            raise DevlegateError(str(error)) from error
+            raise WorkflowBlockedError(str(error)) from error
+        except FileNotFoundError as error:
+            raise WorkflowBlockedError(
+                "managed workflow changed while it was being observed"
+            ) from error
 
     def _selected_ticket(
         self, store: TicketStore, bound_execution: bool
@@ -1178,13 +1194,28 @@ class Devlegate:
     def run(self, once: bool) -> int:
         with self._lock():
             while True:
+                workflow_blocked = False
                 try:
                     status = self.run_once()
+                except WorkflowBlockedError as error:
+                    workflow_blocked = True
+                    message = str(error)
+                    fingerprint = hashlib.sha256(message.encode()).hexdigest()
+                    if self._workflow_blocker_fingerprint is None:
+                        _log(f"workflow became blocked: {message}")
+                    elif self._workflow_blocker_fingerprint != fingerprint:
+                        _log(f"workflow remains blocked: {message}")
+                    self._workflow_blocker_fingerprint = fingerprint
+                    status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
                     detail = getattr(error, "stderr", None) or str(error)
                     _log(f"run failed: {detail.strip()}")
                     status = 1
-                if status:
+                else:
+                    if self._workflow_blocker_fingerprint is not None:
+                        _log("workflow is valid again")
+                        self._workflow_blocker_fingerprint = None
+                if status and not workflow_blocked:
                     if not (status == 1 and self._dirty_fingerprint is not None):
                         _log(f"run failed with status {status}")
                 if once:
@@ -1595,6 +1626,9 @@ def main() -> int:
             print(f"Devlegate {__version__} preflight")
             print(f"FAIL  configuration: {error}")
             print("\nNot ready.")
+            return 1
+        if isinstance(error, WorkflowBlockedError):
+            print(f"devlegate: workflow blocked: {error}", file=sys.stderr)
             return 1
         print(f"devlegate: {error}", file=sys.stderr)
         return 1
