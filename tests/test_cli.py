@@ -406,6 +406,7 @@ def test_recovery_keeps_persisted_ticket_identity(git_fixture, monkeypatch):
         remote_head=head,
         changed_paths="",
         selected_ticket_id="ED-18",
+        selected_ticket_body="second body",
     )
 
     assert Devlegate(config).run_once() == 0
@@ -690,6 +691,7 @@ def test_local_ahead_agent_pending_restart_executes_once(git_fixture, monkeypatc
         remote_head=remote_head,
         changed_paths="",
         selected_ticket_id="ticket",
+        selected_ticket_body="changed local work",
     )
 
     assert Devlegate(config).run_once() == 1
@@ -780,6 +782,7 @@ def test_agent_pending_rollback_fails_closed(git_fixture, monkeypatch):
         remote_head=persisted_remote_head,
         changed_paths="",
         selected_ticket_id="ticket",
+        selected_ticket_body="implement",
     )
 
     result = run_devlegate(git_fixture, mode="observe")
@@ -822,6 +825,7 @@ def test_agent_pending_divergence_fails_closed(git_fixture, monkeypatch):
         remote_head=persisted_remote_head,
         changed_paths="",
         selected_ticket_id="ticket",
+        selected_ticket_body="implement",
     )
 
     result = run_devlegate(git_fixture, mode="observe")
@@ -830,6 +834,181 @@ def test_agent_pending_divergence_fails_closed(git_fixture, monkeypatch):
     assert "diverged from the persisted execution history" in result.stderr
     assert not git_fixture["marker"].exists()
     assert git(working, "rev-parse", "HEAD").stdout.strip() == divergent_head
+
+
+def test_legacy_unbound_pending_supersede_rebuilds_and_executes_once(
+    git_fixture, monkeypatch, capsys
+):
+    add_remote_revision(git_fixture)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    working = git_fixture["working"]
+    monkeypatch.chdir(working)
+    git(working, "fetch", "origin", "main")
+    git(working, "merge", "--ff-only", "origin/main")
+    revision_one = git(working, "rev-parse", "HEAD").stdout.strip()
+    devlegate = Devlegate(config)
+    devlegate._state_file.write_text(
+        '{"phase":"agent_pending","local_head":"%s",'
+        '"remote_head":"%s","changed_paths":""}\n' % (revision_one, revision_one)
+    )
+    add_remote_revision(git_fixture, ticket=True)
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+
+    restarted = Devlegate(config)
+    assert restarted.run_once() == 0
+    output = capsys.readouterr().out
+    assert "superseding pending revision" in output
+    assert "legacy unbound agent_pending state detected" in output
+    assert "recovery state has no persisted selected ticket identity" not in output
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    assert "Assigned ticket ID: ticket" in git_fixture["prompt_capture"].read_text()
+
+    assert Devlegate(config).run_once() == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    state = next((config.parent / "state").glob("*.json")).read_text()
+    assert '"phase": "idle"' in state
+    assert "selected_ticket_id" not in state
+
+
+def test_unbound_sync_without_runnable_work_settles_to_idle(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    working = git_fixture["working"]
+    monkeypatch.chdir(working)
+    git(working, "fetch", "origin", "main")
+    git(working, "merge", "--ff-only", "origin/main")
+    revision_one = git(working, "rev-parse", "HEAD").stdout.strip()
+    devlegate = Devlegate(config)
+    devlegate._state_file.write_text(
+        '{"phase":"agent_pending","local_head":"%s",'
+        '"remote_head":"%s","changed_paths":""}\n' % (revision_one, revision_one)
+    )
+    add_remote_revision(git_fixture)
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "observe")
+
+    assert Devlegate(config).run_once() == 0
+    assert not git_fixture["marker"].exists()
+    state = next((config.parent / "state").glob("*.json")).read_text()
+    assert '"phase": "idle"' in state
+    assert "selected_ticket_id" not in state
+    assert Devlegate(config).run_once() == 0
+    assert not git_fixture["marker"].exists()
+
+
+def test_fresh_remote_update_binds_before_worker_start(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+    devlegate = Devlegate(config)
+    transitions = []
+    save_state = devlegate._save_state
+
+    def record_state(phase, **fields):
+        transitions.append((phase, fields.copy()))
+        save_state(phase, **fields)
+
+    monkeypatch.setattr(devlegate, "_save_state", record_state)
+
+    assert devlegate.run_once() == 0
+    pending = [fields for phase, fields in transitions if phase == "agent_pending"]
+    assert pending
+    assert pending[0]["selected_ticket_id"] == "ticket"
+    assert pending[0]["selected_ticket_body"] == "implement\n"
+    phases = [phase for phase, _fields in transitions]
+    assert phases.index("merge_pending") < phases.index("agent_pending")
+
+
+def test_crash_after_sync_leaves_merge_pending_and_rebuilds(
+    git_fixture, monkeypatch
+):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+
+    def interrupt_selection():
+        raise RuntimeError("simulated crash before ticket selection")
+
+    monkeypatch.setattr(devlegate, "_ticket_store", interrupt_selection)
+    add_remote_revision(git_fixture, ticket=True)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        devlegate.run_once()
+    state = next((config.parent / "state").glob("*.json")).read_text()
+    assert '"phase": "merge_pending"' in state
+    assert "selected_ticket_id" not in state
+
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+    assert Devlegate(config).run_once() == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_partial_agent_pending_binding_fails_closed(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture, ticket=True)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._state_file.write_text(
+        '{"phase":"agent_pending","selected_ticket_id":"ticket",'
+        '"selected_ticket_body":null,"local_head":"%s",'
+        '"remote_head":"%s","changed_paths":""}\n' % (head, head)
+    )
+
+    result = run_devlegate(git_fixture, mode="observe")
+
+    assert result.returncode == 1
+    assert "invalid agent_pending state: selected ticket binding is incomplete" in (
+        result.stderr
+    )
+    assert not git_fixture["marker"].exists()
 
 
 def test_unchanged_blocked_todo_is_not_redispatched(git_fixture):
@@ -1066,7 +1245,15 @@ def test_interrupted_recovery_with_dirty_tree_requires_manual_intervention(
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
-    devlegate._save_state("recovery_running")
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "recovery_running",
+        local_head=head,
+        remote_head=head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+        selected_ticket_body="unfinished",
+    )
     restarted = Devlegate(config)
 
     assert restarted.run_once() == 1
@@ -1088,7 +1275,15 @@ def test_interrupted_recovery_with_clean_tree_clears_state(
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
-    devlegate._save_state("recovery_running")
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "recovery_running",
+        local_head=head,
+        remote_head=head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+        selected_ticket_body="unfinished",
+    )
     restarted = Devlegate(config)
 
     assert restarted.run_once() == 0
@@ -1111,7 +1306,15 @@ def test_interrupted_recovery_is_never_retried(
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
     devlegate = Devlegate(config)
-    devlegate._save_state("recovery_running")
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "recovery_running",
+        local_head=head,
+        remote_head=head,
+        changed_paths="",
+        selected_ticket_id="ticket",
+        selected_ticket_body="unfinished",
+    )
     restarted = Devlegate(config)
 
     assert restarted.run_once() == 1
@@ -1181,6 +1384,7 @@ def test_pending_revision_is_resumed_before_new_remote_revision(
         remote_head=revision_a,
         changed_paths=changed_paths,
         selected_ticket_id="ticket",
+        selected_ticket_body="implement",
     )
     add_remote_revision(git_fixture)
     revision_b = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()

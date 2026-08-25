@@ -362,13 +362,13 @@ class Devlegate:
             raise DevlegateError(str(error)) from error
 
     def _selected_ticket(
-        self, store: TicketStore, bound_execution: bool, recovery: bool
+        self, store: TicketStore, bound_execution: bool
     ) -> Ticket | None:
         selected_id = self._state.get("selected_ticket_id")
         if bound_execution:
             if not isinstance(selected_id, str):
                 raise DevlegateError(
-                    "recovery state has no persisted selected ticket identity"
+                    "invalid execution state: selected ticket binding is incomplete"
                 )
             selected = store.by_id.get(selected_id)
             if selected is None:
@@ -381,13 +381,12 @@ class Devlegate:
                     f"selected ticket {selected.id} has unexpected recovery state "
                     f"{selected.state}"
                 )
-            if recovery:
-                body = self._state.get("selected_ticket_body")
-                if not isinstance(body, str):
-                    raise DevlegateError(
-                        "recovery state has no persisted selected ticket body"
-                    )
-                selected = dataclasses.replace(selected, body=body)
+            body = self._state.get("selected_ticket_body")
+            if not isinstance(body, str):
+                raise DevlegateError(
+                    "invalid execution state: selected ticket binding is incomplete"
+                )
+            selected = dataclasses.replace(selected, body=body)
             return selected
         return store.selected()
 
@@ -480,7 +479,53 @@ class Devlegate:
             ) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
+        self._validate_state_invariant(state, allow_legacy_unbound=True)
         return state
+
+    @staticmethod
+    def _validate_state_invariant(
+        state: dict[str, object], *, allow_legacy_unbound: bool = False
+    ) -> None:
+        phase = state["phase"]
+        if phase not in {
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }:
+            if phase == "merge_pending":
+                required_fields = ("local_head", "remote_head", "changed_paths")
+                if not all(
+                    isinstance(state.get(field), str) for field in required_fields
+                ):
+                    raise DevlegateError(
+                        "invalid merge_pending state: synchronization coordinates "
+                        "are incomplete"
+                    )
+            return
+        required_fields = ("local_head", "remote_head", "changed_paths")
+        if not all(isinstance(state.get(field), str) for field in required_fields):
+            raise DevlegateError(
+                f"invalid {phase} state: synchronization coordinates are incomplete"
+            )
+        has_id = isinstance(state.get("selected_ticket_id"), str) and bool(
+            state["selected_ticket_id"]
+        )
+        has_body = isinstance(state.get("selected_ticket_body"), str)
+        if (
+            phase == "agent_pending"
+            and state.get("selected_ticket_id") is None
+            and state.get("selected_ticket_body") is None
+        ):
+            if allow_legacy_unbound:
+                return
+            raise DevlegateError(
+                "invalid agent_pending state: selected ticket binding is incomplete"
+            )
+        if not has_id or not has_body:
+            raise DevlegateError(
+                f"invalid {phase} state: selected ticket binding is incomplete"
+            )
 
     def _save_state(self, phase: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +533,7 @@ class Devlegate:
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
+        self._validate_state_invariant(state)
         temporary_name = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -613,8 +659,21 @@ class Devlegate:
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
+        legacy_unbound_pending = (
+            state_phase == "agent_pending"
+            and self._state.get("selected_ticket_id") is None
+            and self._state.get("selected_ticket_body") is None
+        )
+        bound_agent_execution = state_phase == "agent_pending" and not (
+            legacy_unbound_pending
+        )
+        if legacy_unbound_pending:
+            _log(
+                "legacy unbound agent_pending state detected; rebuilding "
+                "scheduling state"
+            )
         pending_sync = state_phase in {"agent_pending", "merge_pending"}
-        pending_agent_execution = state_phase == "agent_pending"
+        pending_agent_execution = bound_agent_execution
         had_remote_change = False
         local_ahead = False
         if recovery:
@@ -786,22 +845,15 @@ class Devlegate:
                 else:
                     changed_paths = str(self._state.get("changed_paths", ""))
                 remote_head = target_head
-                self._save_state(
-                    "agent_pending",
-                    local_head=local_head,
-                    remote_head=target_head,
-                    changed_paths=changed_paths,
-                    selected_ticket_id=(
-                        self._state.get("selected_ticket_id")
-                        if state_phase == "agent_pending"
-                        else None
-                    ),
-                    selected_ticket_body=(
-                        self._state.get("selected_ticket_body")
-                        if state_phase == "agent_pending"
-                        else None
-                    ),
+                synchronized_phase = (
+                    "agent_pending" if bound_agent_execution else "merge_pending"
                 )
+                synchronized_fields = {
+                    "local_head": local_head,
+                    "remote_head": target_head,
+                    "changed_paths": changed_paths,
+                }
+                self._save_state(synchronized_phase, **synchronized_fields)
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
@@ -850,12 +902,10 @@ class Devlegate:
                 )
                 local_head = actual_head
                 self._save_state(
-                    "agent_pending",
+                    "merge_pending",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
-                    selected_ticket_id=None,
-                    selected_ticket_body=None,
                 )
             elif _git(
                 self.repo,
@@ -883,10 +933,8 @@ class Devlegate:
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
         ticket_store = self._ticket_store()
-        bound_execution = recovery or state_phase == "agent_pending"
-        selected_ticket = self._selected_ticket(
-            ticket_store, bound_execution, recovery
-        )
+        bound_execution = recovery or bound_agent_execution
+        selected_ticket = self._selected_ticket(ticket_store, bound_execution)
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
