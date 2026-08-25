@@ -40,6 +40,34 @@ class SnapshotChanged(Exception):
 
 
 @dataclasses.dataclass(frozen=True)
+class ExecutionPlan:
+    """The immutable scheduling decision for one observed project state."""
+
+    action: str
+    reason: str
+    ticket_id: str | None = None
+    ticket_title: str | None = None
+    ticket_state: str | None = None
+    bound: bool = False
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "ticket": (
+                {
+                    "id": self.ticket_id,
+                    "title": self.ticket_title,
+                    "state": self.ticket_state,
+                }
+                if self.ticket_id is not None
+                else None
+            ),
+            "bound": self.bound,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class StatusSnapshot:
     phase: str
     bound_ticket_id: str | None
@@ -54,6 +82,7 @@ class StatusSnapshot:
     blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
     review: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
+    plan: ExecutionPlan
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -96,6 +125,7 @@ class StatusSnapshot:
                     else None
                 ),
             },
+            "plan": self.plan.as_dict(),
         }
 
 
@@ -521,33 +551,39 @@ class Devlegate:
         return Path(result.stdout.strip()).resolve()
 
     def _validate(self) -> None:
-        if not self.agent_prompt_file.is_file():
-            raise DevlegateError(
-                f"agent prompt file not found: {self.agent_prompt_file}"
-            )
-        if not self.recovery_prompt_file.is_file():
-            raise DevlegateError(
-                f"recovery prompt file not found: {self.recovery_prompt_file}"
-            )
-        if not self.poll_interval.isdecimal():
-            raise DevlegateError("POLL_INTERVAL must be an integer")
-        if not self.opencode_model:
-            raise DevlegateError("OPENCODE_MODEL is required")
-        if shutil.which(self.opencode_bin) is None:
-            raise DevlegateError(f"OpenCode executable not found: {self.opencode_bin}")
+        if not self.read_only:
+            if not self.agent_prompt_file.is_file():
+                raise DevlegateError(
+                    f"agent prompt file not found: {self.agent_prompt_file}"
+                )
+            if not self.recovery_prompt_file.is_file():
+                raise DevlegateError(
+                    f"recovery prompt file not found: {self.recovery_prompt_file}"
+                )
+            if not self.poll_interval.isdecimal():
+                raise DevlegateError("POLL_INTERVAL must be an integer")
+            if not self.opencode_model:
+                raise DevlegateError("OPENCODE_MODEL is required")
+            if shutil.which(self.opencode_bin) is None:
+                raise DevlegateError(
+                    f"OpenCode executable not found: {self.opencode_bin}"
+                )
         branch = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         if branch.returncode:
-            raise DevlegateError("detached HEAD is not supported")
-        self.current_branch = branch.stdout.strip()
+            if not self.read_only:
+                raise DevlegateError("detached HEAD is not supported")
+            self.current_branch = "<detached>"
+        else:
+            self.current_branch = branch.stdout.strip()
         self.remote_branch = self.remote_branch or self.current_branch
-        if self.current_branch != self.remote_branch:
+        if not self.read_only and self.current_branch != self.remote_branch:
             raise DevlegateError(
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
             )
-        if _git(
+        if not self.read_only and _git(
             self.repo, "remote", "get-url", self.remote_name, check=False
         ).returncode:
             raise DevlegateError(f"git remote not found: {self.remote_name}")
@@ -1067,7 +1103,16 @@ class Devlegate:
                 return 1
         ticket_store = self._ticket_store()
         bound_execution = recovery or bound_agent_execution
-        selected_ticket = self._selected_ticket(ticket_store, bound_execution)
+        execution_plan = self._make_execution_plan(self._state, ticket_store, False)
+        if execution_plan.action == "blocked":
+            raise DevlegateError(execution_plan.reason)
+        if execution_plan.action == "none" and not recovery:
+            selected_ticket = None
+        elif bound_execution:
+            selected_ticket = self._selected_ticket(ticket_store, True)
+        else:
+            assert execution_plan.ticket_id is not None
+            selected_ticket = ticket_store.by_id[execution_plan.ticket_id]
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -1077,8 +1122,7 @@ class Devlegate:
                 and str(self._state.get("handled_todo_fingerprint", ""))
                 == todo_fingerprint
             )
-            runnable_count = len(ticket_store.runnable)
-            if not runnable_count and not pending_agent_execution:
+            if selected_ticket is None and not pending_agent_execution:
                 self._save_state(
                     "idle",
                     handled_remote_head=remote_head,
@@ -1251,6 +1295,10 @@ class Devlegate:
             raw = self._state_file.read_bytes()
         except FileNotFoundError:
             return {"phase": "idle"}, "missing"
+        except OSError as error:
+            raise DevlegateError(
+                f"cannot read state file {self._state_file}: {error}"
+            ) from error
         try:
             state = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -1266,15 +1314,18 @@ class Devlegate:
         branch_result = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
-        if branch_result.returncode:
-            raise DevlegateError("detached HEAD is not supported")
+        branch = (
+            branch_result.stdout.strip()
+            if branch_result.returncode == 0
+            else "<detached>"
+        )
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         remote_result = _git(
             self.repo, "rev-parse", "--verify", remote_ref, check=False
         )
         return {
-            "branch": branch_result.stdout.strip(),
+            "branch": branch,
             "local_head": local_head,
             "remote_ref": remote_ref,
             "remote_head": (
@@ -1283,7 +1334,9 @@ class Devlegate:
             "status": _git(self.repo, "status", "--porcelain").stdout,
         }
 
-    def _collect_status_attempt(self) -> StatusSnapshot:
+    def _collect_status_attempt(
+        self, *, allow_workflow_blocked: bool = False
+    ) -> StatusSnapshot:
         state_before, state_token_before = self._status_state_observation()
         self._status_snapshot_hook("after-state-before")
         git_before = self._status_git_observation()
@@ -1294,6 +1347,8 @@ class Devlegate:
             )
         except FileNotFoundError as error:
             raise SnapshotChanged from error
+        except OSError as error:
+            raise DevlegateError(f"cannot observe workflow files: {error}") from error
         self._status_snapshot_hook("after-workflow-before")
 
         ticket_error: DevlegateError | None = None
@@ -1314,6 +1369,8 @@ class Devlegate:
             )
         except FileNotFoundError as error:
             raise SnapshotChanged from error
+        except OSError as error:
+            raise DevlegateError(f"cannot observe workflow files: {error}") from error
         git_after = self._status_git_observation()
         state_after, state_token_after = self._status_state_observation()
         if (
@@ -1322,17 +1379,45 @@ class Devlegate:
             or workflow_token_before != workflow_token_after
         ):
             raise SnapshotChanged
-        if ticket_error is not None:
+        if ticket_error is not None and not allow_workflow_blocked:
             raise ticket_error
-        assert ticket_store is not None
-        return self._make_status_snapshot(state_after, git_after, ticket_store)
+        return self._make_status_snapshot(
+            state_after, git_after, ticket_store, workflow_error=ticket_error
+        )
 
     def _make_status_snapshot(
         self,
         state: dict[str, object],
         git_observation: dict[str, object],
-        ticket_store: TicketStore,
+        ticket_store: TicketStore | None,
+        workflow_error: DevlegateError | None = None,
     ) -> StatusSnapshot:
+        if ticket_store is None:
+            return StatusSnapshot(
+                phase=str(state["phase"]),
+                bound_ticket_id=None,
+                persisted_body_present=False,
+                branch=str(git_observation["branch"]),
+                local_head=str(git_observation["local_head"]),
+                remote_ref=str(git_observation["remote_ref"]),
+                remote_head=(
+                    str(git_observation["remote_head"])
+                    if git_observation["remote_head"] is not None
+                    else None
+                ),
+                working_tree_clean=not bool(git_observation["status"]),
+                counts=tuple(
+                    (state_name, 0)
+                    for state_name in ("backlog", "todo", "review", "done")
+                ),
+                runnable=(),
+                blocked=(),
+                review=(),
+                next_ticket=None,
+                plan=ExecutionPlan(
+                    "blocked", str(workflow_error or "workflow is invalid")
+                ),
+            )
         counts = tuple(
             (
                 state_name,
@@ -1372,6 +1457,20 @@ class Devlegate:
             "recovery_pending",
             "recovery_running",
         }
+        plan = self._make_execution_plan(
+            state,
+            ticket_store,
+            bool(git_observation["status"]),
+            str(git_observation["branch"]) == self.remote_branch,
+        )
+        next_ticket = (
+            (
+                ticket_store.by_id[plan.ticket_id].id,
+                ticket_store.by_id[plan.ticket_id].title,
+            )
+            if plan.ticket_id is not None and plan.ticket_id in ticket_store.by_id
+            else None
+        )
         return StatusSnapshot(
             phase=str(state["phase"]),
             bound_ticket_id=(
@@ -1392,11 +1491,63 @@ class Devlegate:
             runnable=runnable,
             blocked=blocked,
             review=review,
-            next_ticket=(
-                (ticket_store.selected().id, ticket_store.selected().title)
-                if ticket_store.selected() is not None
+            next_ticket=next_ticket,
+            plan=plan,
+        )
+
+    def _make_execution_plan(
+        self,
+        state: dict[str, object],
+        ticket_store: TicketStore,
+        dirty: bool,
+        branch_ok: bool = True,
+    ) -> ExecutionPlan:
+        if not branch_ok:
+            return ExecutionPlan(
+                "blocked", "current checkout is not on the configured branch"
+            )
+        if dirty:
+            return ExecutionPlan("blocked", "working tree is dirty")
+        bound_phase = str(state["phase"]) in {
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
+        if bound_phase:
+            ticket_id = state.get("selected_ticket_id")
+            ticket = (
+                ticket_store.by_id.get(ticket_id)
+                if isinstance(ticket_id, str)
                 else None
-            ),
+            )
+            if ticket is None:
+                return ExecutionPlan(
+                    "blocked", "persisted selected ticket is not in managed storage"
+                )
+            if ticket.state not in {"todo", "review"}:
+                return ExecutionPlan(
+                    "blocked",
+                    "selected ticket "
+                    f"{ticket.id} has unexpected recovery state {ticket.state}",
+                )
+            return ExecutionPlan(
+                "run-worker",
+                "resume persisted bound execution",
+                ticket.id,
+                ticket.title,
+                ticket.state,
+                True,
+            )
+        selected = ticket_store.selected()
+        if selected is None:
+            return ExecutionPlan("none", "no runnable tickets")
+        return ExecutionPlan(
+            "run-worker",
+            "deterministic runnable ticket selection",
+            selected.id,
+            selected.title,
+            selected.state,
         )
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
@@ -1472,6 +1623,29 @@ class Devlegate:
             print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
         else:
             print(self._render_status_text(snapshot))
+        return 0
+
+    def plan(self, json_output: bool = False) -> int:
+        for _attempt in range(3):
+            try:
+                snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
+                break
+            except SnapshotChanged:
+                continue
+        else:
+            raise DevlegateError(
+                "project state changed while execution plan was being collected"
+            )
+        if json_output:
+            print(json.dumps(snapshot.plan.as_dict(), indent=2, sort_keys=True))
+        else:
+            plan = snapshot.plan
+            print(f"action: {plan.action}")
+            print(f"reason: {plan.reason}")
+            if plan.ticket_id is not None:
+                print(f"ticket: {plan.ticket_id}  {plan.ticket_title}")
+                print(f"ticket state: {plan.ticket_state}")
+            print(f"bound: {'yes' if plan.bound else 'no'}")
         return 0
 
     def check(self) -> int:
@@ -1612,6 +1786,15 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument(
         "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
+    plan_parser = commands.add_parser(
+        "plan", help="show the read-only execution plan"
+    )
+    plan_parser.add_argument(
+        "--json", action="store_true", help="render the plan as JSON"
+    )
+    plan_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
     return parser
 
 
@@ -1634,9 +1817,11 @@ def main() -> int:
         build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"
     try:
-        devlegate = Devlegate(env_file, read_only=args.command == "status")
+        devlegate = Devlegate(env_file, read_only=args.command in {"status", "plan"})
         if args.command == "status":
             return devlegate.status(args.json)
+        if args.command == "plan":
+            return devlegate.plan(args.json)
         if args.command == "check":
             return devlegate.check()
         return devlegate.run(args.once)

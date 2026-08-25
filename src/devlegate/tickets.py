@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping
 
 from nanoyaml import NanoYAMLError, loads
@@ -37,31 +38,38 @@ class Ticket:
 @dataclass(frozen=True)
 class TicketStore:
     tickets: tuple[Ticket, ...]
+    _index: Mapping[str, Ticket] = field(init=False, repr=False, compare=False)
+    _runnable: tuple[Ticket, ...] = field(init=False, repr=False, compare=False)
 
-    @property
-    def by_id(self) -> dict[str, Ticket]:
-        return {ticket.id: ticket for ticket in self.tickets}
-
-    @property
-    def runnable(self) -> tuple[Ticket, ...]:
-        tickets = self.by_id
-        return tuple(
+    def __post_init__(self) -> None:
+        index = {ticket.id: ticket for ticket in self.tickets}
+        runnable = tuple(
             sorted(
                 (
                     ticket
                     for ticket in self.tickets
                     if ticket.state == "todo"
                     and all(
-                        tickets[dependency].state == "done"
+                        index[dependency].state == "done"
                         for dependency in ticket.depends_on
                     )
                 ),
                 key=lambda ticket: ticket.id,
             )
         )
+        object.__setattr__(self, "_index", MappingProxyType(index))
+        object.__setattr__(self, "_runnable", runnable)
+
+    @property
+    def by_id(self) -> Mapping[str, Ticket]:
+        return self._index
+
+    @property
+    def runnable(self) -> tuple[Ticket, ...]:
+        return self._runnable
 
     def selected(self) -> Ticket | None:
-        return self.runnable[0] if self.runnable else None
+        return self._runnable[0] if self._runnable else None
 
 
 def _ticket_error(path: Path, reason: str) -> TicketError:

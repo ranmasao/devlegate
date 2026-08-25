@@ -2288,7 +2288,7 @@ def test_check_is_read_only_and_reports_ready(git_fixture):
     result = run_devlegate(git_fixture, "--check")
 
     assert result.returncode == 0
-    assert "Devlegate 0.2.5 preflight" in result.stdout
+    assert "Devlegate 0.3.0 preflight" in result.stdout
     assert "Ready." in result.stdout
     assert not (git_fixture["working"] / "remote.txt").exists()
     assert not git_fixture["marker"].exists()

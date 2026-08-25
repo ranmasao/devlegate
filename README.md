@@ -26,9 +26,11 @@ From the target project's repository root, run the installed CLI through the hel
 /path/to/devlegate/dev check
 /path/to/devlegate/dev status
 /path/to/devlegate/dev status --json
+/path/to/devlegate/dev plan
+/path/to/devlegate/dev plan --json
 ```
 
-The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only, does not fetch, and reports one optimistic consistent snapshot; retry if project state changes continuously while it is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
+The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
 For 0.2.x compatibility, bare `devlegate` runs the normal workflow, and legacy `devlegate --once` and `devlegate --check` forms remain accepted. The command forms are canonical.
 
@@ -71,7 +73,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 ## Current safety rules
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
-- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing directories are empty; only canonical `<ID>.md` entries are tickets, while other human/editor artifacts are ignored.
+- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing configured directories block planning and execution; only canonical `<ID>.md` entries are tickets, while other human/editor artifacts are ignored.
 - Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support legacy free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and dispatches exactly one ticket per OpenCode execution.
