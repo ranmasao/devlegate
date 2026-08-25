@@ -639,13 +639,11 @@ class Devlegate:
             ) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
-        self._validate_state_invariant(state, allow_legacy_unbound=True)
+        self._validate_state_invariant(state)
         return state
 
     @staticmethod
-    def _validate_state_invariant(
-        state: dict[str, object], *, allow_legacy_unbound: bool = False
-    ) -> None:
+    def _validate_state_invariant(state: dict[str, object]) -> None:
         phase = state["phase"]
         if phase not in {
             "agent_pending",
@@ -672,16 +670,6 @@ class Devlegate:
             state["selected_ticket_id"]
         )
         has_body = isinstance(state.get("selected_ticket_body"), str)
-        if (
-            phase == "agent_pending"
-            and state.get("selected_ticket_id") is None
-            and state.get("selected_ticket_body") is None
-        ):
-            if allow_legacy_unbound:
-                return
-            raise DevlegateError(
-                "invalid agent_pending state: selected ticket binding is incomplete"
-            )
         if not has_id or not has_body:
             raise DevlegateError(
                 f"invalid {phase} state: selected ticket binding is incomplete"
@@ -834,21 +822,8 @@ class Devlegate:
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
-        legacy_unbound_pending = (
-            state_phase == "agent_pending"
-            and self._state.get("selected_ticket_id") is None
-            and self._state.get("selected_ticket_body") is None
-        )
-        bound_agent_execution = state_phase == "agent_pending" and not (
-            legacy_unbound_pending
-        )
-        if legacy_unbound_pending:
-            _log(
-                "legacy unbound agent_pending state detected; rebuilding "
-                "scheduling state"
-            )
         pending_sync = state_phase in {"agent_pending", "merge_pending"}
-        pending_agent_execution = bound_agent_execution
+        pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
         if recovery:
@@ -1021,7 +996,7 @@ class Devlegate:
                     changed_paths = str(self._state.get("changed_paths", ""))
                 remote_head = target_head
                 synchronized_phase = (
-                    "agent_pending" if bound_agent_execution else "merge_pending"
+                    "agent_pending" if pending_agent_execution else "merge_pending"
                 )
                 synchronized_fields = {
                     "local_head": local_head,
@@ -1108,7 +1083,7 @@ class Devlegate:
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
         ticket_store = self._ticket_store()
-        bound_execution = recovery or bound_agent_execution
+        bound_execution = recovery or pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
             ticket_store,
@@ -1833,7 +1808,7 @@ class Devlegate:
         print(f"work generation differs from persisted: {generation_differs}")
         print(
             "remote information is from the existing remote-tracking ref; "
-            "--check does not fetch"
+            "check does not fetch"
         )
         if failed:
             print("\nNot ready.")
@@ -1890,19 +1865,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Run the command-line interface."""
-    argv = sys.argv[1:]
-    if argv and argv[0] in {"--help", "-h", "--version"}:
-        normalized_argv = argv
-    elif not argv or argv[0].startswith("-"):
-        if "--check" in argv:
-            normalized_argv = [
-                "check"
-            ] + [argument for argument in argv if argument not in {"--check", "--once"}]
-        else:
-            normalized_argv = ["run", *argv]
-    else:
-        normalized_argv = argv
-    args = build_parser().parse_args(normalized_argv)
+    args = build_parser().parse_args(sys.argv[1:])
     if args.command is None:
         build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"

@@ -26,7 +26,7 @@ def make_checkout(tmp_path: Path, launcher: str, *, cli: bool = True) -> Path:
     return checkout
 
 
-@pytest.mark.parametrize("launcher", ["dev", "devlegate.sh"])
+@pytest.mark.parametrize("launcher", ["dev"])
 def test_launcher_preserves_cwd_and_arguments(tmp_path, launcher):
     checkout = make_checkout(tmp_path, launcher)
     target = tmp_path / "target project"
@@ -34,7 +34,7 @@ def test_launcher_preserves_cwd_and_arguments(tmp_path, launcher):
     command = [str(checkout / launcher)]
     if launcher == "dev":
         command.append("run")
-    command += ["--watch", "--env", "file with spaces"]
+    command += ["run", "--once", "--env", "file with spaces"]
 
     result = subprocess.run(
         command,
@@ -47,13 +47,14 @@ def test_launcher_preserves_cwd_and_arguments(tmp_path, launcher):
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         f"cwd={target}",
-        "arg=--watch",
+        "arg=run",
+        "arg=--once",
         "arg=--env",
         "arg=file with spaces",
     ]
 
 
-@pytest.mark.parametrize("launcher", ["dev", "devlegate.sh"])
+@pytest.mark.parametrize("launcher", ["dev"])
 def test_launcher_explains_setup_when_cli_is_missing(tmp_path, launcher):
     checkout = make_checkout(tmp_path, launcher, cli=False)
     command = [str(checkout / launcher)]

@@ -218,7 +218,7 @@ def run_devlegate(fixture, *args, env_file=None, mode="success", output_mode=Non
         environment["FAKE_OUTPUT_MODE"] = output_mode
     environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
     return subprocess.run(
-        [sys.executable, "-m", "devlegate", "--once", *args, "--env", config],
+        [sys.executable, "-m", "devlegate", "run", "--once", *args, "--env", config],
         cwd=fixture["working"],
         env=environment,
         text=True,
@@ -248,6 +248,28 @@ def run_status(fixture, *args, env_file=None):
     )
 
 
+def run_check(fixture, *args, env_file=None):
+    config = env_file or fixture["tmp"] / "config.env"
+    if not config.exists():
+        config.write_text(
+            f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+            f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+            f"AGENT_PROMPT_FILE={fixture['tmp'] / 'prompt.txt'}\n"
+            f"OPENCODE_BIN={fixture['fake']}\nOPENCODE_MODEL=fake\n"
+            f"STATE_DIR={fixture['tmp'] / 'state'}\n"
+        )
+    (fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    return subprocess.run(
+        [sys.executable, "-m", "devlegate", "check", *args, "--env", config],
+        cwd=fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+
 def run_plan(fixture, *args, env_file=None):
     config = env_file or fixture["tmp"] / "config.env"
     if not config.exists():
@@ -260,6 +282,18 @@ def run_plan(fixture, *args, env_file=None):
     environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
     return subprocess.run(
         [sys.executable, "-m", "devlegate", "plan", *args, "--env", config],
+        cwd=fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+
+def run_cli(fixture, *args):
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    return subprocess.run(
+        [sys.executable, "-m", "devlegate", *args],
         cwd=fixture["working"],
         env=environment,
         text=True,
@@ -288,7 +322,7 @@ def test_plan_help(monkeypatch, capsys):
     assert "usage: devlegate plan" in capsys.readouterr().out
 
 
-def test_command_parser_exposes_run_check_and_status():
+def test_command_parser_exposes_current_commands():
     parser = build_parser()
 
     assert parser.parse_args(["run"]).command == "run"
@@ -297,6 +331,47 @@ def test_command_parser_exposes_run_check_and_status():
     status = parser.parse_args(["status", "--json"])
     assert status.command == "status"
     assert status.json
+    assert parser.parse_args(["plan", "--json"]).command == "plan"
+
+
+@pytest.mark.parametrize("arguments", [(), ("--once",), ("--check",)])
+def test_removed_top_level_cli_forms_are_rejected(git_fixture, arguments):
+    result = run_cli(git_fixture, *arguments)
+
+    assert result.returncode == 2
+    assert not git_fixture["marker"].exists()
+    if not arguments:
+        assert "command is required" in result.stderr
+
+
+def test_unbound_agent_pending_state_is_rejected(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "invalid-pending.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    devlegate._state_file.write_text(
+        json.dumps(
+            {
+                "phase": "agent_pending",
+                "local_head": "local",
+                "remote_head": "remote",
+                "changed_paths": "",
+            }
+        )
+    )
+
+    result = run_devlegate(git_fixture, env_file=config)
+
+    assert result.returncode == 1
+    assert "selected ticket binding is incomplete" in result.stderr
+    assert not git_fixture["marker"].exists()
 
 
 def test_status_text_reports_one_observed_snapshot(git_fixture):
@@ -977,7 +1052,7 @@ def test_recovery_unexpected_done_ticket_fails_closed(git_fixture, monkeypatch):
     monkeypatch.setenv("FAKE_MODE", "observe")
 
     result = subprocess.run(
-        [sys.executable, "-m", "devlegate", "--once", "--env", config],
+        [sys.executable, "-m", "devlegate", "run", "--once", "--env", config],
         cwd=git_fixture["working"],
         env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
         text=True,
@@ -1650,86 +1725,6 @@ def test_agent_pending_divergence_fails_closed(git_fixture, monkeypatch):
     assert git(working, "rev-parse", "HEAD").stdout.strip() == divergent_head
 
 
-def test_legacy_unbound_pending_supersede_rebuilds_and_executes_once(
-    git_fixture, monkeypatch, capsys
-):
-    add_remote_revision(git_fixture)
-    config = git_fixture["tmp"] / "config.env"
-    config.write_text(
-        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
-        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
-        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
-        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
-        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
-    )
-    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
-    working = git_fixture["working"]
-    monkeypatch.chdir(working)
-    git(working, "fetch", "origin", "main")
-    git(working, "merge", "--ff-only", "origin/main")
-    revision_one = git(working, "rev-parse", "HEAD").stdout.strip()
-    devlegate = Devlegate(config)
-    devlegate._state_file.write_text(
-        '{"phase":"agent_pending","local_head":"%s",'
-        '"remote_head":"%s","changed_paths":""}\n' % (revision_one, revision_one)
-    )
-    add_remote_revision(git_fixture, ticket=True)
-    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
-    monkeypatch.setenv("FAKE_PROMPT", str(git_fixture["prompt_capture"]))
-    monkeypatch.setenv("FAKE_MODE", "success")
-
-    restarted = Devlegate(config)
-    assert restarted.run_once() == 0
-    output = capsys.readouterr().out
-    assert "superseding pending revision" in output
-    assert "legacy unbound agent_pending state detected" in output
-    assert "recovery state has no persisted selected ticket identity" not in output
-    assert git_fixture["marker"].read_text().splitlines() == ["run"]
-    assert "Assigned ticket ID: ticket" in git_fixture["prompt_capture"].read_text()
-
-    assert Devlegate(config).run_once() == 0
-    assert git_fixture["marker"].read_text().splitlines() == ["run"]
-    state = next((config.parent / "state").glob("*.json")).read_text()
-    assert '"phase": "idle"' in state
-    assert "selected_ticket_id" not in state
-
-
-def test_unbound_sync_without_runnable_work_settles_to_idle(
-    git_fixture, monkeypatch
-):
-    add_remote_revision(git_fixture)
-    config = git_fixture["tmp"] / "config.env"
-    config.write_text(
-        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
-        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
-        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
-        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
-        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
-    )
-    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
-    working = git_fixture["working"]
-    monkeypatch.chdir(working)
-    git(working, "fetch", "origin", "main")
-    git(working, "merge", "--ff-only", "origin/main")
-    revision_one = git(working, "rev-parse", "HEAD").stdout.strip()
-    devlegate = Devlegate(config)
-    devlegate._state_file.write_text(
-        '{"phase":"agent_pending","local_head":"%s",'
-        '"remote_head":"%s","changed_paths":""}\n' % (revision_one, revision_one)
-    )
-    add_remote_revision(git_fixture)
-    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
-    monkeypatch.setenv("FAKE_MODE", "observe")
-
-    assert Devlegate(config).run_once() == 0
-    assert not git_fixture["marker"].exists()
-    state = next((config.parent / "state").glob("*.json")).read_text()
-    assert '"phase": "idle"' in state
-    assert "selected_ticket_id" not in state
-    assert Devlegate(config).run_once() == 0
-    assert not git_fixture["marker"].exists()
-
-
 def test_fresh_remote_update_binds_before_worker_start(git_fixture, monkeypatch):
     add_remote_revision(git_fixture, ticket=True)
     config = git_fixture["tmp"] / "config.env"
@@ -2294,17 +2289,10 @@ def test_once_and_explicit_env_file(git_fixture):
     env_file = git_fixture["tmp"] / "custom.env"
     add_remote_revision(git_fixture)
 
-    result = run_devlegate(git_fixture, "--once", env_file=env_file)
+    result = run_devlegate(git_fixture, env_file=env_file)
 
     assert result.returncode == 0
     assert (git_fixture["working"] / "remote.txt").exists()
-
-
-def test_watch_is_rejected(git_fixture):
-    result = run_devlegate(git_fixture, "--watch")
-
-    assert result.returncode == 2
-    assert "unrecognized arguments: --watch" in result.stderr
 
 
 def test_default_state_directory_uses_xdg(git_fixture, monkeypatch):
@@ -2361,7 +2349,7 @@ def test_env_example_uses_optional_prompt_paths():
 
 def test_check_is_read_only_and_reports_ready(git_fixture):
     add_remote_revision(git_fixture)
-    result = run_devlegate(git_fixture, "--check")
+    result = run_check(git_fixture)
 
     assert result.returncode == 0
     assert "Devlegate 0.3.0 preflight" in result.stdout
@@ -2374,13 +2362,13 @@ def test_check_is_read_only_and_reports_ready(git_fixture):
     assert "Ticket storage:" in result.stdout
     assert "Runnable tickets: 0" in result.stdout
     assert "work generation differs from persisted: True" in result.stdout
-    assert "--check does not fetch" in result.stdout
+    assert "check does not fetch" in result.stdout
 
 
 def test_check_reports_dirty_details(git_fixture):
     (git_fixture["working"] / "tracked.txt").write_text("changed\n")
 
-    result = run_devlegate(git_fixture, "--check")
+    result = run_check(git_fixture)
 
     assert result.returncode == 1
     assert "working tree clean" in result.stdout
@@ -2392,7 +2380,7 @@ def test_check_reports_invalid_configuration(git_fixture):
     config = git_fixture["tmp"] / "invalid.env"
     config.write_text("REMOTE_BRANCH=main\n")
 
-    result = run_devlegate(git_fixture, "--check", env_file=config)
+    result = run_check(git_fixture, env_file=config)
 
     assert result.returncode == 1
     assert "FAIL  configuration" in result.stdout
