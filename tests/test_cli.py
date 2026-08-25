@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from devlegate.cli import Devlegate, _preserve_terminal, build_parser, main
+from devlegate.cli import (
+    Devlegate,
+    _has_todo_files,
+    _preserve_terminal,
+    _todo_fingerprint,
+    build_parser,
+    main,
+)
 
 
 @pytest.fixture
@@ -212,6 +219,39 @@ def test_help(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "usage: devlegate" in output
+
+
+def test_noncanonical_todo_artifacts_do_not_change_fingerprint_or_presence(tmp_path):
+    todo = tmp_path / "kanban/todo"
+    todo.mkdir(parents=True)
+    canonical = todo / "ED-17.md"
+    canonical.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Ticket"\n---\nbody\n'
+    )
+    first = _todo_fingerprint(tmp_path, "kanban/todo")
+    assert _has_todo_files(tmp_path, "kanban/todo")
+
+    temporary = todo / ".ED-17.md.swp"
+    temporary.write_text("one\n")
+    second = _todo_fingerprint(tmp_path, "kanban/todo")
+    temporary.write_text("two\n")
+    third = _todo_fingerprint(tmp_path, "kanban/todo")
+    temporary.unlink()
+    fourth = _todo_fingerprint(tmp_path, "kanban/todo")
+
+    assert first == second == third == fourth
+    canonical.write_text(canonical.read_text() + "changed\n")
+    assert _todo_fingerprint(tmp_path, "kanban/todo") != first
+
+
+def test_non_ticket_only_todo_has_no_work(tmp_path):
+    todo = tmp_path / "kanban/todo"
+    todo.mkdir(parents=True)
+    for name in (".gitkeep", "notes.txt", ".foo.swp", "foo.tmp"):
+        (todo / name).write_text("not a ticket\n")
+
+    assert not _has_todo_files(tmp_path, "kanban/todo")
+    assert _todo_fingerprint(tmp_path, "kanban/todo")[1] == 0
 
 
 def test_version(capsys):

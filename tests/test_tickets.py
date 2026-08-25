@@ -59,14 +59,38 @@ def test_frontmatter_delimiters_and_nanoyaml_are_strict(tmp_path, content, messa
         load_ticket_store(tmp_path, PATHS)
 
 
-def test_invalid_filename_identity_fails(tmp_path):
+def test_noncanonical_filename_is_not_ticket(tmp_path):
     directory = tmp_path / "kanban/todo"
     directory.mkdir(parents=True)
     (directory / "bad id.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Bad"\n---\nbody\n'
     )
 
-    with pytest.raises(TicketError, match="filename"):
+    assert load_ticket_store(tmp_path, PATHS).tickets == ()
+
+
+def test_editor_artifacts_are_ignored_beside_canonical_ticket(tmp_path):
+    write_ticket(tmp_path, "review", "CORPUS-018")
+    directory = tmp_path / "kanban/review"
+    for name in (
+        ".CORPUS-018.md.swp",
+        "CORPUS-018.md~",
+        ".#CORPUS-018.md",
+        "notes.txt",
+        "arbitrary.tmp",
+    ):
+        (directory / name).write_text("temporary\n")
+
+    store = load_ticket_store(tmp_path, PATHS)
+
+    assert [ticket.id for ticket in store.tickets] == ["CORPUS-018"]
+
+
+def test_canonical_directory_entry_fails_closed(tmp_path):
+    directory = tmp_path / "kanban/todo/ED-17.md"
+    directory.mkdir(parents=True)
+
+    with pytest.raises(TicketError, match="invalid managed ticket entry"):
         load_ticket_store(tmp_path, PATHS)
 
 

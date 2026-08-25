@@ -19,6 +19,11 @@ _WORKFLOW_STATES = ("backlog", "todo", "review", "done")
 _METADATA_KEYS = {"type", "title", "depends_on"}
 
 
+def is_canonical_ticket_name(name: str) -> bool:
+    """Return whether a managed-directory entry claims canonical ticket identity."""
+    return name.endswith(".md") and bool(_ID.fullmatch(name[:-3]))
+
+
 @dataclass(frozen=True)
 class Ticket:
     id: str
@@ -87,7 +92,7 @@ def _split_ticket(path: Path) -> tuple[str, str]:
 
 def _parse_ticket(path: Path, state: str) -> Ticket:
     ticket_id = path.stem
-    if path.suffix != ".md" or not _ID.fullmatch(ticket_id):
+    if not is_canonical_ticket_name(path.name):
         raise _ticket_error(path, "filename must be a valid ticket ID ending in .md")
     metadata_text, body = _split_ticket(path)
     try:
@@ -165,12 +170,10 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
         if not directory.is_dir():
             raise TicketError(f"managed workflow path is not a directory: {directory}")
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
-            if path.name == ".gitkeep":
-                if path.is_file():
-                    continue
-                raise TicketError(f"invalid managed workflow entry: {path}")
-            if not path.is_file():
-                raise TicketError(f"invalid managed workflow entry: {path}")
+            if not is_canonical_ticket_name(path.name):
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise TicketError(f"invalid managed ticket entry: {path}")
             ticket = _parse_ticket(path, state)
             locations.setdefault(ticket.id, []).append(path)
             tickets.append(ticket)
@@ -189,4 +192,10 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
     return TicketStore(tuple(sorted(tickets, key=lambda item: item.id)))
 
 
-__all__ = ["Ticket", "TicketError", "TicketStore", "load_ticket_store"]
+__all__ = [
+    "Ticket",
+    "TicketError",
+    "TicketStore",
+    "is_canonical_ticket_name",
+    "load_ticket_store",
+]

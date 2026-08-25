@@ -18,7 +18,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from devlegate import __version__
-from devlegate.tickets import Ticket, TicketError, TicketStore, load_ticket_store
+from devlegate.tickets import (
+    Ticket,
+    TicketError,
+    TicketStore,
+    is_canonical_ticket_name,
+    load_ticket_store,
+)
 
 
 class DevlegateError(Exception):
@@ -232,7 +238,10 @@ def _run_opencode(command: list[str], prompt: str) -> int:
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
     todo_dir = repo / todo_path
     return todo_dir.is_dir() and any(
-        item.is_file() and item.name != ".gitkeep" for item in todo_dir.rglob("*")
+        is_canonical_ticket_name(item.name)
+        and not item.is_symlink()
+        and item.is_file()
+        for item in todo_dir.iterdir()
     )
 
 
@@ -240,11 +249,14 @@ def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
     todo_dir = repo / todo_path
     entries: list[str] = []
     if todo_dir.is_dir():
-        for item in todo_dir.rglob("*"):
-            if item.is_file() and not item.is_symlink() and item.name != ".gitkeep":
-                relative = item.relative_to(todo_dir).as_posix()
+        for item in todo_dir.iterdir():
+            if (
+                is_canonical_ticket_name(item.name)
+                and item.is_file()
+                and not item.is_symlink()
+            ):
                 digest = hashlib.sha256(item.read_bytes()).hexdigest()
-                entries.append(f"{relative}\0{digest}\n")
+                entries.append(f"{item.name}\0{digest}\n")
     entries.sort()
     return hashlib.sha256("".join(entries).encode()).hexdigest(), len(entries)
 
