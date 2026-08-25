@@ -998,6 +998,139 @@ def test_long_running_run_recovers_after_duplicate_ticket_fix(
     assert git_fixture["marker"].read_text().splitlines() == ["run"]
 
 
+def test_branch_change_after_startup_blocks_before_sync(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    git(git_fixture["working"], "switch", "-c", "experiment")
+    experiment_head = git(
+        git_fixture["working"], "rev-parse", "HEAD"
+    ).stdout.strip()
+    add_remote_revision(git_fixture)
+
+    assert devlegate.run(once=True) == 1
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == (
+        experiment_head
+    )
+    assert not git_fixture["marker"].exists()
+
+
+def test_branch_and_detached_checkout_recover_in_same_process(
+    git_fixture, monkeypatch, capsys
+):
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    git(git_fixture["working"], "switch", "-c", "experiment")
+    polls = 0
+
+    def switch_back(_interval):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            git(git_fixture["working"], "switch", "main")
+        else:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.cli.time.sleep", switch_back)
+    with pytest.raises(KeyboardInterrupt):
+        devlegate.run(once=False)
+    assert "workflow became blocked" in capsys.readouterr().out
+
+    git(git_fixture["working"], "checkout", "--detach", "HEAD")
+    assert devlegate.run(once=True) == 1
+    git(git_fixture["working"], "switch", "main")
+
+
+def test_wrong_branch_never_merges_expected_remote(git_fixture, monkeypatch):
+    add_remote_revision(git_fixture)
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nAGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    git(git_fixture["working"], "switch", "-c", "experiment")
+    experiment_head = git(
+        git_fixture["working"], "rev-parse", "HEAD"
+    ).stdout.strip()
+    add_remote_revision(git_fixture)
+
+    assert devlegate.run(once=True) == 1
+    assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == (
+        experiment_head
+    )
+    assert (
+        git(
+            git_fixture["working"], "symbolic-ref", "--short", "HEAD"
+        ).stdout.strip()
+        == "experiment"
+    )
+
+
+def test_dirty_early_return_does_not_clear_workflow_blocker(
+    git_fixture, monkeypatch, capsys
+):
+    add_remote_revision(git_fixture)
+    malformed = git_fixture["publisher"] / "kanban/todo/ED-17.md"
+    malformed.write_text("not a ticket\n")
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "publish malformed ticket")
+    git(git_fixture["publisher"], "push")
+    config = git_fixture["tmp"] / "config.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("FAKE_MARKER", str(git_fixture["marker"]))
+    monkeypatch.setenv("FAKE_MODE", "success")
+    devlegate = Devlegate(config)
+
+    assert devlegate.run(once=True) == 1
+    first = capsys.readouterr().out
+    (git_fixture["working"] / "uncommitted.txt").write_text("dirty\n")
+    assert devlegate.run(once=True) == 1
+    dirty = capsys.readouterr().out
+    (git_fixture["working"] / "uncommitted.txt").unlink()
+    assert devlegate.run(once=True) == 1
+    unchanged = capsys.readouterr().out
+    malformed.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Fixed"\n---\nwork\n'
+    )
+    git(git_fixture["publisher"], "add", ".")
+    git(git_fixture["publisher"], "commit", "-m", "repair malformed ticket")
+    git(git_fixture["publisher"], "push")
+    assert devlegate.run(once=True) == 0
+    recovered = capsys.readouterr().out
+
+    assert "workflow became blocked" in first
+    assert "workflow is valid again" not in dirty
+    assert "workflow is valid again" not in unchanged
+    assert "workflow is valid again" in recovered
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
 def test_missing_managed_directory_blocks_run_once(git_fixture):
     config = git_fixture["tmp"] / "missing.env"
     config.write_text(
@@ -1085,11 +1218,12 @@ def test_long_running_run_recovers_after_missing_workflow_directory(
         nonlocal polls
         polls += 1
         if polls == 1:
-            missing = git_fixture["working"] / "kanban/missing"
+            missing = git_fixture["publisher"] / "kanban/missing"
             missing.mkdir()
             (missing / ".gitkeep").touch()
-            git(git_fixture["working"], "add", "kanban/missing/.gitkeep")
-            git(git_fixture["working"], "commit", "-m", "restore workflow directory")
+            git(git_fixture["publisher"], "add", "kanban/missing/.gitkeep")
+            git(git_fixture["publisher"], "commit", "-m", "restore workflow directory")
+            git(git_fixture["publisher"], "push")
         else:
             raise KeyboardInterrupt
 

@@ -442,6 +442,7 @@ class Devlegate:
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
         self._workflow_blocker_fingerprint: str | None = None
+        self._workflow_validation_succeeded = False
         self._recovery_pending = False
         self._validate()
         self._state = self._load_state()
@@ -467,7 +468,9 @@ class Devlegate:
                     f"({state})"
                 )
         try:
-            return load_ticket_store(self.repo, self._workflow_paths())
+            store = load_ticket_store(self.repo, self._workflow_paths())
+            self._workflow_validation_succeeded = True
+            return store
         except TicketError as error:
             raise WorkflowBlockedError(str(error)) from error
         except FileNotFoundError as error:
@@ -749,6 +752,21 @@ class Devlegate:
             _log(f"git stderr: {stderr.strip()}")
 
     def run_once(self) -> int:
+        self._workflow_validation_succeeded = False
+        branch = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        if branch.returncode:
+            raise WorkflowBlockedError(
+                f"current checkout is detached; expected branch "
+                f"'{self.current_branch}'"
+            )
+        actual_branch = branch.stdout.strip()
+        if actual_branch != self.current_branch:
+            raise WorkflowBlockedError(
+                f"current checkout branch '{actual_branch}' does not match "
+                f"expected branch '{self.current_branch}'"
+            )
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if self._state.get("phase") == "recovery_running":
@@ -1212,7 +1230,10 @@ class Devlegate:
                     _log(f"run failed: {detail.strip()}")
                     status = 1
                 else:
-                    if self._workflow_blocker_fingerprint is not None:
+                    if (
+                        self._workflow_blocker_fingerprint is not None
+                        and self._workflow_validation_succeeded
+                    ):
                         _log("workflow is valid again")
                         self._workflow_blocker_fingerprint = None
                 if status and not workflow_blocked:
