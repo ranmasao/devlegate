@@ -22,11 +22,17 @@ From the target project's repository root, run the installed CLI through the hel
 
 ```sh
 /path/to/devlegate/dev run
+/path/to/devlegate/dev run --once
+/path/to/devlegate/dev check
+/path/to/devlegate/dev status
+/path/to/devlegate/dev status --json
 ```
 
-The default mode is a foreground polling loop. Use `--once` for one synchronization/execution pass. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
+The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only, does not fetch, and reports one optimistic consistent snapshot; retry if project state changes continuously while it is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
-The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed. Use `--check` for a side-effect-free configuration and checkout preflight.
+For 0.2.x compatibility, bare `devlegate` runs the normal workflow, and legacy `devlegate --once` and `devlegate --check` forms remain accepted. The command forms are canonical.
+
+The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed. Use `check` for a side-effect-free configuration and checkout preflight.
 
 `REMOTE_BRANCH` defaults to the currently checked-out branch. If set explicitly, the current branch must match it. See `.env.example` for the available runtime settings.
 
@@ -65,7 +71,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 ## Current safety rules
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
-- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing directories are empty; a managed directory otherwise permits only `.gitkeep` and strict `.md` tickets.
+- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing directories are empty; only canonical `<ID>.md` entries are tickets, while other human/editor artifacts are ignored.
 - Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support legacy free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and dispatches exactly one ticket per OpenCode execution.

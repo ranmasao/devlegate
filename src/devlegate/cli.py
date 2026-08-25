@@ -31,6 +31,91 @@ class DevlegateError(Exception):
     """A user-facing startup error."""
 
 
+class SnapshotChanged(Exception):
+    """The observed project changed during a status snapshot attempt."""
+
+
+@dataclasses.dataclass(frozen=True)
+class StatusSnapshot:
+    phase: str
+    bound_ticket_id: str | None
+    persisted_body_present: bool
+    branch: str
+    local_head: str
+    remote_ref: str
+    remote_head: str | None
+    working_tree_clean: bool
+    counts: tuple[tuple[str, int], ...]
+    runnable: tuple[tuple[str, str], ...]
+    blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
+    review: tuple[tuple[str, str], ...]
+    next_ticket: tuple[str, str] | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "execution": {
+                "phase": self.phase,
+                "bound_ticket": self.bound_ticket_id,
+                "persisted_body": self.persisted_body_present,
+            },
+            "repository": {
+                "branch": self.branch,
+                "local_head": self.local_head,
+                "remote_ref": self.remote_ref,
+                "remote_head": self.remote_head,
+                "working_tree_clean": self.working_tree_clean,
+            },
+            "tickets": {
+                "counts": dict(self.counts),
+                "runnable": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.runnable
+                ],
+                "blocked": [
+                    {
+                        "id": ticket_id,
+                        "title": title,
+                        "blocked_by": [
+                            {"id": dependency_id, "state": state}
+                            for dependency_id, state in blockers
+                        ],
+                    }
+                    for ticket_id, title, blockers in self.blocked
+                ],
+                "review": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.review
+                ],
+                "next": (
+                    {"id": self.next_ticket[0], "title": self.next_ticket[1]}
+                    if self.next_ticket is not None
+                    else None
+                ),
+            },
+        }
+
+
+def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
+    entries: list[str] = []
+    for state in ("backlog", "todo", "review", "done"):
+        directory = repo / workflow_paths[state]
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not is_canonical_ticket_name(path.name):
+                continue
+            if path.is_symlink():
+                kind = "symlink"
+                digest = ""
+            elif path.is_file():
+                kind = "file"
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            else:
+                kind = "other"
+                digest = ""
+            entries.append(f"{state}/{path.name}\0{kind}\0{digest}\n")
+    return hashlib.sha256("".join(entries).encode()).hexdigest()
+
 def _read_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -306,7 +391,7 @@ def _render_prompt(template: str, values: dict[str, str]) -> str:
 class Devlegate:
     """Run the repository polling and agent execution workflow."""
 
-    def __init__(self, env_file: Path) -> None:
+    def __init__(self, env_file: Path, *, read_only: bool = False) -> None:
         if not env_file.is_file():
             raise DevlegateError(
                 f"configuration file not found: {env_file} "
@@ -340,6 +425,7 @@ class Devlegate:
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
+        self.read_only = read_only
         self._recovery_pending = False
         state_default = Path(
             os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
@@ -446,7 +532,8 @@ class Devlegate:
             self.repo, "remote", "get-url", self.remote_name, check=False
         ).returncode:
             raise DevlegateError(f"git remote not found: {self.remote_name}")
-        self._validate_state_access()
+        if not self.read_only:
+            self._validate_state_access()
 
     def _validate_state_access(self) -> None:
         try:
@@ -1104,6 +1191,237 @@ class Devlegate:
                     return status
                 time.sleep(int(self.poll_interval))
 
+    def _status_snapshot_hook(self, _point: str) -> None:
+        """Testing hook for deterministic snapshot-race simulations."""
+
+    def _status_state_observation(self) -> tuple[dict[str, object], str]:
+        try:
+            raw = self._state_file.read_bytes()
+        except FileNotFoundError:
+            return {"phase": "idle"}, "missing"
+        try:
+            state = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise DevlegateError(
+                f"cannot read state file {self._state_file}: {error}"
+            ) from error
+        if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
+            raise DevlegateError(f"invalid state file: {self._state_file}")
+        self._validate_state_invariant(state)
+        return state, hashlib.sha256(raw).hexdigest()
+
+    def _status_git_observation(self) -> dict[str, object]:
+        branch_result = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        if branch_result.returncode:
+            raise DevlegateError("detached HEAD is not supported")
+        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        remote_ref = f"{self.remote_name}/{self.remote_branch}"
+        remote_result = _git(
+            self.repo, "rev-parse", "--verify", remote_ref, check=False
+        )
+        return {
+            "branch": branch_result.stdout.strip(),
+            "local_head": local_head,
+            "remote_ref": remote_ref,
+            "remote_head": (
+                remote_result.stdout.strip() if remote_result.returncode == 0 else None
+            ),
+            "status": _git(self.repo, "status", "--porcelain").stdout,
+        }
+
+    def _collect_status_attempt(self) -> StatusSnapshot:
+        state_before, state_token_before = self._status_state_observation()
+        self._status_snapshot_hook("after-state-before")
+        git_before = self._status_git_observation()
+        self._status_snapshot_hook("after-git-before")
+        try:
+            workflow_token_before = _workflow_fingerprint(
+                self.repo, self._workflow_paths()
+            )
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        self._status_snapshot_hook("after-workflow-before")
+
+        ticket_error: DevlegateError | None = None
+        ticket_store = None
+        try:
+            ticket_store = self._ticket_store()
+        except DevlegateError as error:
+            ticket_error = error
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        except OSError as error:
+            ticket_error = DevlegateError(f"cannot read ticket storage: {error}")
+
+        self._status_snapshot_hook("before-verify")
+        try:
+            workflow_token_after = _workflow_fingerprint(
+                self.repo, self._workflow_paths()
+            )
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        git_after = self._status_git_observation()
+        state_after, state_token_after = self._status_state_observation()
+        if (
+            state_token_before != state_token_after
+            or git_before != git_after
+            or workflow_token_before != workflow_token_after
+        ):
+            raise SnapshotChanged
+        if ticket_error is not None:
+            raise ticket_error
+        assert ticket_store is not None
+        return self._make_status_snapshot(state_after, git_after, ticket_store)
+
+    def _make_status_snapshot(
+        self,
+        state: dict[str, object],
+        git_observation: dict[str, object],
+        ticket_store: TicketStore,
+    ) -> StatusSnapshot:
+        counts = tuple(
+            (
+                state_name,
+                sum(ticket.state == state_name for ticket in ticket_store.tickets),
+            )
+            for state_name in ("backlog", "todo", "review", "done")
+        )
+        runnable = tuple(
+            (ticket.id, ticket.title) for ticket in ticket_store.runnable
+        )
+        blocked = tuple(
+            (
+                ticket.id,
+                ticket.title,
+                tuple(
+                    (dependency, ticket_store.by_id[dependency].state)
+                    for dependency in sorted(ticket.depends_on)
+                    if ticket_store.by_id[dependency].state != "done"
+                ),
+            )
+            for ticket in ticket_store.tickets
+            if ticket.state == "todo"
+            and any(
+                ticket_store.by_id[dependency].state != "done"
+                for dependency in ticket.depends_on
+            )
+        )
+        review = tuple(
+            (ticket.id, ticket.title)
+            for ticket in ticket_store.tickets
+            if ticket.state == "review"
+        )
+        selected_id = state.get("selected_ticket_id")
+        bound_phase = str(state["phase"]) in {
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
+        return StatusSnapshot(
+            phase=str(state["phase"]),
+            bound_ticket_id=(
+                selected_id if bound_phase and isinstance(selected_id, str) else None
+            ),
+            persisted_body_present=bound_phase
+            and isinstance(state.get("selected_ticket_body"), str),
+            branch=str(git_observation["branch"]),
+            local_head=str(git_observation["local_head"]),
+            remote_ref=str(git_observation["remote_ref"]),
+            remote_head=(
+                str(git_observation["remote_head"])
+                if git_observation["remote_head"] is not None
+                else None
+            ),
+            working_tree_clean=not bool(git_observation["status"]),
+            counts=counts,
+            runnable=runnable,
+            blocked=blocked,
+            review=review,
+            next_ticket=(
+                (ticket_store.selected().id, ticket_store.selected().title)
+                if ticket_store.selected() is not None
+                else None
+            ),
+        )
+
+    def _render_status_text(self, snapshot: StatusSnapshot) -> str:
+        lines = [
+            f"Devlegate {__version__}",
+            "",
+            "Execution:",
+            f"  phase: {snapshot.phase}",
+            f"  bound ticket: {snapshot.bound_ticket_id or 'none'}",
+            (
+                "  persisted body: "
+                f"{'yes' if snapshot.persisted_body_present else 'no'}"
+                if snapshot.bound_ticket_id
+                else ""
+            ),
+            "",
+            "Repository:",
+            f"  branch: {snapshot.branch}",
+            f"  local HEAD: {snapshot.local_head}",
+            f"  known remote: {snapshot.remote_ref}",
+            f"  known remote HEAD: {snapshot.remote_head or '<unknown>'}",
+            f"  working tree: {'clean' if snapshot.working_tree_clean else 'dirty'}",
+            "",
+            "Tickets:",
+        ]
+        lines.extend(f"  {state}: {count}" for state, count in snapshot.counts)
+        lines.extend(["", "Runnable:"])
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.runnable
+        )
+        if not snapshot.runnable:
+            lines.append("  none")
+        lines.append("Blocked:")
+        if snapshot.blocked:
+            for ticket_id, title, blockers in snapshot.blocked:
+                lines.append(f"  {ticket_id}  {title}")
+                lines.extend(
+                    f"    by {dependency_id} [{state}]"
+                    for dependency_id, state in blockers
+                )
+        else:
+            lines.append("  none")
+        lines.append("Review:")
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review
+        )
+        if not snapshot.review:
+            lines.append("  none")
+        lines.extend(
+            [
+                "Next:",
+                (
+                    f"  {snapshot.next_ticket[0]}  {snapshot.next_ticket[1]}"
+                    if snapshot.next_ticket
+                    else "  none"
+                ),
+            ]
+        )
+        return "\n".join(lines)
+
+    def status(self, json_output: bool = False) -> int:
+        for _attempt in range(3):
+            try:
+                snapshot = self._collect_status_attempt()
+                break
+            except SnapshotChanged:
+                continue
+        else:
+            raise DevlegateError(
+                "project state changed while status snapshot was being collected"
+            )
+        if json_output:
+            print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
+        else:
+            print(self._render_status_text(snapshot))
+        return 0
+
     def check(self) -> int:
         """Run read-only configuration and checkout diagnostics."""
         print(f"Devlegate {__version__} preflight")
@@ -1221,29 +1539,59 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument(
+    commands = parser.add_subparsers(dest="command", metavar="{run,check,status}")
+    run_parser = commands.add_parser("run", help="synchronize and run one ticket")
+    run_parser.add_argument(
         "--once", action="store_true", help="run one synchronization pass and exit"
     )
-    parser.add_argument(
-        "--check", action="store_true", help="validate setup without running workflow"
+    run_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
-    parser.add_argument(
-        "--env", metavar="FILE", type=Path, help="read configuration from FILE"
+    check_parser = commands.add_parser("check", help="validate setup readiness")
+    check_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    status_parser = commands.add_parser(
+        "status", help="show a read-only observed project snapshot"
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", help="render the snapshot as JSON"
+    )
+    status_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     return parser
 
 
 def main() -> int:
     """Run the command-line interface."""
-    args = build_parser().parse_args()
+    argv = sys.argv[1:]
+    if argv and argv[0] in {"--help", "-h", "--version"}:
+        normalized_argv = argv
+    elif not argv or argv[0].startswith("-"):
+        if "--check" in argv:
+            normalized_argv = [
+                "check"
+            ] + [argument for argument in argv if argument not in {"--check", "--once"}]
+        else:
+            normalized_argv = ["run", *argv]
+    else:
+        normalized_argv = argv
+    args = build_parser().parse_args(normalized_argv)
+    if args.command is None:
+        build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"
     try:
-        devlegate = Devlegate(env_file)
-        return devlegate.check() if args.check else devlegate.run(args.once)
+        devlegate = Devlegate(env_file, read_only=args.command == "status")
+        if args.command == "status":
+            return devlegate.status(args.json)
+        if args.command == "check":
+            return devlegate.check()
+        return devlegate.run(args.once)
     except KeyboardInterrupt:
         return 130
     except DevlegateError as error:
-        if args.check:
+        if args.command == "check":
             print(f"Devlegate {__version__} preflight")
             print(f"FAIL  configuration: {error}")
             print("\nNot ready.")
