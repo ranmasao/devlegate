@@ -374,6 +374,27 @@ def test_unbound_agent_pending_state_is_rejected(git_fixture, monkeypatch):
     assert not git_fixture["marker"].exists()
 
 
+def test_unknown_persisted_state_phase_is_rejected(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "unknown-phase.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+        f"REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+        f"AGENT_PROMPT_FILE={git_fixture['tmp'] / 'prompt.txt'}\n"
+        f"OPENCODE_BIN={git_fixture['fake']}\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={git_fixture['tmp'] / 'state'}\n"
+    )
+    (git_fixture["tmp"] / "prompt.txt").write_text("fake prompt\n")
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config)
+    devlegate._state_file.write_text(json.dumps({"phase": "obsolete_phase"}))
+
+    result = run_devlegate(git_fixture, env_file=config)
+
+    assert result.returncode == 1
+    assert "invalid state phase: obsolete_phase" in result.stderr
+    assert not git_fixture["marker"].exists()
+
+
 def test_status_text_reports_one_observed_snapshot(git_fixture):
     add_remote_revision(git_fixture, ticket=True)
     git(git_fixture["working"], "fetch", "origin", "main")

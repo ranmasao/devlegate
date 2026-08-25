@@ -645,21 +645,28 @@ class Devlegate:
     @staticmethod
     def _validate_state_invariant(state: dict[str, object]) -> None:
         phase = state["phase"]
-        if phase not in {
+        valid_phases = {
+            "idle",
+            "merge_pending",
             "agent_pending",
             "agent_running",
             "recovery_pending",
             "recovery_running",
-        }:
-            if phase == "merge_pending":
-                required_fields = ("local_head", "remote_head", "changed_paths")
-                if not all(
-                    isinstance(state.get(field), str) for field in required_fields
-                ):
-                    raise DevlegateError(
-                        "invalid merge_pending state: synchronization coordinates "
-                        "are incomplete"
-                    )
+            "recovery_failed",
+        }
+        if phase not in valid_phases:
+            raise DevlegateError(f"invalid state phase: {phase}")
+        if phase in {"idle", "recovery_failed"}:
+            return
+        if phase == "merge_pending":
+            required_fields = ("local_head", "remote_head", "changed_paths")
+            if not all(
+                isinstance(state.get(field), str) for field in required_fields
+            ):
+                raise DevlegateError(
+                    "invalid merge_pending state: synchronization coordinates "
+                    "are incomplete"
+                )
             return
         required_fields = ("local_head", "remote_head", "changed_paths")
         if not all(isinstance(state.get(field), str) for field in required_fields):

@@ -4,30 +4,22 @@ Devlegate is a minimal bootstrap orchestrator for a software-development workflo
 
 During this bootstrap phase, responsibilities that will later move into deterministic orchestration modules are intentionally delegated to the implementation agent. In particular, the agent currently owns ticket movement from `todo` to `review`, Git commits, and pushes.
 
-## Python setup
+## Usage
 
-Run the development helper from this repository's root:
-
-```sh
-./dev setup
-```
-
-This creates the local `.venv`, installs Devlegate in editable mode, and installs the pytest and Ruff development tools. The virtual environment is local to this checkout and is not used for project files that Devlegate manages.
-
-Devlegate runs from the root of the target project checkout. Copy `.env.example` to that project's `$PWD/.env` and configure at least `OPENCODE_MODEL` and the managed workflow paths if they differ from the defaults. The project must also have its normal Git remote and authentication configured.
-
-## Execution
-
-From the target project's repository root, run the installed CLI through the helper in the Devlegate checkout:
+Install Devlegate, then run the `devlegate` command from the root of the target
+project checkout. Copy `.env.example` to that project's `$PWD/.env` and
+configure at least `OPENCODE_MODEL` and the managed workflow paths if they
+differ from the defaults. The project must also have its normal Git remote and
+authentication configured.
 
 ```sh
-/path/to/devlegate/dev run
-/path/to/devlegate/dev run --once
-/path/to/devlegate/dev check
-/path/to/devlegate/dev status
-/path/to/devlegate/dev status --json
-/path/to/devlegate/dev plan
-/path/to/devlegate/dev plan --json
+devlegate run
+devlegate run --once
+devlegate check
+devlegate status
+devlegate status --json
+devlegate plan
+devlegate plan --json
 ```
 
 The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
@@ -36,7 +28,17 @@ Use `check` for a side-effect-free configuration and checkout preflight.
 
 `REMOTE_BRANCH` defaults to the currently checked-out branch when HEAD is attached. If set explicitly, the current branch must match it; detached HEAD is always blocked for planning and execution. See `.env.example` for the available runtime settings.
 
-## Development commands
+## Development Setup
+
+For contributors working on the Devlegate repository, run:
+
+```sh
+./dev setup
+```
+
+This creates the local `.venv`, installs Devlegate in editable mode, and installs the pytest and Ruff development tools.
+
+## Development Commands
 
 All commands use the local `.venv`:
 
@@ -45,7 +47,7 @@ All commands use the local `.venv`:
 ./dev test              Run pytest
 ./dev lint              Run Ruff check
 ./dev check             Run tests and lint
-./dev run [args...]     Run devlegate with arguments
+./dev run [args...]     Run the checkout-local installed Devlegate CLI
 ./dev clean             Remove named caches and build artifacts
 ./dev purge             Also remove .venv and named development artifacts
 ```
