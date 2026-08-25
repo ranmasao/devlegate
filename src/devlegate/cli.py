@@ -144,6 +144,12 @@ def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
     for state in ("backlog", "todo", "review", "done"):
         directory = repo / workflow_paths[state]
+        if directory.is_dir():
+            entries.append(f"{state}\0dir\n")
+        elif directory.exists():
+            entries.append(f"{state}\0non-directory\n")
+        else:
+            entries.append(f"{state}\0missing\n")
         if not directory.is_dir():
             continue
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
@@ -280,6 +286,10 @@ def _write_worker_line(text: str, stream) -> None:
     _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
 
 
+# Caps raw JSONL events before decode and parsing while leaving normal events intact.
+MAX_STDOUT_EVENT_BYTES = 1024 * 1024
+
+
 def _run_opencode(command: list[str], prompt: str) -> int:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -298,7 +308,19 @@ def _run_opencode(command: list[str], prompt: str) -> int:
     def consume_stdout() -> None:
         nonlocal protocol_failed
         assert process.stdout is not None
-        for raw_line in process.stdout:
+        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
+            if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
+                protocol_failed = True
+                _log(
+                    "OpenCode protocol error: stdout event exceeds maximum size"
+                )
+                if not raw_line.endswith(b"\n"):
+                    while discarded := process.stdout.readline(
+                        MAX_STDOUT_EVENT_BYTES + 1
+                    ):
+                        if discarded.endswith(b"\n"):
+                            break
+                continue
             try:
                 event = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):

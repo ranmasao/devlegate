@@ -99,6 +99,18 @@ def git_fixture(tmp_path):
         "    print(json.dumps(event), flush=True)\n"
         "elif output_mode == 'malformed':\n"
         "    print('not-json', flush=True)\n"
+        "elif output_mode == 'near-limit':\n"
+        "    print(json.dumps({'type': 'text', 'part': {\n"
+        "        'text': 'x' * (1024 * 1024 - 1000)}}), flush=True)\n"
+        "elif output_mode == 'oversized':\n"
+        "    print(json.dumps({'type': 'text', 'part': {\n"
+        "        'text': 'oversized-secret-' + 'x' * (1024 * 1024 + 100)}}),\n"
+        "        flush=True)\n"
+        "elif output_mode == 'oversized-followed':\n"
+        "    print('oversized-secret-' + 'x' * (1024 * 1024 + 100),\n"
+        "          flush=True)\n"
+        "    print(json.dumps({'type': 'text', 'part': {'text': 'after'}}),\n"
+        "          flush=True)\n"
         "if mode == 'fail':\n"
         "    sys.exit(7)\n"
         "if mode == 'fail-dirty':\n"
@@ -703,6 +715,42 @@ def test_malformed_worker_output_fails_closed(git_fixture):
     assert "OpenCode protocol error: invalid JSON event on stdout" in result.stdout
     assert "not-json" not in result.stdout
     assert "not-json" not in result.stderr
+
+
+def test_worker_event_just_below_limit_is_processed(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(git_fixture, mode="observe", output_mode="near-limit")
+
+    assert result.returncode == 0
+    assert (
+        "OpenCode protocol error: stdout event exceeds maximum size"
+        not in result.stdout
+    )
+
+
+def test_oversized_worker_event_fails_without_echoing_payload(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(git_fixture, mode="observe", output_mode="oversized")
+
+    assert result.returncode == 1
+    assert "stdout event exceeds maximum size" in result.stdout
+    assert "oversized-secret" not in result.stdout
+    assert "oversized-secret" not in result.stderr
+
+
+def test_oversized_worker_event_is_drained_before_later_events(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+
+    result = run_devlegate(
+        git_fixture, mode="observe", output_mode="oversized-followed"
+    )
+
+    assert result.returncode == 1
+    assert "stdout event exceeds maximum size" in result.stdout
+    assert "after" in result.stdout
+    assert "oversized-secret" not in result.stdout
 
 
 def test_dispatches_one_sorted_ticket_without_orchestration_metadata(git_fixture):
@@ -2638,3 +2686,93 @@ def test_plan_broken_persisted_binding_is_blocked(git_fixture, monkeypatch):
 
     assert snapshot.plan.action == "blocked"
     assert "not in managed storage" in snapshot.plan.reason
+
+
+def _minimal_read_only_devlegate(fixture, monkeypatch, name):
+    config = fixture["tmp"] / f"{name}.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nSTATE_DIR={fixture['tmp'] / name}-state\n"
+    )
+    monkeypatch.chdir(fixture["working"])
+    return Devlegate(config, read_only=True)
+
+
+def test_plan_retries_when_empty_workflow_directory_disappears(
+    git_fixture, monkeypatch, capsys
+):
+    devlegate = _minimal_read_only_devlegate(
+        git_fixture, monkeypatch, "directory-disappears"
+    )
+    todo = git_fixture["working"] / "kanban/todo"
+    changed = False
+
+    def hook(point):
+        nonlocal changed
+        if point == "after-workflow-before" and not changed:
+            (todo / ".gitkeep").unlink()
+            todo.rmdir()
+            changed = True
+
+    monkeypatch.setattr(devlegate, "_status_snapshot_hook", hook)
+
+    assert devlegate.plan() == 0
+    output = capsys.readouterr().out
+    assert changed
+    assert "action: blocked" in output
+    assert "workflow directory" in output
+
+
+def test_plan_retries_when_missing_workflow_directory_appears(
+    git_fixture, monkeypatch, capsys
+):
+    todo = git_fixture["working"] / "kanban/todo"
+    (todo / ".gitkeep").unlink()
+    todo.rmdir()
+    git(git_fixture["working"], "add", "-u")
+    git(git_fixture["working"], "commit", "-m", "remove todo directory")
+    devlegate = _minimal_read_only_devlegate(
+        git_fixture, monkeypatch, "directory-appears"
+    )
+    changed = False
+
+    def hook(point):
+        nonlocal changed
+        if point == "after-workflow-before" and not changed:
+            todo.mkdir()
+            (todo / ".gitkeep").touch()
+            git(git_fixture["working"], "add", "kanban/todo/.gitkeep")
+            git(git_fixture["working"], "commit", "-m", "restore todo directory")
+            changed = True
+
+    monkeypatch.setattr(devlegate, "_status_snapshot_hook", hook)
+
+    assert devlegate.plan() == 0
+    output = capsys.readouterr().out
+    assert changed
+    assert "action: none" in output
+
+
+def test_plan_retries_when_workflow_directory_becomes_non_directory(
+    git_fixture, monkeypatch, capsys
+):
+    devlegate = _minimal_read_only_devlegate(
+        git_fixture, monkeypatch, "directory-non-directory"
+    )
+    todo = git_fixture["working"] / "kanban/todo"
+    changed = False
+
+    def hook(point):
+        nonlocal changed
+        if point == "after-workflow-before" and not changed:
+            (todo / ".gitkeep").unlink()
+            todo.rmdir()
+            todo.write_text("not a directory\n")
+            changed = True
+
+    monkeypatch.setattr(devlegate, "_status_snapshot_hook", hook)
+
+    assert devlegate.plan() == 0
+    output = capsys.readouterr().out
+    assert changed
+    assert "action: blocked" in output
+    assert "unavailable" in output
