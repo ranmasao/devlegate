@@ -2,15 +2,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).parents[1]
 
 
-def make_checkout(tmp_path: Path, launcher: str, *, cli: bool = True) -> Path:
+def make_dev_checkout(tmp_path: Path, *, cli: bool = True) -> Path:
     checkout = tmp_path / "devlegate"
     checkout.mkdir()
-    shutil.copy2(ROOT / launcher, checkout / launcher)
+    shutil.copy2(ROOT / "dev", checkout / "dev")
     (checkout / ".venv/bin").mkdir(parents=True)
     python = checkout / ".venv/bin/python"
     python.write_text("#!/bin/sh\nexit 0\n")
@@ -26,15 +24,17 @@ def make_checkout(tmp_path: Path, launcher: str, *, cli: bool = True) -> Path:
     return checkout
 
 
-@pytest.mark.parametrize("launcher", ["dev", "devlegate.sh"])
-def test_launcher_preserves_cwd_and_arguments(tmp_path, launcher):
-    checkout = make_checkout(tmp_path, launcher)
+def test_dev_preserves_cwd_and_arguments(tmp_path):
+    checkout = make_dev_checkout(tmp_path)
     target = tmp_path / "target project"
     target.mkdir()
-    command = [str(checkout / launcher)]
-    if launcher == "dev":
-        command.append("run")
-    command += ["--watch", "--env", "file with spaces"]
+    command = [
+        str(checkout / "dev"),
+        "run",
+        "--once",
+        "--env",
+        "file with spaces",
+    ]
 
     result = subprocess.run(
         command,
@@ -47,18 +47,15 @@ def test_launcher_preserves_cwd_and_arguments(tmp_path, launcher):
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         f"cwd={target}",
-        "arg=--watch",
+        "arg=--once",
         "arg=--env",
         "arg=file with spaces",
     ]
 
 
-@pytest.mark.parametrize("launcher", ["dev", "devlegate.sh"])
-def test_launcher_explains_setup_when_cli_is_missing(tmp_path, launcher):
-    checkout = make_checkout(tmp_path, launcher, cli=False)
-    command = [str(checkout / launcher)]
-    if launcher == "dev":
-        command.append("run")
+def test_dev_explains_setup_when_cli_is_missing(tmp_path):
+    checkout = make_dev_checkout(tmp_path, cli=False)
+    command = [str(checkout / "dev"), "run"]
 
     result = subprocess.run(
         command,

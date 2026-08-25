@@ -18,12 +18,154 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from devlegate import __version__
-from devlegate.tickets import Ticket, TicketError, TicketStore, load_ticket_store
+from devlegate.tickets import (
+    TicketError,
+    TicketStore,
+    is_canonical_ticket_name,
+    load_ticket_store,
+)
 
 
 class DevlegateError(Exception):
     """A user-facing startup error."""
 
+
+class WorkflowBlockedError(DevlegateError):
+    """The repository cannot currently be interpreted safely for scheduling."""
+
+
+class SnapshotChanged(Exception):
+    """The observed project changed during a status snapshot attempt."""
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionPlan:
+    """The immutable scheduling decision for one observed project state."""
+
+    action: str
+    reason: str
+    ticket_id: str | None = None
+    ticket_title: str | None = None
+    ticket_state: str | None = None
+    bound: bool = False
+    branch: str | None = None
+    detached: bool = False
+    local_head: str = ""
+    remote_ref: str = ""
+    remote_head: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "ticket": (
+                {
+                    "id": self.ticket_id,
+                    "title": self.ticket_title,
+                    "state": self.ticket_state,
+                }
+                if self.ticket_id is not None
+                else None
+            ),
+            "bound": self.bound,
+            "observation": {
+                "branch": self.branch,
+                "detached": self.detached,
+                "local_head": self.local_head,
+                "remote_ref": self.remote_ref,
+                "remote_head": self.remote_head,
+            },
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class StatusSnapshot:
+    phase: str
+    bound_ticket_id: str | None
+    persisted_body_present: bool
+    branch: str
+    local_head: str
+    remote_ref: str
+    remote_head: str | None
+    working_tree_clean: bool
+    counts: tuple[tuple[str, int], ...]
+    runnable: tuple[tuple[str, str], ...]
+    blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
+    review: tuple[tuple[str, str], ...]
+    next_ticket: tuple[str, str] | None
+    plan: ExecutionPlan
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "execution": {
+                "phase": self.phase,
+                "bound_ticket": self.bound_ticket_id,
+                "persisted_body": self.persisted_body_present,
+            },
+            "repository": {
+                "branch": self.branch,
+                "local_head": self.local_head,
+                "remote_ref": self.remote_ref,
+                "remote_head": self.remote_head,
+                "working_tree_clean": self.working_tree_clean,
+            },
+            "tickets": {
+                "counts": dict(self.counts),
+                "runnable": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.runnable
+                ],
+                "blocked": [
+                    {
+                        "id": ticket_id,
+                        "title": title,
+                        "blocked_by": [
+                            {"id": dependency_id, "state": state}
+                            for dependency_id, state in blockers
+                        ],
+                    }
+                    for ticket_id, title, blockers in self.blocked
+                ],
+                "review": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.review
+                ],
+                "next": (
+                    {"id": self.next_ticket[0], "title": self.next_ticket[1]}
+                    if self.next_ticket is not None
+                    else None
+                ),
+            },
+            "plan": self.plan.as_dict(),
+        }
+
+
+def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
+    entries: list[str] = []
+    for state in ("backlog", "todo", "review", "done"):
+        directory = repo / workflow_paths[state]
+        if directory.is_dir():
+            entries.append(f"{state}\0dir\n")
+        elif directory.exists():
+            entries.append(f"{state}\0non-directory\n")
+        else:
+            entries.append(f"{state}\0missing\n")
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not is_canonical_ticket_name(path.name):
+                continue
+            if path.is_symlink():
+                kind = "symlink"
+                digest = ""
+            elif path.is_file():
+                kind = "file"
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            else:
+                kind = "other"
+                digest = ""
+            entries.append(f"{state}/{path.name}\0{kind}\0{digest}\n")
+    return hashlib.sha256("".join(entries).encode()).hexdigest()
 
 def _read_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -144,6 +286,10 @@ def _write_worker_line(text: str, stream) -> None:
     _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
 
 
+# Caps raw JSONL events before decode and parsing while leaving normal events intact.
+MAX_STDOUT_EVENT_BYTES = 1024 * 1024
+
+
 def _run_opencode(command: list[str], prompt: str) -> int:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -162,7 +308,19 @@ def _run_opencode(command: list[str], prompt: str) -> int:
     def consume_stdout() -> None:
         nonlocal protocol_failed
         assert process.stdout is not None
-        for raw_line in process.stdout:
+        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
+            if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
+                protocol_failed = True
+                _log(
+                    "OpenCode protocol error: stdout event exceeds maximum size"
+                )
+                if not raw_line.endswith(b"\n"):
+                    while discarded := process.stdout.readline(
+                        MAX_STDOUT_EVENT_BYTES + 1
+                    ):
+                        if discarded.endswith(b"\n"):
+                            break
+                continue
             try:
                 event = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
@@ -232,7 +390,10 @@ def _run_opencode(command: list[str], prompt: str) -> int:
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
     todo_dir = repo / todo_path
     return todo_dir.is_dir() and any(
-        item.is_file() and item.name != ".gitkeep" for item in todo_dir.rglob("*")
+        is_canonical_ticket_name(item.name)
+        and not item.is_symlink()
+        and item.is_file()
+        for item in todo_dir.iterdir()
     )
 
 
@@ -240,11 +401,14 @@ def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
     todo_dir = repo / todo_path
     entries: list[str] = []
     if todo_dir.is_dir():
-        for item in todo_dir.rglob("*"):
-            if item.is_file() and not item.is_symlink() and item.name != ".gitkeep":
-                relative = item.relative_to(todo_dir).as_posix()
+        for item in todo_dir.iterdir():
+            if (
+                is_canonical_ticket_name(item.name)
+                and item.is_file()
+                and not item.is_symlink()
+            ):
                 digest = hashlib.sha256(item.read_bytes()).hexdigest()
-                entries.append(f"{relative}\0{digest}\n")
+                entries.append(f"{item.name}\0{digest}\n")
     entries.sort()
     return hashlib.sha256("".join(entries).encode()).hexdigest(), len(entries)
 
@@ -294,7 +458,7 @@ def _render_prompt(template: str, values: dict[str, str]) -> str:
 class Devlegate:
     """Run the repository polling and agent execution workflow."""
 
-    def __init__(self, env_file: Path) -> None:
+    def __init__(self, env_file: Path, *, read_only: bool = False) -> None:
         if not env_file.is_file():
             raise DevlegateError(
                 f"configuration file not found: {env_file} "
@@ -328,6 +492,7 @@ class Devlegate:
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
+        self.read_only = read_only
         self._recovery_pending = False
         state_default = Path(
             os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
@@ -339,6 +504,8 @@ class Devlegate:
         self._state_file = self.state_dir / f"{self._state_key}.json"
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
+        self._workflow_blocker_fingerprint: str | None = None
+        self._workflow_validation_succeeded = False
         self._recovery_pending = False
         self._validate()
         self._state = self._load_state()
@@ -356,40 +523,23 @@ class Devlegate:
         }
 
     def _ticket_store(self) -> TicketStore:
+        for state, configured_path in self._workflow_paths().items():
+            directory = self.repo / configured_path
+            if not directory.is_dir():
+                raise WorkflowBlockedError(
+                    f"managed workflow directory is unavailable: {directory} "
+                    f"({state})"
+                )
         try:
-            return load_ticket_store(self.repo, self._workflow_paths())
+            store = load_ticket_store(self.repo, self._workflow_paths())
+            self._workflow_validation_succeeded = True
+            return store
         except TicketError as error:
-            raise DevlegateError(str(error)) from error
-
-    def _selected_ticket(
-        self, store: TicketStore, bound_execution: bool, recovery: bool
-    ) -> Ticket | None:
-        selected_id = self._state.get("selected_ticket_id")
-        if bound_execution:
-            if not isinstance(selected_id, str):
-                raise DevlegateError(
-                    "recovery state has no persisted selected ticket identity"
-                )
-            selected = store.by_id.get(selected_id)
-            if selected is None:
-                raise DevlegateError(
-                    "persisted selected ticket is not in managed storage: "
-                    f"{selected_id}"
-                )
-            if selected.state not in {"todo", "review"}:
-                raise DevlegateError(
-                    f"selected ticket {selected.id} has unexpected recovery state "
-                    f"{selected.state}"
-                )
-            if recovery:
-                body = self._state.get("selected_ticket_body")
-                if not isinstance(body, str):
-                    raise DevlegateError(
-                        "recovery state has no persisted selected ticket body"
-                    )
-                selected = dataclasses.replace(selected, body=body)
-            return selected
-        return store.selected()
+            raise WorkflowBlockedError(str(error)) from error
+        except FileNotFoundError as error:
+            raise WorkflowBlockedError(
+                "managed workflow changed while it was being observed"
+            ) from error
 
     @staticmethod
     def _repository_root() -> Path:
@@ -405,37 +555,46 @@ class Devlegate:
         return Path(result.stdout.strip()).resolve()
 
     def _validate(self) -> None:
-        if not self.agent_prompt_file.is_file():
-            raise DevlegateError(
-                f"agent prompt file not found: {self.agent_prompt_file}"
-            )
-        if not self.recovery_prompt_file.is_file():
-            raise DevlegateError(
-                f"recovery prompt file not found: {self.recovery_prompt_file}"
-            )
-        if not self.poll_interval.isdecimal():
-            raise DevlegateError("POLL_INTERVAL must be an integer")
-        if not self.opencode_model:
-            raise DevlegateError("OPENCODE_MODEL is required")
-        if shutil.which(self.opencode_bin) is None:
-            raise DevlegateError(f"OpenCode executable not found: {self.opencode_bin}")
+        if not self.read_only:
+            if not self.agent_prompt_file.is_file():
+                raise DevlegateError(
+                    f"agent prompt file not found: {self.agent_prompt_file}"
+                )
+            if not self.recovery_prompt_file.is_file():
+                raise DevlegateError(
+                    f"recovery prompt file not found: {self.recovery_prompt_file}"
+                )
+            if not self.poll_interval.isdecimal():
+                raise DevlegateError("POLL_INTERVAL must be an integer")
+            if not self.opencode_model:
+                raise DevlegateError("OPENCODE_MODEL is required")
+            if shutil.which(self.opencode_bin) is None:
+                raise DevlegateError(
+                    f"OpenCode executable not found: {self.opencode_bin}"
+                )
         branch = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         if branch.returncode:
-            raise DevlegateError("detached HEAD is not supported")
-        self.current_branch = branch.stdout.strip()
-        self.remote_branch = self.remote_branch or self.current_branch
-        if self.current_branch != self.remote_branch:
+            if not self.read_only:
+                raise DevlegateError("detached HEAD is not supported")
+            self.current_branch = None
+        else:
+            self.current_branch = branch.stdout.strip()
+        self.remote_branch = self.remote_branch or self.current_branch or ""
+        if not self.read_only and (
+            self.current_branch is None or self.current_branch != self.remote_branch
+        ):
             raise DevlegateError(
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
             )
-        if _git(
+        if not self.read_only and _git(
             self.repo, "remote", "get-url", self.remote_name, check=False
         ).returncode:
             raise DevlegateError(f"git remote not found: {self.remote_name}")
-        self._validate_state_access()
+        if not self.read_only:
+            self._validate_state_access()
 
     def _validate_state_access(self) -> None:
         try:
@@ -480,7 +639,48 @@ class Devlegate:
             ) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
+        self._validate_state_invariant(state)
         return state
+
+    @staticmethod
+    def _validate_state_invariant(state: dict[str, object]) -> None:
+        phase = state["phase"]
+        valid_phases = {
+            "idle",
+            "merge_pending",
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+            "recovery_failed",
+        }
+        if phase not in valid_phases:
+            raise DevlegateError(f"invalid state phase: {phase}")
+        if phase in {"idle", "recovery_failed"}:
+            return
+        if phase == "merge_pending":
+            required_fields = ("local_head", "remote_head", "changed_paths")
+            if not all(
+                isinstance(state.get(field), str) for field in required_fields
+            ):
+                raise DevlegateError(
+                    "invalid merge_pending state: synchronization coordinates "
+                    "are incomplete"
+                )
+            return
+        required_fields = ("local_head", "remote_head", "changed_paths")
+        if not all(isinstance(state.get(field), str) for field in required_fields):
+            raise DevlegateError(
+                f"invalid {phase} state: synchronization coordinates are incomplete"
+            )
+        has_id = isinstance(state.get("selected_ticket_id"), str) and bool(
+            state["selected_ticket_id"]
+        )
+        has_body = isinstance(state.get("selected_ticket_body"), str)
+        if not has_id or not has_body:
+            raise DevlegateError(
+                f"invalid {phase} state: selected ticket binding is incomplete"
+            )
 
     def _save_state(self, phase: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +688,7 @@ class Devlegate:
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
+        self._validate_state_invariant(state)
         temporary_name = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -588,6 +789,21 @@ class Devlegate:
             _log(f"git stderr: {stderr.strip()}")
 
     def run_once(self) -> int:
+        self._workflow_validation_succeeded = False
+        branch = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        if branch.returncode:
+            raise WorkflowBlockedError(
+                f"current checkout is detached; expected branch "
+                f"'{self.current_branch}'"
+            )
+        actual_branch = branch.stdout.strip()
+        if actual_branch != self.current_branch:
+            raise WorkflowBlockedError(
+                f"current checkout branch '{actual_branch}' does not match "
+                f"expected branch '{self.current_branch}'"
+            )
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if self._state.get("phase") == "recovery_running":
@@ -647,17 +863,49 @@ class Devlegate:
             remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
             if pending_sync:
-                old_head = str(self._state.get("local_head", ""))
+                persisted_local_head = str(self._state.get("local_head", ""))
                 target_head = persisted_head
                 if state_phase == "merge_pending":
-                    if local_head not in {old_head, target_head}:
+                    if local_head not in {persisted_local_head, target_head}:
                         raise DevlegateError(
                             "persisted merge revision does not match the local HEAD"
                         )
-                elif local_head != old_head:
-                    raise DevlegateError(
-                        "persisted execution local_head does not match the local HEAD"
+                elif local_head != persisted_local_head:
+                    persisted_local_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            persisted_local_head,
+                            local_head,
+                            check=False,
+                        ).returncode
+                        == 0
                     )
+                    current_local_is_ancestor = (
+                        _git(
+                            self.repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            local_head,
+                            persisted_local_head,
+                            check=False,
+                        ).returncode
+                        == 0
+                    )
+                    if current_local_is_ancestor:
+                        raise DevlegateError(
+                            "current local HEAD is behind the persisted execution "
+                            "HEAD; refusing rollback "
+                            f"(persisted {persisted_local_head[:12]}, "
+                            f"current {local_head[:12]}, remote {target_head[:12]})"
+                        )
+                    if not persisted_local_is_ancestor:
+                        raise DevlegateError(
+                            "current local HEAD diverged from the persisted execution "
+                            f"history (persisted {persisted_local_head[:12]}, "
+                            f"current {local_head[:12]}, remote {target_head[:12]})"
+                        )
 
                 target_is_current = target_head == remote_head
                 target_is_ancestor = (
@@ -754,22 +1002,15 @@ class Devlegate:
                 else:
                     changed_paths = str(self._state.get("changed_paths", ""))
                 remote_head = target_head
-                self._save_state(
-                    "agent_pending",
-                    local_head=local_head,
-                    remote_head=target_head,
-                    changed_paths=changed_paths,
-                    selected_ticket_id=(
-                        self._state.get("selected_ticket_id")
-                        if state_phase == "agent_pending"
-                        else None
-                    ),
-                    selected_ticket_body=(
-                        self._state.get("selected_ticket_body")
-                        if state_phase == "agent_pending"
-                        else None
-                    ),
+                synchronized_phase = (
+                    "agent_pending" if pending_agent_execution else "merge_pending"
                 )
+                synchronized_fields = {
+                    "local_head": local_head,
+                    "remote_head": target_head,
+                    "changed_paths": changed_paths,
+                }
+                self._save_state(synchronized_phase, **synchronized_fields)
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
@@ -818,12 +1059,10 @@ class Devlegate:
                 )
                 local_head = actual_head
                 self._save_state(
-                    "agent_pending",
+                    "merge_pending",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
-                    selected_ticket_id=None,
-                    selected_ticket_body=None,
                 )
             elif _git(
                 self.repo,
@@ -851,10 +1090,33 @@ class Devlegate:
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
         ticket_store = self._ticket_store()
-        bound_execution = recovery or state_phase == "agent_pending"
-        selected_ticket = self._selected_ticket(
-            ticket_store, bound_execution, recovery
+        bound_execution = recovery or pending_agent_execution
+        execution_plan = self._make_execution_plan(
+            self._state,
+            ticket_store,
+            False,
+            observation={
+                "branch": self.current_branch,
+                "detached": False,
+                "local_head": local_head,
+                "remote_ref": remote_ref,
+                "remote_head": remote_head,
+            },
         )
+        if execution_plan.action == "blocked":
+            raise DevlegateError(execution_plan.reason)
+        if execution_plan.action == "none" and not recovery:
+            selected_ticket = None
+        else:
+            assert execution_plan.ticket_id is not None
+            selected_ticket = ticket_store.by_id[execution_plan.ticket_id]
+            if bound_execution:
+                body = self._state.get("selected_ticket_body")
+                if not isinstance(body, str):
+                    raise DevlegateError(
+                        "invalid execution state: selected ticket binding is incomplete"
+                    )
+                selected_ticket = dataclasses.replace(selected_ticket, body=body)
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -864,8 +1126,7 @@ class Devlegate:
                 and str(self._state.get("handled_todo_fingerprint", ""))
                 == todo_fingerprint
             )
-            runnable_count = len(ticket_store.runnable)
-            if not runnable_count and not pending_agent_execution:
+            if selected_ticket is None and not pending_agent_execution:
                 self._save_state(
                     "idle",
                     handled_remote_head=remote_head,
@@ -999,18 +1260,463 @@ class Devlegate:
     def run(self, once: bool) -> int:
         with self._lock():
             while True:
+                workflow_blocked = False
                 try:
                     status = self.run_once()
+                except WorkflowBlockedError as error:
+                    workflow_blocked = True
+                    message = str(error)
+                    fingerprint = hashlib.sha256(message.encode()).hexdigest()
+                    if self._workflow_blocker_fingerprint is None:
+                        _log(f"workflow became blocked: {message}")
+                    elif self._workflow_blocker_fingerprint != fingerprint:
+                        _log(f"workflow remains blocked: {message}")
+                    self._workflow_blocker_fingerprint = fingerprint
+                    status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
                     detail = getattr(error, "stderr", None) or str(error)
                     _log(f"run failed: {detail.strip()}")
                     status = 1
-                if status:
+                else:
+                    if (
+                        self._workflow_blocker_fingerprint is not None
+                        and self._workflow_validation_succeeded
+                    ):
+                        _log("workflow is valid again")
+                        self._workflow_blocker_fingerprint = None
+                if status and not workflow_blocked:
                     if not (status == 1 and self._dirty_fingerprint is not None):
                         _log(f"run failed with status {status}")
                 if once:
                     return status
                 time.sleep(int(self.poll_interval))
+
+    def _status_snapshot_hook(self, _point: str) -> None:
+        """Testing hook for deterministic snapshot-race simulations."""
+
+    def _status_state_observation(self) -> tuple[dict[str, object], str]:
+        try:
+            raw = self._state_file.read_bytes()
+        except FileNotFoundError:
+            return {"phase": "idle"}, "missing"
+        except OSError as error:
+            raise DevlegateError(
+                f"cannot read state file {self._state_file}: {error}"
+            ) from error
+        try:
+            state = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise DevlegateError(
+                f"cannot read state file {self._state_file}: {error}"
+            ) from error
+        if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
+            raise DevlegateError(f"invalid state file: {self._state_file}")
+        self._validate_state_invariant(state)
+        return state, hashlib.sha256(raw).hexdigest()
+
+    def _status_git_observation(self) -> dict[str, object]:
+        branch_result = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        detached = branch_result.returncode != 0
+        branch = branch_result.stdout.strip() if not detached else None
+        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        remote_ref = f"{self.remote_name}/{self.remote_branch}"
+        remote_result = _git(
+            self.repo, "rev-parse", "--verify", remote_ref, check=False
+        )
+        return {
+            "branch": branch,
+            "detached": detached,
+            "local_head": local_head,
+            "remote_ref": remote_ref,
+            "remote_head": (
+                remote_result.stdout.strip() if remote_result.returncode == 0 else None
+            ),
+            "status": _git(self.repo, "status", "--porcelain").stdout,
+        }
+
+    def _collect_status_attempt(
+        self, *, allow_workflow_blocked: bool = False
+    ) -> StatusSnapshot:
+        state_before, state_token_before = self._status_state_observation()
+        self._status_snapshot_hook("after-state-before")
+        git_before = self._status_git_observation()
+        self._status_snapshot_hook("after-git-before")
+        try:
+            workflow_token_before = _workflow_fingerprint(
+                self.repo, self._workflow_paths()
+            )
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        except OSError as error:
+            raise DevlegateError(f"cannot observe workflow files: {error}") from error
+        self._status_snapshot_hook("after-workflow-before")
+
+        ticket_error: DevlegateError | None = None
+        ticket_store = None
+        try:
+            ticket_store = self._ticket_store()
+        except DevlegateError as error:
+            ticket_error = error
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        except OSError as error:
+            ticket_error = DevlegateError(f"cannot read ticket storage: {error}")
+
+        self._status_snapshot_hook("before-verify")
+        try:
+            workflow_token_after = _workflow_fingerprint(
+                self.repo, self._workflow_paths()
+            )
+        except FileNotFoundError as error:
+            raise SnapshotChanged from error
+        except OSError as error:
+            raise DevlegateError(f"cannot observe workflow files: {error}") from error
+        git_after = self._status_git_observation()
+        state_after, state_token_after = self._status_state_observation()
+        if (
+            state_token_before != state_token_after
+            or git_before != git_after
+            or workflow_token_before != workflow_token_after
+        ):
+            raise SnapshotChanged
+        if ticket_error is not None and not allow_workflow_blocked:
+            raise ticket_error
+        return self._make_status_snapshot(
+            state_after, git_after, ticket_store, workflow_error=ticket_error
+        )
+
+    def _make_status_snapshot(
+        self,
+        state: dict[str, object],
+        git_observation: dict[str, object],
+        ticket_store: TicketStore | None,
+        workflow_error: DevlegateError | None = None,
+    ) -> StatusSnapshot:
+        if ticket_store is None:
+            return StatusSnapshot(
+                phase=str(state["phase"]),
+                bound_ticket_id=None,
+                persisted_body_present=False,
+                branch=(
+                    str(git_observation["branch"])
+                    if git_observation["branch"] is not None
+                    else "<detached>"
+                ),
+                local_head=str(git_observation["local_head"]),
+                remote_ref=str(git_observation["remote_ref"]),
+                remote_head=(
+                    str(git_observation["remote_head"])
+                    if git_observation["remote_head"] is not None
+                    else None
+                ),
+                working_tree_clean=not bool(git_observation["status"]),
+                counts=tuple(
+                    (state_name, 0)
+                    for state_name in ("backlog", "todo", "review", "done")
+                ),
+                runnable=(),
+                blocked=(),
+                review=(),
+                next_ticket=None,
+                plan=ExecutionPlan(
+                    "blocked",
+                    str(workflow_error or "workflow is invalid"),
+                    branch=(
+                        str(git_observation["branch"])
+                        if git_observation["branch"] is not None
+                        else None
+                    ),
+                    detached=bool(git_observation.get("detached")),
+                    local_head=str(git_observation["local_head"]),
+                    remote_ref=str(git_observation["remote_ref"]),
+                    remote_head=(
+                        str(git_observation["remote_head"])
+                        if git_observation["remote_head"] is not None
+                        else None
+                    ),
+                ),
+            )
+        counts = tuple(
+            (
+                state_name,
+                sum(ticket.state == state_name for ticket in ticket_store.tickets),
+            )
+            for state_name in ("backlog", "todo", "review", "done")
+        )
+        runnable = tuple(
+            (ticket.id, ticket.title) for ticket in ticket_store.runnable
+        )
+        blocked = tuple(
+            (
+                ticket.id,
+                ticket.title,
+                tuple(
+                    (dependency, ticket_store.by_id[dependency].state)
+                    for dependency in sorted(ticket.depends_on)
+                    if ticket_store.by_id[dependency].state != "done"
+                ),
+            )
+            for ticket in ticket_store.tickets
+            if ticket.state == "todo"
+            and any(
+                ticket_store.by_id[dependency].state != "done"
+                for dependency in ticket.depends_on
+            )
+        )
+        review = tuple(
+            (ticket.id, ticket.title)
+            for ticket in ticket_store.tickets
+            if ticket.state == "review"
+        )
+        selected_id = state.get("selected_ticket_id")
+        bound_phase = str(state["phase"]) in {
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
+        plan = self._make_execution_plan(
+            state,
+            ticket_store,
+            bool(git_observation["status"]),
+            not bool(git_observation.get("detached"))
+            and git_observation["branch"] == self.remote_branch,
+            observation=git_observation,
+        )
+        next_ticket = (
+            (
+                ticket_store.by_id[plan.ticket_id].id,
+                ticket_store.by_id[plan.ticket_id].title,
+            )
+            if plan.ticket_id is not None and plan.ticket_id in ticket_store.by_id
+            else None
+        )
+        return StatusSnapshot(
+            phase=str(state["phase"]),
+            bound_ticket_id=(
+                selected_id if bound_phase and isinstance(selected_id, str) else None
+            ),
+            persisted_body_present=bound_phase
+            and isinstance(state.get("selected_ticket_body"), str),
+            branch=(
+                str(git_observation["branch"])
+                if git_observation["branch"] is not None
+                else "<detached>"
+            ),
+            local_head=str(git_observation["local_head"]),
+            remote_ref=str(git_observation["remote_ref"]),
+            remote_head=(
+                str(git_observation["remote_head"])
+                if git_observation["remote_head"] is not None
+                else None
+            ),
+            working_tree_clean=not bool(git_observation["status"]),
+            counts=counts,
+            runnable=runnable,
+            blocked=blocked,
+            review=review,
+            next_ticket=next_ticket,
+            plan=plan,
+        )
+
+    def _make_execution_plan(
+        self,
+        state: dict[str, object],
+        ticket_store: TicketStore,
+        dirty: bool,
+        branch_ok: bool = True,
+        observation: dict[str, object] | None = None,
+    ) -> ExecutionPlan:
+        observation = observation or {}
+        branch = observation.get("branch")
+        if not branch_ok:
+            return ExecutionPlan(
+                "blocked",
+                "detached HEAD is not supported"
+                if observation.get("detached")
+                else "current checkout is not on the configured branch",
+                branch=branch if isinstance(branch, str) else None,
+                detached=bool(observation.get("detached")),
+                local_head=str(observation.get("local_head", "")),
+                remote_ref=str(observation.get("remote_ref", "")),
+                remote_head=(
+                    str(observation["remote_head"])
+                    if observation.get("remote_head") is not None
+                    else None
+                ),
+            )
+        if dirty:
+            reason = "working tree is dirty"
+            blocked = True
+        else:
+            reason = ""
+            blocked = False
+        identity = {
+            "branch": branch if isinstance(branch, str) else None,
+            "detached": bool(observation.get("detached")),
+            "local_head": str(observation.get("local_head", "")),
+            "remote_ref": str(observation.get("remote_ref", "")),
+            "remote_head": (
+                str(observation["remote_head"])
+                if observation.get("remote_head") is not None
+                else None
+            ),
+        }
+        if blocked:
+            return ExecutionPlan("blocked", reason, **identity)
+        bound_phase = str(state["phase"]) in {
+            "agent_pending",
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
+        if bound_phase:
+            ticket_id = state.get("selected_ticket_id")
+            ticket = (
+                ticket_store.by_id.get(ticket_id)
+                if isinstance(ticket_id, str)
+                else None
+            )
+            if ticket is None:
+                return ExecutionPlan(
+                    "blocked",
+                    "persisted selected ticket is not in managed storage",
+                    **identity,
+                )
+            if ticket.state not in {"todo", "review"}:
+                return ExecutionPlan(
+                    "blocked",
+                    "selected ticket "
+                    f"{ticket.id} has unexpected recovery state {ticket.state}",
+                    **identity,
+                )
+            return ExecutionPlan(
+                "run-worker",
+                "resume persisted bound execution",
+                ticket.id,
+                ticket.title,
+                ticket.state,
+                True,
+                **identity,
+            )
+        selected = ticket_store.selected()
+        if selected is None:
+            return ExecutionPlan("none", "no runnable tickets", **identity)
+        return ExecutionPlan(
+            "run-worker",
+            "deterministic runnable ticket selection",
+            selected.id,
+            selected.title,
+            selected.state,
+            False,
+            **identity,
+        )
+
+    def _render_status_text(self, snapshot: StatusSnapshot) -> str:
+        lines = [
+            f"Devlegate {__version__}",
+            "",
+            "Execution:",
+            f"  phase: {snapshot.phase}",
+            f"  bound ticket: {snapshot.bound_ticket_id or 'none'}",
+            (
+                "  persisted body: "
+                f"{'yes' if snapshot.persisted_body_present else 'no'}"
+                if snapshot.bound_ticket_id
+                else ""
+            ),
+            "",
+            "Repository:",
+            f"  branch: {snapshot.branch}",
+            f"  local HEAD: {snapshot.local_head}",
+            f"  known remote: {snapshot.remote_ref}",
+            f"  known remote HEAD: {snapshot.remote_head or '<unknown>'}",
+            f"  working tree: {'clean' if snapshot.working_tree_clean else 'dirty'}",
+            "",
+            "Tickets:",
+        ]
+        lines.extend(f"  {state}: {count}" for state, count in snapshot.counts)
+        lines.extend(["", "Runnable:"])
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.runnable
+        )
+        if not snapshot.runnable:
+            lines.append("  none")
+        lines.append("Blocked:")
+        if snapshot.blocked:
+            for ticket_id, title, blockers in snapshot.blocked:
+                lines.append(f"  {ticket_id}  {title}")
+                lines.extend(
+                    f"    by {dependency_id} [{state}]"
+                    for dependency_id, state in blockers
+                )
+        else:
+            lines.append("  none")
+        lines.append("Review:")
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review
+        )
+        if not snapshot.review:
+            lines.append("  none")
+        lines.extend(
+            [
+                "Next:",
+                (
+                    f"  {snapshot.next_ticket[0]}  {snapshot.next_ticket[1]}"
+                    if snapshot.next_ticket
+                    else "  none"
+                ),
+            ]
+        )
+        return "\n".join(lines)
+
+    def status(self, json_output: bool = False) -> int:
+        for _attempt in range(3):
+            try:
+                snapshot = self._collect_status_attempt()
+                break
+            except SnapshotChanged:
+                continue
+        else:
+            raise DevlegateError(
+                "project state changed while status snapshot was being collected"
+            )
+        if json_output:
+            print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
+        else:
+            print(self._render_status_text(snapshot))
+        return 0
+
+    def plan(self, json_output: bool = False) -> int:
+        for _attempt in range(3):
+            try:
+                snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
+                break
+            except SnapshotChanged:
+                continue
+        else:
+            raise DevlegateError(
+                "project state changed while execution plan was being collected"
+            )
+        if json_output:
+            print(json.dumps(snapshot.plan.as_dict(), indent=2, sort_keys=True))
+        else:
+            plan = snapshot.plan
+            print(f"Devlegate {__version__}")
+            print("Execution plan:")
+            print(f"  action: {plan.action}")
+            if plan.ticket_id is not None:
+                print(f"  ticket: {plan.ticket_id}  {plan.ticket_title}")
+                print(f"  ticket state: {plan.ticket_state}")
+            print(f"  branch: {plan.branch or '<detached>'}")
+            print(f"  local HEAD: {plan.local_head}")
+            print(f"  known remote: {plan.remote_ref}")
+            print(f"  known remote HEAD: {plan.remote_head or '<unknown>'}")
+            print(f"  reason: {plan.reason}")
+            print(f"  bound: {'yes' if plan.bound else 'no'}")
+        return 0
 
     def check(self) -> int:
         """Run read-only configuration and checkout diagnostics."""
@@ -1109,7 +1815,7 @@ class Devlegate:
         print(f"work generation differs from persisted: {generation_differs}")
         print(
             "remote information is from the existing remote-tracking ref; "
-            "--check does not fetch"
+            "check does not fetch"
         )
         if failed:
             print("\nNot ready.")
@@ -1129,32 +1835,66 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument(
+    commands = parser.add_subparsers(
+        dest="command", metavar="{run,check,status,plan}"
+    )
+    run_parser = commands.add_parser("run", help="synchronize and run one ticket")
+    run_parser.add_argument(
         "--once", action="store_true", help="run one synchronization pass and exit"
     )
-    parser.add_argument(
-        "--check", action="store_true", help="validate setup without running workflow"
+    run_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
-    parser.add_argument(
-        "--env", metavar="FILE", type=Path, help="read configuration from FILE"
+    check_parser = commands.add_parser("check", help="validate setup readiness")
+    check_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    status_parser = commands.add_parser(
+        "status", help="show a read-only observed project snapshot"
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", help="render the snapshot as JSON"
+    )
+    status_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    plan_parser = commands.add_parser(
+        "plan", help="show the read-only execution plan"
+    )
+    plan_parser.add_argument(
+        "--json", action="store_true", help="render the plan as JSON"
+    )
+    plan_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     return parser
 
 
 def main() -> int:
     """Run the command-line interface."""
-    args = build_parser().parse_args()
+    args = build_parser().parse_args(sys.argv[1:])
+    if args.command is None:
+        build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"
     try:
-        devlegate = Devlegate(env_file)
-        return devlegate.check() if args.check else devlegate.run(args.once)
+        devlegate = Devlegate(env_file, read_only=args.command in {"status", "plan"})
+        if args.command == "status":
+            return devlegate.status(args.json)
+        if args.command == "plan":
+            return devlegate.plan(args.json)
+        if args.command == "check":
+            return devlegate.check()
+        return devlegate.run(args.once)
     except KeyboardInterrupt:
         return 130
     except DevlegateError as error:
-        if args.check:
+        if args.command == "check":
             print(f"Devlegate {__version__} preflight")
             print(f"FAIL  configuration: {error}")
             print("\nNot ready.")
+            return 1
+        if isinstance(error, WorkflowBlockedError):
+            print(f"devlegate: workflow blocked: {error}", file=sys.stderr)
             return 1
         print(f"devlegate: {error}", file=sys.stderr)
         return 1

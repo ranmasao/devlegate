@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping
 
 from nanoyaml import NanoYAMLError, loads
@@ -17,6 +18,11 @@ class TicketError(ValueError):
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _WORKFLOW_STATES = ("backlog", "todo", "review", "done")
 _METADATA_KEYS = {"type", "title", "depends_on"}
+
+
+def is_canonical_ticket_name(name: str) -> bool:
+    """Return whether a managed-directory entry claims canonical ticket identity."""
+    return name.endswith(".md") and bool(_ID.fullmatch(name[:-3]))
 
 
 @dataclass(frozen=True)
@@ -32,31 +38,38 @@ class Ticket:
 @dataclass(frozen=True)
 class TicketStore:
     tickets: tuple[Ticket, ...]
+    _index: Mapping[str, Ticket] = field(init=False, repr=False, compare=False)
+    _runnable: tuple[Ticket, ...] = field(init=False, repr=False, compare=False)
 
-    @property
-    def by_id(self) -> dict[str, Ticket]:
-        return {ticket.id: ticket for ticket in self.tickets}
-
-    @property
-    def runnable(self) -> tuple[Ticket, ...]:
-        tickets = self.by_id
-        return tuple(
+    def __post_init__(self) -> None:
+        index = {ticket.id: ticket for ticket in self.tickets}
+        runnable = tuple(
             sorted(
                 (
                     ticket
                     for ticket in self.tickets
                     if ticket.state == "todo"
                     and all(
-                        tickets[dependency].state == "done"
+                        index[dependency].state == "done"
                         for dependency in ticket.depends_on
                     )
                 ),
                 key=lambda ticket: ticket.id,
             )
         )
+        object.__setattr__(self, "_index", MappingProxyType(index))
+        object.__setattr__(self, "_runnable", runnable)
+
+    @property
+    def by_id(self) -> Mapping[str, Ticket]:
+        return self._index
+
+    @property
+    def runnable(self) -> tuple[Ticket, ...]:
+        return self._runnable
 
     def selected(self) -> Ticket | None:
-        return self.runnable[0] if self.runnable else None
+        return self._runnable[0] if self._runnable else None
 
 
 def _ticket_error(path: Path, reason: str) -> TicketError:
@@ -87,7 +100,7 @@ def _split_ticket(path: Path) -> tuple[str, str]:
 
 def _parse_ticket(path: Path, state: str) -> Ticket:
     ticket_id = path.stem
-    if path.suffix != ".md" or not _ID.fullmatch(ticket_id):
+    if not is_canonical_ticket_name(path.name):
         raise _ticket_error(path, "filename must be a valid ticket ID ending in .md")
     metadata_text, body = _split_ticket(path)
     try:
@@ -165,12 +178,10 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
         if not directory.is_dir():
             raise TicketError(f"managed workflow path is not a directory: {directory}")
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
-            if path.name == ".gitkeep":
-                if path.is_file():
-                    continue
-                raise TicketError(f"invalid managed workflow entry: {path}")
-            if not path.is_file():
-                raise TicketError(f"invalid managed workflow entry: {path}")
+            if not is_canonical_ticket_name(path.name):
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise TicketError(f"invalid managed ticket entry: {path}")
             ticket = _parse_ticket(path, state)
             locations.setdefault(ticket.id, []).append(path)
             tickets.append(ticket)
@@ -189,4 +200,10 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
     return TicketStore(tuple(sorted(tickets, key=lambda item: item.id)))
 
 
-__all__ = ["Ticket", "TicketError", "TicketStore", "load_ticket_store"]
+__all__ = [
+    "Ticket",
+    "TicketError",
+    "TicketStore",
+    "is_canonical_ticket_name",
+    "load_ticket_store",
+]

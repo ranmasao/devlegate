@@ -4,33 +4,41 @@ Devlegate is a minimal bootstrap orchestrator for a software-development workflo
 
 During this bootstrap phase, responsibilities that will later move into deterministic orchestration modules are intentionally delegated to the implementation agent. In particular, the agent currently owns ticket movement from `todo` to `review`, Git commits, and pushes.
 
-## Python setup
+## Usage
 
-Run the development helper from this repository's root:
+Install Devlegate, then run the `devlegate` command from the root of the target
+project checkout. Copy `.env.example` to that project's `$PWD/.env` and
+configure at least `OPENCODE_MODEL` and the managed workflow paths if they
+differ from the defaults. The project must also have its normal Git remote and
+authentication configured.
+
+```sh
+devlegate run
+devlegate run --once
+devlegate check
+devlegate status
+devlegate status --json
+devlegate plan
+devlegate plan --json
+```
+
+The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
+
+Use `check` for a side-effect-free configuration and checkout preflight.
+
+`REMOTE_BRANCH` defaults to the currently checked-out branch when HEAD is attached. If set explicitly, the current branch must match it; detached HEAD is always blocked for planning and execution. See `.env.example` for the available runtime settings.
+
+## Development Setup
+
+For contributors working on the Devlegate repository, run:
 
 ```sh
 ./dev setup
 ```
 
-This creates the local `.venv`, installs Devlegate in editable mode, and installs the pytest and Ruff development tools. The virtual environment is local to this checkout and is not used for project files that Devlegate manages.
+This creates the local `.venv`, installs Devlegate in editable mode, and installs the pytest and Ruff development tools.
 
-Devlegate runs from the root of the target project checkout. Copy `.env.example` to that project's `$PWD/.env` and configure at least `OPENCODE_MODEL` and the managed workflow paths if they differ from the defaults. The project must also have its normal Git remote and authentication configured.
-
-## Execution
-
-From the target project's repository root, run the installed CLI through the helper in the Devlegate checkout:
-
-```sh
-/path/to/devlegate/dev run
-```
-
-The default mode is a foreground polling loop. Use `--once` for one synchronization/execution pass. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
-
-The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed. Use `--check` for a side-effect-free configuration and checkout preflight.
-
-`REMOTE_BRANCH` defaults to the currently checked-out branch. If set explicitly, the current branch must match it. See `.env.example` for the available runtime settings.
-
-## Development commands
+## Development Commands
 
 All commands use the local `.venv`:
 
@@ -39,12 +47,14 @@ All commands use the local `.venv`:
 ./dev test              Run pytest
 ./dev lint              Run Ruff check
 ./dev check             Run tests and lint
-./dev run [args...]     Run devlegate with arguments
+./dev run [args...]     Run the checkout-local installed Devlegate CLI
 ./dev clean             Remove named caches and build artifacts
 ./dev purge             Also remove .venv and named development artifacts
 ```
 
 `clean` and `purge` use an explicit allowlist. They do not use `git clean` and preserve source files, configuration, `.env`, and user files.
+
+`./dev check` is the authoritative development validation entry point. GitHub Actions runs the same `./dev setup` and `./dev check` path on pushes and pull requests using Python 3.12.
 
 ## Bootstrap workflow
 
@@ -65,13 +75,14 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 ## Current safety rules
 
 - The project checkout must be clean before Devlegate pulls or starts OpenCode.
-- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing directories are empty; a managed directory otherwise permits only `.gitkeep` and strict `.md` tickets.
-- Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support legacy free-form tickets.
+- Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing configured directories block planning and execution; only canonical `<ID>.md` entries are tickets, while other human/editor artifacts are ignored.
+- Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and dispatches exactly one ticket per OpenCode execution.
 - Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, and selected-ticket execution binding. The implementation agent temporarily owns implementation, the Executor report, the exact `todo` to `review` move, commit, and push.
 - Prompt files support `${BACKLOG_PATH}`, `${TODO_PATH}`, `${REVIEW_PATH}`, `${DONE_PATH}`, `${TODO_DIRECTORY}`, `${REVIEW_DIRECTORY}`, `${REPO_ROOT}`, `${REMOTE_NAME}`, and `${REMOTE_BRANCH}` substitutions. The `*_PATH` values are configured paths; the `*_DIRECTORY` values are resolved filesystem paths.
-- A work generation combines the known remote HEAD with a deterministic fingerprint of regular files under `TODO_PATH`; remote HEAD is no longer the sole work trigger.
+- Devlegate derives an immutable `ExecutionPlan` from one internally consistent observed snapshot. The plan carries repository observation identity and the exact selected ticket; runtime consumes that exact ticket decision rather than performing an independent selection.
+- A work generation combines the known remote HEAD with a deterministic fingerprint of canonical ticket files under `TODO_PATH`; remote HEAD is no longer the sole work trigger.
 - Devlegate persists the handled generation, so unchanged todo is not redispatched on every poll or after restart.
 - Dirty and divergent Git states are diagnosed with paths and topology, but Devlegate never automatically destroys local changes or reconciles divergent history.
 - After an agent failure, Devlegate may run one automatic recovery attempt. If recovery fails or is interrupted, Devlegate enters `recovery_failed` and requires manual intervention before automatic work resumes.
@@ -87,5 +98,3 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
   decoding, captured stderr, and a safe text renderer for both output streams.
   TTY-dependent automated tests must eventually create and own their own PTY
   rather than relying on the operator terminal.
-
-`devlegate.sh` remains as a legacy compatibility entry point. It is a thin wrapper around the installed Python CLI in this checkout, preserves arguments, and does not implement the workflow itself. Run it from the target project's repository root, or use the `dev` helper instead.

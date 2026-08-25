@@ -6,6 +6,29 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.3.0 -- 2026-08-25
+
+Immutable planning, read-only observability, and stricter product boundaries.
+
+### Added
+
+- Added read-only `status` and `plan` commands for workflow, repository, runnable-work, and blocked-work observations.
+- Added immutable execution plans carrying the observed repository identity and exact selected-ticket authority into execution.
+- Added GitHub Actions CI using the repository-local setup and validation path.
+
+### Changed
+
+- Made observation, planning, and execution use consistent workflow and Git snapshots, including managed-directory state.
+- Kept polling alive for blocked workflows while refusing unsafe execution and bounded worker event input before parsing.
+
+### Fixed
+
+- Hardened pending-execution reconciliation, snapshot freshness, runtime branch validation, recovery admission, and unknown-state handling.
+
+### Removed
+
+- Removed the legacy shell runtime, implicit pre-0.3 command forms, unbound pending compatibility, and obsolete launcher scaffolding.
+
 ## 0.2.4 -- 2026-08-24
 
 Structured tickets, deterministic dependency scheduling, and worker-output safety.
