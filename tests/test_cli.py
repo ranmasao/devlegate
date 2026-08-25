@@ -54,6 +54,7 @@ def git_fixture(tmp_path):
         "#!/usr/bin/env python3\n"
         "import json\n"
         "import os\n"
+        "import re\n"
         "import subprocess\n"
         "import sys\n"
         "from pathlib import Path\n"
@@ -109,7 +110,8 @@ def git_fixture(tmp_path):
         "if mode == 'blocked':\n"
         "    sys.exit(0)\n"
         "ticket = next((p for p in Path('kanban/todo').iterdir()\n"
-        "               if p.is_file() and p.name != '.gitkeep'), None)\n"
+        "               if p.is_file() and re.fullmatch(\n"
+        "                   r'[A-Za-z0-9][A-Za-z0-9_-]*\\.md', p.name)), None)\n"
         "if ticket is not None:\n"
         "    Path('kanban/review').mkdir(parents=True, exist_ok=True)\n"
         "    ticket.rename(Path('kanban/review') / ticket.name)\n"
@@ -643,6 +645,53 @@ def test_ticket_starts_agent_and_next_poll_does_not_repeat(git_fixture):
     assert '"phase": "idle"' in state
     assert "selected_ticket_id" not in state
     assert "selected_ticket_body" not in state
+
+
+def test_editor_sidecar_activity_does_not_redispatch_handled_todo(
+    git_fixture
+):
+    add_remote_revision(git_fixture, ticket=True)
+    replace_remote_tickets(
+        git_fixture, [("ED-17", "Ticket", "implement", [])]
+    )
+
+    first = run_devlegate(git_fixture, mode="blocked")
+    assert first.returncode == 0
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+    todo = git_fixture["working"] / "kanban/todo"
+    sidecar = todo / ".ED-17.md.swp"
+    exclude = git_fixture["working"] / ".git/info/exclude"
+    exclude.write_text(exclude.read_text() + ".ED-17.md.swp\n")
+
+    sidecar.write_text("first temporary contents\n")
+    created = run_devlegate(git_fixture, mode="blocked")
+    sidecar.write_text("changed temporary contents\n")
+    changed = run_devlegate(git_fixture, mode="blocked")
+    sidecar.unlink()
+    deleted = run_devlegate(git_fixture, mode="blocked")
+
+    assert [result.returncode for result in (created, changed, deleted)] == [0, 0, 0]
+    assert all("unchanged todo is already handled" in result.stdout for result in (
+        created,
+        changed,
+        deleted,
+    ))
+    assert git_fixture["marker"].read_text().splitlines() == ["run"]
+
+
+def test_non_ticket_only_todo_does_not_launch_worker(git_fixture):
+    todo = git_fixture["working"] / "kanban/todo"
+    names = ("notes.txt", ".foo.swp", "foo.tmp")
+    exclude = git_fixture["working"] / ".git/info/exclude"
+    exclude.write_text(exclude.read_text() + "\n".join(names) + "\n")
+    for name in names:
+        (todo / name).write_text("not a ticket\n")
+
+    result = run_devlegate(git_fixture, mode="success")
+
+    assert result.returncode == 0
+    assert not git_fixture["marker"].exists()
+    assert "no remote changes" in result.stdout
 
 
 def test_synchronized_checkout_still_detects_new_todo_generation(git_fixture):
