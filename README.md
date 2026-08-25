@@ -30,13 +30,13 @@ From the target project's repository root, run the installed CLI through the hel
 /path/to/devlegate/dev plan --json
 ```
 
-The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
+The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
 For 0.2.x compatibility, bare `devlegate` runs the normal workflow, and legacy `devlegate --once` and `devlegate --check` forms remain accepted. The command forms are canonical.
 
 The old `--watch` option has been removed. Polling is now the default, so no watch flag is needed. Use `check` for a side-effect-free configuration and checkout preflight.
 
-`REMOTE_BRANCH` defaults to the currently checked-out branch. If set explicitly, the current branch must match it. See `.env.example` for the available runtime settings.
+`REMOTE_BRANCH` defaults to the currently checked-out branch when HEAD is attached. If set explicitly, the current branch must match it; detached HEAD is always blocked for planning and execution. See `.env.example` for the available runtime settings.
 
 ## Development commands
 

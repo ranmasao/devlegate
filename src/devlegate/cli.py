@@ -19,7 +19,6 @@ from pathlib import Path
 
 from devlegate import __version__
 from devlegate.tickets import (
-    Ticket,
     TicketError,
     TicketStore,
     is_canonical_ticket_name,
@@ -49,6 +48,11 @@ class ExecutionPlan:
     ticket_title: str | None = None
     ticket_state: str | None = None
     bound: bool = False
+    branch: str | None = None
+    detached: bool = False
+    local_head: str = ""
+    remote_ref: str = ""
+    remote_head: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -64,6 +68,13 @@ class ExecutionPlan:
                 else None
             ),
             "bound": self.bound,
+            "observation": {
+                "branch": self.branch,
+                "detached": self.detached,
+                "local_head": self.local_head,
+                "remote_ref": self.remote_ref,
+                "remote_head": self.remote_head,
+            },
         }
 
 
@@ -508,35 +519,6 @@ class Devlegate:
                 "managed workflow changed while it was being observed"
             ) from error
 
-    def _selected_ticket(
-        self, store: TicketStore, bound_execution: bool
-    ) -> Ticket | None:
-        selected_id = self._state.get("selected_ticket_id")
-        if bound_execution:
-            if not isinstance(selected_id, str):
-                raise DevlegateError(
-                    "invalid execution state: selected ticket binding is incomplete"
-                )
-            selected = store.by_id.get(selected_id)
-            if selected is None:
-                raise DevlegateError(
-                    "persisted selected ticket is not in managed storage: "
-                    f"{selected_id}"
-                )
-            if selected.state not in {"todo", "review"}:
-                raise DevlegateError(
-                    f"selected ticket {selected.id} has unexpected recovery state "
-                    f"{selected.state}"
-                )
-            body = self._state.get("selected_ticket_body")
-            if not isinstance(body, str):
-                raise DevlegateError(
-                    "invalid execution state: selected ticket binding is incomplete"
-                )
-            selected = dataclasses.replace(selected, body=body)
-            return selected
-        return store.selected()
-
     @staticmethod
     def _repository_root() -> Path:
         result = subprocess.run(
@@ -574,11 +556,13 @@ class Devlegate:
         if branch.returncode:
             if not self.read_only:
                 raise DevlegateError("detached HEAD is not supported")
-            self.current_branch = "<detached>"
+            self.current_branch = None
         else:
             self.current_branch = branch.stdout.strip()
-        self.remote_branch = self.remote_branch or self.current_branch
-        if not self.read_only and self.current_branch != self.remote_branch:
+        self.remote_branch = self.remote_branch or self.current_branch or ""
+        if not self.read_only and (
+            self.current_branch is None or self.current_branch != self.remote_branch
+        ):
             raise DevlegateError(
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
@@ -1103,16 +1087,32 @@ class Devlegate:
                 return 1
         ticket_store = self._ticket_store()
         bound_execution = recovery or bound_agent_execution
-        execution_plan = self._make_execution_plan(self._state, ticket_store, False)
+        execution_plan = self._make_execution_plan(
+            self._state,
+            ticket_store,
+            False,
+            observation={
+                "branch": self.current_branch,
+                "detached": False,
+                "local_head": local_head,
+                "remote_ref": remote_ref,
+                "remote_head": remote_head,
+            },
+        )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
         if execution_plan.action == "none" and not recovery:
             selected_ticket = None
-        elif bound_execution:
-            selected_ticket = self._selected_ticket(ticket_store, True)
         else:
             assert execution_plan.ticket_id is not None
             selected_ticket = ticket_store.by_id[execution_plan.ticket_id]
+            if bound_execution:
+                body = self._state.get("selected_ticket_body")
+                if not isinstance(body, str):
+                    raise DevlegateError(
+                        "invalid execution state: selected ticket binding is incomplete"
+                    )
+                selected_ticket = dataclasses.replace(selected_ticket, body=body)
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.repo, self.todo_path
@@ -1314,11 +1314,8 @@ class Devlegate:
         branch_result = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
-        branch = (
-            branch_result.stdout.strip()
-            if branch_result.returncode == 0
-            else "<detached>"
-        )
+        detached = branch_result.returncode != 0
+        branch = branch_result.stdout.strip() if not detached else None
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         remote_result = _git(
@@ -1326,6 +1323,7 @@ class Devlegate:
         )
         return {
             "branch": branch,
+            "detached": detached,
             "local_head": local_head,
             "remote_ref": remote_ref,
             "remote_head": (
@@ -1397,7 +1395,11 @@ class Devlegate:
                 phase=str(state["phase"]),
                 bound_ticket_id=None,
                 persisted_body_present=False,
-                branch=str(git_observation["branch"]),
+                branch=(
+                    str(git_observation["branch"])
+                    if git_observation["branch"] is not None
+                    else "<detached>"
+                ),
                 local_head=str(git_observation["local_head"]),
                 remote_ref=str(git_observation["remote_ref"]),
                 remote_head=(
@@ -1415,7 +1417,21 @@ class Devlegate:
                 review=(),
                 next_ticket=None,
                 plan=ExecutionPlan(
-                    "blocked", str(workflow_error or "workflow is invalid")
+                    "blocked",
+                    str(workflow_error or "workflow is invalid"),
+                    branch=(
+                        str(git_observation["branch"])
+                        if git_observation["branch"] is not None
+                        else None
+                    ),
+                    detached=bool(git_observation.get("detached")),
+                    local_head=str(git_observation["local_head"]),
+                    remote_ref=str(git_observation["remote_ref"]),
+                    remote_head=(
+                        str(git_observation["remote_head"])
+                        if git_observation["remote_head"] is not None
+                        else None
+                    ),
                 ),
             )
         counts = tuple(
@@ -1461,7 +1477,9 @@ class Devlegate:
             state,
             ticket_store,
             bool(git_observation["status"]),
-            str(git_observation["branch"]) == self.remote_branch,
+            not bool(git_observation.get("detached"))
+            and git_observation["branch"] == self.remote_branch,
+            observation=git_observation,
         )
         next_ticket = (
             (
@@ -1478,7 +1496,11 @@ class Devlegate:
             ),
             persisted_body_present=bound_phase
             and isinstance(state.get("selected_ticket_body"), str),
-            branch=str(git_observation["branch"]),
+            branch=(
+                str(git_observation["branch"])
+                if git_observation["branch"] is not None
+                else "<detached>"
+            ),
             local_head=str(git_observation["local_head"]),
             remote_ref=str(git_observation["remote_ref"]),
             remote_head=(
@@ -1501,13 +1523,45 @@ class Devlegate:
         ticket_store: TicketStore,
         dirty: bool,
         branch_ok: bool = True,
+        observation: dict[str, object] | None = None,
     ) -> ExecutionPlan:
+        observation = observation or {}
+        branch = observation.get("branch")
         if not branch_ok:
             return ExecutionPlan(
-                "blocked", "current checkout is not on the configured branch"
+                "blocked",
+                "detached HEAD is not supported"
+                if observation.get("detached")
+                else "current checkout is not on the configured branch",
+                branch=branch if isinstance(branch, str) else None,
+                detached=bool(observation.get("detached")),
+                local_head=str(observation.get("local_head", "")),
+                remote_ref=str(observation.get("remote_ref", "")),
+                remote_head=(
+                    str(observation["remote_head"])
+                    if observation.get("remote_head") is not None
+                    else None
+                ),
             )
         if dirty:
-            return ExecutionPlan("blocked", "working tree is dirty")
+            reason = "working tree is dirty"
+            blocked = True
+        else:
+            reason = ""
+            blocked = False
+        identity = {
+            "branch": branch if isinstance(branch, str) else None,
+            "detached": bool(observation.get("detached")),
+            "local_head": str(observation.get("local_head", "")),
+            "remote_ref": str(observation.get("remote_ref", "")),
+            "remote_head": (
+                str(observation["remote_head"])
+                if observation.get("remote_head") is not None
+                else None
+            ),
+        }
+        if blocked:
+            return ExecutionPlan("blocked", reason, **identity)
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
@@ -1523,13 +1577,16 @@ class Devlegate:
             )
             if ticket is None:
                 return ExecutionPlan(
-                    "blocked", "persisted selected ticket is not in managed storage"
+                    "blocked",
+                    "persisted selected ticket is not in managed storage",
+                    **identity,
                 )
             if ticket.state not in {"todo", "review"}:
                 return ExecutionPlan(
                     "blocked",
                     "selected ticket "
                     f"{ticket.id} has unexpected recovery state {ticket.state}",
+                    **identity,
                 )
             return ExecutionPlan(
                 "run-worker",
@@ -1538,16 +1595,19 @@ class Devlegate:
                 ticket.title,
                 ticket.state,
                 True,
+                **identity,
             )
         selected = ticket_store.selected()
         if selected is None:
-            return ExecutionPlan("none", "no runnable tickets")
+            return ExecutionPlan("none", "no runnable tickets", **identity)
         return ExecutionPlan(
             "run-worker",
             "deterministic runnable ticket selection",
             selected.id,
             selected.title,
             selected.state,
+            False,
+            **identity,
         )
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
@@ -1640,12 +1700,18 @@ class Devlegate:
             print(json.dumps(snapshot.plan.as_dict(), indent=2, sort_keys=True))
         else:
             plan = snapshot.plan
-            print(f"action: {plan.action}")
-            print(f"reason: {plan.reason}")
+            print(f"Devlegate {__version__}")
+            print("Execution plan:")
+            print(f"  action: {plan.action}")
             if plan.ticket_id is not None:
-                print(f"ticket: {plan.ticket_id}  {plan.ticket_title}")
-                print(f"ticket state: {plan.ticket_state}")
-            print(f"bound: {'yes' if plan.bound else 'no'}")
+                print(f"  ticket: {plan.ticket_id}  {plan.ticket_title}")
+                print(f"  ticket state: {plan.ticket_state}")
+            print(f"  branch: {plan.branch or '<detached>'}")
+            print(f"  local HEAD: {plan.local_head}")
+            print(f"  known remote: {plan.remote_ref}")
+            print(f"  known remote HEAD: {plan.remote_head or '<unknown>'}")
+            print(f"  reason: {plan.reason}")
+            print(f"  bound: {'yes' if plan.bound else 'no'}")
         return 0
 
     def check(self) -> int:
@@ -1765,7 +1831,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    commands = parser.add_subparsers(dest="command", metavar="{run,check,status}")
+    commands = parser.add_subparsers(
+        dest="command", metavar="{run,check,status,plan}"
+    )
     run_parser = commands.add_parser("run", help="synchronize and run one ticket")
     run_parser.add_argument(
         "--once", action="store_true", help="run one synchronization pass and exit"

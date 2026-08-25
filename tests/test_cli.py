@@ -236,6 +236,25 @@ def run_status(fixture, *args, env_file=None):
     )
 
 
+def run_plan(fixture, *args, env_file=None):
+    config = env_file or fixture["tmp"] / "config.env"
+    if not config.exists():
+        config.write_text(
+            "REMOTE_BRANCH=main\nTODO_PATH=kanban/todo\n"
+            "REVIEW_PATH=kanban/review\nPOLL_INTERVAL=0\n"
+            f"STATE_DIR={fixture['tmp'] / 'state'}\n"
+        )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    return subprocess.run(
+        [sys.executable, "-m", "devlegate", "plan", *args, "--env", config],
+        cwd=fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+
 def test_help(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["devlegate", "--help"])
     try:
@@ -245,7 +264,16 @@ def test_help(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "usage: devlegate" in output
-    assert "{run,check,status}" in output
+    assert "{run,check,status,plan}" in output
+
+
+def test_plan_help(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "plan", "--help"])
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 0
+    assert "usage: devlegate plan" in capsys.readouterr().out
 
 
 def test_command_parser_exposes_run_check_and_status():
@@ -2321,3 +2349,292 @@ def test_check_reports_invalid_configuration(git_fixture):
     assert result.returncode == 1
     assert "FAIL  configuration" in result.stdout
     assert "OPENCODE_MODEL is required" in result.stdout
+
+
+def _commit_local_ticket(
+    fixture, ticket_id="ED-21", title="Implement ticket", body="work"
+):
+    path = fixture["working"] / "kanban/todo" / f"{ticket_id}.md"
+    path.write_text(
+        "---\n"
+        '"type": "devlegate.ticket"\n'
+        f'"title": "{title}"\n'
+        "---\n"
+        f"{body}\n"
+    )
+    git(fixture["working"], "add", ".")
+    git(fixture["working"], "commit", "-m", "local ticket")
+
+
+def test_plan_selects_deterministic_ticket_and_exposes_identity(git_fixture):
+    _commit_local_ticket(git_fixture)
+
+    result = run_plan(git_fixture, "--json")
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "run-worker"
+    assert payload["ticket"] == {
+        "id": "ED-21",
+        "state": "todo",
+        "title": "Implement ticket",
+    }
+    assert payload["bound"] is False
+    assert payload["observation"]["branch"] == "main"
+    assert payload["observation"]["local_head"]
+    assert payload["observation"]["remote_ref"] == "origin/main"
+    assert payload["observation"]["remote_head"]
+
+
+def test_plan_no_tickets_is_normal_no_action(git_fixture):
+    result = run_plan(git_fixture, "--json")
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "none"
+    assert payload["ticket"] is None
+
+
+def test_plan_preserves_deterministic_scheduler_order(git_fixture):
+    _commit_local_ticket(git_fixture, "ED-22", "Later")
+    _commit_local_ticket(git_fixture, "ED-17", "Earlier")
+
+    result = run_plan(git_fixture, "--json")
+
+    assert json.loads(result.stdout)["ticket"]["id"] == "ED-17"
+
+
+def test_plan_valid_dependency_wait_is_no_action(git_fixture):
+    dependency = git_fixture["working"] / "kanban/review/ED-17.md"
+    dependency.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Review"\n---\nreview\n'
+    )
+    waiting = git_fixture["working"] / "kanban/todo/ED-18.md"
+    waiting.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Waiting"\n'
+        '"depends_on":\n  - "ED-17"\n---\nwait\n'
+    )
+    git(git_fixture["working"], "add", ".")
+    git(git_fixture["working"], "commit", "-m", "dependency waiting")
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "none"
+    assert "runnable" in payload["reason"]
+
+
+def test_plan_duplicate_identity_is_blocked(git_fixture):
+    _commit_local_ticket(git_fixture)
+    review = git_fixture["working"] / "kanban/review/ED-21.md"
+    review.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Duplicate"\n---\ndup\n'
+    )
+    git(git_fixture["working"], "add", ".")
+    git(git_fixture["working"], "commit", "-m", "duplicate ticket")
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "duplicate ticket ID" in payload["reason"]
+
+
+def test_status_works_without_runtime_dependencies(git_fixture):
+    config = git_fixture["tmp"] / "status-minimal.env"
+    config.write_text("REMOTE_BRANCH=main\n")
+
+    result = run_status(git_fixture, "--json", env_file=config)
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["repository"]["branch"] == "main"
+
+
+def test_status_next_follows_bound_plan(git_fixture, monkeypatch):
+    _commit_local_ticket(git_fixture, "ED-17", "Fresh")
+    _commit_local_ticket(git_fixture, "ED-18", "Bound")
+    config = git_fixture["tmp"] / "bound-status.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nSTATE_DIR={git_fixture['tmp'] / 'bound-state'}\n"
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config, read_only=True)
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate.state_dir.mkdir(parents=True, exist_ok=True)
+    devlegate._state_file.write_text(
+        json.dumps(
+            {
+                "phase": "agent_pending",
+                "local_head": head,
+                "remote_head": head,
+                "changed_paths": "",
+                "selected_ticket_id": "ED-18",
+                "selected_ticket_body": "bound body",
+            }
+        )
+    )
+
+    snapshot = devlegate._collect_status_attempt()
+
+    assert snapshot.plan.bound is True
+    assert snapshot.plan.ticket_id == "ED-18"
+    assert snapshot.next_ticket == ("ED-18", "Bound")
+
+
+def test_plan_invalid_workflow_is_blocked_without_traceback(git_fixture):
+    ticket = git_fixture["working"] / "kanban/todo/ED-21.md"
+    ticket.write_text("not a ticket\n")
+
+    result = run_plan(git_fixture, "--json")
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "invalid ticket" in payload["reason"]
+    assert "Traceback" not in result.stdout
+
+
+def test_plan_missing_dependency_is_blocked(git_fixture):
+    ticket = git_fixture["working"] / "kanban/todo/ED-21.md"
+    ticket.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Missing"\n'
+        '"depends_on":\n  - "ED-404"\n---\nwork\n'
+    )
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "missing dependency" in payload["reason"]
+
+
+def test_plan_dependency_cycle_is_blocked(git_fixture):
+    todo = git_fixture["working"] / "kanban/todo"
+    todo.joinpath("ED-21.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "One"\n'
+        '"depends_on":\n  - "ED-22"\n---\none\n'
+    )
+    todo.joinpath("ED-22.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Two"\n'
+        '"depends_on":\n  - "ED-21"\n---\ntwo\n'
+    )
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "dependency cycle" in payload["reason"]
+
+
+@pytest.mark.parametrize("remote_branch", ["main", None])
+def test_plan_detached_head_is_always_blocked(git_fixture, remote_branch):
+    config = git_fixture["tmp"] / f"detached-{remote_branch or 'omitted'}.env"
+    config.write_text(
+        (f"REMOTE_BRANCH={remote_branch}\n" if remote_branch else "")
+        + f"STATE_DIR={git_fixture['tmp'] / 'state-detached'}\n"
+    )
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    git(git_fixture["working"], "checkout", "--detach", head)
+
+    result = run_plan(git_fixture, "--json", env_file=config)
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "detached" in payload["reason"]
+    assert payload["observation"]["detached"] is True
+
+
+def test_plan_text_and_json_share_observation_identity(git_fixture):
+    text = run_plan(git_fixture)
+    structured = run_plan(git_fixture, "--json")
+
+    assert text.returncode == structured.returncode == 0
+    payload = json.loads(structured.stdout)
+    assert f"action: {payload['action']}" in text.stdout
+    assert f"branch: {payload['observation']['branch']}" in text.stdout
+    assert f"local HEAD: {payload['observation']['local_head']}" in text.stdout
+    assert f"known remote: {payload['observation']['remote_ref']}" in text.stdout
+
+
+def test_plan_does_not_fetch_or_write_state(git_fixture):
+    add_remote_revision(git_fixture, ticket=True)
+    state_dir = git_fixture["tmp"] / "plan-state"
+    config = git_fixture["tmp"] / "plan-read-only.env"
+    config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={state_dir}\n")
+    before = git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
+
+    result = run_plan(git_fixture, "--json", env_file=config)
+
+    assert result.returncode == 0
+    assert (
+        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
+        == before
+    )
+    assert not state_dir.exists()
+    assert not (git_fixture["working"] / "remote.txt").exists()
+
+
+def test_plan_missing_workflow_directory_is_blocked(git_fixture):
+    config = git_fixture["tmp"] / "missing-workflow.env"
+    config.write_text(
+        "REMOTE_BRANCH=main\nTODO_PATH=kanban/not-present\n"
+    )
+
+    result = run_plan(git_fixture, "--json", env_file=config)
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "workflow directory" in payload["reason"]
+
+
+def test_plan_dirty_worktree_is_blocked(git_fixture):
+    (git_fixture["working"] / "tracked.txt").write_text("changed\n")
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "dirty" in payload["reason"]
+
+
+def test_plan_wrong_branch_is_blocked_without_mutation(git_fixture):
+    git(git_fixture["working"], "checkout", "-b", "other")
+
+    result = run_plan(git_fixture, "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["action"] == "blocked"
+    assert "configured branch" in payload["reason"]
+    assert (
+        git(git_fixture["working"], "branch", "--show-current").stdout.strip()
+        == "other"
+    )
+
+
+def test_plan_broken_persisted_binding_is_blocked(git_fixture, monkeypatch):
+    config = git_fixture["tmp"] / "broken-binding.env"
+    config.write_text(
+        f"REMOTE_BRANCH=main\nSTATE_DIR={git_fixture['tmp'] / 'broken-state'}\n"
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(config, read_only=True)
+    head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    devlegate.state_dir.mkdir(parents=True, exist_ok=True)
+    devlegate._state_file.write_text(
+        json.dumps(
+            {
+                "phase": "agent_pending",
+                "local_head": head,
+                "remote_head": head,
+                "changed_paths": "",
+                "selected_ticket_id": "ED-404",
+                "selected_ticket_body": "missing",
+            }
+        )
+    )
+
+    snapshot = devlegate._collect_status_attempt()
+
+    assert snapshot.plan.action == "blocked"
+    assert "not in managed storage" in snapshot.plan.reason
