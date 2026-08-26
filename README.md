@@ -92,6 +92,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Execution plans and status snapshots expose separate nested `observation.code` and `observation.control` Git identities. A work generation combines code and control revision identity with a deterministic fingerprint of canonical ticket files under `TODO_PATH`.
 - Devlegate persists the handled generation, so unchanged todo is not redispatched on every poll or after restart.
 - Dirty and divergent Git states are diagnosed with paths and topology, but Devlegate never automatically destroys local changes or reconciles divergent history.
+- Git synchronization and workflow validity are separate boundaries: `merge_pending` covers only an unproven fast-forward transaction and is cleared once the intended HEAD is verified. A later workflow blocker is derived from current control contents and does not reopen that Git transaction.
 - Later execution phases will define worker failure and recovery semantics. Phase 1 does not start worker execution.
 - Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
 - Worker dispatch is deliberately gated during this transitional phase because workers cannot safely mutate the separate canonical control worktree. Later execution architecture must reconnect this boundary without giving workers cross-plane Git access.

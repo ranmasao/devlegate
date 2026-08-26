@@ -1232,7 +1232,7 @@ class Devlegate:
                     changed_paths = str(self._state.get("changed_paths", ""))
                 remote_head = target_head
                 synchronized_phase = (
-                    "agent_pending" if pending_agent_execution else "merge_pending"
+                    "agent_pending" if pending_agent_execution else "idle"
                 )
                 synchronized_fields = {
                     "local_head": local_head,
@@ -1240,7 +1240,10 @@ class Devlegate:
                     "changed_paths": changed_paths,
                     "control_head": control_head,
                 }
-                self._save_state(synchronized_phase, **synchronized_fields)
+                self._save_state(
+                    synchronized_phase,
+                    **synchronized_fields,
+                )
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
@@ -1290,7 +1293,7 @@ class Devlegate:
                 )
                 local_head = actual_head
                 self._save_state(
-                    "merge_pending",
+                    "idle",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
