@@ -1048,7 +1048,11 @@ class Devlegate:
             self._save_state("idle")
             self._recovery_pending = False
             _log("working tree cleaned manually; recovery state cleared")
-        recovery = self._recovery_pending
+        recovery = self._recovery_pending or self._state.get("phase") in {
+            "agent_running",
+            "recovery_pending",
+            "recovery_running",
+        }
         if status and not recovery:
             if dirty_changed:
                 _log("working tree is dirty; refusing to pull or start the agent")

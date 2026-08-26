@@ -134,3 +134,60 @@ def test_merge_pending_divergence_fails_closed(git_fixture, monkeypatch):
     with pytest.raises(DevlegateError, match="does not match the local HEAD"):
         devlegate.run_once()
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() != target
+
+
+def test_live_agent_running_phase_overrides_stale_recovery_flag(
+    git_fixture, monkeypatch, capsys
+):
+    publish_control(
+        git_fixture, "ticket", {"kanban/todo/T-1.md": ticket("Bound")}
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(git_fixture["config"])
+    code_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    control_head = git(git_fixture["control"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "agent_running",
+        local_head=code_head,
+        remote_head=code_head,
+        changed_paths="",
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work",
+    )
+    devlegate._recovery_pending = False
+
+    assert devlegate.run_once() == 1
+    assert "worker dispatch is gated" in capsys.readouterr().out
+    assert state_payload(git_fixture)["phase"] == "idle"
+
+
+def test_unresolved_agent_phase_survives_repeated_sync_failures(
+    git_fixture, monkeypatch
+):
+    publish_control(
+        git_fixture, "ticket", {"kanban/todo/T-1.md": ticket("Bound")}
+    )
+    monkeypatch.chdir(git_fixture["working"])
+    devlegate = Devlegate(git_fixture["config"])
+    code_head = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    control_head = git(git_fixture["control"], "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "agent_running",
+        local_head=code_head,
+        remote_head=code_head,
+        changed_paths="",
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work",
+    )
+
+    def fail_sync():
+        raise DevlegateError("network unavailable")
+
+    monkeypatch.setattr(devlegate, "_sync_control", fail_sync)
+    devlegate._recovery_pending = False
+    for _ in range(2):
+        with pytest.raises(DevlegateError, match="network unavailable"):
+            devlegate.run_once()
+    assert state_payload(git_fixture)["phase"] == "agent_running"
