@@ -149,6 +149,13 @@ def test_malicious_assignment_stays_inside_assigned_work():
         assert "Call devlegate_report" not in section(result, title)
 
 
+def test_worker_contract_does_not_require_ticket_executor_report():
+    result = prompt(WorkDirective.FRESH)
+
+    assert "Executor report" not in result
+    assert "append" not in section(result, "Core Worker Contract")
+
+
 def test_untrusted_headings_cannot_create_owned_sections():
     malicious = "\n".join(
         [
