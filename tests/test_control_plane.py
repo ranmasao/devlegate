@@ -398,6 +398,30 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     assert git(working, "rev-parse", "HEAD").stdout.strip() != execution_head
 
 
+def test_new_control_generation_refreshes_attempt_authority(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    original_base = json.loads(next(state.glob("*.json")).read_text())[
+        "execution_base_head"
+    ]
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "unrelated.md").write_text("architect note\n")
+    git(control, "add", "unrelated.md")
+    git(control, "commit", "-m", "unrelated control update")
+    git(control, "push", "origin", "devlegate/control")
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    payload = json.loads(next(state.glob("*.json")).read_text())
+    assert payload["execution_base_head"] == original_base
+    assert payload["execution_control_head"] == control_head
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_base
+
+
 def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

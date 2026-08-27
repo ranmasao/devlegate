@@ -1436,11 +1436,6 @@ class Devlegate:
                 if existing_lineage
                 else local_head
             )
-            execution_control_head = (
-                self._state["execution_control_head"]
-                if existing_lineage
-                else control_head
-            )
             self._save_state(
                 "agent_pending",
                 local_head=local_head,
@@ -1455,7 +1450,7 @@ class Devlegate:
                 selected_ticket_body=selected_ticket.body,
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
-                execution_control_head=execution_control_head,
+                execution_control_head=control_head,
                 execution_branch=f"devlegate/work/{selected_ticket.id}",
                 execution_path=str(
                     self.execution_worktree_root / "work" / selected_ticket.id
