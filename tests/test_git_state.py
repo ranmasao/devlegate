@@ -66,7 +66,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
     result = invoke(git_fixture, "run", "--once")
 
     assert result.returncode == 1
-    assert "worker dispatch is gated" in result.stdout
+    assert "worker dispatch remains gated" in result.stdout
     assert "superseding pending revision" not in result.stdout
     assert state_payload(git_fixture)["phase"] == "idle"
 
@@ -158,7 +158,7 @@ def test_live_agent_running_phase_overrides_stale_recovery_flag(
     devlegate._recovery_pending = False
 
     assert devlegate.run_once() == 1
-    assert "worker dispatch is gated" in capsys.readouterr().out
+    assert "worker dispatch remains gated" in capsys.readouterr().out
     assert state_payload(git_fixture)["phase"] == "idle"
 
 

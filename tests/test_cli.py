@@ -184,7 +184,7 @@ def test_phase1_gate_persists_idle_and_control_head(git_fixture):
     publish_control(git_fixture, "ticket", {"kanban/todo/T-1.md": ticket()})
     result = invoke(git_fixture, "run", "--once")
     assert result.returncode == 1
-    assert "worker dispatch is gated in Phase 1" in result.stdout
+    assert "worker dispatch remains gated during v0.4 construction" in result.stdout
     state = next(git_fixture["state"].glob("*.json"))
     payload = json.loads(state.read_text())
     assert payload["phase"] == "idle"

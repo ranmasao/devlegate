@@ -71,7 +71,7 @@ external Architect/Reviewer
     -> Devlegate notices a new repository revision or todo generation
     -> fast-forward pull/sync
     -> Devlegate selects one runnable todo ticket
-    -> Phase 1 blocks worker dispatch safely
+    -> worker dispatch remains gated during v0.4 construction
     -> later execution phases reconnect worker reporting
     -> external Architect/Reviewer inspects the result
 ```
@@ -90,7 +90,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and selects exactly one ticket for a potential worker dispatch.
-- Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, and selected-ticket execution binding. Phase 1 does not dispatch a worker because no safe cross-plane reporting bridge exists yet.
+- Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, and selected-ticket execution binding. Worker dispatch remains gated while the v0.4 execution and reporting boundaries are constructed.
 - Devlegate owns worker prompt construction. The worker receives one exact implementation assignment, a small worker-only contract, and only relevant implementation context. Canonical workflow paths, ticket paths, kanban, and Git/execution topology are Devlegate details, not worker API.
 - Fresh, resume, rework, and recovery prompts share one contract and differ only through a narrow work directive and relevant optional context. Ticket content is opaque assigned data; it cannot authorize canonical workflow mutation.
 - Worker output is free-form unless it is exactly one strictly validated `devlegate_report` tool event. `WorkerClaim` is untrusted semantic egress with `completed`, `incomplete`, or `blocked` outcomes; missing, malformed, or duplicate reports are protocol failures and do not mutate workflow.

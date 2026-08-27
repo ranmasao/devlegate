@@ -17,11 +17,29 @@ class WorkerClaim:
 
 
 @dataclass(frozen=True)
+class OpenCodeRunResult:
+    process_returncode: int
+    transport_error: str | None = None
+
+    @property
+    def transport_ok(self) -> bool:
+        return self.transport_error is None
+
+
+@dataclass(frozen=True)
 class WorkerRunResult:
     process_returncode: int
+    transport_error: str | None
     claim: WorkerClaim | None
-    protocol_ok: bool
-    protocol_error: str | None = None
+    egress_error: str | None
+
+    @property
+    def transport_ok(self) -> bool:
+        return self.transport_error is None
+
+    @property
+    def egress_ok(self) -> bool:
+        return self.egress_error is None and self.claim is not None
 
 
 _OUTCOMES = {"completed", "incomplete", "blocked"}

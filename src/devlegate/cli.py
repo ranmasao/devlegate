@@ -30,7 +30,11 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     load_ticket_store,
 )
-from devlegate.worker_egress import WorkerEgressParser, WorkerRunResult
+from devlegate.worker_egress import (
+    OpenCodeRunResult,
+    WorkerEgressParser,
+    WorkerRunResult,
+)
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
@@ -312,7 +316,7 @@ def _run_opencode(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     event_handler: Callable[[object], None] | None = None,
-) -> int:
+) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
         command + [prompt],
@@ -323,19 +327,19 @@ def _run_opencode(
         env=env,
     )
     output_lock = threading.Lock()
-    protocol_failed = False
+    transport_error: str | None = None
 
     def write(text: str, stream) -> None:
         with output_lock:
             _write_worker_text(text, stream)
 
     def consume_stdout() -> None:
-        nonlocal protocol_failed
+        nonlocal transport_error
         assert process.stdout is not None
         while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
-                protocol_failed = True
-                _log("OpenCode protocol error: stdout event exceeds maximum size")
+                transport_error = "stdout event exceeds maximum size"
+                _log(f"OpenCode protocol error: {transport_error}")
                 if not raw_line.endswith(b"\n"):
                     while discarded := process.stdout.readline(
                         MAX_STDOUT_EVENT_BYTES + 1
@@ -346,8 +350,8 @@ def _run_opencode(
             try:
                 event = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
-                protocol_failed = True
-                _log("OpenCode protocol error: invalid JSON event on stdout")
+                transport_error = "invalid JSON event on stdout"
+                _log(f"OpenCode protocol error: {transport_error}")
                 continue
             if event_handler is not None:
                 event_handler(event)
@@ -355,15 +359,15 @@ def _run_opencode(
                 not isinstance(event, dict)
                 or event.get("type") not in _OPENCODE_JSON_TYPES
             ):
-                protocol_failed = True
-                _log("OpenCode protocol error: unsupported event on stdout")
+                transport_error = "unsupported event on stdout"
+                _log(f"OpenCode protocol error: {transport_error}")
                 continue
             event_type = event["type"]
             if event_type == "text" or event_type == "reasoning":
                 part = event.get("part")
                 if not isinstance(part, dict) or not isinstance(part.get("text"), str):
-                    protocol_failed = True
-                    _log("OpenCode protocol error: text event has no text part")
+                    transport_error = "text event has no text part"
+                    _log(f"OpenCode protocol error: {transport_error}")
                     continue
                 write(part["text"] + "\n", sys.stdout)
             elif event_type == "tool_use":
@@ -375,8 +379,8 @@ def _run_opencode(
                     or part["state"].get("status")
                     not in {"pending", "running", "completed", "error"}
                 ):
-                    protocol_failed = True
-                    _log("OpenCode protocol error: invalid tool event on stdout")
+                    transport_error = "invalid tool event on stdout"
+                    _log(f"OpenCode protocol error: {transport_error}")
                     continue
                 tool = part["tool"]
                 write(f"OpenCode tool: {tool}\n", sys.stdout)
@@ -406,9 +410,7 @@ def _run_opencode(
     returncode = process.wait()
     stdout_thread.join()
     stderr_thread.join()
-    if protocol_failed:
-        return 1
-    return returncode
+    return OpenCodeRunResult(returncode, transport_error)
 
 
 def _has_todo_files(repo: Path, todo_path: str) -> bool:
@@ -1476,9 +1478,9 @@ class Devlegate:
             WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
         )
         _log(
-            "worker dispatch is gated in Phase 1; Phase 2 execution workspace is "
-            "prepared, but canonical ticket workflow is isolated in the control "
-            "worktree"
+            "worker dispatch remains gated during v0.4 construction; execution "
+            "workspace is prepared, but canonical ticket workflow is isolated in "
+            "the control worktree"
         )
         self._save_state("idle")
         return 1
@@ -1576,26 +1578,24 @@ export default tool({
         environment = os.environ.copy()
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
         try:
-            returncode = _run_opencode(
+            opencode_result = _run_opencode(
                 command,
                 prompt,
                 cwd=workspace.path,
                 env=environment,
                 event_handler=parser.consume,
             )
-            claim, protocol_error = parser.finish()
-            if returncode != 0:
-                return WorkerRunResult(
-                    returncode,
-                    None,
-                    False,
-                    f"worker exited with status {returncode}",
-                )
-            if protocol_error is not None:
-                return WorkerRunResult(returncode, None, False, protocol_error)
-            return WorkerRunResult(returncode, claim, True)
+            claim, egress_error = parser.finish()
+            if opencode_result.transport_error is not None:
+                claim = None
+            return WorkerRunResult(
+                opencode_result.process_returncode,
+                opencode_result.transport_error,
+                claim,
+                egress_error,
+            )
         except OSError as error:
-            return WorkerRunResult(-1, None, False, str(error))
+            return WorkerRunResult(-1, str(error), None, None)
         finally:
             shutil.rmtree(config_dir, ignore_errors=True)
 

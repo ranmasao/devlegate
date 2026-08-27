@@ -233,7 +233,7 @@ def test_run_worker_gate_leaves_idle_state(tmp_path):
     assert payload["phase"] == "idle"
     assert "selected_ticket_id" not in payload
     assert payload["handled_control_head"]
-    assert "worker dispatch is gated" in result.stdout
+    assert "worker dispatch remains gated" in result.stdout
 
 
 def test_control_init_rejects_wrong_or_unregistered_existing_path(tmp_path):
