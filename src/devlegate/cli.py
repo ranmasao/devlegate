@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-import string
 import subprocess
 import sys
 import tempfile
@@ -29,6 +28,11 @@ from devlegate.tickets import (
     TicketStore,
     is_canonical_ticket_name,
     load_ticket_store,
+)
+from devlegate.worker_prompt import (
+    WorkDirective,
+    WorkerPromptInput,
+    build_worker_prompt,
 )
 
 
@@ -452,14 +456,6 @@ def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
 
 
-def _render_prompt(template: str, values: dict[str, str]) -> str:
-    """Render configured prompt values while leaving unknown variables intact."""
-    rendered = string.Template(template).safe_substitute(values)
-    for name, value in values.items():
-        rendered = rendered.replace("{{" + name + "}}", value)
-    return rendered
-
-
 class Devlegate:
     """Run the repository polling and agent execution workflow."""
 
@@ -486,13 +482,6 @@ class Devlegate:
         self.review_path = setting("REVIEW_PATH", "kanban/review")
         self.done_path = setting("DONE_PATH", "kanban/done")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
-        prompt_root = Path(__file__).resolve().parents[2]
-        default_prompt = prompt_root / "agent-prompt.txt"
-        self.agent_prompt_file = Path(setting("AGENT_PROMPT_FILE", str(default_prompt)))
-        default_recovery_prompt = prompt_root / "recovery-prompt.txt"
-        self.recovery_prompt_file = Path(
-            setting("RECOVERY_PROMPT_FILE", str(default_recovery_prompt))
-        )
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
@@ -612,14 +601,6 @@ class Devlegate:
 
     def _validate(self) -> None:
         if not self.read_only:
-            if not self.agent_prompt_file.is_file():
-                raise DevlegateError(
-                    f"agent prompt file not found: {self.agent_prompt_file}"
-                )
-            if not self.recovery_prompt_file.is_file():
-                raise DevlegateError(
-                    f"recovery prompt file not found: {self.recovery_prompt_file}"
-                )
             if not self.poll_interval.isdecimal():
                 raise DevlegateError("POLL_INTERVAL must be an integer")
             if not self.opencode_model:
@@ -1471,6 +1452,16 @@ class Devlegate:
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
             f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
         )
+        directive = (
+            WorkDirective.RECOVERY
+            if recovery
+            else WorkDirective.RESUME
+            if bound_execution
+            else WorkDirective.FRESH
+        )
+        build_worker_prompt(
+            WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
+        )
         _log(
             "worker dispatch is gated in Phase 1; Phase 2 execution workspace is "
             "prepared, but canonical ticket workflow is isolated in the control "
@@ -2037,21 +2028,7 @@ class Devlegate:
                 remote_result.returncode == 0,
                 f"{self.remote_name}/{self.remote_branch}",
             ),
-            (
-                "OpenCode executable",
-                shutil.which(self.opencode_bin) is not None,
-                "",
-            ),
-            (
-                "agent prompt",
-                self.agent_prompt_file.is_file(),
-                str(self.agent_prompt_file),
-            ),
-            (
-                "recovery prompt",
-                self.recovery_prompt_file.is_file(),
-                str(self.recovery_prompt_file),
-            ),
+            ("OpenCode executable", shutil.which(self.opencode_bin) is not None, ""),
             ("state directory", self.state_dir.is_dir(), str(self.state_dir)),
             (
                 "working tree clean",
