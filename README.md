@@ -1,8 +1,8 @@
 # Devlegate
 
-Devlegate is a minimal bootstrap orchestrator for a software-development workflow. In the Phase 1 unstable architecture, product code remains on the configured product branch and canonical workflow files live only on `CONTROL_BRANCH` (default `devlegate/control`) in a Devlegate-owned worktree outside the product checkout.
+Devlegate is a minimal bootstrap orchestrator for a software-development workflow. Product code remains on the configured product branch and canonical workflow files live only on `CONTROL_BRANCH` (default `devlegate/control`) in a Devlegate-owned worktree outside the product checkout.
 
-During this transitional phase, worker dispatch is deliberately gated. The control-plane foundation is fully observable and schedulable, but later execution phases must define how workers report and mutate canonical control state.
+During this transitional phase, worker dispatch is deliberately gated. Devlegate now maintains three physically separate Git surfaces: the operator checkout, the canonical control worktree, and a per-ticket execution worktree. Later execution phases must define how workers report and mutate canonical control state.
 
 ## Usage
 
@@ -83,6 +83,8 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - The product checkout must be clean before Devlegate synchronizes it. The control worktree must also be clean before it is synchronized or used for scheduling.
 - Managed tickets use the explicit `BACKLOG_PATH`, `TODO_PATH`, `REVIEW_PATH`, and `DONE_PATH` directories. Missing configured directories block planning and execution; only canonical `<ID>.md` entries are tickets, while other human/editor artifacts are ignored.
 - `CONTROL_BRANCH` defaults to `devlegate/control`. The local control worktree is stored under `$STATE_DIR/worktrees/<repository-key>/control`; `status`, `plan`, `check`, and `run` never create it automatically.
+- Each selected ticket gets the deterministic local branch `devlegate/work/<ticket-id>` and worktree `$STATE_DIR/worktrees/<repository-key>/work/<ticket-id>`. The branch is durable implementation history; the worktree is a disposable active workspace. Creation, resume, and safe recreation are Devlegate-owned and never use the operator checkout or control worktree.
+- Execution branches start at the exact planned product code HEAD and retain the bound control revision in durable state. Control history is never merged or copied into an execution branch. Missing worktrees may be recreated from the existing branch; dirty or conflicting worktrees fail closed without reset, clean, force removal, or branch stealing.
 - Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and selects exactly one ticket for a potential worker dispatch.
@@ -98,4 +100,4 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Worker dispatch is deliberately gated during this transitional phase because workers cannot safely mutate the separate canonical control worktree. Later execution architecture must reconnect this boundary without giving workers cross-plane Git access.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
 - Agent sessions are intentionally ephemeral for now.
-- No worker receives control-worktree paths or control branch topology in Phase 1.
+- Workers remain gated and receive no control-worktree paths, control branch topology, or ticket source paths. A worker, when re-enabled in a later phase, will use only the execution worktree.

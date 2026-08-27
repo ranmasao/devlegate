@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from devlegate.cli import Devlegate, DevlegateError
+from devlegate.execution_workspace import (
+    ExecutionWorkspaceError,
+    parse_worktree_porcelain,
+)
 
 
 def git(cwd, *args):
@@ -245,3 +249,117 @@ def test_control_init_rejects_wrong_or_unregistered_existing_path(tmp_path):
     unregistered = invoke(working, "control", "init", config=config)
     assert unregistered.returncode == 1
     assert "registered Git worktree" in unregistered.stderr
+
+
+def test_run_prepares_exact_product_execution_workspace_without_cross_plane_changes(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((state / "worktrees").glob("*/control"))
+    operator_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    execution = (
+        state / "worktrees" / next(state.glob("worktrees/*")).name / "work" / "T-1"
+    )
+    assert execution.is_dir()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == operator_head
+    assert git(execution, "symbolic-ref", "--short", "HEAD").stdout.strip() == (
+        "devlegate/work/T-1"
+    )
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == operator_head
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == control_head
+    assert not (execution / "kanban").exists()
+
+
+def test_run_reuses_and_recreates_execution_worktree_from_durable_branch(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "implementation.txt").write_text("checkpoint\n")
+    git(execution, "add", "implementation.txt")
+    git(execution, "commit", "-m", "checkpoint")
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(working, "worktree", "remove", execution)
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    assert execution.is_dir()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+    assert (execution / "implementation.txt").read_text() == "checkpoint\n"
+
+
+def test_dirty_execution_worktree_is_preserved(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    marker = execution / "uncommitted.txt"
+    marker.write_text("unique worker work\n")
+
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert marker.read_text() == "unique worker work\n"
+
+
+def test_execution_path_conflict_fails_closed(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next((state / "worktrees").glob("*"))
+    expected = key / "work" / "T-1"
+    expected.mkdir(parents=True)
+    (expected / "do-not-delete").write_text("foreign\n")
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    assert "not a registered execution worktree" in result.stderr
+    assert (expected / "do-not-delete").read_text() == "foreign\n"
+
+
+def test_read_only_plan_does_not_materialize_execution_workspace(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+
+    result = invoke(working, "plan", "--json", config=config)
+
+    assert result.returncode == 0
+    assert not list((state / "worktrees").glob("*/work/*"))
+
+
+def test_worktree_porcelain_parser_rejects_ambiguous_records():
+    output = "\n".join(
+        [
+            "worktree /tmp/repo",
+            "HEAD " + "a" * 40,
+            "branch refs/heads/main",
+            "branch refs/heads/other",
+            "",
+        ]
+    )
+    with pytest.raises(ExecutionWorkspaceError, match="duplicate"):
+        parse_worktree_porcelain(output)
+
+
+def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(execution)
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    assert execution.is_dir()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
