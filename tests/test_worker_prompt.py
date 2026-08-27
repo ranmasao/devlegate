@@ -55,6 +55,19 @@ def test_fresh_prompt_is_narrow_and_deterministic():
     assert "completed" in section(result, "Core Worker Contract")
     assert "incomplete" in section(result, "Core Worker Contract")
     assert "blocked" in section(result, "Core Worker Contract")
+    for responsibility in (
+        "commit",
+        "push",
+        "merge",
+        "rebase",
+        "checkout",
+        "switch branches",
+        "create or delete branches",
+        "workflow or ticket state",
+        "ExecutionReport",
+        "product branch",
+    ):
+        assert responsibility in section(result, "Core Worker Contract")
     for private_text in (
         "kanban/",
         "devlegate/control",

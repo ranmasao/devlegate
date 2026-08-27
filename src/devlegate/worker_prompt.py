@@ -27,7 +27,11 @@ Work only on the assigned task.
 Inspect source code and tests as needed.
 Preserve unrelated behavior.
 Run focused validation as appropriate.
-Do not manage workflow state or orchestration.
+The worker owns implementation edits and the semantic claim only. Do not commit,
+push, merge, rebase, checkout, switch branches, create or delete branches,
+modify workflow or ticket state, write ExecutionReport artifacts, or integrate
+implementation changes into a product branch. Devlegate owns Git lifecycle,
+execution reports, ticket movement, and product integration.
 
 Before finishing, call the devlegate_report tool exactly once. Report one of
 these worker claims: completed when you believe the assigned work is complete,

@@ -24,6 +24,13 @@ class ExecutionWorkspace:
     dirty: bool
 
 
+@dataclasses.dataclass(frozen=True)
+class ExecutionCheckpoint:
+    before_head: str
+    after_head: str
+    commit_created: bool
+
+
 WorktreeRegistration: TypeAlias = dict[str, str | None]
 
 
@@ -108,6 +115,53 @@ class ExecutionWorkspaceManager:
                 f"created execution worktree {self.path} but Git did not register it"
             )
         return self._validate_existing(registration, base_head)
+
+    def checkpoint(
+        self, workspace: ExecutionWorkspace, execution_id: str
+    ) -> ExecutionCheckpoint:
+        self._validate_workspace(workspace)
+        before_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        _git(workspace.path, "add", "-A")
+        staged = _git(workspace.path, "diff", "--cached", "--quiet", check=False)
+        if staged.returncode not in {0, 1}:
+            raise ExecutionWorkspaceError(
+                f"cannot inspect staged execution changes: {staged.stderr.strip()}"
+            )
+        commit_created = staged.returncode == 1
+        if commit_created:
+            committed = _git(
+                workspace.path,
+                "commit",
+                "-m",
+                f"Devlegate checkpoint {self.ticket_id} {execution_id}",
+                check=False,
+            )
+            if committed.returncode:
+                raise ExecutionWorkspaceError(
+                    f"cannot create execution checkpoint: "
+                    f"{committed.stderr.strip() or 'unknown git error'}"
+                )
+        after_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        return ExecutionCheckpoint(before_head, after_head, commit_created)
+
+    def _validate_workspace(self, workspace: ExecutionWorkspace) -> ExecutionWorkspace:
+        if not isinstance(workspace, ExecutionWorkspace):
+            raise TypeError("execution workspace must be ExecutionWorkspace")
+        if (
+            workspace.ticket_id != self.ticket_id
+            or workspace.branch != self.branch
+            or workspace.path != self.path
+        ):
+            raise ExecutionWorkspaceError("execution workspace binding is invalid")
+        if (
+            self.root.is_symlink()
+            or (self.root / "work").is_symlink()
+            or self.path.is_symlink()
+        ):
+            raise self._path_conflict("is a symlink")
+        registrations = self._registrations()
+        registration = registrations.get(self.path.resolve())
+        return self._validate_existing(registration, workspace.base_head)
 
     def _validate_base(self, base_head: str) -> None:
         result = _git(
@@ -295,6 +349,7 @@ class ExecutionWorkspaceManager:
 
 
 __all__ = [
+    "ExecutionCheckpoint",
     "ExecutionWorkspace",
     "ExecutionWorkspaceError",
     "ExecutionWorkspaceManager",

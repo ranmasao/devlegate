@@ -18,6 +18,13 @@ from pathlib import Path
 from typing import Callable
 
 from devlegate import __version__
+from devlegate.execution_result import (
+    ExecutionReport,
+    ExecutionReportError,
+    ExecutionReportStore,
+    build_execution_report,
+    new_execution_id,
+)
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
     ExecutionWorkspaceError,
@@ -867,6 +874,7 @@ class Devlegate:
             "execution_control_head",
             "execution_branch",
             "execution_path",
+            "execution_id",
         )
         present = [field in state for field in execution_fields]
         if any(present) and not all(
@@ -1387,6 +1395,7 @@ class Devlegate:
                         "invalid execution state: selected ticket binding is incomplete"
                     )
                 selected_ticket = dataclasses.replace(selected_ticket, body=body)
+        execution_id: str | None = None
         if not recovery:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.control_worktree, self.todo_path
@@ -1437,6 +1446,13 @@ class Devlegate:
                 if existing_lineage
                 else local_head
             )
+            execution_id = (
+                self._state.get("execution_id")
+                if pending_agent_execution
+                else new_execution_id()
+            )
+            if not isinstance(execution_id, str) or not execution_id:
+                raise DevlegateError("invalid persisted execution identity")
             self._save_state(
                 "agent_pending",
                 local_head=local_head,
@@ -1456,6 +1472,7 @@ class Devlegate:
                 execution_path=str(
                     self.execution_worktree_root / "work" / selected_ticket.id
                 ),
+                execution_id=execution_id,
             )
 
         try:
@@ -1474,16 +1491,75 @@ class Devlegate:
             if bound_execution
             else WorkDirective.FRESH
         )
-        build_worker_prompt(
+        if execution_id is None:
+            execution_id = self._state.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            execution_id = new_execution_id()
+        prompt = build_worker_prompt(
             WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
         )
-        _log(
-            "worker dispatch remains gated during v0.4 construction; execution "
-            "workspace is prepared, but canonical ticket workflow is isolated in "
-            "the control worktree"
+        self._save_state(
+            "agent_running",
+            execution_ticket_id=selected_ticket.id,
+            execution_base_head=workspace.base_head,
+            execution_control_head=str(self._state["control_head"]),
+            execution_branch=workspace.branch,
+            execution_path=str(workspace.path),
+            execution_id=execution_id,
         )
-        self._save_state("idle")
-        return 1
+        worker_run = self._run_worker(workspace, prompt)
+        execution_result = build_execution_report(
+            execution_id=execution_id,
+            ticket_id=selected_ticket.id,
+            code_base_head=workspace.base_head,
+            control_head=str(self._state["execution_control_head"]),
+            execution_branch=workspace.branch,
+            execution_path=str(workspace.path),
+            workspace_head=None,
+            run=worker_run,
+        )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, selected_ticket.id
+        )
+        try:
+            checkpoint = manager.checkpoint(workspace, execution_id)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(f"execution checkpoint failed: {error}") from error
+        _log(
+            "execution checkpoint "
+            f"{'created' if checkpoint.commit_created else 'not needed'}: "
+            f"{checkpoint.after_head[:12]}"
+        )
+        try:
+            self._publish_execution_branch(workspace, checkpoint.after_head)
+        except (DevlegateError, OSError) as error:
+            raise DevlegateError(
+                f"execution branch publication failed: {error}"
+            ) from error
+        report = dataclasses.replace(
+            execution_result,
+            workspace_head=checkpoint.after_head,
+        )
+        try:
+            control_head = self._apply_execution_lifecycle(report)
+        except (DevlegateError, OSError, ExecutionReportError) as error:
+            raise DevlegateError(f"control-plane lifecycle failed: {error}") from error
+        todo_fingerprint, _todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
+        self._save_state(
+            "idle",
+            handled_remote_head=remote_head,
+            handled_control_head=control_head,
+            handled_control_remote_head=control_head,
+            handled_todo_fingerprint=todo_fingerprint,
+            execution_control_head=control_head,
+        )
+        _log(
+            f"execution {report.result.conclusion}; lifecycle control HEAD "
+            f"{control_head[:12]}"
+        )
+        return 1 if report.result.conclusion == "failed" else 0
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
@@ -1495,7 +1571,16 @@ class Devlegate:
             self._state.get("execution_base_head") if same_ticket else None
         )
         bound_control = (
-            self._state.get("execution_control_head") if same_ticket else None
+            self._state.get("execution_control_head")
+            if same_ticket
+            and str(self._state.get("phase"))
+            in {
+                "agent_pending",
+                "agent_running",
+                "recovery_pending",
+                "recovery_running",
+            }
+            else None
         )
         bound_phase = str(self._state.get("phase")) in {
             "agent_pending",
@@ -1542,6 +1627,81 @@ class Devlegate:
                 "stale execution"
             )
         return workspace
+
+    def _publish_execution_branch(
+        self, workspace: ExecutionWorkspace, checkpoint_head: str
+    ) -> None:
+        observed = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        if observed != checkpoint_head:
+            raise DevlegateError("execution HEAD changed before branch publication")
+        pushed = _git(
+            workspace.path,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{workspace.branch}",
+            check=False,
+        )
+        if pushed.returncode:
+            raise DevlegateError(pushed.stderr.strip() or "unknown Git push error")
+
+    def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
+        self._validate_control_worktree()
+        status = _git(self.control_worktree, "status", "--porcelain").stdout
+        if status:
+            raise WorkflowBlockedError("control working tree is dirty")
+        expected_head = report.control_head
+        current_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if current_head != expected_head:
+            raise WorkflowBlockedError(
+                "control HEAD changed after execution admission; refusing "
+                "lifecycle mutation"
+            )
+        try:
+            ticket_store = load_ticket_store(
+                self.control_worktree, self._workflow_paths()
+            )
+        except TicketError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        ticket = ticket_store.by_id.get(report.ticket_id)
+        if ticket is None:
+            raise WorkflowBlockedError(
+                "execution ticket is no longer in managed storage"
+            )
+        ExecutionReportStore(self.control_worktree).write(report)
+        if report.result.conclusion == "completed" and ticket.state == "todo":
+            review = self.control_worktree / self.review_path / f"{ticket.id}.md"
+            if review.exists() or review.is_symlink():
+                raise WorkflowBlockedError("review ticket already exists")
+            ticket.path.rename(review)
+        try:
+            load_ticket_store(self.control_worktree, self._workflow_paths())
+        except TicketError as error:
+            raise WorkflowBlockedError(
+                f"resulting ticket store is invalid: {error}"
+            ) from error
+        _git(self.control_worktree, "add", "-A")
+        committed = _git(
+            self.control_worktree,
+            "commit",
+            "-m",
+            f"Devlegate lifecycle {report.ticket_id} {report.execution_id} "
+            f"{report.result.conclusion}",
+            check=False,
+        )
+        if committed.returncode:
+            raise DevlegateError(
+                committed.stderr.strip() or "cannot create control-plane commit"
+            )
+        pushed = _git(
+            self.control_worktree,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if pushed.returncode:
+            raise DevlegateError(pushed.stderr.strip() or "unknown Git push error")
+        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
     def _run_worker(
         self, workspace: ExecutionWorkspace, prompt: str

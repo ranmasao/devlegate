@@ -14,6 +14,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
 def git(cwd, *args):
@@ -221,7 +222,7 @@ def test_worker_gate_clears_bound_state_and_bound_state_requires_control_head(
     assert devlegate._state["control_head"] == control_head
 
 
-def test_run_worker_gate_leaves_idle_state(tmp_path):
+def test_run_worker_completes_one_lifecycle_attempt(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
 
@@ -233,7 +234,9 @@ def test_run_worker_gate_leaves_idle_state(tmp_path):
     assert payload["phase"] == "idle"
     assert "selected_ticket_id" not in payload
     assert payload["handled_control_head"]
-    assert "worker dispatch remains gated" in result.stdout
+    assert "execution failed" in result.stdout
+    control = next((state / "worktrees").glob("*/control"))
+    assert list((control / "executions/T-1").glob("*.json"))
 
 
 def test_control_init_rejects_wrong_or_unregistered_existing_path(tmp_path):
@@ -274,8 +277,75 @@ def test_run_prepares_exact_product_execution_workspace_without_cross_plane_chan
         "devlegate/work/T-1"
     )
     assert git(working, "rev-parse", "HEAD").stdout.strip() == operator_head
-    assert git(control, "rev-parse", "HEAD").stdout.strip() == control_head
+    assert git(control, "rev-parse", "HEAD").stdout.strip() != control_head
     assert not (execution / "kanban").exists()
+
+
+def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 0
+    assert calls == 1
+    control = next((state / "worktrees").glob("*/control"))
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert (execution / "implementation.txt").read_text() == "worker change\n"
+    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip().startswith(
+        "Devlegate checkpoint T-1 "
+    )
+    remote_control = git(
+        control, "ls-remote", "origin", "refs/heads/devlegate/control"
+    ).stdout.split()[0]
+    assert remote_control == git(control, "rev-parse", "HEAD").stdout.strip()
+    assert not (control / "kanban/todo/T-1.md").exists()
+    assert (control / "kanban/review/T-1.md").is_file()
+    reports = list((control / "executions/T-1").glob("*.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text())["conclusion"] == "completed"
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == git(
+        working, "rev-parse", "origin/main"
+    ).stdout.strip()
+    assert not (working / "implementation.txt").exists()
+
+
+def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        (workspace.path / "partial.txt").write_text("partial\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("incomplete", "more remains", ("finish",), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 0
+    assert devlegate.run_once() == 0
+    assert calls == 1
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/todo/T-1.md").is_file()
+    assert not (control / "kanban/review/T-1.md").exists()
 
 
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
@@ -419,7 +489,9 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     assert result.returncode == 1
     payload = json.loads(next(state.glob("*.json")).read_text())
     assert payload["execution_base_head"] == original_base
-    assert payload["execution_control_head"] == control_head
+    final_control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    assert payload["execution_control_head"] == final_control_head
+    assert final_control_head != control_head
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_base
 
 
