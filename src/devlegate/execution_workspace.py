@@ -121,6 +121,10 @@ class ExecutionWorkspaceManager:
     ) -> ExecutionCheckpoint:
         self._validate_workspace(workspace)
         before_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        if before_head != workspace.head:
+            raise ExecutionWorkspaceError(
+                "execution Git history changed while worker was running"
+            )
         _git(workspace.path, "add", "-A")
         staged = _git(workspace.path, "diff", "--cached", "--quiet", check=False)
         if staged.returncode not in {0, 1}:

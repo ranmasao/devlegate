@@ -281,6 +281,94 @@ def test_run_prepares_exact_product_execution_workspace_without_cross_plane_chan
     assert not (execution / "kanban").exists()
 
 
+def test_checkpoint_rejects_worker_created_history_and_preserves_it(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((state / "worktrees").glob("*/control"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    (workspace.path / "worker-commit.txt").write_text("worker history\n")
+    git(workspace.path, "add", "worker-commit.txt")
+    git(workspace.path, "commit", "-m", "worker-owned commit")
+    worker_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(ExecutionWorkspaceError, match="history changed"):
+        manager.checkpoint(workspace, "attempt-1")
+
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == worker_head
+    assert (workspace.path / "worker-commit.txt").read_text() == "worker history\n"
+    assert "Devlegate checkpoint" not in git(
+        workspace.path, "log", "-1", "--pretty=%s"
+    ).stdout
+    assert not (control / "executions").exists()
+
+
+def test_worker_created_commit_cannot_reach_lifecycle_or_publication(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "worker-commit.txt").write_text("worker history\n")
+        git(workspace.path, "add", "worker-commit.txt")
+        git(workspace.path, "commit", "-m", "worker-owned commit")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="checkpoint failed"):
+        devlegate.run_once()
+
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    control = next((state / "worktrees").glob("*/control"))
+    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip() == (
+        "worker-owned commit"
+    )
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not list((control / "executions").glob("T-1/*.json"))
+    assert not git(
+        control, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout.strip()
+
+
+def test_unexpected_execution_remote_creation_blocks_publication(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        git(workspace.path, "push", "origin", "HEAD:refs/heads/devlegate/work/T-1")
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="remote changed"):
+        devlegate.run_once()
+
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    control = next((state / "worktrees").glob("*/control"))
+    assert (execution / "implementation.txt").exists()
+    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip().startswith(
+        "Devlegate checkpoint T-1 "
+    )
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert not list((control / "executions").glob("T-1/*.json"))
+
+
 def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     tmp_path, monkeypatch
 ):
@@ -346,6 +434,39 @@ def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
     control = next((state / "worktrees").glob("*/control"))
     assert (control / "kanban/todo/T-1.md").is_file()
     assert not (control / "kanban/review/T-1.md").exists()
+
+
+def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 0
+    control = next((state / "worktrees").glob("*/control"))
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "return ticket for rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    assert devlegate.run_once() == 0
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert calls == 2
+    assert (execution / "attempt-1.txt").exists()
+    assert (execution / "attempt-2.txt").exists()
+    assert git(execution, "log", "--oneline").stdout.count("Devlegate checkpoint") == 2
+    assert len(list((control / "executions/T-1").glob("*.json"))) == 2
 
 
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
