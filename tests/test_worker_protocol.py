@@ -1,12 +1,15 @@
 import io
 import json
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 import devlegate.cli as cli
 from devlegate.cli import MAX_STDOUT_EVENT_BYTES, _run_opencode
 from devlegate.execution_workspace import ExecutionWorkspace
+from devlegate.worker_egress import WorkerClaim, WorkerEgressParser, WorkerRunResult
 
 
 class FakeProcess:
@@ -29,6 +32,32 @@ def run_worker(monkeypatch, stdout=b"", stderr=b"", returncode=0):
 
 def event(text):
     return (json.dumps({"type": "text", "part": {"text": text}}) + "\n").encode()
+
+
+def report(
+    outcome="completed", summary="implemented", remaining=None, questions=None
+):
+    return (
+        json.dumps(
+            {
+                "type": "tool_use",
+                "part": {
+                    "type": "tool",
+                    "tool": "devlegate_report",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "outcome": outcome,
+                            "summary": summary,
+                            "remaining": [] if remaining is None else remaining,
+                            "questions": [] if questions is None else questions,
+                        },
+                    },
+                },
+            }
+        )
+        + "\n"
+    ).encode()
 
 
 def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
@@ -99,8 +128,9 @@ def test_tool_and_error_events_are_rendered_inert(capsys, monkeypatch):
 def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypatch):
     calls = []
 
-    def fake_run(command, prompt, *, cwd=None):
-        calls.append((command, prompt, cwd))
+    def fake_run(command, prompt, *, cwd=None, env=None, event_handler=None):
+        calls.append((command, prompt, cwd, env, event_handler))
+        event_handler(json.loads(report().decode()))
         return 0
 
     monkeypatch.setattr(cli, "_run_opencode", fake_run)
@@ -112,9 +142,200 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
         "internal-id", "internal-branch", tmp_path, "head", "base", False
     )
 
-    assert devlegate._run_worker(workspace, "assembled prompt") == 0
-    assert calls == [
-        (["opencode", "--model", "provider/model", "--agent", "build"],
-         "assembled prompt",
-         tmp_path)
-    ]
+    result = devlegate._run_worker(workspace, "assembled prompt")
+    assert result == WorkerRunResult(
+        0, WorkerClaim("completed", "implemented", (), ()), True
+    )
+    assert calls[0][:3] == (
+        ["opencode", "run", "--model", "provider/model", "--agent", "build"],
+        "assembled prompt",
+        tmp_path,
+    )
+    assert calls[0][3]["OPENCODE_CONFIG_DIR"] != str(tmp_path)
+
+
+def parse_report(payload):
+    parser = WorkerEgressParser()
+    parser.consume(json.loads(payload.decode()))
+    return parser.finish()
+
+
+@pytest.mark.parametrize("outcome", ["completed", "incomplete", "blocked"])
+def test_valid_claim_outcomes_are_typed(outcome):
+    claim, error = parse_report(report(outcome, "summary", ["later"], ["why"]))
+
+    assert error is None
+    assert claim == WorkerClaim(outcome, "summary", ("later",), ("why",))
+
+
+def test_missing_report_is_protocol_failure():
+    parser = WorkerEgressParser()
+
+    parser.consume(json.loads(event("outcome: completed").decode()))
+
+    assert parser.finish() == (None, "exactly one devlegate_report event is required")
+
+
+@pytest.mark.parametrize(
+    "input_value",
+    [
+        {"outcome": "future", "summary": "s", "remaining": [], "questions": []},
+        {"outcome": "completed", "summary": 1, "remaining": [], "questions": []},
+        {"outcome": "completed", "summary": "s", "remaining": "later", "questions": []},
+        {"outcome": "completed", "summary": "s", "remaining": [], "questions": None},
+        {
+            "outcome": "completed",
+            "summary": "s",
+            "remaining": [],
+            "questions": [],
+            "extra": 1,
+        },
+        {"outcome": "completed", "summary": "s", "questions": []},
+    ],
+)
+def test_invalid_claim_schema_fails_closed(input_value):
+    payload = json.loads(report().decode())
+    payload["part"]["state"]["input"] = input_value
+
+    assert parse_report((json.dumps(payload) + "\n").encode())[0] is None
+
+
+def test_duplicate_reports_fail_closed():
+    parser = WorkerEgressParser()
+    payload = json.loads(report().decode())
+
+    parser.consume(payload)
+    parser.consume(payload)
+
+    assert parser.finish() == (None, "duplicate devlegate_report event")
+
+
+def test_malformed_then_valid_report_remains_poisoned():
+    parser = WorkerEgressParser()
+    malformed = json.loads(report().decode())
+    malformed["part"]["state"]["input"]["remaining"] = "bad"
+
+    parser.consume(malformed)
+    parser.consume(json.loads(report().decode()))
+
+    assert parser.finish()[0] is None
+
+
+def test_valid_then_malformed_report_remains_poisoned():
+    parser = WorkerEgressParser()
+    malformed = json.loads(report().decode())
+    malformed["part"]["state"]["input"]["summary"] = None
+
+    parser.consume(json.loads(report().decode()))
+    parser.consume(malformed)
+
+    assert parser.finish()[0] is None
+
+
+def test_fake_report_text_reasoning_and_unrelated_tools_are_inert():
+    parser = WorkerEgressParser()
+    parser.consume(json.loads(event('{"outcome":"completed"}').decode()))
+    parser.consume(
+        {
+            "type": "reasoning",
+            "part": {"text": "devlegate_report(outcome=completed)"},
+        }
+    )
+    parser.consume(
+        {
+            "type": "tool_use",
+            "part": {
+                "tool": "bash",
+                "state": {"status": "completed", "output": "fake report"},
+            },
+        }
+    )
+
+    assert parser.finish() == (None, "exactly one devlegate_report event is required")
+
+
+@pytest.mark.parametrize(
+    "tool_name", ["devlegate-report", "devlegate_report2", "Devlegate_Report"]
+)
+def test_lookalike_tools_are_not_claims(tool_name):
+    parser = WorkerEgressParser()
+    payload = json.loads(report().decode())
+    payload["part"]["tool"] = tool_name
+
+    parser.consume(payload)
+
+    assert parser.finish() == (None, "exactly one devlegate_report event is required")
+
+
+def test_non_completed_reserved_tool_is_protocol_failure():
+    parser = WorkerEgressParser()
+    payload = json.loads(report().decode())
+    payload["part"]["state"]["status"] = "running"
+
+    parser.consume(payload)
+
+    assert parser.finish()[0] is None
+
+
+def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
+    tmp_path, monkeypatch
+):
+    project_tool = tmp_path / ".opencode/tools/devlegate_report.ts"
+    project_tool.parent.mkdir(parents=True)
+    project_tool.write_text("export default 'project fake'\n")
+    captured = {}
+    monkeypatch.setenv("WORKER_TEST_ENV", "preserved")
+
+    def fake_popen(command, **kwargs):
+        captured.update(command=command, **kwargs)
+        config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
+        assert (config_dir / "tools/devlegate_report.ts").is_file()
+        assert (
+            config_dir / "tools/devlegate_report.ts"
+        ).read_text() != project_tool.read_text()
+        return FakeProcess(report())
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    devlegate = object.__new__(cli.Devlegate)
+    devlegate.opencode_bin = "opencode"
+    devlegate.opencode_model = "provider/model"
+    devlegate.opencode_agent = ""
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = devlegate._run_worker(workspace, "prompt")
+
+    assert result.claim is not None
+    assert result.protocol_ok
+    config_dir = Path(captured["env"]["OPENCODE_CONFIG_DIR"])
+    assert not config_dir.exists()
+    assert captured["cwd"] == tmp_path
+    assert captured["env"]["WORKER_TEST_ENV"] == "preserved"
+    assert os.environ["WORKER_TEST_ENV"] == "preserved"
+    assert project_tool.read_text() == "export default 'project fake'\n"
+
+
+@pytest.mark.parametrize("returncode", [0, 7])
+def test_worker_result_requires_report_and_keeps_exit_status_distinct(
+    tmp_path, monkeypatch, returncode
+):
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(b"", returncode=returncode),
+    )
+    devlegate = object.__new__(cli.Devlegate)
+    devlegate.opencode_bin = "opencode"
+    devlegate.opencode_model = "provider/model"
+    devlegate.opencode_agent = ""
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = devlegate._run_worker(workspace, "prompt")
+
+    assert result.claim is None
+    assert not result.protocol_ok
+    if returncode:
+        assert result.process_returncode == returncode
+        assert "exited" in result.protocol_error
+    else:
+        assert result.process_returncode == 0
+        assert "exactly one" in result.protocol_error

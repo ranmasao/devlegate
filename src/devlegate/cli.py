@@ -15,6 +15,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
 
 from devlegate import __version__
 from devlegate.execution_workspace import (
@@ -29,6 +30,7 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     load_ticket_store,
 )
+from devlegate.worker_egress import WorkerEgressParser, WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
@@ -303,7 +305,14 @@ def _write_worker_line(text: str, stream) -> None:
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 
 
-def _run_opencode(command: list[str], prompt: str, *, cwd: Path | None = None) -> int:
+def _run_opencode(
+    command: list[str],
+    prompt: str,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    event_handler: Callable[[object], None] | None = None,
+) -> int:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
         command + [prompt],
@@ -311,6 +320,7 @@ def _run_opencode(command: list[str], prompt: str, *, cwd: Path | None = None) -
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,
+        env=env,
     )
     output_lock = threading.Lock()
     protocol_failed = False
@@ -339,6 +349,8 @@ def _run_opencode(command: list[str], prompt: str, *, cwd: Path | None = None) -
                 protocol_failed = True
                 _log("OpenCode protocol error: invalid JSON event on stdout")
                 continue
+            if event_handler is not None:
+                event_handler(event)
             if (
                 not isinstance(event, dict)
                 or event.get("type") not in _OPENCODE_JSON_TYPES
@@ -1529,16 +1541,63 @@ class Devlegate:
             )
         return workspace
 
-    def _run_worker(self, workspace: ExecutionWorkspace, prompt: str) -> int:
+    def _run_worker(
+        self, workspace: ExecutionWorkspace, prompt: str
+    ) -> WorkerRunResult:
         """Run a worker only in the validated execution workspace."""
         if not isinstance(workspace, ExecutionWorkspace):
             raise TypeError("worker workspace must be ExecutionWorkspace")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
-        command = [self.opencode_bin, "--model", self.opencode_model]
+        command = [self.opencode_bin, "run", "--model", self.opencode_model]
         if self.opencode_agent:
             command.extend(("--agent", self.opencode_agent))
-        return _run_opencode(command, prompt, cwd=workspace.path)
+        parser = WorkerEgressParser()
+        config_dir = Path(tempfile.mkdtemp(prefix="devlegate-opencode-"))
+        tool_dir = config_dir / "tools"
+        tool_dir.mkdir()
+        (tool_dir / "devlegate_report.ts").write_text(
+            '''import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "Report the worker's semantic claim to Devlegate.",
+  args: {
+    outcome: tool.schema.enum(["completed", "incomplete", "blocked"]),
+    summary: tool.schema.string(),
+    remaining: tool.schema.array(tool.schema.string()),
+    questions: tool.schema.array(tool.schema.string()),
+  },
+  async execute() {
+    return "devlegate_report accepted"
+  },
+})
+'''
+        )
+        environment = os.environ.copy()
+        environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
+        try:
+            returncode = _run_opencode(
+                command,
+                prompt,
+                cwd=workspace.path,
+                env=environment,
+                event_handler=parser.consume,
+            )
+            claim, protocol_error = parser.finish()
+            if returncode != 0:
+                return WorkerRunResult(
+                    returncode,
+                    None,
+                    False,
+                    f"worker exited with status {returncode}",
+                )
+            if protocol_error is not None:
+                return WorkerRunResult(returncode, None, False, protocol_error)
+            return WorkerRunResult(returncode, claim, True)
+        except OSError as error:
+            return WorkerRunResult(-1, None, False, str(error))
+        finally:
+            shutil.rmtree(config_dir, ignore_errors=True)
 
     def run(self, once: bool) -> int:
         with self._lock():

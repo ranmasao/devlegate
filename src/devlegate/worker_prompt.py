@@ -27,7 +27,12 @@ Work only on the assigned task.
 Inspect source code and tests as needed.
 Preserve unrelated behavior.
 Run focused validation as appropriate.
-Do not manage workflow state or orchestration."""
+Do not manage workflow state or orchestration.
+
+Before finishing, call the devlegate_report tool exactly once. Report one of
+these worker claims: completed when you believe the assigned work is complete,
+incomplete when useful work remains, or blocked when safe progress needs
+external information or action."""
 
 _DIRECTIVES = {
     WorkDirective.FRESH: "Implement the assigned work in the current workspace.",
