@@ -167,16 +167,16 @@ class ExecutionReport:
             questions != claim.questions or remaining != claim.remaining
         ):
             raise ExecutionReportError("execution report claim data is inconsistent")
-        expected_conclusion = (
-            claim.outcome
-            if claim is not None
-            and payload["process_returncode"] == 0
-            and payload["transport_error"] is None
-            and payload["egress_error"] is None
-            else "failed"
+        expected_conclusion, expected_reason = _canonical_result(
+            payload["process_returncode"],
+            payload["transport_error"],
+            payload["egress_error"],
+            claim,
         )
         if conclusion != expected_conclusion:
             raise ExecutionReportError("execution report conclusion is inconsistent")
+        if payload["reason"] != expected_reason:
+            raise ExecutionReportError("execution report reason is inconsistent")
         result = ExecutionResult(
             payload["process_returncode"],
             payload["transport_error"],
@@ -229,6 +229,25 @@ def _parse_claim(value: object) -> WorkerClaim:
     )
 
 
+def _canonical_result(
+    process_returncode: int,
+    transport_error: str | None,
+    egress_error: str | None,
+    claim: WorkerClaim | None,
+) -> tuple[str, str]:
+    if claim is not None and egress_error is not None:
+        raise ExecutionReportError(
+            "worker claim cannot coexist with typed-egress error"
+        )
+    if process_returncode != 0:
+        return "failed", f"worker exited with status {process_returncode}"
+    if transport_error is not None:
+        return "failed", transport_error
+    if egress_error is not None or claim is None:
+        return "failed", egress_error or "worker claim is unavailable"
+    return claim.outcome, "valid worker claim"
+
+
 def build_execution_result(run: WorkerRunResult) -> ExecutionResult:
     """Interpret one worker observation without treating claims as truth."""
     if not isinstance(run, WorkerRunResult):
@@ -236,18 +255,9 @@ def build_execution_result(run: WorkerRunResult) -> ExecutionResult:
     claim = run.claim
     questions = claim.questions if claim is not None else ()
     remaining = claim.remaining if claim is not None else ()
-    if run.process_returncode != 0:
-        conclusion = "failed"
-        reason = f"worker exited with status {run.process_returncode}"
-    elif run.transport_error is not None:
-        conclusion = "failed"
-        reason = run.transport_error
-    elif run.egress_error is not None or claim is None:
-        conclusion = "failed"
-        reason = run.egress_error or "worker claim is unavailable"
-    else:
-        conclusion = claim.outcome
-        reason = "valid worker claim"
+    conclusion, reason = _canonical_result(
+        run.process_returncode, run.transport_error, run.egress_error, claim
+    )
     return ExecutionResult(
         run.process_returncode,
         run.transport_error,
@@ -293,7 +303,14 @@ class ExecutionReportStore:
     """Persist reports below one Devlegate-owned control-plane directory."""
 
     def __init__(self, control_worktree: Path) -> None:
+        self.control_worktree = control_worktree
         self.root = control_worktree / "executions"
+
+    def _validate_roots(self) -> None:
+        if self.control_worktree.is_symlink():
+            raise ExecutionReportError("control worktree root is a symlink")
+        if self.root.is_symlink():
+            raise ExecutionReportError("execution report root is a symlink")
 
     def _path(self, ticket_id: str, execution_id: str) -> Path:
         if not _IDENTIFIER.fullmatch(ticket_id) or not _IDENTIFIER.fullmatch(
@@ -309,9 +326,9 @@ class ExecutionReportStore:
         path = self._path(report.ticket_id, report.execution_id)
         temporary_name = None
         try:
+            self._validate_roots()
             self.root.mkdir(parents=True, exist_ok=True)
-            if self.root.is_symlink():
-                raise ExecutionReportError("execution report root is a symlink")
+            self._validate_roots()
             if path.parent.exists() and path.parent.is_symlink():
                 raise ExecutionReportError(
                     "execution report ticket directory is a symlink"
@@ -350,7 +367,8 @@ class ExecutionReportStore:
 
     def read(self, ticket_id: str, execution_id: str) -> ExecutionReport:
         path = self._path(ticket_id, execution_id)
-        if path.is_symlink() or path.parent.is_symlink() or self.root.is_symlink():
+        self._validate_roots()
+        if path.is_symlink() or path.parent.is_symlink():
             raise ExecutionReportError("execution report path is a symlink")
         try:
             payload = json.loads(path.read_text())

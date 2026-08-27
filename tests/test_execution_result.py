@@ -59,6 +59,11 @@ def test_failed_result_preserves_questions_and_remaining():
     assert result.questions == ("Which API?",)
 
 
+def test_valid_claim_cannot_have_typed_egress_error():
+    with pytest.raises(ExecutionReportError, match="typed-egress"):
+        build_execution_result(run(egress_error="invalid typed egress"))
+
+
 def test_execution_report_round_trips_all_facts():
     report = build_execution_report(
         execution_id="attempt-1",
@@ -129,6 +134,45 @@ def test_inconsistent_canonical_conclusion_is_rejected():
         report.from_dict(payload)
 
 
+def test_inconsistent_canonical_reason_is_rejected():
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code",
+        control_head="control",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=run(),
+    )
+    payload = report.as_dict()
+    payload["reason"] = "worker exited with status 1"
+
+    with pytest.raises(ExecutionReportError, match="reason"):
+        report.from_dict(payload)
+
+
+def test_report_readback_rejects_valid_claim_with_egress_error():
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code",
+        control_head="control",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=run(),
+    )
+    payload = report.as_dict()
+    payload["egress_error"] = "impossible"
+    payload["egress_ok"] = False
+    payload["conclusion"] = "failed"
+    payload["reason"] = "impossible"
+
+    with pytest.raises(ExecutionReportError, match="typed-egress"):
+        report.from_dict(payload)
+
+
 def test_report_store_is_control_plane_only_and_never_overwrites(tmp_path):
     store = ExecutionReportStore(tmp_path / "control")
     report = build_execution_report(
@@ -149,6 +193,29 @@ def test_report_store_is_control_plane_only_and_never_overwrites(tmp_path):
     with pytest.raises(ExecutionReportError, match="already exists"):
         store.write(report)
     assert not (tmp_path / "control/kanban").exists()
+
+
+def test_report_store_rejects_symlinked_control_worktree(tmp_path):
+    real_control = tmp_path / "real-control"
+    real_control.mkdir()
+    linked_control = tmp_path / "control"
+    linked_control.symlink_to(real_control, target_is_directory=True)
+    store = ExecutionReportStore(linked_control)
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code",
+        control_head="control",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=run(),
+    )
+
+    with pytest.raises(ExecutionReportError, match="control worktree root"):
+        store.write(report)
+    with pytest.raises(ExecutionReportError, match="control worktree root"):
+        store.read("T-1", "attempt-1")
 
 
 @pytest.mark.parametrize(
