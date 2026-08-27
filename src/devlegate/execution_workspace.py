@@ -49,7 +49,8 @@ class ExecutionWorkspaceManager:
         self.repo = repo.resolve()
         self.ticket_id = ticket_id
         self.branch = f"devlegate/work/{ticket_id}"
-        self.root = root.resolve()
+        # Keep managed components lexical so symlink substitution is observable.
+        self.root = root.absolute()
         self.path = self.root / "work" / ticket_id
 
     def prepare(self, base_head: str) -> ExecutionWorkspace:
@@ -67,7 +68,8 @@ class ExecutionWorkspaceManager:
             ),
             None,
         )
-        if branch_path is not None and branch_path != self.path:
+        expected_path = self.path.resolve()
+        if branch_path is not None and branch_path != expected_path:
             raise ExecutionWorkspaceError(
                 f"execution branch {self.branch} is already attached to unexpected "
                 f"worktree {branch_path}"
@@ -75,7 +77,7 @@ class ExecutionWorkspaceManager:
 
         if self.path.is_symlink():
             raise self._path_conflict("is a symlink")
-        registration = registrations.get(self.path)
+        registration = registrations.get(expected_path)
         if registration is not None:
             if not self.path.is_dir():
                 self._prune_expected_stale_registration()
@@ -94,13 +96,13 @@ class ExecutionWorkspaceManager:
         )
         if created.returncode:
             registrations = self._registrations()
-            if registrations.get(self.path) is not None:
-                return self._validate_existing(registrations[self.path], base_head)
+            if registrations.get(expected_path) is not None:
+                return self._validate_existing(registrations[expected_path], base_head)
             raise ExecutionWorkspaceError(
                 f"cannot create execution worktree {self.path}: "
                 f"{created.stderr.strip() or 'unknown git error'}"
             )
-        registration = self._registrations().get(self.path)
+        registration = self._registrations().get(expected_path)
         if registration is None:
             raise ExecutionWorkspaceError(
                 f"created execution worktree {self.path} but Git did not register it"
@@ -249,7 +251,7 @@ class ExecutionWorkspaceManager:
             or resolve_git_path(self.path, common.stdout.strip())
             != resolve_git_path(self.repo, expected_common)
             or root.returncode
-            or resolve_git_path(self.path, root.stdout.strip()) != self.path
+            or resolve_git_path(self.path, root.stdout.strip()) != self.path.resolve()
         ):
             raise self._path_conflict("belongs to another repository")
         branch = _git(

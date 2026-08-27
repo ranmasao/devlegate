@@ -1431,6 +1431,11 @@ class Devlegate:
                 and isinstance(self._state.get("execution_base_head"), str)
                 and isinstance(self._state.get("execution_control_head"), str)
             )
+            bound_execution_control = (
+                self._state.get("execution_control_head")
+                if pending_agent_execution and existing_lineage
+                else control_head
+            )
             execution_base_head = (
                 self._state["execution_base_head"]
                 if existing_lineage
@@ -1450,7 +1455,7 @@ class Devlegate:
                 selected_ticket_body=selected_ticket.body,
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
-                execution_control_head=control_head,
+                execution_control_head=bound_execution_control,
                 execution_branch=f"devlegate/work/{selected_ticket.id}",
                 execution_path=str(
                     self.execution_worktree_root / "work" / selected_ticket.id

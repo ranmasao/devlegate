@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import devlegate.execution_workspace as execution_workspace
 from devlegate.cli import Devlegate, DevlegateError
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
@@ -422,6 +423,50 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_base
 
 
+def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    state_file = next(state.glob("*.json"))
+    original = json.loads(state_file.read_text())
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "authority-race.md").write_text("changed\n")
+    git(control, "add", ".")
+    git(control, "commit", "-m", "advance control")
+    git(control, "push", "origin", "devlegate/control")
+    current_control = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    execution_path = (
+        state / "worktrees" / next(state.glob("worktrees/*")).name / "work" / "T-1"
+    )
+    devlegate._save_state(
+        "agent_pending",
+        local_head=original["local_head"],
+        remote_head=original["remote_head"],
+        changed_paths=original["changed_paths"],
+        control_head=original["handled_control_head"],
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=original["execution_base_head"],
+        execution_control_head=original["handled_control_head"],
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(execution_path),
+    )
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    payload = json.loads(state_file.read_text())
+    assert payload["execution_control_head"] == original["handled_control_head"]
+    assert payload["execution_control_head"] != current_control
+    assert "stale execution" in result.stderr
+
+
 def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -507,3 +552,225 @@ def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch
         manager.prepare(base)
     assert execution.is_dir()
     assert devlegate._state["execution_base_head"] == base
+
+
+def test_expected_execution_worktree_on_wrong_branch_fails_closed(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "switch", "-c", "wrong-execution")
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    with pytest.raises(ExecutionWorkspaceError, match="on branch wrong-execution"):
+        manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+
+
+def test_execution_branch_attached_to_unexpected_worktree_fails_closed(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    branch = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(working, "worktree", "remove", execution)
+    elsewhere = tmp_path / "elsewhere"
+    git(working, "worktree", "add", elsewhere, "devlegate/work/T-1")
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    with pytest.raises(ExecutionWorkspaceError, match="unexpected worktree"):
+        manager.prepare(branch)
+
+
+def test_existing_execution_branch_unrelated_to_base_fails_closed(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    orphan = tmp_path / "orphan"
+    git(working, "worktree", "add", "--detach", orphan, base)
+    git(orphan, "switch", "--orphan", "unrelated")
+    (orphan / "unrelated.txt").write_text("unrelated\n")
+    git(orphan, "add", ".")
+    git(orphan, "commit", "-m", "unrelated")
+    unrelated = git(orphan, "rev-parse", "HEAD").stdout.strip()
+    git(working, "worktree", "remove", orphan)
+    git(working, "branch", "devlegate/work/T-1", unrelated)
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    with pytest.raises(ExecutionWorkspaceError, match="unrelated"):
+        manager.prepare(base)
+
+
+def test_execution_leaf_symlink_fails_closed_without_following_target(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    target = tmp_path / "leaf-target"
+    target.mkdir()
+    (key / "work").mkdir()
+    (key / "work" / "T-1").symlink_to(target, target_is_directory=True)
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+
+    with pytest.raises(ExecutionWorkspaceError, match="is a symlink"):
+        manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+    assert target.is_dir()
+
+
+def test_managed_execution_work_root_symlink_fails_closed(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    target = tmp_path / "work-target"
+    target.mkdir()
+    (key / "work").symlink_to(target, target_is_directory=True)
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+
+    with pytest.raises(ExecutionWorkspaceError, match="symlinked workspace root"):
+        manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+
+
+def test_selected_stale_registration_repair_preserves_unrelated_registration(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    unrelated = tmp_path / "unrelated"
+    git(working, "worktree", "add", "--detach", unrelated, "HEAD")
+    shutil.rmtree(execution)
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+    registrations = manager._registrations()
+    assert unrelated.resolve() in registrations
+
+
+def test_branch_exists_worktree_missing_resumes_from_branch(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    shutil.rmtree(execution)
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    resumed = manager.prepare(checkpoint)
+
+    assert resumed.path == execution
+    assert resumed.head == checkpoint
+
+
+def test_existing_branch_and_worktree_are_rediscovered_after_finalization_boundary(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    base = git(execution, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+
+    rediscovered = manager.prepare(base)
+
+    assert rediscovered.path == execution
+    assert rediscovered.head == base
+
+
+def test_branch_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    real_git = execution_workspace._git
+    raced = False
+
+    def race(repo, *args, **kwargs):
+        nonlocal raced
+        result = real_git(repo, *args, **kwargs)
+        if args[:2] == ("branch", "devlegate/work/T-1") and not raced:
+            raced = True
+            return subprocess.CompletedProcess(result.args, 1, "", "already exists")
+        return result
+
+    monkeypatch.setattr(execution_workspace, "_git", race)
+    workspace = ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
+
+    assert raced
+    assert workspace.head == base
+
+
+def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    real_git = execution_workspace._git
+    raced = False
+
+    def race(repo, *args, **kwargs):
+        nonlocal raced
+        result = real_git(repo, *args, **kwargs)
+        if args[:3] == ("worktree", "add", str(key / "work" / "T-1")) and not raced:
+            raced = True
+            return subprocess.CompletedProcess(result.args, 1, "", "already exists")
+        return result
+
+    monkeypatch.setattr(execution_workspace, "_git", race)
+    workspace = ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
+
+    assert raced
+    assert workspace.path.is_dir()
+    assert workspace.head == base
+
+
+def test_first_creation_remains_bound_to_planned_product_head_if_product_moves(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    key = next(state.glob("worktrees/*"))
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    original_validate = manager._validate_base
+
+    def move_product(planned):
+        original_validate(planned)
+        (working / "product-race.txt").write_text("moved\n")
+        git(working, "add", "product-race.txt")
+        git(working, "commit", "-m", "move product")
+
+    monkeypatch.setattr(manager, "_validate_base", move_product)
+    workspace = manager.prepare(base)
+
+    assert workspace.base_head == base
+    assert workspace.head == base
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("status",), ("status", "--json"), ("plan",), ("plan", "--json"), ("check",)],
+)
+def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    state_file = next(state.glob("*.json"))
+    before = state_file.read_text()
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(working, "worktree", "remove", execution)
+
+    result = invoke(working, *command, config=config)
+
+    assert result.returncode in {0, 1}
+    assert state_file.read_text() == before
+    assert not execution.exists()
