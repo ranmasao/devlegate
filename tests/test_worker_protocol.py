@@ -200,6 +200,19 @@ def test_process_zero_and_oversized_json_preserve_independent_status(
     assert result.claim is None
 
 
+def test_transport_failure_preserves_valid_typed_egress(tmp_path, monkeypatch):
+    stdout = b"not-json\n" + report()
+
+    result = run_typed_worker(monkeypatch, tmp_path, stdout)
+
+    assert result.process_returncode == 0
+    assert not result.transport_ok
+    assert result.transport_error is not None
+    assert result.egress_ok
+    assert result.egress_error is None
+    assert result.claim == WorkerClaim("completed", "implemented", (), ())
+
+
 def test_nonzero_process_preserves_valid_claim_and_transport_status(
     tmp_path, monkeypatch
 ):

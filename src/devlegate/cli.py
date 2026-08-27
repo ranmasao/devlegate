@@ -1586,8 +1586,6 @@ export default tool({
                 event_handler=parser.consume,
             )
             claim, egress_error = parser.finish()
-            if opencode_result.transport_error is not None:
-                claim = None
             return WorkerRunResult(
                 opencode_result.process_returncode,
                 opencode_result.transport_error,
