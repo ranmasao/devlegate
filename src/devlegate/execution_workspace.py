@@ -63,7 +63,7 @@ class ExecutionWorkspaceManager:
             (
                 path
                 for path, item in registrations.items()
-                if item["branch"] == self.branch
+                if item.get("branch") == self.branch
             ),
             None,
         )

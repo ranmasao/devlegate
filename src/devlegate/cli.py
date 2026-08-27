@@ -1424,17 +1424,23 @@ class Devlegate:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
             if generation_is_same and not pending_agent_execution:
-                has_workspace_binding = all(
-                    isinstance(self._state.get(field), str)
-                    for field in (
-                        "execution_ticket_id",
-                        "execution_base_head",
-                        "execution_control_head",
-                    )
-                ) and self._state.get("execution_ticket_id") == selected_ticket.id
-                if not has_workspace_binding:
-                    _log("no new work generation; unchanged todo is already handled")
-                    return 0
+                _log("no new work generation; unchanged todo is already handled")
+                return 0
+            existing_lineage = (
+                self._state.get("execution_ticket_id") == selected_ticket.id
+                and isinstance(self._state.get("execution_base_head"), str)
+                and isinstance(self._state.get("execution_control_head"), str)
+            )
+            execution_base_head = (
+                self._state["execution_base_head"]
+                if existing_lineage
+                else local_head
+            )
+            execution_control_head = (
+                self._state["execution_control_head"]
+                if existing_lineage
+                else control_head
+            )
             self._save_state(
                 "agent_pending",
                 local_head=local_head,
@@ -1448,8 +1454,8 @@ class Devlegate:
                 selected_ticket_id=selected_ticket.id,
                 selected_ticket_body=selected_ticket.body,
                 execution_ticket_id=selected_ticket.id,
-                execution_base_head=local_head,
-                execution_control_head=control_head,
+                execution_base_head=execution_base_head,
+                execution_control_head=execution_control_head,
                 execution_branch=f"devlegate/work/{selected_ticket.id}",
                 execution_path=str(
                     self.execution_worktree_root / "work" / selected_ticket.id

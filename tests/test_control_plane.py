@@ -10,6 +10,7 @@ import pytest
 from devlegate.cli import Devlegate, DevlegateError
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
+    ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
 
@@ -276,7 +277,7 @@ def test_run_prepares_exact_product_execution_workspace_without_cross_plane_chan
     assert not (execution / "kanban").exists()
 
 
-def test_run_reuses_and_recreates_execution_worktree_from_durable_branch(
+def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     tmp_path,
 ):
     working, config, state = control_fixture(tmp_path)
@@ -288,15 +289,12 @@ def test_run_reuses_and_recreates_execution_worktree_from_durable_branch(
     (execution / "implementation.txt").write_text("checkpoint\n")
     git(execution, "add", "implementation.txt")
     git(execution, "commit", "-m", "checkpoint")
-    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
     git(working, "worktree", "remove", execution)
 
     result = invoke(working, "run", "--once", config=config)
 
-    assert result.returncode == 1
-    assert execution.is_dir()
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
-    assert (execution / "implementation.txt").read_text() == "checkpoint\n"
+    assert result.returncode == 0
+    assert not execution.exists()
 
 
 def test_dirty_execution_worktree_is_preserved(tmp_path):
@@ -307,7 +305,7 @@ def test_dirty_execution_worktree_is_preserved(tmp_path):
     marker = execution / "uncommitted.txt"
     marker.write_text("unique worker work\n")
 
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "run", "--once", config=config).returncode == 0
     assert marker.read_text() == "unique worker work\n"
 
 
@@ -358,8 +356,130 @@ def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path)
     checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
     shutil.rmtree(execution)
 
+    manager = ExecutionWorkspaceManager(
+        working,
+        state / "worktrees" / next(state.glob("worktrees/*")).name,
+        "T-1",
+    )
+    workspace = manager.prepare(checkpoint)
+
+    assert workspace.path == execution
+    assert execution.is_dir()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+
+
+def test_product_advance_does_not_rebind_execution_base(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "implementation.txt").write_text("checkpoint\n")
+    git(execution, "add", "implementation.txt")
+    git(execution, "commit", "-m", "execution checkpoint")
+    execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
+    original_base = json.loads(next(state.glob("*.json")).read_text())[
+        "execution_base_head"
+    ]
+    product = tmp_path / "seed"
+    git(product, "switch", "main")
+    (product / "product-update.txt").write_text("product\n")
+    git(product, "add", "product-update.txt")
+    git(product, "commit", "-m", "product update")
+    git(product, "push", "origin", "main")
+
     result = invoke(working, "run", "--once", config=config)
 
     assert result.returncode == 1
+    payload = json.loads(next(state.glob("*.json")).read_text())
+    assert payload["execution_base_head"] == original_base
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
+    assert git(working, "rev-parse", "HEAD").stdout.strip() != execution_head
+
+
+def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "implementation.txt").write_text("checkpoint\n")
+    git(execution, "add", "implementation.txt")
+    git(execution, "commit", "-m", "execution checkpoint")
+    execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
+    product = tmp_path / "seed"
+    git(product, "switch", "main")
+    (product / "product-update.txt").write_text("product\n")
+    git(product, "add", "product-update.txt")
+    git(product, "commit", "-m", "product update")
+    git(product, "push", "origin", "main")
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    shutil.rmtree(execution)
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    state_payload = json.loads(next(state.glob("*.json")).read_text())
+    devlegate._save_state(
+        "agent_pending",
+        local_head=state_payload["local_head"],
+        remote_head=state_payload["remote_head"],
+        changed_paths="",
+        control_head=state_payload["control_head"],
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=state_payload["execution_base_head"],
+        execution_control_head=state_payload["execution_control_head"],
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(execution),
+    )
+
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
+
+
+def test_unchanged_prepared_generation_is_quiet(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    first = invoke(working, "run", "--once", config=config)
+    second = invoke(working, "run", "--once", config=config)
+
+    assert first.returncode == 1
+    assert second.returncode == 0
+    assert "execution workspace" not in second.stdout
+
+
+def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    unrelated = tmp_path / "unrelated"
+    git(working, "worktree", "add", "--detach", unrelated, "HEAD")
+
+    result = invoke(working, "run", "--once", config=config)
+
+    assert result.returncode == 1
+    assert next((state / "worktrees").glob("*/work/T-1"), None) is not None
+
+
+def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 1
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "checkout", "--detach")
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = json.loads(next(state.glob("*.json")).read_text())[
+        "execution_base_head"
+    ]
+    manager = ExecutionWorkspaceManager(
+        working,
+        state / "worktrees" / next(state.glob("worktrees/*")).name,
+        "T-1",
+    )
+
+    with pytest.raises(ExecutionWorkspaceError, match="detached"):
+        manager.prepare(base)
     assert execution.is_dir()
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+    assert devlegate._state["execution_base_head"] == base
