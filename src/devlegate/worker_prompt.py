@@ -1,5 +1,6 @@
 """Pure construction of the implementation worker prompt."""
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -51,6 +52,13 @@ def _content(value: str) -> str:
     return value.strip("\r\n")
 
 
+def _fenced_content(value: str) -> str:
+    """Keep opaque content from being interpreted as prompt structure."""
+    longest = max((len(run) for run in re.findall(r"~+", value)), default=0)
+    fence = "~" * max(3, longest + 1)
+    return f"{fence}text\n{value}\n{fence}"
+
+
 def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
     """Build one deterministic prompt without observing workflow or Git state."""
     if not isinstance(prompt_input, WorkerPromptInput):
@@ -62,14 +70,17 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         raise ValueError("assigned work must not be empty")
 
     sections = [
-        ("Core Worker Contract", _CORE_CONTRACT),
-        ("Work Directive", _DIRECTIVES[prompt_input.directive]),
+        ("Core Worker Contract", _CORE_CONTRACT, False),
+        ("Work Directive", _DIRECTIVES[prompt_input.directive], False),
     ]
     for title, value in (
         ("Relevant Previous Work", prompt_input.previous_work),
         ("Architect Feedback", prompt_input.architect_feedback),
     ):
         if value is not None and _content(value):
-            sections.append((title, _content(value)))
-    sections.append(("Assigned Work", assignment))
-    return "\n\n".join(f"## {title}\n{value}" for title, value in sections) + "\n"
+            sections.append((title, _content(value), True))
+    sections.append(("Assigned Work", assignment, True))
+    return "\n\n".join(
+        f"## {title}\n{_fenced_content(value) if untrusted else value}"
+        for title, value, untrusted in sections
+    ) + "\n"

@@ -4,7 +4,9 @@ import subprocess
 
 import pytest
 
+import devlegate.cli as cli
 from devlegate.cli import MAX_STDOUT_EVENT_BYTES, _run_opencode
+from devlegate.execution_workspace import ExecutionWorkspace
 
 
 class FakeProcess:
@@ -92,3 +94,27 @@ def test_tool_and_error_events_are_rendered_inert(capsys, monkeypatch):
     assert "OpenCode error" in output
     assert "\\x1b[?1049h" in output
     assert "\x1b" not in output
+
+
+def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(command, prompt, *, cwd=None):
+        calls.append((command, prompt, cwd))
+        return 0
+
+    monkeypatch.setattr(cli, "_run_opencode", fake_run)
+    devlegate = object.__new__(cli.Devlegate)
+    devlegate.opencode_bin = "opencode"
+    devlegate.opencode_model = "provider/model"
+    devlegate.opencode_agent = "build"
+    workspace = ExecutionWorkspace(
+        "internal-id", "internal-branch", tmp_path, "head", "base", False
+    )
+
+    assert devlegate._run_worker(workspace, "assembled prompt") == 0
+    assert calls == [
+        (["opencode", "--model", "provider/model", "--agent", "build"],
+         "assembled prompt",
+         tmp_path)
+    ]

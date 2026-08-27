@@ -303,13 +303,14 @@ def _write_worker_line(text: str, stream) -> None:
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 
 
-def _run_opencode(command: list[str], prompt: str) -> int:
+def _run_opencode(command: list[str], prompt: str, *, cwd: Path | None = None) -> int:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
         command + [prompt],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        cwd=cwd,
     )
     output_lock = threading.Lock()
     protocol_failed = False
@@ -1527,6 +1528,17 @@ class Devlegate:
                 "stale execution"
             )
         return workspace
+
+    def _run_worker(self, workspace: ExecutionWorkspace, prompt: str) -> int:
+        """Run a worker only in the validated execution workspace."""
+        if not isinstance(workspace, ExecutionWorkspace):
+            raise TypeError("worker workspace must be ExecutionWorkspace")
+        if not isinstance(prompt, str):
+            raise TypeError("worker prompt must be text")
+        command = [self.opencode_bin, "--model", self.opencode_model]
+        if self.opencode_agent:
+            command.extend(("--agent", self.opencode_agent))
+        return _run_opencode(command, prompt, cwd=workspace.path)
 
     def run(self, once: bool) -> int:
         with self._lock():
