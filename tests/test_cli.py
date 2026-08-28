@@ -152,10 +152,10 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     assert result.returncode == 0
     assert "rendered 2" in result.stdout
     architect = (
-        git_fixture["working"] / ".devlegate/generated/skills/architect/SKILL.md"
+        git_fixture["working"] / "skills/architect/SKILL.md"
     )
     reviewer = (
-        git_fixture["working"] / ".devlegate/generated/skills/reviewer/SKILL.md"
+        git_fixture["working"] / "skills/reviewer/SKILL.md"
     )
     assert "automation/state" in architect.read_text()
     assert "workflow/inspection" in reviewer.read_text()

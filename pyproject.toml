@@ -22,7 +22,7 @@ devlegate = "devlegate.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-devlegate = ["default_templates/**/*.tmpl"]
+devlegate = ["default_templates/artifacts.toml", "default_templates/**/*.tmpl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
