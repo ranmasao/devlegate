@@ -111,6 +111,10 @@ def _relative_path(value: object, field: str) -> Path:
 
 def _manifest(templates: Path) -> tuple[tuple[Path, Path], ...]:
     path = templates / _MANIFEST_NAME
+    if path.is_symlink():
+        raise AgentProtocolError(f"unsafe symlinked artifact manifest: {path}")
+    if not path.is_file():
+        raise AgentProtocolError(f"artifact manifest is unavailable: {path}")
     try:
         payload = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as error:

@@ -169,3 +169,43 @@ def test_target_symlink_escape_is_rejected(tmp_path):
 
     with pytest.raises(AgentProtocolError, match="target path"):
         render_project(tmp_path, context())
+
+
+def _replace_manifest_with_external_symlink(tmp_path):
+    initialize_project(tmp_path, context())
+    manifest = tmp_path / ".devlegate/templates/artifacts.toml"
+    external = tmp_path.parent / "external-artifacts.toml"
+    external.write_text(
+        '[[artifact]]\nsource = "skills/architect/SKILL.md.tmpl"\n'
+        'target = "external-target.md"\n'
+    )
+    manifest.unlink()
+    manifest.symlink_to(external)
+    return manifest, external
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_render_rejects_symlinked_manifest_without_using_external_mapping(
+    tmp_path, check
+):
+    manifest, external = _replace_manifest_with_external_symlink(tmp_path)
+    target = tmp_path / "skills/architect/SKILL.md"
+    before = target.read_bytes()
+
+    with pytest.raises(AgentProtocolError, match="unsafe symlinked artifact manifest"):
+        render_project(tmp_path, context(), check=check)
+
+    assert manifest.is_symlink()
+    assert external.is_file()
+    assert target.read_bytes() == before
+    assert not (tmp_path / "external-target.md").exists()
+
+
+def test_init_rejects_symlinked_manifest_without_replacing_it(tmp_path):
+    manifest, external = _replace_manifest_with_external_symlink(tmp_path)
+
+    with pytest.raises(AgentProtocolError, match="unsafe symlinked artifact manifest"):
+        initialize_project(tmp_path, context())
+
+    assert manifest.is_symlink()
+    assert external.is_file()
