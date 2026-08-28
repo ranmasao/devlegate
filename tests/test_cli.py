@@ -118,7 +118,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 0
-    assert "{run,check,status,plan,control}" in capsys.readouterr().out
+    assert "{init,render,run,check,status,plan,control}" in capsys.readouterr().out
 
 
 def test_removed_top_level_forms_are_rejected(git_fixture):
@@ -137,6 +137,29 @@ def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixt
         == "devlegate/control"
     )
     assert invoke(git_fixture, "control", "init").returncode == 0
+
+
+def test_init_and_render_use_effective_configuration_without_control_mutation(
+    git_fixture,
+):
+    config = git_fixture["tmp"] / "render.env"
+    config.write_text(
+        "REMOTE_BRANCH=main\nCONTROL_BRANCH=automation/state\n"
+        "BACKLOG_PATH=workflow/waiting\nTODO_PATH=workflow/ready\n"
+        "REVIEW_PATH=workflow/inspection\nDONE_PATH=workflow/accepted\n"
+    )
+    result = invoke(git_fixture, "init", env_file=config)
+    assert result.returncode == 0
+    assert "rendered 2" in result.stdout
+    architect = (
+        git_fixture["working"] / ".devlegate/generated/skills/architect/SKILL.md"
+    )
+    reviewer = (
+        git_fixture["working"] / ".devlegate/generated/skills/reviewer/SKILL.md"
+    )
+    assert "automation/state" in architect.read_text()
+    assert "workflow/inspection" in reviewer.read_text()
+    assert invoke(git_fixture, "render", "--check", env_file=config).returncode == 0
 
 
 def test_read_only_commands_do_not_create_state_or_fetch(git_fixture):

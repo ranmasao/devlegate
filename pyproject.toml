@@ -21,6 +21,9 @@ devlegate = "devlegate.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+devlegate = ["default_templates/**/*.tmpl"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Callable
 
 from devlegate import __version__
+from devlegate.agent_protocol import (
+    AgentProtocolError,
+    RenderContext,
+    initialize_project,
+    render_project,
+)
 from devlegate.execution_result import (
     ExecutionReport,
     ExecutionReportError,
@@ -2224,6 +2230,42 @@ export default tool({
             print(self._render_status_text(snapshot))
         return 1 if snapshot.plan.action == "blocked" else 0
 
+    def _agent_render_context(self) -> RenderContext:
+        return RenderContext(
+            control_branch=self.control_branch,
+            backlog_path=self.backlog_path,
+            todo_path=self.todo_path,
+            review_path=self.review_path,
+            done_path=self.done_path,
+            product_branch=self.remote_branch,
+        )
+
+    def init_project(self) -> int:
+        try:
+            _total, changed = initialize_project(
+                self.repo, self._agent_render_context()
+            )
+        except AgentProtocolError as error:
+            raise DevlegateError(str(error)) from error
+        print(
+            "initialized Devlegate project protocol templates "
+            f"and rendered {changed} agent protocol artifacts"
+        )
+        return 0
+
+    def render(self, check: bool = False) -> int:
+        try:
+            total, changed = render_project(
+                self.repo, self._agent_render_context(), check=check
+            )
+        except AgentProtocolError as error:
+            raise DevlegateError(str(error)) from error
+        if check:
+            print("generated agent protocol artifacts are current")
+        else:
+            print(f"rendered {total} agent protocol artifacts ({changed} changed)")
+        return 0
+
     def plan(self, json_output: bool = False) -> int:
         for _attempt in range(3):
             try:
@@ -2408,7 +2450,22 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(
-        dest="command", metavar="{run,check,status,plan,control}"
+        dest="command", metavar="{init,render,run,check,status,plan,control}"
+    )
+    init_parser = commands.add_parser(
+        "init", help="initialize project-local protocol templates"
+    )
+    init_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    render_parser = commands.add_parser(
+        "render", help="render project-local agent protocol artifacts"
+    )
+    render_parser.add_argument(
+        "--check", action="store_true", help="check generated artifacts without writing"
+    )
+    render_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     run_parser = commands.add_parser("run", help="synchronize and run one ticket")
     run_parser.add_argument(
@@ -2459,8 +2516,13 @@ def main() -> int:
             build_parser().error("a control command is required")
         devlegate = Devlegate(
             env_file,
-            read_only=args.command in {"status", "plan", "check", "control"},
+            read_only=args.command
+            in {"init", "render", "status", "plan", "check", "control"},
         )
+        if args.command == "init":
+            return devlegate.init_project()
+        if args.command == "render":
+            return devlegate.render(args.check)
         if args.command == "control":
             return devlegate.control_init()
         if args.command == "status":

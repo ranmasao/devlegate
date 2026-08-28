@@ -13,6 +13,9 @@ differ from the defaults. The project must also have its normal Git remote and
 authentication configured.
 
 ```sh
+devlegate init
+devlegate render
+devlegate render --check
 devlegate control init
 devlegate run
 devlegate run --once
@@ -28,6 +31,15 @@ control branch at the deterministic state location. It does not create a branch,
 migrate tickets, commit, or push. Existing projects must explicitly migrate their
 workflow files to the control branch first; the product checkout must not retain a
 second managed workflow copy.
+
+`devlegate init` creates project-local `.devlegate/templates` and
+`.devlegate/generated` protocol directories, seeds missing Architect and Reviewer
+templates, and renders their generated skills. `devlegate render` regenerates the
+derived skills from the existing project-owned templates and the effective safe
+configuration. `devlegate render --check` verifies freshness without writing.
+The `.env` file remains runtime configuration and agents must not read it;
+generated files should not be edited directly. These commands do not attach the
+control worktree or mutate workflow state.
 
 The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
