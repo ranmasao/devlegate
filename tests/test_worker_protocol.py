@@ -151,6 +151,8 @@ def test_tool_and_error_events_are_rendered_inert(capsys, monkeypatch):
 
 def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypatch):
     calls = []
+    parent_pwd = "/some/operator/product/checkout"
+    monkeypatch.setenv("PWD", parent_pwd)
 
     def fake_run(command, prompt, *, cwd=None, env=None, event_handler=None):
         calls.append((command, prompt, cwd, env, event_handler))
@@ -174,6 +176,8 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
         [
             "opencode",
             "run",
+            "--dir",
+            str(tmp_path),
             "--format",
             "json",
             "--model",
@@ -185,6 +189,8 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
         tmp_path,
     )
     assert calls[0][3]["OPENCODE_CONFIG_DIR"] != str(tmp_path)
+    assert calls[0][3]["PWD"] == str(tmp_path)
+    assert os.environ["PWD"] == parent_pwd
 
 
 def test_process_zero_and_malformed_json_preserve_independent_status(

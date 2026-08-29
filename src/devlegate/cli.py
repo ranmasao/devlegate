@@ -674,6 +674,30 @@ class Devlegate:
                 f"state directory is not writable: {self.state_dir}: {error}"
             ) from error
 
+    def _assert_product_checkout_unchanged(
+        self, expected_branch: str | None, expected_head: str
+    ) -> None:
+        branch_result = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        observed_branch = (
+            branch_result.stdout.strip() if branch_result.returncode == 0 else None
+        )
+        head_result = _git(self.repo, "rev-parse", "HEAD", check=False)
+        observed_head = (
+            head_result.stdout.strip() if head_result.returncode == 0 else None
+        )
+        status = _git(self.repo, "status", "--porcelain", check=False).stdout
+        if (
+            observed_branch != expected_branch
+            or observed_head != expected_head
+            or bool(status)
+        ):
+            raise DevlegateError(
+                "product checkout changed while worker execution was active; "
+                "execution isolation cannot be proven"
+            )
+
     def _control_remote_exists(self) -> bool:
         """Observe the control ref without conflating transport failure and absence."""
         observed = _git(
@@ -1637,6 +1661,7 @@ class Devlegate:
             execution_remote_head=execution_remote_head,
         )
         worker_run = self._run_worker(workspace, prompt)
+        self._assert_product_checkout_unchanged(self.current_branch, local_head)
         execution_result = build_execution_report(
             execution_id=execution_id,
             ticket_id=selected_ticket.id,
@@ -1867,9 +1892,12 @@ class Devlegate:
             raise TypeError("worker workspace must be ExecutionWorkspace")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
+        execution_path = workspace.path.resolve()
         command = [
             self.opencode_bin,
             "run",
+            "--dir",
+            str(execution_path),
             "--format",
             "json",
             "--model",
@@ -1899,12 +1927,13 @@ export default tool({
 '''
         )
         environment = os.environ.copy()
+        environment["PWD"] = str(execution_path)
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
         try:
             opencode_result = _run_opencode(
                 command,
                 prompt,
-                cwd=workspace.path,
+                cwd=execution_path,
                 env=environment,
                 event_handler=parser.consume,
             )

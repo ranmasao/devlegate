@@ -500,6 +500,88 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     assert not (working / "implementation.txt").exists()
 
 
+def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(_workspace, _prompt):
+        (working / "product.txt").write_text("unexpected\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
+        devlegate.run_once()
+
+    control = next((state / "worktrees").glob("*/control"))
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert (working / "product.txt").read_text() == "unexpected\n"
+    assert not list((control / "executions/T-1").glob("*.json"))
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
+        "Devlegate checkpoint"
+    )
+
+
+def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(_workspace, _prompt):
+        (working / "product.txt").write_text("unexpected history\n")
+        git(working, "add", "product.txt")
+        git(working, "commit", "-m", "unexpected product commit")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
+        devlegate.run_once()
+
+    control = next((state / "worktrees").glob("*/control"))
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert git(working, "status", "--porcelain").stdout == ""
+    assert not list((control / "executions/T-1").glob("*.json"))
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
+        "Devlegate checkpoint"
+    )
+
+
+def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(_workspace, _prompt):
+        git(working, "switch", "-c", "unexpected-product-branch")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
+        devlegate.run_once()
+
+    control = next((state / "worktrees").glob("*/control"))
+    assert not list((control / "executions/T-1").glob("*.json"))
+    assert (control / "kanban/todo/T-1.md").exists()
+
+
 def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
     tmp_path, monkeypatch
 ):
