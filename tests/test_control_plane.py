@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import devlegate.cli as cli
 import devlegate.execution_workspace as execution_workspace
 from devlegate.cli import Devlegate, DevlegateError
 from devlegate.execution_workspace import (
@@ -580,6 +581,44 @@ def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
     control = next((state / "worktrees").glob("*/control"))
     assert not list((control / "executions/T-1").glob("*.json"))
     assert (control / "kanban/todo/T-1.md").exists()
+
+
+def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    worker_finished = False
+    original_git = cli._git
+
+    def git_with_failed_status(repo, *args, check=True):
+        if worker_finished and args == ("status", "--porcelain"):
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, stdout="", stderr="cannot inspect checkout"
+            )
+        return original_git(repo, *args, check=check)
+
+    def worker(_workspace, _prompt):
+        nonlocal worker_finished
+        worker_finished = True
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(cli, "_git", git_with_failed_status)
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="cannot verify product checkout"):
+        devlegate.run_once()
+
+    control = next((state / "worktrees").glob("*/control"))
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert not list((control / "executions/T-1").glob("*.json"))
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
+        "Devlegate checkpoint"
+    )
 
 
 def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(

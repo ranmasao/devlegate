@@ -687,7 +687,15 @@ class Devlegate:
         observed_head = (
             head_result.stdout.strip() if head_result.returncode == 0 else None
         )
-        status = _git(self.repo, "status", "--porcelain", check=False).stdout
+        status_result = _git(
+            self.repo, "status", "--porcelain", check=False
+        )
+        if status_result.returncode:
+            raise DevlegateError(
+                "cannot verify product checkout after worker execution; "
+                "execution isolation cannot be proven"
+            )
+        status = status_result.stdout
         if (
             observed_branch != expected_branch
             or observed_head != expected_head
