@@ -171,7 +171,16 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
         0, None, WorkerClaim("completed", "implemented", (), ()), None
     )
     assert calls[0][:3] == (
-        ["opencode", "run", "--model", "provider/model", "--agent", "build"],
+        [
+            "opencode",
+            "run",
+            "--format",
+            "json",
+            "--model",
+            "provider/model",
+            "--agent",
+            "build",
+        ],
         "assembled prompt",
         tmp_path,
     )

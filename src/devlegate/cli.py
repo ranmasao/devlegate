@@ -1079,8 +1079,7 @@ class Devlegate:
             "rev-list",
             "--left-right",
             "--count",
-            local_head,
-            remote_head,
+            f"{local_head}...{remote_head}",
             check=False,
         )
         counts = counts_result.stdout.strip().split()
@@ -1868,7 +1867,14 @@ class Devlegate:
             raise TypeError("worker workspace must be ExecutionWorkspace")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
-        command = [self.opencode_bin, "run", "--model", self.opencode_model]
+        command = [
+            self.opencode_bin,
+            "run",
+            "--format",
+            "json",
+            "--model",
+            self.opencode_model,
+        ]
         if self.opencode_agent:
             command.extend(("--agent", self.opencode_agent))
         parser = WorkerEgressParser()
@@ -2537,11 +2543,16 @@ export default tool({
                 "rev-list",
                 "--left-right",
                 "--count",
-                local_head,
-                remote_head,
+                f"{local_head}...{remote_head}",
                 check=False,
             ).stdout.strip()
-            print(f"ahead/behind: {counts or '<unknown>'}")
+            count_parts = counts.split()
+            display_counts = (
+                f"{count_parts[0]} {count_parts[1]}"
+                if len(count_parts) == 2
+                else "<unknown>"
+            )
+            print(f"ahead/behind: {display_counts}")
         print(f"todo files: {todo_count}")
         print(f"todo fingerprint: {todo_fingerprint}")
         if self.control_worktree.is_dir():

@@ -191,6 +191,45 @@ def test_check_distinguishes_missing_configured_remote_from_stale_ref(git_fixtur
     assert "Not ready." in result.stdout
 
 
+def test_check_reports_local_product_branch_ahead(git_fixture):
+    (git_fixture["working"] / "local.txt").write_text("local\n")
+    git(git_fixture["working"], "add", "local.txt")
+    git(git_fixture["working"], "commit", "-m", "local")
+
+    result = invoke(git_fixture, "check")
+
+    assert "ahead/behind: 1 0" in result.stdout
+
+
+def test_check_reports_local_product_branch_behind(git_fixture):
+    publisher = git_fixture["publisher"]
+    (publisher / "remote.txt").write_text("remote\n")
+    git(publisher, "add", "remote.txt")
+    git(publisher, "commit", "-m", "remote")
+    git(publisher, "push", "origin", "main")
+    git(git_fixture["working"], "fetch", "origin", "main")
+
+    result = invoke(git_fixture, "check")
+
+    assert "ahead/behind: 0 1" in result.stdout
+
+
+def test_check_reports_diverged_product_branch(git_fixture):
+    (git_fixture["working"] / "local.txt").write_text("local\n")
+    git(git_fixture["working"], "add", "local.txt")
+    git(git_fixture["working"], "commit", "-m", "local")
+    publisher = git_fixture["publisher"]
+    (publisher / "remote.txt").write_text("remote\n")
+    git(publisher, "add", "remote.txt")
+    git(publisher, "commit", "-m", "remote")
+    git(publisher, "push", "origin", "main")
+    git(git_fixture["working"], "fetch", "origin", "main")
+
+    result = invoke(git_fixture, "check")
+
+    assert "ahead/behind: 1 1" in result.stdout
+
+
 def test_init_outside_git_does_not_seed_project_files(tmp_path):
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     result = subprocess.run(
