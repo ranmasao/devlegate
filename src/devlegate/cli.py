@@ -1670,6 +1670,16 @@ class Devlegate:
         )
         worker_run = self._run_worker(workspace, prompt)
         self._assert_product_checkout_unchanged(self.current_branch, local_head)
+        try:
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, selected_ticket.id
+            )
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                "submodule changed while worker execution was active; "
+                f"execution dependency integrity cannot be proven: {error}"
+            ) from error
         execution_result = build_execution_report(
             execution_id=execution_id,
             ticket_id=selected_ticket.id,
@@ -1679,9 +1689,6 @@ class Devlegate:
             execution_path=str(workspace.path),
             workspace_head=None,
             run=worker_run,
-        )
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, selected_ticket.id
         )
         try:
             checkpoint = manager.checkpoint(workspace, execution_id)

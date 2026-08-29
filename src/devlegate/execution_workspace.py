@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import subprocess
 from pathlib import Path
 from typing import TypeAlias
@@ -89,7 +90,9 @@ class ExecutionWorkspaceManager:
             if not self.path.is_dir():
                 self._prune_expected_stale_registration()
             else:
-                return self._validate_existing(registration, base_head)
+                workspace = self._validate_existing(registration, base_head)
+                self._prepare_submodules(workspace.path)
+                return workspace
         elif self.path.exists():
             if (self.path / ".git").exists() or (self.path / "HEAD").exists():
                 raise self._path_conflict("belongs to another repository")
@@ -104,7 +107,11 @@ class ExecutionWorkspaceManager:
         if created.returncode:
             registrations = self._registrations()
             if registrations.get(expected_path) is not None:
-                return self._validate_existing(registrations[expected_path], base_head)
+                workspace = self._validate_existing(
+                    registrations[expected_path], base_head
+                )
+                self._prepare_submodules(workspace.path)
+                return workspace
             raise ExecutionWorkspaceError(
                 f"cannot create execution worktree {self.path}: "
                 f"{created.stderr.strip() or 'unknown git error'}"
@@ -114,7 +121,169 @@ class ExecutionWorkspaceManager:
             raise ExecutionWorkspaceError(
                 f"created execution worktree {self.path} but Git did not register it"
             )
-        return self._validate_existing(registration, base_head)
+        workspace = self._validate_existing(registration, base_head)
+        self._prepare_submodules(workspace.path)
+        return workspace
+
+    def verify_submodules(self, workspace: ExecutionWorkspace) -> None:
+        """Verify immutable submodules after worker execution."""
+        self._validate_workspace(workspace)
+        self._verify_submodules(workspace.path)
+
+    def _prepare_submodules(self, path: Path) -> None:
+        try:
+            self._validate_submodule_paths(path)
+            self._observe_initialized_submodules(path)
+            updated = _git(
+                path, "submodule", "update", "--init", "--recursive", check=False
+            )
+            if updated.returncode:
+                raise ExecutionWorkspaceError(
+                    "submodule materialization failed: "
+                    f"{updated.stderr.strip() or 'unknown git error'}"
+                )
+            self._verify_submodules(path)
+        except ExecutionWorkspaceError:
+            raise
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ExecutionWorkspaceError(
+                f"cannot prepare execution submodules: {error}"
+            ) from error
+
+    def _validate_submodule_paths(self, repo: Path) -> None:
+        for path in self._gitlink_paths(repo):
+            candidate = repo / path
+            current = repo
+            for component in path.parts:
+                current /= component
+                if current.is_symlink():
+                    raise ExecutionWorkspaceError(
+                        "submodule path is unsafe because it contains a symlink: "
+                        f"{path}"
+                    )
+            if candidate.exists() and not candidate.is_dir():
+                raise ExecutionWorkspaceError(
+                    f"submodule path is not a directory: {path}"
+                )
+
+    def _observe_initialized_submodules(self, repo: Path) -> None:
+        result = _git(repo, "submodule", "status", "--recursive", check=False)
+        if result.returncode:
+            # No .gitmodules is a valid repository without submodules. Other
+            # failures are observations that cannot safely be treated as empty.
+            if not (repo / ".gitmodules").exists() and not self._gitlink_paths(repo):
+                return
+            raise ExecutionWorkspaceError(
+                f"cannot observe submodule state: "
+                f"{result.stderr.strip() or 'unknown git error'}"
+            )
+        for line in result.stdout.splitlines():
+            if len(line) < 43 or line[0] not in " +-U":
+                raise ExecutionWorkspaceError("malformed submodule status")
+            fields = line[1:].split(" ", 1)
+            if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{40}", fields[0]):
+                raise ExecutionWorkspaceError("malformed submodule status")
+            if line[0] in "+U":
+                raise ExecutionWorkspaceError(
+                    f"submodule {fields[1]} is initialized at an unexpected state"
+                )
+        for path in self._gitlink_paths(repo):
+            candidate = repo / path
+            if not candidate.is_dir():
+                continue
+            initialized = _git(candidate, "rev-parse", "--git-dir", check=False)
+            initialized_root = _git(
+                candidate, "rev-parse", "--show-toplevel", check=False
+            )
+            if (
+                initialized.returncode
+                or initialized_root.returncode
+                or Path(initialized_root.stdout.strip()).resolve()
+                != candidate.resolve()
+            ):
+                if any(candidate.iterdir()):
+                    raise ExecutionWorkspaceError(
+                        f"submodule {path} has an unsafe existing checkout"
+                    )
+                continue
+            head = _git(candidate, "rev-parse", "HEAD", check=False)
+            status = _git(candidate, "status", "--porcelain", check=False)
+            expected = self._expected_gitlink(repo, path)
+            if head.returncode or status.returncode:
+                raise ExecutionWorkspaceError(
+                    f"cannot observe submodule {path}; dependency integrity cannot "
+                    "be proven"
+                )
+            if head.stdout.strip() != expected or status.stdout:
+                raise ExecutionWorkspaceError(
+                    f"submodule {path} is dirty or has unexpected HEAD "
+                    f"(head={head.stdout.strip()}, expected={expected}, "
+                    f"status={status.stdout!r}); preserving evidence"
+                )
+            self._observe_initialized_submodules(candidate)
+
+    @staticmethod
+    def _gitlink_paths(repo: Path) -> list[Path]:
+        result = _git(repo, "ls-tree", "-z", "HEAD")
+        paths: list[Path] = []
+        for entry in result.stdout.split("\0"):
+            if not entry:
+                continue
+            metadata, separator, name = entry.partition("\t")
+            fields = metadata.split()
+            if separator and len(fields) == 3 and fields[0] == "160000":
+                path = Path(name)
+                if path.is_absolute() or ".." in path.parts or "." in path.parts:
+                    raise ExecutionWorkspaceError(
+                        f"unsafe submodule path in execution superproject: {name}"
+                    )
+                paths.append(path)
+        return paths
+
+    def _verify_submodules(self, repo: Path) -> None:
+        for path in self._gitlink_paths(repo):
+            candidate = repo / path
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise ExecutionWorkspaceError(
+                    f"submodule {path} is not initialized safely"
+                )
+            expected_sha = self._expected_gitlink(repo, path)
+            head = _git(candidate, "rev-parse", "HEAD", check=False)
+            root = _git(candidate, "rev-parse", "--show-toplevel", check=False)
+            status = _git(candidate, "status", "--porcelain", check=False)
+            if (
+                head.returncode
+                or root.returncode
+                or Path(root.stdout.strip()).resolve() != candidate.resolve()
+                or status.returncode
+            ):
+                raise ExecutionWorkspaceError(
+                    f"cannot verify submodule {path}; dependency integrity cannot "
+                    "be proven"
+                )
+            if head.stdout.strip() != expected_sha:
+                raise ExecutionWorkspaceError(
+                    f"submodule {path} has unexpected HEAD; expected {expected_sha}"
+                )
+            if status.stdout:
+                raise ExecutionWorkspaceError(
+                    f"submodule {path} is dirty; dependency integrity cannot be proven"
+                )
+            self._verify_submodules(candidate)
+
+    @staticmethod
+    def _expected_gitlink(repo: Path, path: Path) -> str:
+        output = _git(repo, "ls-tree", "-z", "HEAD").stdout
+        for entry in output.split("\0"):
+            metadata, separator, name = entry.partition("\t")
+            fields = metadata.split()
+            if separator and name == str(path) and len(fields) == 3:
+                if fields[0] != "160000" or not re.fullmatch(
+                    r"[0-9a-f]{40}", fields[2]
+                ):
+                    break
+                return fields[2]
+        raise ExecutionWorkspaceError(f"cannot observe gitlink for submodule {path}")
 
     def checkpoint(
         self, workspace: ExecutionWorkspace, execution_id: str
