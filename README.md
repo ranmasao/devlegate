@@ -99,7 +99,9 @@ external Architect/Reviewer
     -> external Architect/Reviewer inspects the result
 ```
 
-A ticket that is not actually complete must remain in `todo`. If implementation is blocked on an architectural decision, the agent should leave the ticket there and report the blocker instead of moving it to `review`.
+Workers report semantic outcomes; Devlegate interprets them and owns ticket
+placement. Completed work may submit the same ticket to `review`; incomplete,
+blocked, or failed work preserves the same ticket in `todo`.
 
 ## Current safety rules
 

@@ -558,8 +558,9 @@ class Devlegate:
         ]
         if any(path.exists() for path in product_workflow):
             raise WorkflowBlockedError(
-                "managed workflow copy exists in the product checkout; remove or "
-                f"explicitly migrate it to control branch {self.control_branch}"
+                "configured managed workflow path exists in the product checkout; "
+                "canonical workflow belongs only to the control plane; resolve "
+                "the conflicting project path explicitly"
             )
         self._validate_control_worktree()
         for state, configured_path in self._workflow_paths().items():
@@ -709,8 +710,8 @@ class Devlegate:
         )
         if remote.returncode:
             raise DevlegateError(
-                f"control branch {self.control_branch!r} was not found; "
-                "workflow migration/bootstrap must be explicit"
+                f"configured control branch {self.control_branch!r} is unavailable "
+                f"on remote {self.remote_name}"
             )
         if self.control_worktree.exists() or self.control_worktree.is_symlink():
             registered = _git(self.repo, "worktree", "list", "--porcelain")
@@ -2459,8 +2460,16 @@ export default tool({
             ),
             (
                 "configured remote",
-                remote_result.returncode == 0,
-                f"{self.remote_name}/{self.remote_branch}",
+                _git(
+                    self.repo, "remote", "get-url", self.remote_name, check=False
+                ).returncode
+                == 0,
+                self.remote_name,
+            ),
+            (
+                "poll interval",
+                self.poll_interval.isdecimal(),
+                "POLL_INTERVAL must be an integer",
             ),
             ("OpenCode executable", shutil.which(self.opencode_bin) is not None, ""),
             (
@@ -2647,7 +2656,13 @@ def main() -> int:
     env_file = args.env or Path.cwd() / ".env"
     try:
         project_env = Path.cwd() / ".env"
-        if args.command == "init" and not project_env.exists():
+        if args.command == "init":
+            repository_root = Devlegate._repository_root()
+            if repository_root != Path.cwd().resolve():
+                raise DevlegateError(
+                    f"run devlegate from repository root: {repository_root}"
+                )
+        if args.command == "init" and args.env is None and not project_env.exists():
             try:
                 seed_project_env(project_env)
             except AgentProtocolError as error:

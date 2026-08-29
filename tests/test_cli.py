@@ -150,6 +150,7 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     )
     result = invoke(git_fixture, "init", env_file=config)
     assert result.returncode == 0
+    assert not (git_fixture["working"] / ".env").exists()
     assert "rendered 2" in result.stdout
     architect = (
         git_fixture["working"] / "skills/architect/SKILL.md"
@@ -160,6 +161,68 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     assert "automation/state" in architect.read_text()
     assert "workflow/inspection" in reviewer.read_text()
     assert invoke(git_fixture, "render", "--check", env_file=config).returncode == 0
+
+
+def test_check_rejects_invalid_poll_interval_without_creating_state(git_fixture):
+    config = git_fixture["tmp"] / "invalid-poll.env"
+    state = git_fixture["tmp"] / "invalid-poll-state"
+    config.write_text(
+        "REMOTE_BRANCH=main\nOPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
+        "POLL_INTERVAL=banana\n"
+        f"STATE_DIR={state}\n"
+    )
+
+    result = invoke(git_fixture, "check", env_file=config)
+
+    assert result.returncode == 1
+    assert "poll interval" in result.stdout
+    assert "Not ready." in result.stdout
+    assert not state.exists()
+
+
+def test_check_distinguishes_missing_configured_remote_from_stale_ref(git_fixture):
+    git(git_fixture["working"], "remote", "remove", "origin")
+
+    result = invoke(git_fixture, "check")
+
+    assert result.returncode == 1
+    assert "FAIL  configured remote: origin" in result.stdout
+    assert "known remote HEAD:" in result.stdout
+    assert "Not ready." in result.stdout
+
+
+def test_init_outside_git_does_not_seed_project_files(tmp_path):
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    result = subprocess.run(
+        [sys.executable, "-m", "devlegate", "init"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "not a git repository" in result.stderr
+    assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / ".devlegate").exists()
+
+
+def test_init_from_repository_subdirectory_does_not_seed_project_files(git_fixture):
+    subdirectory = git_fixture["working"] / "subdir"
+    subdirectory.mkdir()
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    result = subprocess.run(
+        [sys.executable, "-m", "devlegate", "init"],
+        cwd=subdirectory,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "run devlegate from repository root" in result.stderr
+    assert not (subdirectory / ".env").exists()
+    assert not (subdirectory / ".devlegate").exists()
 
 
 def test_init_seeds_missing_project_env_from_package(git_fixture):
