@@ -23,6 +23,7 @@ from devlegate.agent_protocol import (
     RenderContext,
     initialize_project,
     render_project,
+    seed_project_env,
 )
 from devlegate.execution_result import (
     ExecutionReport,
@@ -672,15 +673,32 @@ class Devlegate:
                 f"state directory is not writable: {self.state_dir}: {error}"
             ) from error
 
-    def control_init(self) -> int:
-        """Attach the local control worktree to an existing remote branch."""
+    def _control_remote_exists(self) -> bool:
+        """Observe the control ref without conflating transport failure and absence."""
+        observed = _git(
+            self.repo,
+            "ls-remote",
+            "--heads",
+            self.remote_name,
+            f"refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if observed.returncode:
+            detail = observed.stderr.strip() or "remote could not be observed"
+            raise DevlegateError(
+                f"cannot observe control branch {self.control_branch!r} on "
+                f"remote {self.remote_name}: {detail}"
+            )
+        return bool(observed.stdout.strip())
+
+    def _attach_existing_control(self) -> int:
         fetch = _git(
             self.repo, "fetch", self.remote_name, self.control_branch, check=False
         )
         if fetch.returncode:
             raise DevlegateError(
-                f"control branch {self.control_branch!r} does not exist on "
-                f"remote {self.remote_name}; migrate/bootstrap it explicitly"
+                f"cannot fetch existing control branch {self.control_branch!r}: "
+                f"{fetch.stderr.strip()}"
             )
         remote = _git(
             self.repo,
@@ -694,7 +712,7 @@ class Devlegate:
                 f"control branch {self.control_branch!r} was not found; "
                 "workflow migration/bootstrap must be explicit"
             )
-        if self.control_worktree.exists():
+        if self.control_worktree.exists() or self.control_worktree.is_symlink():
             registered = _git(self.repo, "worktree", "list", "--porcelain")
             try:
                 registered_paths = set(parse_worktree_porcelain(registered.stdout))
@@ -789,6 +807,90 @@ class Devlegate:
             )
         print(f"attached control worktree: {self.control_worktree}")
         return 0
+
+    def _bootstrap_control(self) -> int:
+        if self.control_worktree.exists() or self.control_worktree.is_symlink():
+            raise DevlegateError(
+                "expected control worktree path already exists: "
+                f"{self.control_worktree}"
+            )
+        local_branch = _git(
+            self.repo,
+            "show-ref",
+            "--verify",
+            f"refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if local_branch.returncode == 0:
+            raise DevlegateError(
+                f"local control branch {self.control_branch!r} exists while the "
+                "remote branch is absent"
+            )
+        self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
+        created = _git(
+            self.repo,
+            "worktree",
+            "add",
+            "--orphan",
+            "-b",
+            self.control_branch,
+            str(self.control_worktree),
+            check=False,
+        )
+        if created.returncode:
+            raise DevlegateError(
+                f"cannot create fresh control worktree: {created.stderr.strip()}"
+            )
+        try:
+            for configured_path in self._workflow_paths().values():
+                directory = self.control_worktree / configured_path
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / ".gitkeep").touch()
+            added = _git(self.control_worktree, "add", "--all", check=False)
+            if added.returncode:
+                raise DevlegateError(
+                    f"cannot stage initial control state: {added.stderr.strip()}"
+                )
+            committed = _git(
+                self.control_worktree,
+                "commit",
+                "-m",
+                "Initialize Devlegate control plane",
+                check=False,
+            )
+            if committed.returncode:
+                raise DevlegateError(
+                    f"cannot commit initial control state: {committed.stderr.strip()}"
+                )
+            pushed = _git(
+                self.control_worktree,
+                "push",
+                self.remote_name,
+                f"HEAD:refs/heads/{self.control_branch}",
+                check=False,
+            )
+            if pushed.returncode:
+                raise DevlegateError(
+                    f"cannot publish initial control branch: {pushed.stderr.strip()}"
+                )
+            refreshed = _git(
+                self.repo, "fetch", self.remote_name, self.control_branch, check=False
+            )
+            if refreshed.returncode:
+                raise DevlegateError(
+                    "cannot refresh published control branch: "
+                    f"{refreshed.stderr.strip()}"
+                )
+        except DevlegateError:
+            raise
+        print(f"initialized control worktree: {self.control_worktree}")
+        return 0
+
+    def control_init(self) -> int:
+        """Attach an existing control branch or bootstrap a fresh control plane."""
+        if self._control_remote_exists():
+            return self._attach_existing_control()
+        return self._bootstrap_control()
 
     def _probe_state_access(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -2240,10 +2342,13 @@ export default tool({
             product_branch=self.remote_branch,
         )
 
-    def init_project(self) -> int:
+    def init_project(self, conflicts: str = "abort") -> int:
         try:
             _total, changed = initialize_project(
-                self.repo, self._agent_render_context()
+                self.repo,
+                self._agent_render_context(),
+                conflicts=conflicts,
+                state_dir=self.state_dir,
             )
         except AgentProtocolError as error:
             raise DevlegateError(str(error)) from error
@@ -2339,16 +2444,31 @@ export default tool({
             or str(self._state.get("handled_todo_fingerprint", "")) != todo_fingerprint
         )
         checks = [
-            ("configuration", True, ""),
-            ("repository root", self.repo.is_dir(), str(self.repo)),
-            ("branch", bool(self.current_branch), self.current_branch),
             (
-                "remote",
+                "OPENCODE_MODEL",
+                bool(self.opencode_model),
+                "set OPENCODE_MODEL in the effective configuration",
+            ),
+            ("repository root", self.repo.is_dir(), str(self.repo)),
+            (
+                "product branch",
+                bool(self.current_branch)
+                and self.current_branch == self.remote_branch,
+                f"current={self.current_branch or '<detached>'}, "
+                f"configured={self.remote_branch or '<unset>'}",
+            ),
+            (
+                "configured remote",
                 remote_result.returncode == 0,
                 f"{self.remote_name}/{self.remote_branch}",
             ),
             ("OpenCode executable", shutil.which(self.opencode_bin) is not None, ""),
-            ("state directory", self.state_dir.is_dir(), str(self.state_dir)),
+            (
+                "state directory",
+                not self.state_dir.is_symlink()
+                and (not self.state_dir.exists() or self.state_dir.is_dir()),
+                str(self.state_dir),
+            ),
             (
                 "working tree clean",
                 not bool(status),
@@ -2358,7 +2478,7 @@ export default tool({
             ("dependency graph", not ticket_error, ticket_error),
             (
                 "control worktree",
-                self.control_worktree.is_dir(),
+                control_observation is not None,
                 f"{self.control_worktree} (run 'devlegate control init')",
             ),
             (
@@ -2373,6 +2493,14 @@ export default tool({
                 and control_observation.remote_head is not None,
                 f"{self.remote_name}/{self.control_branch}",
             ),
+            *[
+                (
+                    f"workflow directory ({state})",
+                    (self.control_worktree / configured_path).is_dir(),
+                    str(self.control_worktree / configured_path),
+                )
+                for state, configured_path in self._workflow_paths().items()
+            ],
             (
                 "control working tree clean",
                 control_observation is not None
@@ -2458,6 +2586,12 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
+    init_parser.add_argument(
+        "--conflicts",
+        choices=("abort", "backup", "replace"),
+        default="abort",
+        help="policy for unrelated existing rendered artifacts",
+    )
     render_parser = commands.add_parser(
         "render", help="render project-local agent protocol artifacts"
     )
@@ -2512,6 +2646,12 @@ def main() -> int:
         build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"
     try:
+        project_env = Path.cwd() / ".env"
+        if args.command == "init" and not project_env.exists():
+            try:
+                seed_project_env(project_env)
+            except AgentProtocolError as error:
+                raise DevlegateError(str(error)) from error
         if args.command == "control" and args.control_command != "init":
             build_parser().error("a control command is required")
         devlegate = Devlegate(
@@ -2520,7 +2660,7 @@ def main() -> int:
             in {"init", "render", "status", "plan", "check", "control"},
         )
         if args.command == "init":
-            return devlegate.init_project()
+            return devlegate.init_project(args.conflicts)
         if args.command == "render":
             return devlegate.render(args.check)
         if args.command == "control":

@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from devlegate.agent_protocol import (
@@ -5,6 +7,7 @@ from devlegate.agent_protocol import (
     RenderContext,
     initialize_project,
     render_project,
+    seed_project_env,
 )
 
 
@@ -51,6 +54,75 @@ def test_init_does_not_overwrite_custom_templates(tmp_path):
     manifest_before = manifest.read_bytes()
     initialize_project(tmp_path, context())
     assert manifest.read_bytes() == manifest_before
+
+
+def test_seed_project_env_is_packaged_and_byte_preserving(tmp_path):
+    env = tmp_path / ".env"
+    assert seed_project_env(env)
+    first = env.read_bytes()
+    assert b"OPENCODE_MODEL=" in first
+    assert b"leave empty until a model is selected" in first
+    assert not seed_project_env(env)
+    assert env.read_bytes() == first
+
+
+def test_init_conflict_abort_preflights_all_targets(tmp_path):
+    initialize_project(tmp_path, context())
+    first = tmp_path / "skills/architect/SKILL.md"
+    second = tmp_path / "skills/reviewer/SKILL.md"
+    first.write_text("foreign\n")
+    before = second.read_bytes()
+
+    with pytest.raises(AgentProtocolError, match="will not be clobbered"):
+        initialize_project(tmp_path, context())
+    assert first.read_text() == "foreign\n"
+    assert second.read_bytes() == before
+
+
+def test_init_conflict_backup_is_deterministic_and_never_overwrites(tmp_path):
+    initialize_project(tmp_path, context())
+    target = tmp_path / "skills/architect/SKILL.md"
+    target.write_text("foreign\n")
+    state = tmp_path / "state"
+    backup = (
+        state
+        / "backups"
+        / hashlib.sha256(str(tmp_path.resolve()).encode()).hexdigest()
+        / "skills/architect/SKILL.md"
+    )
+
+    assert initialize_project(tmp_path, context(), conflicts="backup", state_dir=state)
+    assert backup.read_text() == "foreign\n"
+    target.write_text("changed\n")
+    with pytest.raises(AgentProtocolError, match="backup already exists"):
+        initialize_project(tmp_path, context(), conflicts="backup", state_dir=state)
+    assert target.read_text() == "changed\n"
+
+
+def test_init_abort_reports_all_foreign_targets_before_writing(tmp_path):
+    initialize_project(tmp_path, context())
+    first = tmp_path / "skills/architect/SKILL.md"
+    second = tmp_path / "skills/reviewer/SKILL.md"
+    first.write_text("foreign architect\n")
+    second.write_text("foreign reviewer\n")
+
+    with pytest.raises(AgentProtocolError) as error:
+        initialize_project(tmp_path, context())
+
+    message = str(error.value)
+    assert "skills/architect/SKILL.md" in message
+    assert "skills/reviewer/SKILL.md" in message
+    assert first.read_text() == "foreign architect\n"
+    assert second.read_text() == "foreign reviewer\n"
+
+
+def test_init_conflict_replace_replaces_foreign_target(tmp_path):
+    initialize_project(tmp_path, context())
+    target = tmp_path / "skills/architect/SKILL.md"
+    target.write_text("foreign\n")
+
+    initialize_project(tmp_path, context(), conflicts="replace")
+    assert "GENERATED FILE. DO NOT EDIT DIRECTLY." in target.read_text()
 
 
 def test_render_is_deterministic_and_check_is_read_only(tmp_path):

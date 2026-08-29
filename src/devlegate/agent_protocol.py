@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import tempfile
@@ -38,6 +39,7 @@ class RenderContext:
 
 _PLACEHOLDER = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
 _MANIFEST_NAME = "artifacts.toml"
+_ENV_NAME = ".env.example"
 _DEFAULT_ARTIFACTS = (
     {
         "source": "skills/architect/SKILL.md.tmpl",
@@ -54,6 +56,27 @@ _MARKER = "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
 def packaged_template_root() -> Path:
     """Return the read-only packaged bootstrap template directory."""
     return Path(__file__).parent / "default_templates"
+
+
+def seed_project_env(path: Path) -> bool:
+    """Create a project environment file from the installed bootstrap template."""
+    if path.exists() or path.is_symlink():
+        return False
+    packaged = packaged_template_root() / _ENV_NAME
+    if not packaged.is_file():
+        raise AgentProtocolError(
+            f"packaged environment template is missing: {packaged}"
+        )
+    try:
+        with path.open("xb") as destination:
+            destination.write(packaged.read_bytes())
+    except FileExistsError:
+        return False
+    except OSError as error:
+        raise AgentProtocolError(
+            f"cannot seed environment file {path}: {error}"
+        ) from error
+    return True
 
 
 def _directory(path: Path, label: str, *, create: bool = True) -> None:
@@ -153,21 +176,27 @@ def _manifest(templates: Path) -> tuple[tuple[Path, Path], ...]:
 
 def _check_components(root: Path, relative: Path, label: str) -> Path:
     current = root
-    for part in relative.parts:
+    for index, part in enumerate(relative.parts):
         current = current / part
         if current.is_symlink():
             raise AgentProtocolError(f"unsafe symlinked {label}: {current}")
+        if (
+            index < len(relative.parts) - 1
+            and current.exists()
+            and not current.is_dir()
+        ):
+            raise AgentProtocolError(f"unsafe structural {label}: {current}")
     return current
 
 
-def _atomic_write(path: Path, content: str) -> bool:
+def _atomic_write(path: Path, content: str, *, allow_foreign: bool = False) -> bool:
     if path.is_symlink():
         raise AgentProtocolError(f"unsafe symlinked target file: {path}")
     if path.exists() and not path.is_file():
         raise AgentProtocolError(f"target path is not a file: {path}")
     if path.is_file():
         existing = path.read_text()
-        if not existing.startswith(_MARKER):
+        if not existing.startswith(_MARKER) and not allow_foreign:
             raise AgentProtocolError(
                 f"unrelated existing target will not be clobbered: {path}"
             )
@@ -200,11 +229,112 @@ def _atomic_write(path: Path, content: str) -> bool:
     return True
 
 
-def initialize_project(project: Path, context: RenderContext) -> tuple[int, int]:
+def _state_backup_path(state_dir: Path, project: Path, target: Path) -> Path:
+    key = hashlib.sha256(str(project.resolve()).encode()).hexdigest()
+    return state_dir / "backups" / key / target.relative_to(project)
+
+
+def _render_plan(
+    project: Path,
+    templates: Path,
+    context: RenderContext,
+    conflicts: str,
+    state_dir: Path | None,
+) -> list[tuple[Path, str, Path | None, bool]]:
+    artifacts = _manifest(templates)
+    plan: list[tuple[Path, str, Path | None, bool]] = []
+    conflicts_found: list[Path] = []
+    backup_conflicts: list[Path] = []
+    for source_relative, target_relative in artifacts:
+        source = _check_components(templates, source_relative, "template path")
+        if not source.is_file():
+            default_sources = {Path(item["source"]) for item in _DEFAULT_ARTIFACTS}
+            if (
+                source_relative not in default_sources
+                or templates == packaged_template_root()
+            ):
+                raise AgentProtocolError(f"template path is unavailable: {source}")
+            source = _check_components(
+                packaged_template_root(), source_relative, "packaged template path"
+            )
+            if not source.is_file():
+                raise AgentProtocolError(f"packaged template is missing: {source}")
+        target = _check_components(project, target_relative, "target path")
+        if target == project / ".git":
+            raise AgentProtocolError(f"unsafe target path: {target}")
+        rendered = _MARKER + _render_template(source.read_text(), context, source)
+        backup = None
+        if target.is_symlink():
+            raise AgentProtocolError(f"unsafe symlinked target file: {target}")
+        if target.exists() and not target.is_file():
+            raise AgentProtocolError(f"target path is not a file: {target}")
+        if target.is_file() and not target.read_text().startswith(_MARKER):
+            if conflicts == "abort":
+                conflicts_found.append(target)
+            if conflicts == "backup":
+                if state_dir is None:
+                    raise AgentProtocolError(
+                        "backup conflict policy requires STATE_DIR"
+                    )
+                backup = _state_backup_path(state_dir, project, target)
+                if state_dir.exists() and not state_dir.is_dir():
+                    raise AgentProtocolError(
+                        f"state directory is not a directory: {state_dir}"
+                    )
+                _check_components(
+                    state_dir, backup.relative_to(state_dir), "backup path"
+                )
+                if backup.exists() or backup.is_symlink():
+                    backup_conflicts.append(backup)
+                    backup = None
+        plan.append(
+            (target, rendered, backup, conflicts != "abort")
+        )
+    if conflicts_found:
+        details = "\n".join(f"  {target}" for target in conflicts_found)
+        raise AgentProtocolError(
+            "existing files are not Devlegate-owned and will not be clobbered; "
+            "no project artifacts were "
+            f"changed:\n{details}"
+        )
+    if backup_conflicts:
+        details = "\n".join(f"  {backup}" for backup in backup_conflicts)
+        raise AgentProtocolError(
+            "backup already exists; no project artifacts were changed:\n"
+            f"{details}"
+        )
+    return plan
+
+
+def _write_backup(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with destination.open("xb") as backup:
+            backup.write(source.read_bytes())
+    except FileExistsError as error:
+        raise AgentProtocolError(f"backup already exists: {destination}") from error
+    except OSError as error:
+        raise AgentProtocolError(
+            f"cannot create backup {destination}: {error}"
+        ) from error
+
+
+def initialize_project(
+    project: Path,
+    context: RenderContext,
+    *,
+    conflicts: str = "abort",
+    state_dir: Path | None = None,
+) -> tuple[int, int]:
     """Seed missing project templates and manifest, then render targets."""
-    _protocol, templates = _safe_project_roots(project)
-    _directory(templates / "skills", "skills template directory")
-    _directory(templates / "prompts", "prompts template directory")
+    if conflicts not in {"abort", "backup", "replace"}:
+        raise AgentProtocolError(f"unknown conflict policy: {conflicts}")
+    protocol = project / ".devlegate"
+    templates = protocol / "templates"
+    if protocol.exists() or protocol.is_symlink():
+        _directory(protocol, ".devlegate root", create=False)
+    if templates.exists() or templates.is_symlink():
+        _directory(templates, "template root", create=False)
     manifest = templates / _MANIFEST_NAME
     if manifest.is_symlink():
         raise AgentProtocolError(f"unsafe symlinked artifact manifest: {manifest}")
@@ -214,9 +344,17 @@ def initialize_project(project: Path, context: RenderContext) -> tuple[int, int]
             raise AgentProtocolError(
                 f"packaged manifest is missing: {packaged_manifest}"
             )
-        manifest.write_bytes(packaged_manifest.read_bytes())
     elif not manifest.is_file():
         raise AgentProtocolError(f"manifest path is not a file: {manifest}")
+    # Validate the complete target set before creating directories or changing targets.
+    template_root = templates if manifest.exists() else packaged_template_root()
+    plan = _render_plan(project, template_root, context, conflicts, state_dir)
+    _safe_project_roots(project)
+    _directory(templates / "skills", "skills template directory")
+    _directory(templates / "prompts", "prompts template directory")
+    if not manifest.exists():
+        packaged_manifest = packaged_template_root() / "artifacts.toml"
+        manifest.write_bytes(packaged_manifest.read_bytes())
     for item in _DEFAULT_ARTIFACTS:
         source = templates / item["source"]
         if source.is_symlink() or source.parent.is_symlink():
@@ -230,7 +368,15 @@ def initialize_project(project: Path, context: RenderContext) -> tuple[int, int]
             raise AgentProtocolError(f"packaged template is missing: {packaged}")
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(packaged.read_bytes())
-    return render_project(project, context)
+    changed = 0
+    for target, rendered, backup, allow_foreign in plan:
+        _directory(target.parent, "target directory")
+        if backup is not None:
+            _write_backup(target, backup)
+            print(f"backed up {target} to {backup}")
+        if _atomic_write(target, rendered, allow_foreign=allow_foreign):
+            changed += 1
+    return len(plan), changed
 
 
 def render_project(
@@ -245,16 +391,9 @@ def render_project(
         raise AgentProtocolError(
             f"artifact manifest is missing: {templates / _MANIFEST_NAME}"
         )
-    artifacts = _manifest(templates)
+    plan = _render_plan(project, templates, context, "abort", None)
     changed = 0
-    for source_relative, target_relative in artifacts:
-        source = _check_components(templates, source_relative, "template path")
-        if not source.is_file():
-            raise AgentProtocolError(f"template path is unavailable: {source}")
-        target = _check_components(project, target_relative, "target path")
-        if target.parent == project and target.name == ".git":
-            raise AgentProtocolError(f"unsafe target path: {target}")
-        rendered = _MARKER + _render_template(source.read_text(), context, source)
+    for target, rendered, _backup, _allow_foreign in plan:
         if check:
             if (
                 target.is_symlink()
@@ -268,7 +407,7 @@ def render_project(
             _directory(target.parent, "target directory")
             if _atomic_write(target, rendered):
                 changed += 1
-    return len(artifacts), changed
+    return len(plan), changed
 
 
 __all__ = [
@@ -277,4 +416,5 @@ __all__ = [
     "initialize_project",
     "packaged_template_root",
     "render_project",
+    "seed_project_env",
 ]

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -64,6 +65,34 @@ def control_fixture(tmp_path):
     return working, config, tmp_path / "state"
 
 
+def fresh_control_fixture(tmp_path):
+    bare = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    working = tmp_path / "working"
+    git(tmp_path, "init", "--bare", bare)
+    git(tmp_path, "init", "-b", "main", seed)
+    git(seed, "config", "user.email", "test@example.com")
+    git(seed, "config", "user.name", "Test User")
+    (seed / "product.txt").write_text("product\n")
+    git(seed, "add", ".")
+    git(seed, "commit", "-m", "product")
+    git(seed, "remote", "add", "origin", bare)
+    git(seed, "push", "-u", "origin", "main")
+    git(tmp_path, "clone", "-b", "main", bare, working)
+    git(working, "config", "user.email", "test@example.com")
+    git(working, "config", "user.name", "Test User")
+    state = tmp_path / "state"
+    config = tmp_path / "devlegate.env"
+    config.write_text(
+        "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
+        "BACKLOG_PATH=workflow/backlog\nTODO_PATH=workflow/todo\n"
+        "REVIEW_PATH=workflow/review\nDONE_PATH=workflow/done\n"
+        "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={state}\n"
+    )
+    return working, config, state
+
+
 def invoke(working, *args, config):
     return subprocess.run(
         [sys.executable, "-m", "devlegate", *args, "--env", config],
@@ -95,6 +124,67 @@ def test_control_init_is_explicit_idempotent_and_nested_observation(tmp_path):
     assert payload["observation"]["control"]["branch"] == "devlegate/control"
     assert payload["ticket"] is not None, payload
     assert payload["ticket"]["id"] == "T-1"
+
+
+def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
+    working, config, state = fresh_control_fixture(tmp_path)
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    initialized = invoke(working, "control", "init", config=config)
+
+    assert initialized.returncode == 0, initialized.stderr
+    control = next((state / "worktrees").glob("*/control"))
+    assert git(control, "symbolic-ref", "--short", "HEAD").stdout.strip() == (
+        "devlegate/control"
+    )
+    assert len(git(control, "rev-list", "--parents", "-n1", "HEAD").stdout.split()) == 1
+    for state_name in ("backlog", "todo", "review", "done"):
+        assert (control / "workflow" / state_name / ".gitkeep").is_file()
+    assert not (working / "workflow").exists()
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "ls-remote", "origin", "refs/heads/devlegate/control").stdout
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert json.loads(invoke(working, "plan", "--json", config=config).stdout)[
+        "action"
+    ] == "none"
+    assert invoke(working, "check", config=config).returncode == 0
+    assert invoke(working, "status", "--json", config=config).returncode == 0
+    assert invoke(working, "run", "--once", config=config).returncode == 0
+
+
+def test_control_init_does_not_treat_remote_observation_failure_as_absence(tmp_path):
+    working, config, state = fresh_control_fixture(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            "REMOTE_BRANCH=main", "REMOTE_NAME=missing\nREMOTE_BRANCH=main"
+        )
+    )
+
+    result = invoke(working, "control", "init", config=config)
+
+    assert result.returncode == 1
+    assert "cannot observe control branch" in result.stderr
+    assert not state.exists()
+    assert not subprocess.run(
+        ["git", "show-ref", "--verify", "refs/heads/devlegate/control"],
+        cwd=working,
+        text=True,
+        capture_output=True,
+    ).stdout
+
+
+def test_control_init_rejects_ambiguous_local_control_state(tmp_path):
+    working, config, state = fresh_control_fixture(tmp_path)
+    key = hashlib.sha256(str(working.resolve()).encode()).hexdigest()
+    control_path = state / "worktrees" / key / "control"
+    control_path.parent.mkdir(parents=True)
+    control_path.write_text("foreign\n")
+
+    result = invoke(working, "control", "init", config=config)
+
+    assert result.returncode == 1
+    assert "expected control worktree path already exists" in result.stderr
+    assert control_path.read_text() == "foreign\n"
 
 
 def test_product_workflow_copy_fails_closed(tmp_path):

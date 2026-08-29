@@ -162,6 +162,29 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     assert invoke(git_fixture, "render", "--check", env_file=config).returncode == 0
 
 
+def test_init_seeds_missing_project_env_from_package(git_fixture):
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    env = git_fixture["working"] / ".env"
+    result = subprocess.run(
+        [sys.executable, "-m", "devlegate", "init"],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert b"OPENCODE_MODEL=" in env.read_bytes()
+    before = env.read_bytes()
+    assert subprocess.run(
+        [sys.executable, "-m", "devlegate", "init"],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    ).returncode == 0
+    assert env.read_bytes() == before
+
+
 def test_read_only_commands_do_not_create_state_or_fetch(git_fixture):
     state = git_fixture["tmp"] / "read-only-state"
     config = git_fixture["tmp"] / "read-only.env"

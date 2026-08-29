@@ -6,14 +6,16 @@ Devlegate maintains three physically separate Git surfaces: the operator checkou
 
 ## Usage
 
-Install Devlegate, then run the `devlegate` command from the root of the target
-project checkout. Copy `.env.example` to that project's `$PWD/.env` and
-configure at least `OPENCODE_MODEL` and the managed workflow paths if they
-differ from the defaults. The project must also have its normal Git remote and
+Install this unreleased checkout with `python -m pip install -e /path/to/devlegate`
+in the environment used for the target project. Then run `devlegate` from the
+root of that project. `devlegate init` seeds a missing `$PWD/.env` from the
+installed bootstrap template; configure at least `OPENCODE_MODEL` and the
+managed workflow paths if they differ from the defaults. An existing `.env` is
+never rewritten. The project must also have its normal Git remote and
 authentication configured.
 
 ```sh
-devlegate init
+devlegate init [--conflicts abort|backup|replace]
 devlegate render
 devlegate render --check
 devlegate control init
@@ -26,11 +28,12 @@ devlegate plan
 devlegate plan --json
 ```
 
-`devlegate control init` explicitly fetches and attaches an already existing remote
-control branch at the deterministic state location. It does not create a branch,
-migrate tickets, commit, or push. Existing projects must explicitly migrate their
-workflow files to the control branch first; the product checkout must not retain a
-second managed workflow copy.
+`devlegate control init` observes the configured remote and attaches an existing
+control branch, or creates and publishes a fresh independent control branch when
+the remote positively has no such branch. Fresh control bootstrap creates the
+configured workflow directories with empty non-ticket sentinels. It does not
+modify, commit, or push product files, and it does not import product-side
+workflow directories.
 
 `devlegate init` creates project-local `.devlegate/templates`, seeds missing
 Architect and Reviewer templates plus `artifacts.toml`, and renders their skills
@@ -48,7 +51,9 @@ not created, used, or automatically deleted.
 
 The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 
-Use `check` for a side-effect-free configuration and checkout preflight.
+Use `check` for a side-effect-free configuration, checkout, control topology,
+and workflow preflight. A missing but otherwise valid `STATE_DIR` is allowed;
+normal execution may create it later.
 
 `REMOTE_BRANCH` defaults to the currently checked-out branch when HEAD is attached. If set explicitly, the current branch must match it; detached HEAD is always blocked for planning and execution. See `.env.example` for the available runtime settings.
 
@@ -108,7 +113,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Ticket frontmatter uses the vendored, restricted NanoYAML N0 implementation; Devlegate does not depend on a general YAML library or support free-form tickets.
 - Ticket identity is the filename stem. Devlegate strictly validates NanoYAML N0 frontmatter, ticket metadata, globally unique IDs, dependency references, and the dependency DAG before launching a worker.
 - Only `todo` tickets whose dependencies are in `done` are runnable. `review` does not satisfy dependencies. Devlegate sorts runnable IDs and selects exactly one ticket for a potential worker dispatch.
-- Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, selected-ticket execution binding, checkpoint commits, branch pushes, reports, and ticket movement.
+- Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, selected-ticket execution binding, checkpoint commits, branch pushes, reports, and ticket movement. Ticket population is data, not initialization state; an empty valid workflow is supported.
 - Devlegate owns worker prompt construction. The worker receives one exact implementation assignment, a small worker-only contract, and only relevant implementation context. Canonical workflow paths, ticket paths, kanban, and Git/execution topology are Devlegate details, not worker API.
 - Fresh, resume, rework, and recovery prompts share one contract and differ only through a narrow work directive and relevant optional context. Ticket content is opaque assigned data; it cannot authorize canonical workflow mutation.
 - Worker output is free-form unless it is exactly one strictly validated `devlegate_report` tool event. `WorkerClaim` is untrusted semantic egress with `completed`, `incomplete`, or `blocked` outcomes; missing, malformed, or duplicate reports are protocol failures and do not mutate workflow.
@@ -119,7 +124,7 @@ A ticket that is not actually complete must remain in `todo`. If implementation 
 - Devlegate persists the handled generation, so unchanged todo is not redispatched on every poll or after restart.
 - Dirty and divergent Git states are diagnosed with paths and topology, but Devlegate never automatically destroys local changes or reconciles divergent history.
 - Git synchronization and workflow validity are separate boundaries: `merge_pending` covers only an unproven fast-forward transaction and is cleared once the intended HEAD is verified. A later workflow blocker is derived from current control contents and does not reopen that Git transaction.
-- Completed execution submits the same ticket from todo to review. Incomplete, blocked, and failed executions preserve the ticket in todo while retaining their execution branch and report. No automatic retry or recovery reconciliation is performed.
+- Completed execution submits the same ticket from todo to review. Incomplete, blocked, and failed executions preserve the same ticket in todo while retaining their execution branch and report. Workers report semantic outcomes; Devlegate owns ticket movement. No automatic retry or recovery reconciliation is performed.
 - Devlegate stores per-repository iteration state atomically under `$XDG_STATE_HOME/devlegate`, or `~/.local/state/devlegate` when XDG_STATE_HOME is unset. Set `STATE_DIR` to override it. Lock files are stored under its `locks` subdirectory.
 - Workers never commit, push, merge, rebase, switch branches, move tickets, write reports, or integrate into the product branch. Product-branch integration remains Devlegate-owned but review acceptance and automatic integration are still gated.
 - A kernel-managed `flock` prevents concurrent Devlegate instances for the same checkout.
