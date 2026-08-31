@@ -20,19 +20,49 @@ Implementation lineage uses `{{ execution.branch_prefix }}<ticket-id>`.
 
 ## Ticket Specification
 
-Every implementation ticket MUST define these sections:
+Every implementation ticket MUST use Devlegate NanoYAML frontmatter followed by
+a Markdown specification. NanoYAML is a restricted canonical format, not
+unrestricted YAML. For a ticket without dependencies, use:
 
-- Milestone
-- Goal
-- Context
-- Required behavior
-- Acceptance criteria
-- Required regressions
+```text
+---
+"type": "devlegate.ticket"
+"title": "Human-readable ticket title"
+---
+```
 
-Describe required behavior as cause -> mechanism -> observable behavior where
-appropriate. Preserve the supported frontmatter contract: `type`, `title`, and
-optional `depends_on`. Do not invent metadata. Dependencies are satisfied only by
-`done`; `review` and `accepted` do not satisfy dependencies.
+For a ticket with dependencies, use the block sequence form exactly:
+
+```text
+---
+"type": "devlegate.ticket"
+"title": "Human-readable ticket title"
+"depends_on":
+  - "LAB-023"
+  - "LAB-024"
+---
+```
+
+Do not use YAML flow collections such as `["LAB-023"]`, and do not invent
+additional metadata. The filename stem is the ticket ID. Dependencies are
+satisfied only by `done`; `review` and `accepted` do not satisfy dependencies.
+
+Every implementation ticket MUST define these Markdown sections:
+
+* Milestone
+* Goal
+* Context
+* Required behavior
+* Acceptance criteria
+* Required regressions
+
+`Milestone` identifies the larger objective; `Goal` states the concrete ticket
+outcome; `Context` contains only the facts needed to understand the work.
+`Required behavior` defines the normative behavior, preferably as
+cause -> mechanism -> observable behavior where appropriate. `Acceptance
+criteria` define observable completion conditions rather than an implementation
+checklist. `Required regressions` define concrete setup -> action -> expected
+outcome cases rather than vague requests to add tests.
 
 ## Ticket Identity and Hardening
 
