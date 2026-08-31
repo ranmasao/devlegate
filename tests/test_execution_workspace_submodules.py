@@ -14,8 +14,8 @@ def git(cwd, *args):
     )
 
 
-@pytest.fixture
-def linked_submodule_fixture(tmp_path, monkeypatch):
+@pytest.fixture(params=["dependency", "vendor/dependency"])
+def linked_submodule_fixture(tmp_path, monkeypatch, request):
     monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
     sub_remote = tmp_path / "submodule.git"
     sub_seed = tmp_path / "submodule-seed"
@@ -42,6 +42,7 @@ def linked_submodule_fixture(tmp_path, monkeypatch):
     (super_seed / "source.txt").write_text("project\n")
     git(super_seed, "add", ".")
     git(super_seed, "commit", "-m", "project")
+    dependency_path = request.param
     git(
         super_seed,
         "-c",
@@ -51,7 +52,7 @@ def linked_submodule_fixture(tmp_path, monkeypatch):
         "-b",
         "main",
         sub_remote,
-        "dependency",
+        dependency_path,
     )
     git(super_seed, "commit", "-am", "pin dependency")
     git(super_seed, "push", super_remote, "HEAD:main")
@@ -64,16 +65,16 @@ def linked_submodule_fixture(tmp_path, monkeypatch):
     base = git(product, "rev-parse", "HEAD").stdout.strip()
     root = tmp_path / "execution-state"
     manager = ExecutionWorkspaceManager(product, root, "T-1")
-    return manager, base, s1
+    return manager, base, s1, dependency_path
 
 
 def test_linked_execution_materializes_and_resumes_submodule(
     linked_submodule_fixture,
 ):
-    manager, base, s1 = linked_submodule_fixture
+    manager, base, s1, dependency_path = linked_submodule_fixture
 
     workspace = manager.prepare(base)
-    dependency = workspace.path / "dependency"
+    dependency = workspace.path / dependency_path
     assert git(dependency, "rev-parse", "HEAD").stdout.strip() == s1
     manager.verify_submodules(workspace)
 
@@ -83,9 +84,9 @@ def test_linked_execution_materializes_and_resumes_submodule(
 
 
 def test_dirty_submodule_is_preserved_and_rejected(linked_submodule_fixture):
-    manager, base, _s1 = linked_submodule_fixture
+    manager, base, _s1, dependency_path = linked_submodule_fixture
     workspace = manager.prepare(base)
-    dependency = workspace.path / "dependency"
+    dependency = workspace.path / dependency_path
     (dependency / "dependency.txt").write_text("unique evidence\n")
 
     with pytest.raises(ExecutionWorkspaceError, match="dirty"):
@@ -96,9 +97,9 @@ def test_dirty_submodule_is_preserved_and_rejected(linked_submodule_fixture):
 def test_wrong_submodule_head_is_preserved_and_rejected(
     linked_submodule_fixture,
 ):
-    manager, base, _s1 = linked_submodule_fixture
+    manager, base, _s1, dependency_path = linked_submodule_fixture
     workspace = manager.prepare(base)
-    dependency = workspace.path / "dependency"
+    dependency = workspace.path / dependency_path
     (dependency / "second.txt").write_text("S2\n")
     git(dependency, "config", "user.email", "test@example.com")
     git(dependency, "config", "user.name", "Test User")

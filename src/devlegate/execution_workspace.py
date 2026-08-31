@@ -224,7 +224,7 @@ class ExecutionWorkspaceManager:
 
     @staticmethod
     def _gitlink_paths(repo: Path) -> list[Path]:
-        result = _git(repo, "ls-tree", "-z", "HEAD")
+        result = _git(repo, "ls-tree", "-r", "-z", "HEAD")
         paths: list[Path] = []
         for entry in result.stdout.split("\0"):
             if not entry:
@@ -273,7 +273,7 @@ class ExecutionWorkspaceManager:
 
     @staticmethod
     def _expected_gitlink(repo: Path, path: Path) -> str:
-        output = _git(repo, "ls-tree", "-z", "HEAD").stdout
+        output = _git(repo, "ls-tree", "-r", "-z", "HEAD").stdout
         for entry in output.split("\0"):
             metadata, separator, name = entry.partition("\t")
             fields = metadata.split()
