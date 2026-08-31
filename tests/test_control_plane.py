@@ -623,6 +623,54 @@ def test_stale_failed_execution_remains_visible_but_not_retryable(
     assert devlegate._retry_candidates() == ()
 
 
+def test_clean_local_product_advance_invalidates_retry(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(_workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    (working / "local.txt").write_text("local advance\n")
+    git(working, "add", "local.txt")
+    git(working, "commit", "-m", "local advance")
+
+    snapshot = devlegate._collect_status_attempt(allow_workflow_blocked=True)
+    failure = snapshot.failed_executions[0]
+    assert not failure.retryable
+    assert "product HEAD changed" in (failure.nonretryable_reason or "")
+    assert devlegate._retry_candidates() == ()
+    with pytest.raises(DevlegateError, match="not currently retryable"):
+        devlegate.retry("T-1")
+    assert calls == 1
+
+
+def test_dirty_product_blocks_current_retryability(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    monkeypatch.setattr(
+        devlegate,
+        "_run_worker",
+        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+    )
+    assert devlegate.run_once() == 1
+    (working / "dirty.txt").write_text("uncommitted\n")
+
+    snapshot = devlegate._collect_status_attempt(allow_workflow_blocked=True)
+    failure = snapshot.failed_executions[0]
+    assert not failure.retryable
+    assert failure.nonretryable_reason == "code or control working tree is dirty"
+    assert devlegate._retry_candidates() == ()
+
+
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
 ):

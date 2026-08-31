@@ -1030,6 +1030,7 @@ class Devlegate:
                 isinstance(value.get(field), str)
                 for field in (
                     "execution_id",
+                    "product_head",
                     "remote_head",
                     "control_head",
                     "todo_fingerprint",
@@ -1591,6 +1592,8 @@ class Devlegate:
             },
         )
         if self._retry_ticket_id is not None:
+            if execution_plan.action != "run-worker" or execution_plan.bound:
+                raise DevlegateError(execution_plan.reason)
             retry_ticket = ticket_store.by_id.get(self._retry_ticket_id)
             if (
                 retry_ticket is None
@@ -1682,6 +1685,7 @@ class Devlegate:
                 if not isinstance(failed_for_ticket, dict) or any(
                     failed_for_ticket.get(field) != expected
                     for field, expected in (
+                        ("product_head", local_head),
                         ("remote_head", remote_head),
                         ("control_head", control_head),
                         ("todo_fingerprint", todo_fingerprint),
@@ -1864,6 +1868,7 @@ class Devlegate:
                 **failed_executions,
                 report.ticket_id: {
                     "execution_id": report.execution_id,
+                    "product_head": local_head,
                     "remote_head": remote_head,
                     "control_head": control_head,
                     "todo_fingerprint": todo_fingerprint,
@@ -2418,6 +2423,7 @@ export default tool({
         ticket_store: TicketStore,
         code: GitObservation,
         control: GitObservation | None,
+        admission_reason: str | None = None,
     ) -> tuple[FailedExecution, ...]:
         if not isinstance(failures, dict):
             return ()
@@ -2444,6 +2450,8 @@ export default tool({
                     invalid_reason = "ticket is no longer runnable"
                 elif control is None:
                     invalid_reason = "control worktree is unavailable"
+                elif metadata.get("product_head") != code.local_head:
+                    invalid_reason = "product HEAD changed since the failure"
                 elif metadata.get("control_head") != control.local_head:
                     invalid_reason = "control generation changed since the failure"
                 elif metadata.get("remote_head") != code.remote_head:
@@ -2461,6 +2469,8 @@ export default tool({
             if invalid_reason is None and report is not None:
                 if report.result.conclusion != "failed":
                     invalid_reason = "stored execution report is not failed"
+            if invalid_reason is None and admission_reason is not None:
+                invalid_reason = admission_reason
             evaluated.append(
                 FailedExecution(
                     ticket_id,
@@ -2591,10 +2601,6 @@ export default tool({
             for ticket in ticket_store.tickets
             if ticket.state == "accepted"
         )
-        failures = state.get("failed_executions", {})
-        failed_executions = self._evaluate_failed_executions(
-            failures, ticket_store, code, control
-        )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
             "agent_pending",
@@ -2612,6 +2618,15 @@ export default tool({
             and not control.detached
             and control.branch == self.control_branch,
             observation=git_observation,
+        )
+        admission_reason = (
+            None
+            if plan.action == "run-worker" and not plan.bound
+            else plan.reason
+        )
+        failures = state.get("failed_executions", {})
+        failed_executions = self._evaluate_failed_executions(
+            failures, ticket_store, code, control, admission_reason
         )
         next_ticket = (
             (

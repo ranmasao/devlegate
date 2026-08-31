@@ -558,3 +558,21 @@ def test_interactive_retry_rejects_invalid_selection_without_running(monkeypatch
     with pytest.raises(DevlegateError, match="invalid retry selection"):
         devlegate.retry()
     assert ran == []
+
+
+def test_failed_execution_state_requires_product_head():
+    state = {
+        "phase": "idle",
+        "failed_executions": {
+            "T-1": {
+                "execution_id": "attempt-1",
+                "remote_head": "remote",
+                "control_head": "control",
+                "todo_fingerprint": "todo",
+                "reason": "worker failed",
+            }
+        },
+    }
+
+    with pytest.raises(DevlegateError, match="failed execution metadata is invalid"):
+        Devlegate._validate_state_invariant(state)
