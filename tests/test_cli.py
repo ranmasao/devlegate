@@ -502,7 +502,7 @@ def test_retry_without_ticket_rejects_non_tty(monkeypatch, tmp_path):
         devlegate.retry()
 
 
-def test_interactive_retry_selects_only_requested_candidate(monkeypatch):
+def test_interactive_retry_selects_only_requested_candidate(monkeypatch, capsys):
     devlegate = object.__new__(Devlegate)
     candidates = (("T-1", "one", "first"), ("T-2", "two", "second"))
     selected = []
@@ -520,6 +520,9 @@ def test_interactive_retry_selects_only_requested_candidate(monkeypatch):
 
     assert devlegate.retry() == 0
     assert selected == ["T-2"]
+    output = capsys.readouterr().out
+    assert "1) T-1" in output
+    assert "2) T-2" in output
 
 
 def test_interactive_retry_requires_explicit_enter_for_single_candidate(monkeypatch):

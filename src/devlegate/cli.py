@@ -2893,7 +2893,7 @@ export default tool({
             print("Failed executions:")
             for index, (candidate_id, title, reason) in enumerate(candidates, 1):
                 marker = ">" if index == 1 else " "
-                print(f"{marker} {candidate_id}  {title}\n    {reason}")
+                print(f"{marker} {index}) {candidate_id}  {title}\n    {reason}")
             answer = input("Select number and press Enter (Enter retries first): ")
             if answer.strip():
                 try:

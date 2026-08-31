@@ -671,6 +671,88 @@ def test_dirty_product_blocks_current_retryability(tmp_path, monkeypatch):
     assert devlegate._retry_candidates() == ()
 
 
+@pytest.mark.parametrize(
+    ("barrier_state", "expected_action"),
+    (("review", "none"), ("accepted", "integrate")),
+)
+def test_retry_cannot_bypass_serial_barrier(
+    tmp_path, monkeypatch, barrier_state, expected_action
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(_workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    control = next((state / "worktrees").glob("*/control"))
+    (control / f"kanban/{barrier_state}/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Barrier"\n---\nbarrier\n'
+    )
+    git(control, "add", ".")
+    git(control, "commit", "-m", f"add {barrier_state} barrier")
+    metadata = dict(devlegate._state["failed_executions"]["T-1"])
+    metadata["control_head"] = git(control, "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "idle",
+        failed_executions={"T-1": metadata},
+    )
+
+    snapshot = devlegate._collect_status_attempt(allow_workflow_blocked=True)
+    assert snapshot.plan.action == expected_action
+    assert not snapshot.failed_executions[0].retryable
+    assert devlegate._retry_candidates() == ()
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="not currently retryable"):
+        devlegate.retry("T-1")
+    assert calls == 1
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert (control / f"kanban/{barrier_state}/T-2.md").exists()
+
+
+def test_retry_cannot_replace_persisted_bound_execution(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(_workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    persisted = dict(devlegate._state)
+    devlegate._save_state(
+        "agent_pending",
+        local_head=persisted["local_head"],
+        remote_head=persisted["remote_head"],
+        changed_paths=persisted["changed_paths"],
+        control_head=persisted["control_head"],
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=persisted["execution_base_head"],
+        execution_control_head=persisted["execution_control_head"],
+        execution_branch=persisted["execution_branch"],
+        execution_path=persisted["execution_path"],
+        execution_id=persisted["execution_id"],
+    )
+
+    with pytest.raises(DevlegateError, match="not currently retryable"):
+        devlegate.retry("T-1")
+    assert calls == 1
+    assert devlegate._state["phase"] == "agent_pending"
+
+
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
 ):
