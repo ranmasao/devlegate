@@ -195,6 +195,26 @@ def test_report_store_is_control_plane_only_and_never_overwrites(tmp_path):
     assert not (tmp_path / "control/kanban").exists()
 
 
+def test_report_store_lists_immutable_history(tmp_path):
+    store = ExecutionReportStore(tmp_path / "control")
+    failed = build_execution_report(
+        execution_id="attempt-1", ticket_id="T-1", code_base_head="code",
+        control_head="control", execution_branch="branch", execution_path="path",
+        workspace_head=None, run=run(process=7),
+    )
+    completed = build_execution_report(
+        execution_id="attempt-2", ticket_id="T-1", code_base_head="code",
+        control_head="control", execution_branch="branch", execution_path="path",
+        workspace_head="head", run=run(),
+    )
+
+    store.write(failed)
+    store.write(completed)
+
+    assert store.list("T-1") == (failed, completed)
+    assert store.read("T-1", "attempt-1") == failed
+
+
 def test_report_store_rejects_symlinked_control_worktree(tmp_path):
     real_control = tmp_path / "real-control"
     real_control.mkdir()

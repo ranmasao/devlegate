@@ -380,3 +380,32 @@ class ExecutionReportStore:
         if (report.ticket_id, report.execution_id) != (ticket_id, execution_id):
             raise ExecutionReportError("execution report identity does not match path")
         return report
+
+    def list(self, ticket_id: str | None = None) -> tuple[ExecutionReport, ...]:
+        """Read immutable reports in deterministic order."""
+        self._validate_roots()
+        roots = [self.root / ticket_id] if ticket_id is not None else sorted(
+            (path for path in self.root.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+        ) if self.root.is_dir() else []
+        reports: list[ExecutionReport] = []
+        for root in roots:
+            if root.is_symlink() or not root.is_dir():
+                raise ExecutionReportError(
+                    "execution report ticket directory is unsafe"
+                )
+            for path in sorted(root.glob("*.json"), key=lambda item: item.name):
+                if path.is_symlink() or not path.is_file():
+                    raise ExecutionReportError("execution report path is a symlink")
+                try:
+                    report = ExecutionReport.from_dict(json.loads(path.read_text()))
+                except (OSError, json.JSONDecodeError, ExecutionReportError) as error:
+                    raise ExecutionReportError(
+                        f"cannot read execution report: {path}"
+                    ) from error
+                if report.ticket_id != root.name or report.execution_id != path.stem:
+                    raise ExecutionReportError(
+                        "execution report identity does not match path"
+                    )
+                reports.append(report)
+        return tuple(reports)

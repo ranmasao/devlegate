@@ -399,6 +399,12 @@ def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
         captured.update(command=command, **kwargs)
         config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
         assert (config_dir / "tools/devlegate_report.ts").is_file()
+        config = json.loads((config_dir / "config.json").read_text())
+        assert config["$schema"] == "https://opencode.ai/config.json"
+        assert config["permission"]["external_directory"] == {
+            "*": "deny",
+            f"{tmp_path.resolve()}/**": "allow",
+        }
         assert (
             config_dir / "tools/devlegate_report.ts"
         ).read_text() != project_tool.read_text()
@@ -422,6 +428,39 @@ def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
     assert captured["env"]["WORKER_TEST_ENV"] == "preserved"
     assert os.environ["WORKER_TEST_ENV"] == "preserved"
     assert project_tool.read_text() == "export default 'project fake'\n"
+
+
+def test_worker_config_permission_is_bound_to_exact_workspace(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
+        captured["config"] = json.loads((config_dir / "config.json").read_text())
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        return FakeProcess(report())
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    devlegate = object.__new__(cli.Devlegate)
+    devlegate.opencode_bin = "opencode"
+    devlegate.opencode_model = "provider/model"
+    devlegate.opencode_agent = ""
+    workspace = ExecutionWorkspace(
+        "T-1", "branch", tmp_path / "ticket", "head", "base", False
+    )
+    workspace.path.mkdir()
+
+    result = devlegate._run_worker(workspace, "prompt")
+
+    assert result.claim is not None
+    permission = captured["config"]["permission"]["external_directory"]
+    assert permission["*"] == "deny"
+    assert permission[f"{workspace.path.resolve()}/**"] == "allow"
+    assert len(permission) == 2
+    assert captured["cwd"] == workspace.path.resolve()
+    assert captured["command"][3] == str(workspace.path.resolve())
+    assert f"{tmp_path.resolve()}/sibling/**" not in permission
+    assert f"{Path.home()}/**" not in permission
 
 
 @pytest.mark.parametrize("returncode", [0, 7])

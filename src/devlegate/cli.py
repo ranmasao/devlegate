@@ -130,6 +130,7 @@ class StatusSnapshot:
     accepted: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
     plan: ExecutionPlan
+    failed_executions: tuple[tuple[str, str, str], ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -174,6 +175,10 @@ class StatusSnapshot:
                 ),
             },
             "plan": self.plan.as_dict(),
+            "failed_executions": [
+                {"id": ticket_id, "title": title, "reason": reason}
+                for ticket_id, title, reason in self.failed_executions
+            ],
         }
 
 
@@ -522,6 +527,7 @@ class Devlegate:
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
         self._recovery_pending = False
+        self._retry_ticket_id: str | None = None
         state_default = (
             Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
             / "devlegate"
@@ -542,6 +548,7 @@ class Devlegate:
         self._workflow_blocker_fingerprint: str | None = None
         self._workflow_validation_succeeded = False
         self._recovery_pending = False
+        self._retry_ticket_id = None
         self._validate()
         self._state = self._load_state()
         self._recovery_pending = self._state.get("phase") in {
@@ -990,6 +997,23 @@ class Devlegate:
         }
         if phase not in valid_phases:
             raise DevlegateError(f"invalid state phase: {phase}")
+        failures = state.get("failed_executions", {})
+        if not isinstance(failures, dict) or not all(
+            isinstance(ticket_id, str)
+            and isinstance(value, dict)
+            and all(
+                isinstance(value.get(field), str)
+                for field in (
+                    "execution_id",
+                    "remote_head",
+                    "control_head",
+                    "todo_fingerprint",
+                    "reason",
+                )
+            )
+            for ticket_id, value in failures.items()
+        ):
+            raise DevlegateError("invalid state: failed execution metadata is invalid")
         if phase in {"idle", "recovery_failed"}:
             return
         if phase == "merge_pending":
@@ -1541,6 +1565,21 @@ class Devlegate:
                 ),
             },
         )
+        if self._retry_ticket_id is not None:
+            retry_ticket = ticket_store.by_id.get(self._retry_ticket_id)
+            if (
+                retry_ticket is None
+                or retry_ticket.state != "todo"
+                or retry_ticket not in ticket_store.runnable
+            ):
+                raise DevlegateError(
+                    f"ticket {self._retry_ticket_id} is no longer eligible for retry"
+                )
+            execution_plan = ExecutionPlan(
+                "run-worker", "explicit retry of current failed execution",
+                retry_ticket.id, retry_ticket.title, retry_ticket.state, False,
+                execution_plan.code, execution_plan.control,
+            )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
         if execution_plan.action == "integrate":
@@ -1610,9 +1649,48 @@ class Devlegate:
                 else:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
-            if generation_is_same and not pending_agent_execution:
+            failed = self._state.get("failed_executions", {})
+            failed_for_ticket = (
+                failed.get(selected_ticket.id) if isinstance(failed, dict) else None
+            )
+            if self._retry_ticket_id is not None:
+                if not isinstance(failed_for_ticket, dict) or any(
+                    failed_for_ticket.get(field) != expected
+                    for field, expected in (
+                        ("remote_head", remote_head),
+                        ("control_head", control_head),
+                        ("todo_fingerprint", todo_fingerprint),
+                    )
+                ):
+                    raise DevlegateError(
+                        f"ticket {self._retry_ticket_id} failed execution is stale; "
+                        "current project state must be reviewed before retry"
+                    )
+            if (
+                self._retry_ticket_id is None
+                and not pending_agent_execution
+                and isinstance(failed_for_ticket, dict)
+                and generation_is_same
+                and failed_for_ticket.get("execution_id")
+            ):
+                _log(
+                    f"execution failed for {selected_ticket.id}; automatic retry "
+                    "suppressed; explicit retry is required"
+                )
+                return 0
+            if (
+                generation_is_same
+                and not pending_agent_execution
+                and self._retry_ticket_id is None
+            ):
                 _log("no new work generation; unchanged todo is already handled")
                 return 0
+            if self._retry_ticket_id is not None:
+                if selected_ticket.id != self._retry_ticket_id:
+                    raise DevlegateError(
+                        f"ticket {self._retry_ticket_id} is no longer the current "
+                        "runnable ticket"
+                    )
             existing_lineage = (
                 self._state.get("execution_ticket_id") == selected_ticket.id
                 and isinstance(self._state.get("execution_base_head"), str)
@@ -1676,13 +1754,11 @@ class Devlegate:
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
             f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
         )
-        directive = (
-            WorkDirective.RECOVERY
-            if recovery
-            else WorkDirective.RESUME
-            if bound_execution
-            else WorkDirective.FRESH
-        )
+        directive = WorkDirective.RECOVERY if recovery else WorkDirective.FRESH
+        if bound_execution or (
+            self._retry_ticket_id is not None and workspace.head != workspace.base_head
+        ):
+            directive = WorkDirective.RESUME
         if execution_id is None:
             execution_id = self._state.get("execution_id")
         if not isinstance(execution_id, str) or not execution_id:
@@ -1755,6 +1831,26 @@ class Devlegate:
         todo_fingerprint, _todo_count = _todo_fingerprint(
             self.control_worktree, self.todo_path
         )
+        failed_executions = self._state.get("failed_executions", {})
+        if not isinstance(failed_executions, dict):
+            failed_executions = {}
+        if report.result.conclusion == "failed":
+            failed_executions = {
+                **failed_executions,
+                report.ticket_id: {
+                    "execution_id": report.execution_id,
+                    "remote_head": remote_head,
+                    "control_head": control_head,
+                    "todo_fingerprint": todo_fingerprint,
+                    "reason": report.result.reason,
+                },
+            }
+        else:
+            failed_executions = {
+                ticket_id: metadata
+                for ticket_id, metadata in failed_executions.items()
+                if ticket_id != report.ticket_id
+            }
         self._save_state(
             "idle",
             handled_remote_head=remote_head,
@@ -1762,6 +1858,7 @@ class Devlegate:
             handled_control_remote_head=control_head,
             handled_todo_fingerprint=todo_fingerprint,
             execution_control_head=control_head,
+            failed_executions=failed_executions,
         )
         _log(
             f"execution {report.result.conclusion}; lifecycle control HEAD "
@@ -2162,6 +2259,22 @@ export default tool({
 })
 '''
         )
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "$schema": "https://opencode.ai/config.json",
+                    "permission": {
+                        "external_directory": {
+                            "*": "deny",
+                            f"{execution_path}/**": "allow",
+                        }
+                    },
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n"
+        )
         environment = os.environ.copy()
         environment["PWD"] = str(execution_path)
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
@@ -2397,6 +2510,33 @@ export default tool({
             for ticket in ticket_store.tickets
             if ticket.state == "accepted"
         )
+        failed_executions: list[tuple[str, str, str]] = []
+        failures = state.get("failed_executions", {})
+        if isinstance(failures, dict) and control is not None:
+            todo_fingerprint, _ = _todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )
+            for ticket_id, metadata in sorted(failures.items()):
+                ticket = ticket_store.by_id.get(ticket_id)
+                if (
+                    isinstance(metadata, dict)
+                    and ticket is not None
+                    and ticket.state == "todo"
+                    and ticket in ticket_store.runnable
+                    and metadata.get("control_head") == control.local_head
+                    and metadata.get("remote_head") == code.remote_head
+                    and metadata.get("todo_fingerprint") == todo_fingerprint
+                ):
+                    try:
+                        report = ExecutionReportStore(self.control_worktree).read(
+                            ticket_id, str(metadata["execution_id"])
+                        )
+                    except (ExecutionReportError, KeyError):
+                        continue
+                    if report.result.conclusion == "failed":
+                        failed_executions.append(
+                            (ticket_id, ticket.title, str(metadata["reason"]))
+                        )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
             "agent_pending",
@@ -2439,6 +2579,7 @@ export default tool({
             accepted=accepted,
             next_ticket=next_ticket,
             plan=plan,
+            failed_executions=tuple(failed_executions),
         )
 
     def _make_execution_plan(
@@ -2590,6 +2731,13 @@ export default tool({
         )
         if not snapshot.runnable:
             lines.append("  none")
+        lines.append("Failed executions:")
+        lines.extend(
+            f"  {ticket_id}  execution: failed  retryable: yes  reason: {reason}"
+            for ticket_id, _title, reason in snapshot.failed_executions
+        )
+        if not snapshot.failed_executions:
+            lines.append("  none")
         lines.append("Blocked:")
         if snapshot.blocked:
             for ticket_id, title, blockers in snapshot.blocked:
@@ -2638,6 +2786,85 @@ export default tool({
         else:
             print(self._render_status_text(snapshot))
         return 1 if snapshot.plan.action == "blocked" else 0
+
+    def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
+        snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
+        if snapshot.control is None:
+            return ()
+        failures = self._state.get("failed_executions", {})
+        if not isinstance(failures, dict):
+            return ()
+        todo_fingerprint, _ = _todo_fingerprint(self.control_worktree, self.todo_path)
+        ticket_store = self._ticket_store()
+        candidates: list[tuple[str, str, str]] = []
+        for ticket_id, metadata in sorted(failures.items()):
+            ticket = ticket_store.by_id.get(ticket_id)
+            if (
+                not isinstance(metadata, dict)
+                or ticket is None
+                or ticket.state != "todo"
+                or ticket not in ticket_store.runnable
+                or metadata.get("control_head") != snapshot.control.local_head
+                or metadata.get("remote_head") != snapshot.code.remote_head
+                or metadata.get("todo_fingerprint") != todo_fingerprint
+            ):
+                continue
+            try:
+                report = ExecutionReportStore(self.control_worktree).read(
+                    ticket_id, str(metadata["execution_id"])
+                )
+            except (ExecutionReportError, KeyError):
+                continue
+            if report.result.conclusion == "failed":
+                candidates.append((ticket_id, ticket.title, str(metadata["reason"])))
+        return tuple(candidates)
+
+    def retry(self, ticket_id: str | None = None) -> int:
+        """Authorize exactly one fresh execution after current-state validation."""
+        if ticket_id is None:
+            try:
+                interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
+                    sys.stdout.fileno()
+                )
+            except (OSError, ValueError):
+                interactive = False
+            if not interactive:
+                raise DevlegateError(
+                    "interactive retry requires a terminal; specify a ticket ID:\n"
+                    "devlegate retry <ticket-id>"
+                )
+            candidates = self._retry_candidates()
+            if not candidates:
+                raise DevlegateError("no current failed executions are retryable")
+            print("Failed executions:")
+            for index, (candidate_id, title, reason) in enumerate(candidates, 1):
+                marker = ">" if index == 1 else " "
+                print(f"{marker} {candidate_id}  {title}\n    {reason}")
+            answer = input(
+                "Select number and press Enter (Enter retries first, Esc cancels): "
+            )
+            if answer == "\x1b":
+                return 0
+            if answer.strip():
+                try:
+                    index = int(answer)
+                    if not 1 <= index <= len(candidates):
+                        raise ValueError
+                except ValueError as error:
+                    raise DevlegateError("invalid retry selection") from error
+            else:
+                index = 1
+            ticket_id = candidates[index - 1][0]
+        candidates = self._retry_candidates()
+        candidate_ids = {candidate[0] for candidate in candidates}
+        if ticket_id not in candidate_ids:
+            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+        self._retry_ticket_id = ticket_id
+        try:
+            with self._lock():
+                return self.run_once()
+        finally:
+            self._retry_ticket_id = None
 
     def _agent_render_context(self) -> RenderContext:
         return RenderContext(
@@ -2899,7 +3126,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(
-        dest="command", metavar="{init,render,run,check,status,plan,control}"
+        dest="command", metavar="{init,render,run,retry,check,status,plan,control}"
     )
     init_parser = commands.add_parser(
         "init", help="initialize project-local protocol templates"
@@ -2947,6 +3174,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="render the plan as JSON"
     )
     plan_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    retry_parser = commands.add_parser(
+        "retry", help="explicitly retry a current failed execution"
+    )
+    retry_parser.add_argument("ticket_id", nargs="?", help="ticket ID to retry")
+    retry_parser.add_argument(
         "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     control_parser = commands.add_parser("control", help="manage control-plane state")
@@ -2998,6 +3232,8 @@ def main() -> int:
             return devlegate.plan(args.json)
         if args.command == "check":
             return devlegate.check()
+        if args.command == "retry":
+            return devlegate.retry(args.ticket_id)
         return devlegate.run(args.once)
     except KeyboardInterrupt:
         return 130

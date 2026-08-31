@@ -118,7 +118,11 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 0
-    assert "{init,render,run,check,status,plan,control}" in capsys.readouterr().out
+    assert (
+        "{init,render,run,retry,check,status,plan,control}"
+        in capsys.readouterr().out
+    )
+    assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
 
 
 def test_removed_top_level_forms_are_rejected(git_fixture):
@@ -485,3 +489,13 @@ def test_control_init_rejects_wrong_branch(git_fixture):
 def test_terminal_state_helpers_remain_importable():
     assert callable(Devlegate)
     assert issubclass(DevlegateError, Exception)
+
+
+def test_retry_without_ticket_rejects_non_tty(monkeypatch, tmp_path):
+    devlegate = object.__new__(Devlegate)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr(os, "isatty", lambda _fd: False)
+
+    with pytest.raises(DevlegateError, match="interactive retry requires a terminal"):
+        devlegate.retry()

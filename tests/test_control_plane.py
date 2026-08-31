@@ -560,6 +560,37 @@ def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
     assert accepted["ticket"]["id"] == "T-1"
 
 
+def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (workspace.path / "retry.txt").write_text("retried\n")
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            )
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    assert devlegate.run_once() == 0
+    assert calls == 1
+    assert devlegate.retry("T-1") == 0
+    assert calls == 2
+
+    control = next((state / "worktrees").glob("*/control"))
+    reports = list((control / "executions/T-1").glob("*.json"))
+    assert len(reports) == 2
+    assert (control / "kanban/review/T-1.md").exists()
+    assert not (control / "kanban/todo/T-1.md").exists()
+
+
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
 ):
