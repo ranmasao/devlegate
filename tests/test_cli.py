@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -499,3 +500,61 @@ def test_retry_without_ticket_rejects_non_tty(monkeypatch, tmp_path):
 
     with pytest.raises(DevlegateError, match="interactive retry requires a terminal"):
         devlegate.retry()
+
+
+def test_interactive_retry_selects_only_requested_candidate(monkeypatch):
+    devlegate = object.__new__(Devlegate)
+    candidates = (("T-1", "one", "first"), ("T-2", "two", "second"))
+    selected = []
+    monkeypatch.setattr(devlegate, "_retry_candidates", lambda: candidates)
+    monkeypatch.setattr(devlegate, "_lock", lambda: nullcontext())
+    monkeypatch.setattr(
+        devlegate,
+        "run_once",
+        lambda: selected.append(devlegate._retry_ticket_id) or 0,
+    )
+    monkeypatch.setattr(os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+    assert devlegate.retry() == 0
+    assert selected == ["T-2"]
+
+
+def test_interactive_retry_requires_explicit_enter_for_single_candidate(monkeypatch):
+    devlegate = object.__new__(Devlegate)
+    selected = []
+    monkeypatch.setattr(
+        devlegate, "_retry_candidates", lambda: (("T-1", "one", "first"),)
+    )
+    monkeypatch.setattr(devlegate, "_lock", lambda: nullcontext())
+    monkeypatch.setattr(
+        devlegate,
+        "run_once",
+        lambda: selected.append(devlegate._retry_ticket_id) or 0,
+    )
+    monkeypatch.setattr(os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert devlegate.retry() == 0
+    assert selected == ["T-1"]
+
+
+def test_interactive_retry_rejects_invalid_selection_without_running(monkeypatch):
+    devlegate = object.__new__(Devlegate)
+    ran = []
+    monkeypatch.setattr(
+        devlegate, "_retry_candidates", lambda: (("T-1", "one", "first"),)
+    )
+    monkeypatch.setattr(devlegate, "run_once", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "9")
+
+    with pytest.raises(DevlegateError, match="invalid retry selection"):
+        devlegate.retry()
+    assert ran == []

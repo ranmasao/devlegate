@@ -130,7 +130,7 @@ class StatusSnapshot:
     accepted: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
     plan: ExecutionPlan
-    failed_executions: tuple[tuple[str, str, str], ...] = ()
+    failed_executions: tuple["FailedExecution", ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -176,9 +176,34 @@ class StatusSnapshot:
             },
             "plan": self.plan.as_dict(),
             "failed_executions": [
-                {"id": ticket_id, "title": title, "reason": reason}
-                for ticket_id, title, reason in self.failed_executions
+                failure.as_dict() for failure in self.failed_executions
             ],
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class FailedExecution:
+    ticket_id: str
+    title: str
+    reason: str
+    retryable: bool
+    nonretryable_reason: str | None = None
+
+    @property
+    def display_reason(self) -> str:
+        return (
+            self.reason
+            if self.retryable
+            else (self.nonretryable_reason or "unknown")
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.ticket_id,
+            "title": self.title,
+            "reason": self.reason,
+            "retryable": self.retryable,
+            "nonretryable_reason": self.nonretryable_reason,
         }
 
 
@@ -2259,25 +2284,21 @@ export default tool({
 })
 '''
         )
-        (config_dir / "config.json").write_text(
-            json.dumps(
-                {
-                    "$schema": "https://opencode.ai/config.json",
-                    "permission": {
-                        "external_directory": {
-                            "*": "deny",
-                            f"{execution_path}/**": "allow",
-                        }
-                    },
-                },
-                sort_keys=True,
-                indent=2,
-            )
-            + "\n"
-        )
+        config = {
+            "$schema": "https://opencode.ai/config.json",
+            "permission": {
+                "external_directory": {
+                    "*": "deny",
+                    f"{execution_path}/**": "allow",
+                }
+            },
+        }
         environment = os.environ.copy()
         environment["PWD"] = str(execution_path)
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
+        environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+            config, sort_keys=True
+        )
         try:
             opencode_result = _run_opencode(
                 command,
@@ -2390,6 +2411,66 @@ export default tool({
             "code": self._git_observation(self.repo, self.remote_branch),
             "control": control,
         }
+
+    def _evaluate_failed_executions(
+        self,
+        failures: object,
+        ticket_store: TicketStore,
+        code: GitObservation,
+        control: GitObservation | None,
+    ) -> tuple[FailedExecution, ...]:
+        if not isinstance(failures, dict):
+            return ()
+        todo_fingerprint = (
+            _todo_fingerprint(self.control_worktree, self.todo_path)[0]
+            if control is not None
+            else None
+        )
+        evaluated: list[FailedExecution] = []
+        for ticket_id, metadata in sorted(failures.items()):
+            if not isinstance(ticket_id, str) or not isinstance(metadata, dict):
+                continue
+            ticket = ticket_store.by_id.get(ticket_id)
+            reason = str(metadata.get("reason", "unknown failure"))
+            invalid_reason: str | None = None
+            if ticket is None:
+                invalid_reason = "ticket is no longer present"
+                title = ticket_id
+            else:
+                title = ticket.title
+                if ticket.state != "todo":
+                    invalid_reason = f"ticket is no longer todo ({ticket.state})"
+                elif ticket not in ticket_store.runnable:
+                    invalid_reason = "ticket is no longer runnable"
+                elif control is None:
+                    invalid_reason = "control worktree is unavailable"
+                elif metadata.get("control_head") != control.local_head:
+                    invalid_reason = "control generation changed since the failure"
+                elif metadata.get("remote_head") != code.remote_head:
+                    invalid_reason = "product generation changed since the failure"
+                elif metadata.get("todo_fingerprint") != todo_fingerprint:
+                    invalid_reason = "todo workflow changed since the failure"
+            report = None
+            if invalid_reason is None:
+                try:
+                    report = ExecutionReportStore(self.control_worktree).read(
+                        ticket_id, str(metadata["execution_id"])
+                    )
+                except (ExecutionReportError, KeyError):
+                    invalid_reason = "failed execution report is unavailable"
+            if invalid_reason is None and report is not None:
+                if report.result.conclusion != "failed":
+                    invalid_reason = "stored execution report is not failed"
+            evaluated.append(
+                FailedExecution(
+                    ticket_id,
+                    title,
+                    reason,
+                    invalid_reason is None,
+                    invalid_reason,
+                )
+            )
+        return tuple(evaluated)
 
     def _collect_status_attempt(
         self, *, allow_workflow_blocked: bool = False
@@ -2510,33 +2591,10 @@ export default tool({
             for ticket in ticket_store.tickets
             if ticket.state == "accepted"
         )
-        failed_executions: list[tuple[str, str, str]] = []
         failures = state.get("failed_executions", {})
-        if isinstance(failures, dict) and control is not None:
-            todo_fingerprint, _ = _todo_fingerprint(
-                self.control_worktree, self.todo_path
-            )
-            for ticket_id, metadata in sorted(failures.items()):
-                ticket = ticket_store.by_id.get(ticket_id)
-                if (
-                    isinstance(metadata, dict)
-                    and ticket is not None
-                    and ticket.state == "todo"
-                    and ticket in ticket_store.runnable
-                    and metadata.get("control_head") == control.local_head
-                    and metadata.get("remote_head") == code.remote_head
-                    and metadata.get("todo_fingerprint") == todo_fingerprint
-                ):
-                    try:
-                        report = ExecutionReportStore(self.control_worktree).read(
-                            ticket_id, str(metadata["execution_id"])
-                        )
-                    except (ExecutionReportError, KeyError):
-                        continue
-                    if report.result.conclusion == "failed":
-                        failed_executions.append(
-                            (ticket_id, ticket.title, str(metadata["reason"]))
-                        )
+        failed_executions = self._evaluate_failed_executions(
+            failures, ticket_store, code, control
+        )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
             "agent_pending",
@@ -2579,7 +2637,7 @@ export default tool({
             accepted=accepted,
             next_ticket=next_ticket,
             plan=plan,
-            failed_executions=tuple(failed_executions),
+            failed_executions=failed_executions,
         )
 
     def _make_execution_plan(
@@ -2733,8 +2791,13 @@ export default tool({
             lines.append("  none")
         lines.append("Failed executions:")
         lines.extend(
-            f"  {ticket_id}  execution: failed  retryable: yes  reason: {reason}"
-            for ticket_id, _title, reason in snapshot.failed_executions
+            (
+                f"  {failure.ticket_id}  execution: failed  "
+                f"retryable: {'yes' if failure.retryable else 'no'}  "
+                "reason: "
+                f"{failure.display_reason}"
+            )
+            for failure in snapshot.failed_executions
         )
         if not snapshot.failed_executions:
             lines.append("  none")
@@ -2789,34 +2852,10 @@ export default tool({
 
     def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
         snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
-        if snapshot.control is None:
-            return ()
-        failures = self._state.get("failed_executions", {})
-        if not isinstance(failures, dict):
-            return ()
-        todo_fingerprint, _ = _todo_fingerprint(self.control_worktree, self.todo_path)
-        ticket_store = self._ticket_store()
         candidates: list[tuple[str, str, str]] = []
-        for ticket_id, metadata in sorted(failures.items()):
-            ticket = ticket_store.by_id.get(ticket_id)
-            if (
-                not isinstance(metadata, dict)
-                or ticket is None
-                or ticket.state != "todo"
-                or ticket not in ticket_store.runnable
-                or metadata.get("control_head") != snapshot.control.local_head
-                or metadata.get("remote_head") != snapshot.code.remote_head
-                or metadata.get("todo_fingerprint") != todo_fingerprint
-            ):
-                continue
-            try:
-                report = ExecutionReportStore(self.control_worktree).read(
-                    ticket_id, str(metadata["execution_id"])
-                )
-            except (ExecutionReportError, KeyError):
-                continue
-            if report.result.conclusion == "failed":
-                candidates.append((ticket_id, ticket.title, str(metadata["reason"])))
+        for failure in snapshot.failed_executions:
+            if failure.retryable:
+                candidates.append((failure.ticket_id, failure.title, failure.reason))
         return tuple(candidates)
 
     def retry(self, ticket_id: str | None = None) -> int:
@@ -2840,11 +2879,7 @@ export default tool({
             for index, (candidate_id, title, reason) in enumerate(candidates, 1):
                 marker = ">" if index == 1 else " "
                 print(f"{marker} {candidate_id}  {title}\n    {reason}")
-            answer = input(
-                "Select number and press Enter (Enter retries first, Esc cancels): "
-            )
-            if answer == "\x1b":
-                return 0
+            answer = input("Select number and press Enter (Enter retries first): ")
             if answer.strip():
                 try:
                     index = int(answer)

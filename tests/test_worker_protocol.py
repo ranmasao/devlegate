@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -399,7 +400,7 @@ def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
         captured.update(command=command, **kwargs)
         config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
         assert (config_dir / "tools/devlegate_report.ts").is_file()
-        config = json.loads((config_dir / "config.json").read_text())
+        config = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
         assert config["$schema"] == "https://opencode.ai/config.json"
         assert config["permission"]["external_directory"] == {
             "*": "deny",
@@ -434,8 +435,7 @@ def test_worker_config_permission_is_bound_to_exact_workspace(tmp_path, monkeypa
     captured = {}
 
     def fake_popen(command, **kwargs):
-        config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
-        captured["config"] = json.loads((config_dir / "config.json").read_text())
+        captured["config"] = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
         captured["command"] = command
         captured["cwd"] = kwargs["cwd"]
         return FakeProcess(report())
@@ -461,6 +461,36 @@ def test_worker_config_permission_is_bound_to_exact_workspace(tmp_path, monkeypa
     assert captured["command"][3] == str(workspace.path.resolve())
     assert f"{tmp_path.resolve()}/sibling/**" not in permission
     assert f"{Path.home()}/**" not in permission
+
+
+def test_opencode_consumes_inline_worker_config(tmp_path):
+    opencode = shutil.which("opencode")
+    if opencode is None:
+        pytest.skip("opencode is not installed")
+    workspace = (tmp_path / "ticket").resolve()
+    workspace.mkdir()
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {
+                "*": "deny",
+                f"{workspace}/**": "allow",
+            }
+        },
+    }
+    result = subprocess.run(
+        [opencode, "debug", "config"],
+        cwd=workspace,
+        env={**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    resolved = json.loads(result.stdout)
+    assert resolved["permission"]["external_directory"] == config["permission"][
+        "external_directory"
+    ]
 
 
 @pytest.mark.parametrize("returncode", [0, 7])

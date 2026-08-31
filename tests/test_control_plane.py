@@ -591,6 +591,38 @@ def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypat
     assert not (control / "kanban/todo/T-1.md").exists()
 
 
+def test_stale_failed_execution_remains_visible_but_not_retryable(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    monkeypatch.setattr(
+        devlegate,
+        "_run_worker",
+        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+    )
+    assert devlegate.run_once() == 1
+
+    current = devlegate._collect_status_attempt(allow_workflow_blocked=True)
+    assert current.failed_executions[0].retryable
+
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Changed"\n---\nwork\n'
+    )
+    stale = devlegate._collect_status_attempt(allow_workflow_blocked=True)
+    assert len(stale.failed_executions) == 1
+    assert not stale.failed_executions[0].retryable
+    assert "todo workflow changed" in (
+        stale.failed_executions[0].nonretryable_reason or ""
+    )
+    assert "execution: failed  retryable: no" in devlegate._render_status_text(stale)
+    assert stale.as_dict()["failed_executions"][0]["retryable"] is False
+    assert devlegate._retry_candidates() == ()
+
+
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
 ):
