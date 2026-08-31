@@ -127,6 +127,7 @@ class StatusSnapshot:
     runnable: tuple[tuple[str, str], ...]
     blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
     review: tuple[tuple[str, str], ...]
+    accepted: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
     plan: ExecutionPlan
 
@@ -162,6 +163,10 @@ class StatusSnapshot:
                     {"id": ticket_id, "title": title}
                     for ticket_id, title in self.review
                 ],
+                "accepted": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.accepted
+                ],
                 "next": (
                     {"id": self.next_ticket[0], "title": self.next_ticket[1]}
                     if self.next_ticket is not None
@@ -174,7 +179,7 @@ class StatusSnapshot:
 
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
-    for state in ("backlog", "todo", "review", "done"):
+    for state in ("backlog", "todo", "review", "accepted", "done"):
         directory = repo / workflow_paths[state]
         if directory.is_dir():
             entries.append(f"{state}\0dir\n")
@@ -509,6 +514,7 @@ class Devlegate:
         self.backlog_path = setting("BACKLOG_PATH", "kanban/backlog")
         self.todo_path = setting("TODO_PATH", "kanban/todo")
         self.review_path = setting("REVIEW_PATH", "kanban/review")
+        self.accepted_path = setting("ACCEPTED_PATH", "kanban/accepted")
         self.done_path = setting("DONE_PATH", "kanban/done")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
@@ -548,6 +554,7 @@ class Devlegate:
             "backlog": self.backlog_path,
             "todo": self.todo_path,
             "review": self.review_path,
+            "accepted": self.accepted_path,
             "done": self.done_path,
         }
 
@@ -778,6 +785,12 @@ class Devlegate:
                 )
             if branch.returncode or branch.stdout.strip() != self.control_branch:
                 raise DevlegateError("existing control worktree is on the wrong branch")
+            for state, configured_path in self._workflow_paths().items():
+                if not (self.control_worktree / configured_path).is_dir():
+                    raise DevlegateError(
+                        f"managed workflow directory is unavailable: "
+                        f"{self.control_worktree / configured_path} ({state})"
+                    )
             local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
             remote_head = remote.stdout.strip()
             if (
@@ -1530,6 +1543,28 @@ class Devlegate:
         )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
+        if execution_plan.action == "integrate":
+            assert execution_plan.ticket_id is not None
+            try:
+                control_head = self._integrate_accepted(
+                    execution_plan.ticket_id,
+                    execution_plan.code,
+                    execution_plan.control,
+                )
+            except (DevlegateError, OSError, ExecutionReportError) as error:
+                raise DevlegateError(f"accepted integration failed: {error}") from error
+            todo_fingerprint, _todo_count = _todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )
+            self._save_state(
+                "idle",
+                handled_remote_head=remote_head,
+                handled_control_head=control_head,
+                handled_control_remote_head=control_head,
+                handled_todo_fingerprint=todo_fingerprint,
+            )
+            _log(f"accepted ticket {execution_plan.ticket_id} integrated")
+            return 0
         if execution_plan.action == "none" and not recovery:
             selected_ticket = None
         else:
@@ -1840,6 +1875,192 @@ class Devlegate:
         fields = remote.stdout.split()
         return fields[0] if fields else None
 
+    def _accepted_checkpoint(self, ticket_id: str) -> str:
+        root = self.control_worktree / "executions" / ticket_id
+        if not root.is_dir() or root.is_symlink():
+            raise WorkflowBlockedError(
+                f"accepted ticket {ticket_id} has no durable execution evidence"
+            )
+        reports: list[ExecutionReport] = []
+        for path in sorted(root.glob("*.json")):
+            if path.is_symlink() or not path.is_file():
+                raise WorkflowBlockedError("accepted execution evidence is unsafe")
+            try:
+                report = ExecutionReport.from_dict(json.loads(path.read_text()))
+            except (OSError, json.JSONDecodeError, ExecutionReportError) as error:
+                raise WorkflowBlockedError(
+                    f"malformed execution evidence for accepted ticket {ticket_id}"
+                ) from error
+            if (
+                report.ticket_id == ticket_id
+                and report.result.conclusion == "completed"
+            ):
+                reports.append(report)
+        expected_branch = f"devlegate/work/{ticket_id}"
+        remote_head = self._execution_remote_head(expected_branch)
+        matches = [
+            report for report in reports
+            if report.execution_branch == expected_branch
+            and isinstance(report.workspace_head, str)
+            and report.workspace_head == remote_head
+        ]
+        if remote_head is None or len(matches) != 1:
+            raise WorkflowBlockedError(
+                f"accepted ticket {ticket_id} has ambiguous or missing completed "
+                "execution evidence"
+            )
+        checkpoint = matches[0].workspace_head
+        assert checkpoint is not None
+        if not all(
+            len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+            for value in (
+                checkpoint,
+                matches[0].code_base_head,
+                matches[0].control_head,
+            )
+        ):
+            raise WorkflowBlockedError(
+                "accepted execution evidence has invalid Git identity"
+            )
+        return checkpoint
+
+    def _integrate_accepted(
+        self,
+        ticket_id: str,
+        code: GitObservation | None,
+        control: GitObservation | None,
+    ) -> str:
+        if code is None or control is None:
+            raise WorkflowBlockedError("accepted integration lacks Git observations")
+        self._validate_control_worktree()
+        if not code.working_tree_clean or not control.working_tree_clean:
+            raise WorkflowBlockedError("product or control working tree is dirty")
+        checkpoint = self._accepted_checkpoint(ticket_id)
+        product_ref = f"refs/heads/{self.remote_branch}"
+        observed = _git(
+            self.repo, "ls-remote", self.remote_name, product_ref, check=False
+        )
+        if observed.returncode:
+            raise DevlegateError(
+                observed.stderr.strip() or "cannot observe product branch"
+            )
+        fields = observed.stdout.split()
+        if not fields:
+            raise WorkflowBlockedError("configured product branch is unavailable")
+        product_head = fields[0]
+        def is_ancestor(older: str, newer: str) -> bool:
+            return (
+                _git(
+                    self.repo,
+                    "merge-base",
+                    "--is-ancestor",
+                    older,
+                    newer,
+                    check=False,
+                ).returncode
+                == 0
+            )
+
+        if product_head == checkpoint or is_ancestor(checkpoint, product_head):
+            pass
+        elif is_ancestor(product_head, checkpoint):
+            pushed = _git(
+                self.repo,
+                "push",
+                self.remote_name,
+                f"{checkpoint}:{product_ref}",
+                check=False,
+            )
+            if pushed.returncode:
+                raise DevlegateError(
+                    pushed.stderr.strip() or "product fast-forward push failed"
+                )
+        else:
+            raise WorkflowBlockedError(
+                "product history diverged from accepted checkpoint; v0.4 does not "
+                "rebase or merge"
+            )
+        reobserved = _git(
+            self.repo, "ls-remote", self.remote_name, product_ref, check=False
+        )
+        observed_fields = reobserved.stdout.split()
+        if (
+            reobserved.returncode
+            or not observed_fields
+            or (
+                observed_fields[0] != checkpoint
+                and not is_ancestor(checkpoint, observed_fields[0])
+            )
+        ):
+            raise WorkflowBlockedError(
+                "published product checkpoint could not be proven"
+            )
+        current = _git(self.repo, "rev-parse", "HEAD", check=False)
+        status = _git(self.repo, "status", "--porcelain", check=False)
+        if current.returncode or status.returncode or status.stdout:
+            raise WorkflowBlockedError(
+                "product checkout is not safely synchronized"
+            )
+        if current.stdout.strip() != checkpoint:
+            fetch = _git(
+                self.repo,
+                "fetch",
+                self.remote_name,
+                self.remote_branch,
+                check=False,
+            )
+            if fetch.returncode:
+                raise WorkflowBlockedError("cannot refresh published product branch")
+            sync = _git(
+                self.repo,
+                "merge",
+                "--ff-only",
+                f"{self.remote_name}/{self.remote_branch}",
+                check=False,
+            )
+            if sync.returncode:
+                raise WorkflowBlockedError(
+                    "product checkout cannot be fast-forwarded safely"
+                )
+        return self._complete_accepted(ticket_id, control.local_head)
+
+    def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
+        current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if current != expected_head:
+            raise WorkflowBlockedError(
+                "control HEAD changed during accepted integration"
+            )
+        store = load_ticket_store(self.control_worktree, self._workflow_paths())
+        ticket = store.by_id.get(ticket_id)
+        if ticket is None or ticket.state != "accepted":
+            raise WorkflowBlockedError("accepted ticket changed during integration")
+        target = self.control_worktree / self.done_path / f"{ticket_id}.md"
+        ticket.path.rename(target)
+        _git(self.control_worktree, "add", "-A")
+        commit = _git(
+            self.control_worktree,
+            "commit",
+            "-m",
+            f"Devlegate integrate {ticket_id}",
+            check=False,
+        )
+        if commit.returncode:
+            raise DevlegateError(
+                commit.stderr.strip() or "cannot create control transition"
+            )
+        push = _git(
+            self.control_worktree,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if push.returncode:
+            raise DevlegateError(
+                push.stderr.strip() or "cannot publish control transition"
+            )
+        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
     def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
         self._validate_control_worktree()
         status = _git(self.control_worktree, "status", "--porcelain").stdout
@@ -2127,11 +2348,12 @@ export default tool({
                 control=control,
                 counts=tuple(
                     (state_name, 0)
-                    for state_name in ("backlog", "todo", "review", "done")
+                    for state_name in ("backlog", "todo", "review", "accepted", "done")
                 ),
                 runnable=(),
                 blocked=(),
                 review=(),
+                accepted=(),
                 next_ticket=None,
                 plan=ExecutionPlan(
                     "blocked",
@@ -2145,7 +2367,7 @@ export default tool({
                 state_name,
                 sum(ticket.state == state_name for ticket in ticket_store.tickets),
             )
-            for state_name in ("backlog", "todo", "review", "done")
+            for state_name in ("backlog", "todo", "review", "accepted", "done")
         )
         runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
         blocked = tuple(
@@ -2169,6 +2391,11 @@ export default tool({
             (ticket.id, ticket.title)
             for ticket in ticket_store.tickets
             if ticket.state == "review"
+        )
+        accepted = tuple(
+            (ticket.id, ticket.title)
+            for ticket in ticket_store.tickets
+            if ticket.state == "accepted"
         )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
@@ -2209,6 +2436,7 @@ export default tool({
             runnable=runnable,
             blocked=blocked,
             review=review,
+            accepted=accepted,
             next_ticket=next_ticket,
             plan=plan,
         )
@@ -2244,6 +2472,17 @@ export default tool({
         identity = {"code": code, "control": control}
         if blocked:
             return ExecutionPlan("blocked", reason, **identity)
+        boundary = tuple(
+            ticket
+            for ticket in ticket_store.tickets
+            if ticket.state in {"review", "accepted"}
+        )
+        if len(boundary) > 1:
+            return ExecutionPlan(
+                "blocked",
+                "multiple tickets occupy the review/accepted serial boundary",
+                **identity,
+            )
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
@@ -2278,6 +2517,17 @@ export default tool({
                 ticket.state,
                 True,
                 **identity,
+            )
+        if boundary:
+            ticket = boundary[0]
+            if ticket.state == "review":
+                return ExecutionPlan(
+                    "none", f"waiting for review: {ticket.id}", ticket.id,
+                    ticket.title, ticket.state, False, **identity
+                )
+            return ExecutionPlan(
+                "integrate", f"accepted, ready for integration: {ticket.id}",
+                ticket.id, ticket.title, ticket.state, False, **identity
             )
         selected = ticket_store.selected()
         if selected is None:
@@ -2354,6 +2604,12 @@ export default tool({
         lines.extend(f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review)
         if not snapshot.review:
             lines.append("  none")
+        lines.append("Accepted:")
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.accepted
+        )
+        if not snapshot.accepted:
+            lines.append("  none")
         lines.extend(
             [
                 "Next:",
@@ -2389,6 +2645,7 @@ export default tool({
             backlog_path=self.backlog_path,
             todo_path=self.todo_path,
             review_path=self.review_path,
+            accepted_path=self.accepted_path,
             done_path=self.done_path,
             product_branch=self.remote_branch,
         )
@@ -2607,10 +2864,10 @@ export default tool({
         if ticket_store is not None:
             counts = {
                 state: sum(ticket.state == state for ticket in ticket_store.tickets)
-                for state in ("backlog", "todo", "review", "done")
+                for state in ("backlog", "todo", "review", "accepted", "done")
             }
             print("Ticket storage:")
-            for state in ("backlog", "todo", "review", "done"):
+            for state in ("backlog", "todo", "review", "accepted", "done"):
                 print(f"  {state}: {counts[state]}")
             print(f"Runnable tickets: {len(ticket_store.runnable)}")
             selected = ticket_store.selected()

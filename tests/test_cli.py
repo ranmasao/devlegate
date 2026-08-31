@@ -43,7 +43,7 @@ def git_fixture(tmp_path):
     git(seed, "push", "-u", "origin", "main")
 
     git(seed, "switch", "--orphan", "devlegate/control")
-    for name in ("backlog", "todo", "review", "done"):
+    for name in ("backlog", "todo", "review", "accepted", "done"):
         (seed / "kanban" / name).mkdir(parents=True)
         (seed / "kanban" / name / ".gitkeep").touch()
     git(seed, "add", ".")

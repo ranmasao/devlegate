@@ -33,14 +33,14 @@ create T-H1, T-fix, or another replacement ticket for ordinary hardening.
 
 ## Accepted Review
 
-This project workflow does not define automatic final integration or review-to-done
-admission. Do not automatically move review to done, manually merge the
-implementation branch as normal review protocol, or assume acceptance means
-integration. Report accepted evidence to the human/operator process.
+If the exact checkpoint passes review, move the SAME ticket from
+`{{ workflow.review_path }}/T.md` to `{{ workflow.accepted_path }}/T.md`.
+Preserve its ID and specification. This submits it for Devlegate-owned integration;
+accepted does not mean integrated or done.
 
 ## Prohibitions
 
 Reviewer MUST NOT edit execution evidence, rewrite execution branch history, ask
-workers to commit or push, mark unintegrated implementation done, treat WorkerClaim
-as authoritative validation, or create a new hardening ticket for ordinary review
-failure.
+workers to commit or push, merge or rebase product code, mark unintegrated
+implementation done, treat WorkerClaim as authoritative validation, or create a new
+hardening ticket for ordinary review failure.

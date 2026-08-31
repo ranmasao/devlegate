@@ -44,7 +44,7 @@ def control_fixture(tmp_path):
     git(seed, "push", "-u", "origin", "main")
     git(seed, "switch", "--orphan", "devlegate/control")
     (seed / "product.txt").unlink(missing_ok=True)
-    for state in ("backlog", "todo", "review", "done"):
+    for state in ("backlog", "todo", "review", "accepted", "done"):
         (seed / "kanban" / state).mkdir(parents=True)
         (seed / "kanban" / state / ".gitkeep").touch()
     (seed / "kanban/todo/T-1.md").write_text(
@@ -88,6 +88,7 @@ def fresh_control_fixture(tmp_path):
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "BACKLOG_PATH=workflow/backlog\nTODO_PATH=workflow/todo\n"
         "REVIEW_PATH=workflow/review\nDONE_PATH=workflow/done\n"
+        "ACCEPTED_PATH=workflow/accepted\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
         f"STATE_DIR={state}\n"
     )
@@ -139,7 +140,7 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
         "devlegate/control"
     )
     assert len(git(control, "rev-list", "--parents", "-n1", "HEAD").stdout.split()) == 1
-    for state_name in ("backlog", "todo", "review", "done"):
+    for state_name in ("backlog", "todo", "review", "accepted", "done"):
         assert (control / "workflow" / state_name / ".gitkeep").is_file()
     assert not (working / "workflow").exists()
     assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
@@ -499,6 +500,64 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
         working, "rev-parse", "origin/main"
     ).stdout.strip()
     assert not (working / "implementation.txt").exists()
+
+
+def test_accepted_ticket_is_fast_forward_integrated_and_completed(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 0
+    control = next((state / "worktrees").glob("*/control"))
+    review = control / "kanban/review/T-1.md"
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept implementation")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    assert devlegate.run_once() == 0
+
+    assert (working / "implementation.txt").is_file()
+    assert not (control / "kanban/accepted/T-1.md").exists()
+    assert (control / "kanban/done/T-1.md").is_file()
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == git(
+        working, "rev-parse", "origin/main"
+    ).stdout.strip()
+
+
+def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
+    )
+    (control / "kanban/todo/T-1.md").rename(control / "kanban/review/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "send ticket to review")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    review = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    assert review["action"] == "none"
+    assert "waiting for review" in review["reason"]
+
+    (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    accepted = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    assert accepted["action"] == "integrate"
+    assert accepted["ticket"]["id"] == "T-1"
 
 
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(

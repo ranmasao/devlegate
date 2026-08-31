@@ -4,7 +4,10 @@ import pytest
 
 from devlegate.tickets import TicketError, load_ticket_store
 
-PATHS = {state: f"kanban/{state}" for state in ("backlog", "todo", "review", "done")}
+PATHS = {
+    state: f"kanban/{state}"
+    for state in ("backlog", "todo", "review", "accepted", "done")
+}
 
 
 def write_ticket(

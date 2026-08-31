@@ -12,6 +12,7 @@ workflow. Use these paths exactly:
 - backlog: `{{ workflow.backlog_path }}`
 - todo: `{{ workflow.todo_path }}`
 - review: `{{ workflow.review_path }}`
+- accepted: `{{ workflow.accepted_path }}`
 - done: `{{ workflow.done_path }}`
 
 Execution evidence lives under `executions/<ticket-id>/<execution-id>.json`.
@@ -31,7 +32,7 @@ Every implementation ticket MUST define these sections:
 Describe required behavior as cause -> mechanism -> observable behavior where
 appropriate. Preserve the supported frontmatter contract: `type`, `title`, and
 optional `depends_on`. Do not invent metadata. Dependencies are satisfied only by
-`done`; `review` does not satisfy dependencies.
+`done`; `review` and `accepted` do not satisfy dependencies.
 
 ## Ticket Identity and Hardening
 
@@ -51,6 +52,7 @@ execution evidence, or integrate product branches.
 
 ## Integration Limit
 
-Completed worker execution is ready for review. It does NOT mean accepted, done,
-or integrated into the product branch. Automatic review acceptance and final
-integration are not available in this project workflow.
+Completed worker execution is ready for review. `accepted` means review passed and
+Devlegate is waiting to integrate the exact checkpoint. `done` means that checkpoint
+is present in published product history. Devlegate owns integration; do not rebase,
+merge, or resolve conflicts automatically.

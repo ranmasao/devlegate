@@ -36,7 +36,7 @@ def test_init_seeds_templates_manifest_and_natural_targets(tmp_path):
     assert "`main`" not in reviewer.read_text()
     assert not (tmp_path / ".devlegate/generated").exists()
     for content in (architect.read_text(), reviewer.read_text()):
-        assert "Devlegate" not in content
+        assert "GENERATED FILE" in content
         assert ".env" not in content
         assert ".devlegate" not in content
 
