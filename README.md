@@ -45,9 +45,19 @@ remains runtime configuration and agents must not read it. Templates stay under
 edited directly. These commands do not attach the control worktree or mutate
 workflow state, and they perform no Git admission.
 
+`devlegate init` also creates an incomplete `.devlegate/project.md` skeleton when
+absent; it never guesses project documentation paths. Populate its NanoYAML `common`,
+`architect`, and `reviewer` routes before `check`. Existing project-owned files are
+preserved. The distribution-only `preinst_readme.md` documents setup and ownership;
+it is never copied or rendered into a target project.
+
 Rendered skills are materialized at the targets declared by
 `.devlegate/templates/artifacts.toml`; `.devlegate/generated` is obsolete and is
 not created, used, or automatically deleted.
+
+Project context is routed by reference, so editing a referenced document does not
+require `devlegate render`. Current project documents remain the project's current
+truth; Git history is historical, and Devlegate does not maintain a semantic copy.
 
 The default `run` mode is a foreground polling loop. Use `run --once` for one synchronization/execution pass. `check` validates setup without running workflow. `status` is read-only and reports what Devlegate observes. `plan` is read-only and reports what Devlegate would decide from one optimistic consistent snapshot; its output includes the branch, local HEAD, known remote ref, and known remote HEAD used for the decision. Neither command fetches or writes durable state. Retry if project state changes continuously while a snapshot is being collected. `--env FILE` selects a configuration file instead of `$PWD/.env`, and `--version` prints the installed version.
 

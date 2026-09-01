@@ -38,6 +38,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.tickets import (
     TicketError,
     TicketStore,
@@ -1565,6 +1566,10 @@ class Devlegate:
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
         ticket_store = self._ticket_store()
+        try:
+            load_project_context(self.repo)
+        except ProjectContextError as error:
+            raise WorkflowBlockedError(str(error)) from error
         bound_execution = recovery or pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
@@ -3012,6 +3017,11 @@ export default tool({
             ticket_store = self._ticket_store()
         except DevlegateError as error:
             ticket_error = str(error)
+        project_context_error = ""
+        try:
+            load_project_context(self.repo)
+        except ProjectContextError as error:
+            project_context_error = str(error)
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
@@ -3069,6 +3079,11 @@ export default tool({
             ),
             ("ticket schema", not ticket_error, ticket_error),
             ("dependency graph", not ticket_error, ticket_error),
+            (
+                "project context",
+                not project_context_error,
+                project_context_error,
+            ),
             (
                 "control worktree",
                 control_observation is not None,

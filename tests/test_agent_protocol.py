@@ -38,7 +38,7 @@ def test_init_seeds_templates_manifest_and_natural_targets(tmp_path):
     for content in (architect.read_text(), reviewer.read_text()):
         assert "GENERATED FILE" in content
         assert ".env" not in content
-        assert ".devlegate" not in content
+        assert ".devlegate/project.md" in content
 
 
 def test_init_does_not_overwrite_custom_templates(tmp_path):

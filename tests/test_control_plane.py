@@ -38,6 +38,11 @@ def control_fixture(tmp_path):
     git(seed, "config", "user.email", "test@example.com")
     git(seed, "config", "user.name", "Test User")
     (seed / "product.txt").write_text("product\n")
+    (seed / "README.md").write_text("project context\n")
+    (seed / ".devlegate").mkdir()
+    (seed / ".devlegate/project.md").write_text(
+        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    )
     git(seed, "add", ".")
     git(seed, "commit", "-m", "product")
     git(seed, "remote", "add", "origin", bare)
@@ -75,6 +80,11 @@ def fresh_control_fixture(tmp_path):
     git(seed, "config", "user.email", "test@example.com")
     git(seed, "config", "user.name", "Test User")
     (seed / "product.txt").write_text("product\n")
+    (seed / "README.md").write_text("project context\n")
+    (seed / ".devlegate").mkdir()
+    (seed / ".devlegate/project.md").write_text(
+        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    )
     git(seed, "add", ".")
     git(seed, "commit", "-m", "product")
     git(seed, "remote", "add", "origin", bare)

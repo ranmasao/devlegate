@@ -38,6 +38,11 @@ def git_fixture(tmp_path):
     git(seed, "config", "user.email", "test@example.com")
     git(seed, "config", "user.name", "Test User")
     (seed / "tracked.txt").write_text("initial\n")
+    (seed / "README.md").write_text("project context\n")
+    (seed / ".devlegate").mkdir()
+    (seed / ".devlegate/project.md").write_text(
+        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    )
     git(seed, "add", ".")
     git(seed, "commit", "-m", "product")
     git(seed, "remote", "add", "origin", bare)
@@ -124,6 +129,17 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         in capsys.readouterr().out
     )
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
+
+
+def test_check_rejects_missing_project_context(git_fixture):
+    working = git_fixture["working"]
+    config = git_fixture["config"]
+    (working / ".devlegate/project.md").unlink()
+
+    result = invoke(git_fixture, "check", env_file=config)
+
+    assert result.returncode == 1
+    assert "project context manifest is missing" in result.stdout
 
 
 def test_removed_top_level_forms_are_rejected(git_fixture):

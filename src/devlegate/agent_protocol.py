@@ -10,6 +10,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from devlegate.project_context import (
+    ProjectContextError,
+    load_project_context,
+    seed_project_context,
+)
+
 
 class AgentProtocolError(ValueError):
     """Raised when agent protocol templates or paths are invalid."""
@@ -352,6 +358,11 @@ def initialize_project(
     template_root = templates if manifest.exists() else packaged_template_root()
     plan = _render_plan(project, template_root, context, conflicts, state_dir)
     _safe_project_roots(project)
+    try:
+        seed_project_context(project)
+        load_project_context(project, require_context=False)
+    except ProjectContextError as error:
+        raise AgentProtocolError(str(error)) from error
     _directory(templates / "skills", "skills template directory")
     _directory(templates / "prompts", "prompts template directory")
     if not manifest.exists():
