@@ -6,6 +6,7 @@ from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
     initialize_project,
+    packaged_template_root,
     render_project,
     seed_project_env,
 )
@@ -54,6 +55,52 @@ def test_init_does_not_overwrite_custom_templates(tmp_path):
     manifest_before = manifest.read_bytes()
     initialize_project(tmp_path, context())
     assert manifest.read_bytes() == manifest_before
+
+
+def test_upgrade_preserves_old_templates_until_explicit_update(tmp_path):
+    initialize_project(tmp_path, context())
+    architect_template = (
+        tmp_path / ".devlegate/templates/skills/architect/SKILL.md.tmpl"
+    )
+    reviewer_template = (
+        tmp_path / ".devlegate/templates/skills/reviewer/SKILL.md.tmpl"
+    )
+    architect_template.write_text("# Old Architect Protocol\n")
+    reviewer_template.write_text("# Old Reviewer Protocol\n")
+    old_architect = tmp_path / "skills/architect/SKILL.md"
+    old_reviewer = tmp_path / "skills/reviewer/SKILL.md"
+    old_architect.write_text(
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
+        "# Old Architect Protocol\n"
+    )
+    old_reviewer.write_text(
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
+        "# Old Reviewer Protocol\n"
+    )
+
+    initialize_project(tmp_path, context())
+
+    assert architect_template.read_text() == "# Old Architect Protocol\n"
+    assert reviewer_template.read_text() == "# Old Reviewer Protocol\n"
+    assert old_architect.read_text() == (
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
+        "# Old Architect Protocol\n"
+    )
+    assert old_reviewer.read_text() == (
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
+        "# Old Reviewer Protocol\n"
+    )
+
+    root = packaged_template_root()
+    architect_template.write_bytes(
+        (root / "skills/architect/SKILL.md.tmpl").read_bytes()
+    )
+    reviewer_template.write_bytes(
+        (root / "skills/reviewer/SKILL.md.tmpl").read_bytes()
+    )
+    assert render_project(tmp_path, context()) == (2, 2)
+    assert ".devlegate/project.md" in old_architect.read_text()
+    assert ".devlegate/project.md" in old_reviewer.read_text()
 
 
 def test_seed_project_env_is_packaged_and_byte_preserving(tmp_path):

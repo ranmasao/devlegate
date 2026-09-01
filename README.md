@@ -28,6 +28,20 @@ devlegate plan
 devlegate plan --json
 ```
 
+`devlegate init` may make the product checkout dirty by creating `.env`, the
+`.devlegate/project.md` adapter, project-owned templates, and generated role
+artifacts. Inspect and configure those files, populate the project context routes,
+then incorporate the changes through the target project's normal change-management
+workflow. Devlegate does not commit, push, open reviews, choose a target branch, or
+edit `.gitignore` for that workflow. Before `devlegate control init` and workflow
+execution, return to the intended product checkout in a clean, valid state.
+
+The project decides whether `.env` is tracked, ignored, or managed elsewhere;
+Devlegate only validates the resulting checkout. The `0.4.0` release includes the
+project-context routing protocol, but upgrading the runtime does not rewrite
+existing project-owned role templates. Explicitly adopt the newer templates and
+run `devlegate render` when upgrading an older project.
+
 `devlegate control init` observes the configured remote and attaches an existing
 control branch, or creates and publishes a fresh independent control branch when
 the remote positively has no such branch. Fresh control bootstrap creates the

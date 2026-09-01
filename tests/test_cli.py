@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -140,6 +141,33 @@ def test_check_rejects_missing_project_context(git_fixture):
 
     assert result.returncode == 1
     assert "project context manifest is missing" in result.stdout
+
+
+def test_fresh_init_requires_external_adoption_before_control_check(git_fixture):
+    working = git_fixture["working"]
+    shutil.rmtree(working / ".devlegate")
+    before = (working / "README.md").read_bytes()
+
+    initialized = invoke(git_fixture, "init")
+
+    assert initialized.returncode == 0
+    assert (working / ".devlegate/project.md").is_file()
+    assert (working / "skills/architect/SKILL.md").is_file()
+    assert (working / "skills/reviewer/SKILL.md").is_file()
+    assert (working / "README.md").read_bytes() == before
+    assert "README.md" not in (working / ".devlegate/project.md").read_text()
+    assert invoke(git_fixture, "check").returncode == 1
+
+    (working / ".devlegate/project.md").write_text(
+        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    )
+    git(working, "add", ".")
+    git(working, "commit", "-m", "adopt Devlegate bootstrap")
+
+    assert invoke(git_fixture, "control", "init").returncode == 0
+    ready = invoke(git_fixture, "check")
+    assert ready.returncode == 0
+    assert "Ready." in ready.stdout
 
 
 def test_removed_top_level_forms_are_rejected(git_fixture):
