@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -86,6 +85,37 @@ def git_fixture(tmp_path):
     }
 
 
+@pytest.fixture
+def plain_project_fixture(tmp_path):
+    bare = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    working = tmp_path / "working"
+    state = tmp_path / "state"
+    git(tmp_path, "init", "--bare", bare)
+    git(tmp_path, "init", "-b", "main", seed)
+    git(seed, "config", "user.email", "test@example.com")
+    git(seed, "config", "user.name", "Test User")
+    (seed / "README.md").write_text("project context\n")
+    (seed / "docs").mkdir()
+    (seed / "docs/architecture.md").write_text("architecture\n")
+    git(seed, "add", ".")
+    git(seed, "commit", "-m", "ordinary project")
+    git(seed, "remote", "add", "origin", bare)
+    git(seed, "push", "-u", "origin", "main")
+    git(tmp_path, "clone", "-b", "main", bare, working)
+    git(working, "config", "user.email", "test@example.com")
+    git(working, "config", "user.name", "Test User")
+    config = tmp_path / "devlegate.env"
+    config.write_text(
+        "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
+        "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\nPOLL_INTERVAL=0\n"
+        f"STATE_DIR={state}\n"
+    )
+    return {
+        "bare": bare, "working": working, "config": config, "state": state
+    }
+
+
 def invoke(fixture, *args, env_file=None):
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     return subprocess.run(
@@ -143,29 +173,34 @@ def test_check_rejects_missing_project_context(git_fixture):
     assert "project context manifest is missing" in result.stdout
 
 
-def test_fresh_init_requires_external_adoption_before_control_check(git_fixture):
-    working = git_fixture["working"]
-    shutil.rmtree(working / ".devlegate")
+def test_fresh_init_requires_external_adoption_before_control_check(
+    plain_project_fixture,
+):
+    fixture = plain_project_fixture
+    working = fixture["working"]
     before = (working / "README.md").read_bytes()
+    assert git(working, "status", "--porcelain").stdout == ""
 
-    initialized = invoke(git_fixture, "init")
+    initialized = invoke(fixture, "init")
 
     assert initialized.returncode == 0
+    assert git(working, "status", "--porcelain").stdout != ""
     assert (working / ".devlegate/project.md").is_file()
     assert (working / "skills/architect/SKILL.md").is_file()
     assert (working / "skills/reviewer/SKILL.md").is_file()
     assert (working / "README.md").read_bytes() == before
     assert "README.md" not in (working / ".devlegate/project.md").read_text()
-    assert invoke(git_fixture, "check").returncode == 1
+    assert invoke(fixture, "check").returncode == 1
 
     (working / ".devlegate/project.md").write_text(
         '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
     )
     git(working, "add", ".")
     git(working, "commit", "-m", "adopt Devlegate bootstrap")
+    assert git(working, "status", "--porcelain").stdout == ""
 
-    assert invoke(git_fixture, "control", "init").returncode == 0
-    ready = invoke(git_fixture, "check")
+    assert invoke(fixture, "control", "init").returncode == 0
+    ready = invoke(fixture, "check")
     assert ready.returncode == 0
     assert "Ready." in ready.stdout
 
