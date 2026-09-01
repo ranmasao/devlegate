@@ -17,12 +17,12 @@ from devlegate.cli import (
     build_parser,
     main,
 )
+from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
 
 
 def git(cwd, *args):
     return subprocess.run(
-        ["git", *map(str, args)], cwd=cwd, text=True,
-        capture_output=True, check=True
+        ["git", *map(str, args)], cwd=cwd, text=True, capture_output=True, check=True
     )
 
 
@@ -66,12 +66,28 @@ def git_fixture(tmp_path):
     key = hashlib.sha256(str(working.resolve()).encode()).hexdigest()
     control = state / "worktrees" / key / "control"
     git(working, "fetch", "origin", "devlegate/control")
-    git(working, "worktree", "add", "--track", "-b", "devlegate/control",
-        control, "origin/devlegate/control")
+    git(
+        working,
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        "devlegate/control",
+        control,
+        "origin/devlegate/control",
+    )
     publisher_control = tmp_path / "publisher-control"
     git(publisher, "fetch", "origin", "devlegate/control")
-    git(publisher, "worktree", "add", "--track", "-b", "publisher-control",
-        publisher_control, "origin/devlegate/control")
+    git(
+        publisher,
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        "publisher-control",
+        publisher_control,
+        "origin/devlegate/control",
+    )
 
     config = tmp_path / "devlegate.env"
     config.write_text(
@@ -80,9 +96,14 @@ def git_fixture(tmp_path):
         f"STATE_DIR={state}\n"
     )
     return {
-        "bare": bare, "working": working, "publisher": publisher,
-        "control": control, "publisher_control": publisher_control,
-        "config": config, "state": state, "tmp": tmp_path,
+        "bare": bare,
+        "working": working,
+        "publisher": publisher,
+        "control": control,
+        "publisher_control": publisher_control,
+        "config": config,
+        "state": state,
+        "tmp": tmp_path,
     }
 
 
@@ -112,17 +133,24 @@ def plain_project_fixture(tmp_path):
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\nPOLL_INTERVAL=0\n"
         f"STATE_DIR={state}\n"
     )
-    return {
-        "bare": bare, "working": working, "config": config, "state": state
-    }
+    return {"bare": bare, "working": working, "config": config, "state": state}
 
 
 def invoke(fixture, *args, env_file=None):
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     return subprocess.run(
-        [sys.executable, "-m", "devlegate", *args, "--env",
-         env_file or fixture["config"]], cwd=fixture["working"], env=environment,
-        text=True, capture_output=True
+        [
+            sys.executable,
+            "-m",
+            "devlegate",
+            *args,
+            "--env",
+            env_file or fixture["config"],
+        ],
+        cwd=fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
     )
 
 
@@ -157,8 +185,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         main()
     assert error.value.code == 0
     assert (
-        "{init,render,run,retry,check,status,plan,control}"
-        in capsys.readouterr().out
+        "{init,render,run,retry,check,status,plan,control}" in capsys.readouterr().out
     )
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
 
@@ -217,8 +244,7 @@ def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixt
     assert invoke(git_fixture, "control", "init").returncode == 0
     assert git_fixture["control"].is_dir()
     assert (
-        git(git_fixture["control"], "symbolic-ref", "--short", "HEAD")
-        .stdout.strip()
+        git(git_fixture["control"], "symbolic-ref", "--short", "HEAD").stdout.strip()
         == "devlegate/control"
     )
     assert invoke(git_fixture, "control", "init").returncode == 0
@@ -237,12 +263,8 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     assert result.returncode == 0
     assert not (git_fixture["working"] / ".env").exists()
     assert "rendered 2" in result.stdout
-    architect = (
-        git_fixture["working"] / "skills/architect/SKILL.md"
-    )
-    reviewer = (
-        git_fixture["working"] / "skills/reviewer/SKILL.md"
-    )
+    architect = git_fixture["working"] / "skills/architect/SKILL.md"
+    reviewer = git_fixture["working"] / "skills/reviewer/SKILL.md"
     assert "automation/state" in architect.read_text()
     assert "workflow/inspection" in reviewer.read_text()
     assert invoke(git_fixture, "render", "--check", env_file=config).returncode == 0
@@ -362,13 +384,16 @@ def test_init_seeds_missing_project_env_from_package(git_fixture):
     assert result.returncode == 0
     assert b"OPENCODE_MODEL=" in env.read_bytes()
     before = env.read_bytes()
-    assert subprocess.run(
-        [sys.executable, "-m", "devlegate", "init"],
-        cwd=git_fixture["working"],
-        env=environment,
-        text=True,
-        capture_output=True,
-    ).returncode == 0
+    assert (
+        subprocess.run(
+            [sys.executable, "-m", "devlegate", "init"],
+            cwd=git_fixture["working"],
+            env=environment,
+            text=True,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
     assert env.read_bytes() == before
 
 
@@ -381,8 +406,7 @@ def test_read_only_commands_do_not_create_state_or_fetch(git_fixture):
     assert result.returncode == 0
     assert not state.exists()
     assert (
-        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
-        == before
+        git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip() == before
     )
 
 
@@ -397,11 +421,26 @@ def test_application_status_and_plan_return_immutable_views(git_fixture, monkeyp
     assert status.code.local_head
     with pytest.raises(dataclasses.FrozenInstanceError):
         status.phase = "changed"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.action = "changed"
 
 
-def test_operational_cli_dispatches_run_through_application(
-    git_fixture, monkeypatch
-):
+def test_application_import_does_not_import_cli():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import devlegate.application; "
+            "assert 'devlegate.cli' not in sys.modules",
+        ],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_operational_cli_dispatches_run_through_application(git_fixture, monkeypatch):
     calls = []
 
     class FakeApplication:
@@ -412,9 +451,7 @@ def test_operational_cli_dispatches_run_through_application(
             calls.append(("run", once))
             return 7
 
-    monkeypatch.setattr(
-        "devlegate.application.Application", FakeApplication
-    )
+    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "run", "--once", "--env", str(git_fixture["config"])]
     )
@@ -422,6 +459,88 @@ def test_operational_cli_dispatches_run_through_application(
 
     assert main() == 7
     assert calls == [("init", git_fixture["config"], False), ("run", True)]
+
+
+def test_cli_status_and_plan_render_fake_application_without_runtime(
+    git_fixture, monkeypatch, capsys
+):
+    observation = GitObservation(
+        "main", False, "local", "origin/main", "remote", True, "fingerprint"
+    )
+    plan = ExecutionPlan("none", "no runnable tickets", code=observation)
+    snapshot = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        observation,
+        None,
+        (("backlog", 0), ("todo", 0), ("review", 0), ("accepted", 0), ("done", 0)),
+        (),
+        (),
+        (),
+        (),
+        None,
+        plan,
+    )
+
+    class FakeApplication:
+        def __init__(self, env_file, *, read_only=False):
+            assert read_only
+
+        def status(self):
+            return snapshot
+
+        def plan(self):
+            return plan
+
+    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "status", "--env", str(git_fixture["config"])]
+    )
+    assert main() == 0
+    assert "Execution:" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--json", "--env", str(git_fixture["config"])],
+    )
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out)["plan"]["action"] == "none"
+
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "plan", "--env", str(git_fixture["config"])]
+    )
+    assert main() == 0
+    assert "Execution plan:" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "plan", "--json", "--env", str(git_fixture["config"])],
+    )
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out)["action"] == "none"
+
+
+def test_operational_cli_dispatches_retry_through_application(git_fixture, monkeypatch):
+    calls = []
+
+    class FakeApplication:
+        def __init__(self, env_file, *, read_only=False):
+            calls.append(("init", env_file, read_only))
+
+        def retry(self, ticket_id=None):
+            calls.append(("retry", ticket_id))
+            return 3
+
+    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "retry", "T-1", "--env", str(git_fixture["config"])]
+    )
+    assert main() == 3
+    assert calls == [("init", git_fixture["config"], False), ("retry", "T-1")]
 
 
 def test_status_reports_nested_code_and_control_observations(git_fixture):
@@ -472,17 +591,28 @@ def test_persisted_execution_requires_control_revision_identity(
     control_head = git(git_fixture["control"], "rev-parse", "HEAD").stdout.strip()
     with pytest.raises(DevlegateError, match="control revision identity"):
         devlegate._save_state(
-            "agent_pending", local_head=code_head, remote_head=code_head,
-            changed_paths="", selected_ticket_id="T-1", selected_ticket_body="work",
+            "agent_pending",
+            local_head=code_head,
+            remote_head=code_head,
+            changed_paths="",
+            selected_ticket_id="T-1",
+            selected_ticket_body="work",
         )
     devlegate._save_state(
-        "agent_pending", local_head=code_head, remote_head=code_head,
-        changed_paths="", control_head=control_head,
-        selected_ticket_id="T-1", selected_ticket_body="work",
-        execution_ticket_id="T-1", execution_base_head=code_head,
-        execution_control_head=control_head, execution_branch="devlegate/work/T-1",
+        "agent_pending",
+        local_head=code_head,
+        remote_head=code_head,
+        changed_paths="",
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work",
+        execution_ticket_id="T-1",
+        execution_base_head=code_head,
+        execution_control_head=control_head,
+        execution_branch="devlegate/work/T-1",
         execution_path=str(devlegate.execution_worktree_root / "work" / "T-1"),
-        execution_id="attempt-1", execution_remote_head=None,
+        execution_id="attempt-1",
+        execution_remote_head=None,
     )
     assert devlegate._state["control_head"] == control_head
 
@@ -511,10 +641,14 @@ def test_status_retries_when_control_workflow_changes_during_snapshot(
 
 
 def test_plan_selects_deterministic_ticket_from_control(git_fixture):
-    publish_control(git_fixture, "tickets", {
-        "kanban/todo/ED-22.md": ticket("Later"),
-        "kanban/todo/ED-17.md": ticket("Earlier"),
-    })
+    publish_control(
+        git_fixture,
+        "tickets",
+        {
+            "kanban/todo/ED-22.md": ticket("Later"),
+            "kanban/todo/ED-17.md": ticket("Earlier"),
+        },
+    )
     payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
     assert payload["action"] == "run-worker"
     assert payload["ticket"]["id"] == "ED-17"
@@ -533,9 +667,13 @@ def test_ticket_validation_and_dependency_blockers(git_fixture):
 
 
 def test_missing_dependency_is_blocked(git_fixture):
-    publish_control(git_fixture, "blocked", {
-        "kanban/todo/ED-2.md": ticket("Waiting", depends=["ED-404"]),
-    })
+    publish_control(
+        git_fixture,
+        "blocked",
+        {
+            "kanban/todo/ED-2.md": ticket("Waiting", depends=["ED-404"]),
+        },
+    )
     payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
     assert payload["action"] == "blocked"
     assert "missing dependency" in payload["reason"]
