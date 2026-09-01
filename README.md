@@ -1,6 +1,6 @@
 # Devlegate
 
-Devlegate is a minimal bootstrap orchestrator for a software-development workflow. Product code remains on the configured product branch and canonical workflow files live only on `CONTROL_BRANCH` (default `devlegate/control`) in a Devlegate-owned worktree outside the product checkout.
+Devlegate is a local deterministic orchestrator for agent-driven software development workflows. Product code remains on the configured product branch and canonical workflow files live only on `CONTROL_BRANCH` (default `devlegate/control`) in a Devlegate-owned worktree outside the product checkout.
 
 Devlegate maintains three physically separate Git surfaces: the operator checkout, the canonical control worktree, and a per-ticket execution worktree. Workers edit implementation files and provide a semantic claim; Devlegate checkpoints, publishes, reports, and mutates workflow state.
 
@@ -143,7 +143,7 @@ blocked, or failed work preserves the same ticket in `todo`.
 - Tickets move through `backlog -> todo -> review -> accepted -> done`. `review` awaits reviewer judgement; `accepted` awaits Devlegate-owned integration; `done` means the accepted checkpoint is present in published product history. Only `todo` tickets whose dependencies are in `done` are runnable. `review` and `accepted` do not satisfy dependencies. Devlegate is serial across review and integration and selects exactly one ticket for a potential worker dispatch.
 - Devlegate owns ticket discovery, parsing, graph validation, runnable determination, deterministic selection, selected-ticket execution binding, checkpoint commits, branch pushes, reports, and ticket movement. Ticket population is data, not initialization state; an empty valid workflow is supported.
 - Devlegate owns worker prompt construction. The worker receives one exact implementation assignment and a small worker-only contract. Canonical workflow paths, ticket paths, kanban, and Git/execution topology are Devlegate details, not worker API.
-- Fresh, resume, and rework prompts share one contract and differ only through a narrow work directive. Ticket content is opaque assigned data; it cannot authorize canonical workflow mutation.
+- Worker prompts use one core contract. The current runtime dispatches fresh and resume directives; rework remains a reserved prompt capability for future explicit review-driven routing. Ticket content is opaque assigned data; it cannot authorize canonical workflow mutation.
 - Worker output is free-form unless it is exactly one strictly validated `devlegate_report` tool event. `WorkerClaim` is untrusted semantic egress with `completed`, `incomplete`, or `blocked` outcomes; missing, malformed, or duplicate reports are protocol failures and do not mutate workflow.
 - Devlegate supplies an ephemeral reserved OpenCode tool configuration for each worker process. The worker runs in the validated execution workspace, while Devlegate keeps process status separate from the worker claim and owns the resulting checkpoint commit and branch push.
 - `ExecutionResult` is the canonical Devlegate-owned interpretation of one execution. `ExecutionReport` is its durable structured record under `executions/<ticket-id>/<execution-id>.json` in the control worktree. Tickets remain specifications, not execution logs; `questions` and `remaining` remain structured execution data.
