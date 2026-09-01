@@ -320,6 +320,13 @@ def test_worker_gate_clears_bound_state_and_bound_state_requires_control_head(
         control_head=control_head,
         selected_ticket_id="T-1",
         selected_ticket_body="work",
+        execution_ticket_id="T-1",
+        execution_base_head=head,
+        execution_control_head=control_head,
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(devlegate.execution_worktree_root / "work" / "T-1"),
+        execution_id="attempt-1",
+        execution_remote_head=None,
     )
     assert devlegate._state["control_head"] == control_head
 
@@ -755,6 +762,7 @@ def test_retry_cannot_replace_persisted_bound_execution(tmp_path, monkeypatch):
         execution_branch=persisted["execution_branch"],
         execution_path=persisted["execution_path"],
         execution_id=persisted["execution_id"],
+        execution_remote_head=persisted["execution_remote_head"],
     )
 
     with pytest.raises(DevlegateError, match="not currently retryable"):

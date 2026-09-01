@@ -9,15 +9,12 @@ class WorkDirective(Enum):
     FRESH = "fresh"
     RESUME = "resume"
     REWORK = "rework"
-    RECOVERY = "recovery"
 
 
 @dataclass(frozen=True)
 class WorkerPromptInput:
     assignment: str
     directive: WorkDirective
-    previous_work: str | None = None
-    architect_feedback: str | None = None
 
 
 _CORE_CONTRACT = """You are an implementation worker.
@@ -47,10 +44,6 @@ _DIRECTIVES = {
     WorkDirective.REWORK: (
         "Revise the existing implementation according to the supplied feedback "
         "while preserving correct work already present."
-    ),
-    WorkDirective.RECOVERY: (
-        "Inspect the existing partial implementation and continue safely from "
-        "the work already present."
     ),
 }
 
@@ -82,12 +75,6 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         ("Core Worker Contract", _CORE_CONTRACT, False),
         ("Work Directive", _DIRECTIVES[prompt_input.directive], False),
     ]
-    for title, value in (
-        ("Relevant Previous Work", prompt_input.previous_work),
-        ("Architect Feedback", prompt_input.architect_feedback),
-    ):
-        if value is not None and _content(value):
-            sections.append((title, _content(value), True))
     sections.append(("Assigned Work", assignment, True))
     return "\n\n".join(
         f"## {title}\n{_fenced_content(value) if untrusted else value}"

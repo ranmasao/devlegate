@@ -463,14 +463,6 @@ def _run_opencode(
     return OpenCodeRunResult(returncode, transport_error)
 
 
-def _has_todo_files(repo: Path, todo_path: str) -> bool:
-    todo_dir = repo / todo_path
-    return todo_dir.is_dir() and any(
-        is_canonical_ticket_name(item.name) and not item.is_symlink() and item.is_file()
-        for item in todo_dir.iterdir()
-    )
-
-
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
     todo_dir = repo / todo_path
     entries: list[str] = []
@@ -552,7 +544,6 @@ class Devlegate:
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
-        self._recovery_pending = False
         self._retry_ticket_id: str | None = None
         state_default = (
             Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
@@ -573,14 +564,9 @@ class Devlegate:
         self._dirty_fingerprint: str | None = None
         self._workflow_blocker_fingerprint: str | None = None
         self._workflow_validation_succeeded = False
-        self._recovery_pending = False
         self._retry_ticket_id = None
         self._validate()
         self._state = self._load_state()
-        self._recovery_pending = self._state.get("phase") in {
-            "agent_running",
-            "recovery_pending",
-        }
 
     def _workflow_paths(self) -> dict[str, str]:
         return {
@@ -1017,9 +1003,6 @@ class Devlegate:
             "merge_pending",
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
-            "recovery_failed",
         }
         if phase not in valid_phases:
             raise DevlegateError(f"invalid state phase: {phase}")
@@ -1041,7 +1024,7 @@ class Devlegate:
             for ticket_id, value in failures.items()
         ):
             raise DevlegateError("invalid state: failed execution metadata is invalid")
-        if phase in {"idle", "recovery_failed"}:
+        if phase == "idle":
             return
         if phase == "merge_pending":
             required_fields = (
@@ -1081,17 +1064,32 @@ class Devlegate:
             "execution_path",
             "execution_id",
         )
-        present = [field in state for field in execution_fields]
-        if any(present) and not all(
-            isinstance(state.get(field), str) and state[field]
-            for field in execution_fields
+        if phase in {"agent_pending", "agent_running"} and (
+            not all(
+                field in state
+                for field in (*execution_fields, "execution_remote_head")
+            )
+            or not all(
+                isinstance(state.get(field), str) and state[field]
+                for field in execution_fields
+            )
+            or not (
+                state.get("execution_remote_head") is None
+                or (
+                    isinstance(state.get("execution_remote_head"), str)
+                    and bool(state["execution_remote_head"])
+                )
+            )
         ):
             raise DevlegateError(
                 "invalid state: execution workspace binding is incomplete"
             )
         if "execution_remote_head" in state and not (
             state["execution_remote_head"] is None
-            or isinstance(state["execution_remote_head"], str)
+            or (
+                isinstance(state["execution_remote_head"], str)
+                and bool(state["execution_remote_head"])
+            )
         ):
             raise DevlegateError(
                 "invalid state: execution remote revision identity is invalid"
@@ -1268,29 +1266,20 @@ class Devlegate:
                 f"current checkout branch '{actual_branch}' does not match "
                 f"expected branch '{self.current_branch}'"
             )
+        if self._state.get("phase") == "agent_running":
+            ticket_id = self._state.get("execution_ticket_id") or self._state.get(
+                "selected_ticket_id", "unknown"
+            )
+            execution_id = self._state.get("execution_id", "unknown")
+            raise DevlegateError(
+                f"interrupted execution is ambiguous for ticket {ticket_id} "
+                f"(execution {execution_id}); refusing to launch a worker or "
+                "automatically reconcile it; explicit operator handling is "
+                "required"
+            )
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
-        if self._state.get("phase") == "recovery_running":
-            self._save_state("recovery_failed")
-            self._recovery_pending = False
-            _log("interrupted recovery treated as failed recovery")
-        if self._state.get("phase") == "recovery_failed":
-            if status:
-                if dirty_changed:
-                    _log(
-                        "recovery failed; working tree is still dirty; manual "
-                        "intervention is required"
-                    )
-                return 1
-            self._save_state("idle")
-            self._recovery_pending = False
-            _log("working tree cleaned manually; recovery state cleared")
-        recovery = self._recovery_pending or self._state.get("phase") in {
-            "agent_running",
-            "recovery_pending",
-            "recovery_running",
-        }
-        if status and not recovery:
+        if status:
             if dirty_changed:
                 _log("working tree is dirty; refusing to pull or start the agent")
             return 1
@@ -1302,14 +1291,7 @@ class Devlegate:
         pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
-        if recovery:
-            self._recovery_pending = False
-            remote_head = local_head
-            changed_paths = status.rstrip()
-            self._save_state("recovery_running")
-            _log("starting recovery for unfinished agent work")
-        else:
-            fetch = _git(
+        fetch = _git(
                 self.repo,
                 "fetch",
                 "--prune",
@@ -1317,9 +1299,10 @@ class Devlegate:
                 self.remote_branch,
                 check=False,
             )
-            if fetch.returncode:
-                _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
-                return 1
+        if fetch.returncode:
+            _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
+            return 1
+        else:
             remote_result = _git(
                 self.repo, "rev-parse", "--verify", remote_ref, check=False
             )
@@ -1486,9 +1469,6 @@ class Devlegate:
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
-                if self._recovery_pending:
-                    self._recovery_pending = False
-                    self._save_state("idle")
                 changed_paths = ""
             elif (
                 _git(
@@ -1570,7 +1550,7 @@ class Devlegate:
             load_project_context(self.repo)
         except ProjectContextError as error:
             raise WorkflowBlockedError(str(error)) from error
-        bound_execution = recovery or pending_agent_execution
+        bound_execution = pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
             ticket_store,
@@ -1632,12 +1612,11 @@ class Devlegate:
                 "idle",
                 handled_remote_head=remote_head,
                 handled_control_head=control_head,
-                handled_control_remote_head=control_head,
                 handled_todo_fingerprint=todo_fingerprint,
             )
             _log(f"accepted ticket {execution_plan.ticket_id} integrated")
             return 0
-        if execution_plan.action == "none" and not recovery:
+        if execution_plan.action == "none":
             selected_ticket = None
         else:
             assert execution_plan.ticket_id is not None
@@ -1650,7 +1629,7 @@ class Devlegate:
                     )
                 selected_ticket = dataclasses.replace(selected_ticket, body=body)
         execution_id: str | None = None
-        if not recovery:
+        if state_phase in {"idle", "agent_pending", "merge_pending"}:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.control_worktree, self.todo_path
             )
@@ -1665,7 +1644,6 @@ class Devlegate:
                     "idle",
                     handled_remote_head=remote_head,
                     handled_control_head=control_head,
-                    handled_control_remote_head=control_remote_head,
                     handled_todo_fingerprint=todo_fingerprint,
                 )
                 if todo_count and ticket_store.tickets:
@@ -1763,7 +1741,6 @@ class Devlegate:
                 changed_paths=changed_paths,
                 handled_remote_head=remote_head,
                 handled_control_head=control_head,
-                handled_control_remote_head=control_remote_head,
                 control_head=control_head,
                 handled_todo_fingerprint=todo_fingerprint,
                 selected_ticket_id=selected_ticket.id,
@@ -1788,7 +1765,7 @@ class Devlegate:
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
             f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
         )
-        directive = WorkDirective.RECOVERY if recovery else WorkDirective.FRESH
+        directive = WorkDirective.FRESH
         if bound_execution or (
             self._retry_ticket_id is not None and workspace.head != workspace.base_head
         ):
@@ -1890,7 +1867,6 @@ class Devlegate:
             "idle",
             handled_remote_head=remote_head,
             handled_control_head=control_head,
-            handled_control_remote_head=control_head,
             handled_todo_fingerprint=todo_fingerprint,
             execution_control_head=control_head,
             failed_executions=failed_executions,
@@ -1917,21 +1893,9 @@ class Devlegate:
             in {
                 "agent_pending",
                 "agent_running",
-                "recovery_pending",
-                "recovery_running",
             }
             else None
         )
-        bound_phase = str(self._state.get("phase")) in {
-            "agent_pending",
-            "agent_running",
-            "recovery_pending",
-            "recovery_running",
-        }
-        if bound_phase and not isinstance(bound_base, str):
-            bound_base = self._state.get("local_head")
-        if bound_phase and not isinstance(bound_control, str):
-            bound_control = self._state.get("control_head")
         base_head = bound_base if isinstance(bound_base, str) else plan.code.local_head
         if isinstance(bound_control, str) and bound_control != plan.control.local_head:
             raise ExecutionWorkspaceError(
@@ -2610,8 +2574,6 @@ export default tool({
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
         }
         plan = self._make_execution_plan(
             state,
@@ -2705,10 +2667,15 @@ export default tool({
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
         }
         if bound_phase:
+            if state["phase"] == "agent_running":
+                return ExecutionPlan(
+                    "blocked",
+                    "interrupted execution has ambiguous outcome; explicit "
+                    "operator handling is required",
+                    **identity,
+                )
             ticket_id = state.get("selected_ticket_id")
             ticket = (
                 ticket_store.by_id.get(ticket_id)
@@ -2725,7 +2692,7 @@ export default tool({
                 return ExecutionPlan(
                     "blocked",
                     "selected ticket "
-                    f"{ticket.id} has unexpected recovery state {ticket.state}",
+                    f"{ticket.id} has unexpected bound execution state {ticket.state}",
                     **identity,
                 )
             return ExecutionPlan(
