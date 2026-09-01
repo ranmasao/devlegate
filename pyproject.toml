@@ -35,6 +35,7 @@ pythonpath = ["src"]
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+exclude = ["src/nanoyaml"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
