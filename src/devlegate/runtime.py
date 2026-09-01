@@ -1654,19 +1654,20 @@ class Devlegate:
                     "suppressed; explicit retry is required"
                 )
                 return 0
-            if (
-                generation_is_same
-                and not pending_agent_execution
-                and self._retry_ticket_id is None
-            ):
-                _log("no new work generation; unchanged todo is already handled")
-                return 0
             if self._retry_ticket_id is not None:
                 if selected_ticket.id != self._retry_ticket_id:
                     raise DevlegateError(
                         f"ticket {self._retry_ticket_id} is no longer the current "
                         "runnable ticket"
                     )
+            if (
+                generation_is_same
+                and not pending_agent_execution
+                and self._retry_ticket_id is None
+                and self._state.get("execution_ticket_id") == selected_ticket.id
+            ):
+                _log("no new work generation; unchanged todo is already handled")
+                return 0
             existing_lineage = (
                 self._state.get("execution_ticket_id") == selected_ticket.id
                 and isinstance(self._state.get("execution_base_head"), str)

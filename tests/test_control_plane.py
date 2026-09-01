@@ -562,6 +562,97 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     ).stdout.strip()
 
 
+def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = []
+
+    def worker(workspace, _prompt):
+        calls.append(workspace.ticket_id)
+        if workspace.ticket_id == "T-1":
+            (workspace.path / "implementation.txt").write_text("worker change\n")
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "implemented", (), ()), None
+            )
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add independent ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    assert devlegate.run_once() == 0
+    review = control / "kanban/review/T-1.md"
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept first ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    assert devlegate.run_once() == 0
+    assert (control / "kanban/done/T-1.md").is_file()
+    assert devlegate.run_once() == 1
+    assert calls == ["T-1", "T-2"]
+
+
+def test_independent_ticket_remains_blocked_by_review_barrier(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = []
+    monkeypatch.setattr(
+        devlegate,
+        "_run_worker",
+        lambda workspace, _prompt: (
+            calls.append(workspace.ticket_id)
+            or WorkerRunResult(
+                0, None, WorkerClaim("completed", "implemented", (), ()), None
+            )
+        ),
+    )
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add independent ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    assert devlegate.run_once() == 0
+    plan = devlegate.plan_view()
+    assert calls == ["T-1"]
+    assert plan.action == "none"
+    assert "waiting for review" in plan.reason
+    assert (control / "kanban/review/T-1.md").is_file()
+    assert (control / "kanban/todo/T-2.md").is_file()
+
+
+def test_unchanged_empty_generation_remains_a_noop(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").unlink()
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "remove runnable ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = []
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    assert devlegate.run_once() == 0
+    assert devlegate.run_once() == 0
+    assert calls == []
+
+
 def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
