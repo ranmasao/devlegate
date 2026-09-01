@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from devlegate.application import Application
 from devlegate.cli import (
     Devlegate,
     DevlegateError,
@@ -382,6 +384,44 @@ def test_read_only_commands_do_not_create_state_or_fetch(git_fixture):
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
         == before
     )
+
+
+def test_application_status_and_plan_return_immutable_views(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    application = Application(git_fixture["config"], read_only=True)
+
+    status = application.status()
+    plan = application.plan()
+
+    assert status.plan == plan
+    assert status.code.local_head
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        status.phase = "changed"
+
+
+def test_operational_cli_dispatches_run_through_application(
+    git_fixture, monkeypatch
+):
+    calls = []
+
+    class FakeApplication:
+        def __init__(self, env_file, *, read_only=False):
+            calls.append(("init", env_file, read_only))
+
+        def run(self, once=False):
+            calls.append(("run", once))
+            return 7
+
+    monkeypatch.setattr(
+        "devlegate.application.Application", FakeApplication
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "run", "--once", "--env", str(git_fixture["config"])]
+    )
+    monkeypatch.chdir(git_fixture["working"])
+
+    assert main() == 7
+    assert calls == [("init", git_fixture["config"], False), ("run", True)]
 
 
 def test_status_reports_nested_code_and_control_observations(git_fixture):

@@ -2820,7 +2820,8 @@ export default tool({
         )
         return "\n".join(lines)
 
-    def status(self, json_output: bool = False) -> int:
+    def status_view(self) -> StatusSnapshot:
+        """Collect a stable, read-only external status view."""
         for _attempt in range(3):
             try:
                 snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
@@ -2831,6 +2832,10 @@ export default tool({
             raise DevlegateError(
                 "project state changed while status snapshot was being collected"
             )
+        return snapshot
+
+    def status(self, json_output: bool = False) -> int:
+        snapshot = self.status_view()
         if json_output:
             print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
         else:
@@ -2928,7 +2933,8 @@ export default tool({
             print(f"rendered {total} agent protocol artifacts ({changed} changed)")
         return 0
 
-    def plan(self, json_output: bool = False) -> int:
+    def plan_view(self) -> ExecutionPlan:
+        """Collect the current read-only scheduling decision."""
         for _attempt in range(3):
             try:
                 snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
@@ -2939,10 +2945,13 @@ export default tool({
             raise DevlegateError(
                 "project state changed while execution plan was being collected"
             )
+        return snapshot.plan
+
+    def plan(self, json_output: bool = False) -> int:
+        plan = self.plan_view()
         if json_output:
-            print(json.dumps(snapshot.plan.as_dict(), indent=2, sort_keys=True))
+            print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
         else:
-            plan = snapshot.plan
             print(f"Devlegate {__version__}")
             print("Execution plan:")
             print(f"  action: {plan.action}")
@@ -3247,26 +3256,77 @@ def main() -> int:
                 raise DevlegateError(str(error)) from error
         if args.command == "control" and args.control_command != "init":
             build_parser().error("a control command is required")
-        devlegate = Devlegate(
-            env_file,
-            read_only=args.command
-            in {"init", "render", "status", "plan", "check", "control"},
-        )
+        devlegate = None
+        if args.command in {"init", "render", "check", "control"}:
+            devlegate = Devlegate(
+                env_file,
+                read_only=args.command
+                in {"init", "render", "check", "control"},
+            )
         if args.command == "init":
+            assert devlegate is not None
             return devlegate.init_project(args.conflicts)
         if args.command == "render":
+            assert devlegate is not None
             return devlegate.render(args.check)
         if args.command == "control":
+            assert devlegate is not None
             return devlegate.control_init()
         if args.command == "status":
-            return devlegate.status(args.json)
+            from devlegate.application import Application
+
+            application = Application(env_file, read_only=True)
+            snapshot = application.status()
+            if args.json:
+                print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
+            else:
+                print(application.runtime._render_status_text(snapshot))
+            return 1 if snapshot.plan.action == "blocked" else 0
         if args.command == "plan":
-            return devlegate.plan(args.json)
+            from devlegate.application import Application
+
+            application = Application(env_file, read_only=True)
+            plan = application.plan()
+            if args.json:
+                print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
+            else:
+                print(f"Devlegate {__version__}")
+                print("Execution plan:")
+                print(f"  action: {plan.action}")
+                if plan.ticket_id is not None:
+                    print(f"  ticket: {plan.ticket_id}  {plan.ticket_title}")
+                    print(f"  ticket state: {plan.ticket_state}")
+                if plan.code:
+                    print(f"  code branch: {plan.code.branch or '<detached>'}")
+                    print(f"  code local HEAD: {plan.code.local_head}")
+                    print(f"  code known remote: {plan.code.remote_ref}")
+                    print(
+                        "  code known remote HEAD: "
+                        f"{plan.code.remote_head or '<unknown>'}"
+                    )
+                if plan.control:
+                    print(f"  control branch: {plan.control.branch or '<detached>'}")
+                    print(f"  control local HEAD: {plan.control.local_head}")
+                    print(f"  control known remote: {plan.control.remote_ref}")
+                    print(
+                        "  control known remote HEAD: "
+                        f"{plan.control.remote_head or '<unknown>'}"
+                    )
+                else:
+                    print("  control worktree: missing")
+                print(f"  reason: {plan.reason}")
+                print(f"  bound: {'yes' if plan.bound else 'no'}")
+            return 0
         if args.command == "check":
+            assert devlegate is not None
             return devlegate.check()
         if args.command == "retry":
-            return devlegate.retry(args.ticket_id)
-        return devlegate.run(args.once)
+            from devlegate.application import Application
+
+            return Application(env_file).retry(args.ticket_id)
+        from devlegate.application import Application
+
+        return Application(env_file).run(args.once)
     except KeyboardInterrupt:
         return 130
     except DevlegateError as error:
