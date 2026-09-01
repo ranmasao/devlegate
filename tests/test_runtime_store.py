@@ -1,31 +1,80 @@
-import json
-from pathlib import Path
+import sqlite3
 
 import pytest
 
-from devlegate.runtime_store import FileRuntimeStore, RuntimeStoreError
+from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 
 
-def test_file_store_reads_existing_runtime_json(tmp_path):
-    store = FileRuntimeStore(tmp_path, "checkout")
-    store.path.write_text('{"phase":"agent_running","execution_id":"e-1"}\n')
-
-    assert store.load() == {"phase": "agent_running", "execution_id": "e-1"}
-    observed, fingerprint = store.observe()
-    assert observed == store.load()
-    assert fingerprint != "missing"
-
-
-def test_file_store_missing_state_is_idle(tmp_path):
-    store = FileRuntimeStore(tmp_path, "checkout")
+def test_sqlite_store_missing_state_is_idle_without_creating_database(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    (store.state_dir / "checkout.json").write_text('{"phase":"agent_running"}\n')
 
     assert store.load() == {"phase": "idle"}
     assert store.observe() == ({"phase": "idle"}, "missing")
+    assert not store.path.exists()
 
 
-def test_file_store_rejects_malformed_json(tmp_path):
-    store = FileRuntimeStore(tmp_path, "checkout")
-    store.path.write_text("not json\n")
+def test_sqlite_store_round_trip_and_revisions(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.probe()
+    assert store.path.suffix == ".sqlite3"
+
+    store.replace({"phase": "idle", "handled_remote_head": "abc"})
+    assert store.load()["handled_remote_head"] == "abc"
+    assert store.observe()[1] == "sqlite:1"
+    assert store.observe()[1] == "sqlite:1"
+    store.replace({"phase": "idle", "handled_remote_head": "abc"})
+    assert store.observe()[1] == "sqlite:2"
+
+
+def test_sqlite_store_configures_schema_and_pragmas(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.probe()
+    connection = store._connect(read_only=False)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runtime_state'"
+    ).fetchone() == ("runtime_state",)
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
+    connection.close()
+
+
+def test_sqlite_store_enforces_singleton_row(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.replace({"phase": "idle"})
+    connection = sqlite3.connect(store.path)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO runtime_state (id, payload, revision) VALUES (2, '{}', 2)"
+        )
+    connection.close()
+
+
+def test_sqlite_store_two_instances_see_committed_updates(tmp_path):
+    first = SQLiteRuntimeStore(tmp_path, "checkout")
+    second = SQLiteRuntimeStore(tmp_path, "checkout")
+    first.replace({"phase": "merge_pending"})
+
+    assert second.load() == {"phase": "merge_pending"}
+    before = second.observe()[1]
+    first.replace({"phase": "agent_pending"})
+    assert second.load() == {"phase": "agent_pending"}
+    assert second.observe()[1] != before
+
+
+def test_sqlite_store_rejects_malformed_payload(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.probe()
+    connection = sqlite3.connect(store.path)
+    connection.execute(
+        "INSERT INTO runtime_state (id, payload, revision) VALUES (1, ?, 1)",
+        ("not json",),
+    )
+    connection.commit()
+    connection.close()
 
     with pytest.raises(RuntimeStoreError):
         store.load()
@@ -33,25 +82,28 @@ def test_file_store_rejects_malformed_json(tmp_path):
         store.observe()
 
 
-def test_file_store_replaces_state_atomically(tmp_path, monkeypatch):
-    store = FileRuntimeStore(tmp_path, "checkout")
-    store.replace({"phase": "idle", "handled_remote_head": "abc"})
-    replacements = []
-    original_replace = __import__("os").replace
+def test_sqlite_store_failed_commit_keeps_previous_state(tmp_path, monkeypatch):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.replace({"phase": "idle", "revision": "old"})
+    monkeypatch.setattr(store, "_commit", lambda _connection: (_ for _ in ()).throw(
+        RuntimeError("forced commit failure")
+    ))
 
-    def replace(source, destination):
-        replacements.append((source, destination))
-        source_path = Path(source)
-        assert source_path.parent == tmp_path
-        assert source_path.name.endswith(".tmp")
-        assert source_path.exists()
-        original_replace(source, destination)
+    with pytest.raises(RuntimeStoreError):
+        store.replace({"phase": "idle", "revision": "new"})
 
-    monkeypatch.setattr("devlegate.runtime_store.os.replace", replace)
-    state = {"phase": "merge_pending", "remote_head": "def"}
-    store.replace(state)
+    fresh = SQLiteRuntimeStore(tmp_path, "checkout")
+    assert fresh.load() == {"phase": "idle", "revision": "old"}
+    assert fresh.observe()[1] == "sqlite:1"
 
-    assert len(replacements) == 1
-    assert Path(replacements[0][1]) == store.path
-    assert json.loads(store.path.read_text()) == state
-    assert not list(tmp_path.glob("*.tmp"))
+
+def test_sqlite_store_rejects_unsupported_schema_version(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.probe()
+    connection = sqlite3.connect(store.path)
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(RuntimeStoreError, match="unsupported"):
+        store.load()

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,16 @@ def git(cwd, *args):
         capture_output=True,
         check=True,
     )
+
+
+def state_payload(state_dir):
+    database = next(state_dir.glob("*.sqlite3"))
+    connection = sqlite3.connect(database)
+    payload = connection.execute(
+        "SELECT payload FROM runtime_state WHERE id = 1"
+    ).fetchone()[0]
+    connection.close()
+    return json.loads(payload)
 
 
 def control_fixture(tmp_path):
@@ -338,8 +349,7 @@ def test_run_worker_completes_one_lifecycle_attempt(tmp_path):
     result = invoke(working, "run", "--once", config=config)
 
     assert result.returncode == 1
-    state_file = next(state.glob("*.json"))
-    payload = json.loads(state_file.read_text())
+    payload = state_payload(state)
     assert payload["phase"] == "idle"
     assert "selected_ticket_id" not in payload
     assert payload["handled_control_head"]
@@ -1052,9 +1062,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     git(execution, "add", "implementation.txt")
     git(execution, "commit", "-m", "execution checkpoint")
     execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
-    original_base = json.loads(next(state.glob("*.json")).read_text())[
-        "execution_base_head"
-    ]
+    original_base = state_payload(state)["execution_base_head"]
     product = tmp_path / "seed"
     git(product, "switch", "main")
     (product / "product-update.txt").write_text("product\n")
@@ -1065,7 +1073,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     result = invoke(working, "run", "--once", config=config)
 
     assert result.returncode == 1
-    payload = json.loads(next(state.glob("*.json")).read_text())
+    payload = state_payload(state)
     assert payload["execution_base_head"] == original_base
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
     assert git(working, "rev-parse", "HEAD").stdout.strip() != execution_head
@@ -1076,9 +1084,7 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "run", "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    original_base = json.loads(next(state.glob("*.json")).read_text())[
-        "execution_base_head"
-    ]
+    original_base = state_payload(state)["execution_base_head"]
     control = next((state / "worktrees").glob("*/control"))
     (control / "unrelated.md").write_text("architect note\n")
     git(control, "add", "unrelated.md")
@@ -1089,7 +1095,7 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     result = invoke(working, "run", "--once", config=config)
 
     assert result.returncode == 1
-    payload = json.loads(next(state.glob("*.json")).read_text())
+    payload = state_payload(state)
     assert payload["execution_base_head"] == original_base
     final_control_head = git(control, "rev-parse", "HEAD").stdout.strip()
     assert payload["execution_control_head"] == final_control_head
@@ -1103,8 +1109,7 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "run", "--once", config=config).returncode == 1
-    state_file = next(state.glob("*.json"))
-    original = json.loads(state_file.read_text())
+    original = state_payload(state)
     control = next((state / "worktrees").glob("*/control"))
     (control / "authority-race.md").write_text("changed\n")
     git(control, "add", ".")
@@ -1135,7 +1140,7 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
     result = invoke(working, "run", "--once", config=config)
 
     assert result.returncode == 1
-    payload = json.loads(state_file.read_text())
+    payload = state_payload(state)
     assert payload["execution_control_head"] == original["handled_control_head"]
     assert payload["execution_control_head"] != current_control
     assert "stale execution" in result.stderr
@@ -1162,18 +1167,18 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     shutil.rmtree(execution)
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    state_payload = json.loads(next(state.glob("*.json")).read_text())
+    persisted_state = state_payload(state)
     devlegate._save_state(
         "agent_pending",
-        local_head=state_payload["local_head"],
-        remote_head=state_payload["remote_head"],
+        local_head=persisted_state["local_head"],
+        remote_head=persisted_state["remote_head"],
         changed_paths="",
-        control_head=state_payload["control_head"],
+        control_head=persisted_state["control_head"],
         selected_ticket_id="T-1",
         selected_ticket_body="work\n",
         execution_ticket_id="T-1",
-        execution_base_head=state_payload["execution_base_head"],
-        execution_control_head=state_payload["execution_control_head"],
+        execution_base_head=persisted_state["execution_base_head"],
+        execution_control_head=persisted_state["execution_control_head"],
         execution_branch="devlegate/work/T-1",
         execution_path=str(execution),
     )
@@ -1213,9 +1218,7 @@ def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch
     git(execution, "checkout", "--detach")
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    base = json.loads(next(state.glob("*.json")).read_text())[
-        "execution_base_head"
-    ]
+    base = state_payload(state)["execution_base_head"]
     manager = ExecutionWorkspaceManager(
         working,
         state / "worktrees" / next(state.glob("worktrees/*")).name,
@@ -1438,13 +1441,12 @@ def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "run", "--once", config=config).returncode == 1
-    state_file = next(state.glob("*.json"))
-    before = state_file.read_text()
+    before = state_payload(state)
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(working, "worktree", "remove", execution)
 
     result = invoke(working, *command, config=config)
 
     assert result.returncode in {0, 1}
-    assert state_file.read_text() == before
+    assert state_payload(state) == before
     assert not execution.exists()

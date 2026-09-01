@@ -37,7 +37,7 @@ from devlegate.execution_workspace import (
     parse_worktree_porcelain,
 )
 from devlegate.project_context import ProjectContextError, load_project_context
-from devlegate.runtime_store import FileRuntimeStore, RuntimeStoreError
+from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.tickets import (
     TicketError,
     TicketStore,
@@ -554,7 +554,7 @@ class Devlegate:
             .resolve()
         )
         self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
-        self._runtime_store = FileRuntimeStore(self.state_dir, self._state_key)
+        self._runtime_store = SQLiteRuntimeStore(self.state_dir, self._state_key)
         self._state_file = self._runtime_store.path
         self.control_worktree = (
             self.state_dir / "worktrees" / self._state_key / "control"

@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -575,8 +576,14 @@ def test_run_once_persists_idle_and_control_head(git_fixture):
     result = invoke(git_fixture, "run", "--once")
     assert result.returncode == 1
     assert "execution failed" in result.stdout
-    state = next(git_fixture["state"].glob("*.json"))
-    payload = json.loads(state.read_text())
+    database = next(git_fixture["state"].glob("*.sqlite3"))
+    connection = sqlite3.connect(database)
+    payload = json.loads(
+        connection.execute(
+            "SELECT payload FROM runtime_state WHERE id = 1"
+        ).fetchone()[0]
+    )
+    connection.close()
     assert payload["phase"] == "idle"
     assert payload["handled_control_head"]
     assert "selected_ticket_id" not in payload

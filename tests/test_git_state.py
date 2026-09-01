@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 from test_cli import git, invoke, publish_control, ticket
@@ -15,7 +16,13 @@ def code_update(fixture, name="remote.txt", content="remote\n"):
 
 
 def state_payload(fixture):
-    return json.loads(next(fixture["state"].glob("*.json")).read_text())
+    database = next(fixture["state"].glob("*.sqlite3"))
+    connection = sqlite3.connect(database)
+    payload = connection.execute(
+        "SELECT payload FROM runtime_state WHERE id = 1"
+    ).fetchone()[0]
+    connection.close()
+    return json.loads(payload)
 
 
 def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
