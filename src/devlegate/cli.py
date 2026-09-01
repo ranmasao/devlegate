@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from devlegate import __version__
 from devlegate import runtime as _runtime
@@ -149,6 +150,40 @@ def _render_plan_text(plan: ExecutionPlan) -> str:
     return "\n".join(lines)
 
 
+class DevlegateArgumentParser(argparse.ArgumentParser):
+    """Present syntax errors concisely while retaining argparse parsing."""
+
+    def parse_known_args(self, args=None, namespace=None):
+        if self.prog == "devlegate":
+            values = list(sys.argv[1:] if args is None else args)
+            choices = next(
+                action.choices
+                for action in self._subparsers._group_actions
+                if action.dest == "command"
+            )
+            self._command_context = (
+                values[0] if values and values[0] in choices else None
+            )
+        return super().parse_known_args(args, namespace)
+
+    def error(self, message: str) -> NoReturn:
+        if self.prog == "devlegate" and ": invalid choice: " in message:
+            choice = message.split(": invalid choice: ", 1)[1]
+            choice = choice.split(" (choose from", 1)[0]
+            message = f"unknown command {choice}"
+        elif message.startswith("unrecognized arguments: "):
+            message = "unrecognized argument: " + message[
+                len("unrecognized arguments: ") :
+            ]
+        program = self.prog
+        command = getattr(self, "_command_context", None)
+        if program == "devlegate" and command is not None:
+            program = f"{program} {command}"
+        print(f"{program}: {message}", file=sys.stderr)
+        print(f"Try '{program} --help' for usage.", file=sys.stderr)
+        raise SystemExit(2)
+
+
 class Devlegate(RuntimeDevlegate):
     """Legacy CLI-facing runtime surface; presentation remains here."""
 
@@ -192,7 +227,7 @@ class Devlegate(RuntimeDevlegate):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = DevlegateArgumentParser(
         prog="devlegate",
         description="Workflow orchestrator for software-development repositories.",
     )
@@ -200,7 +235,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     commands = parser.add_subparsers(
-        dest="command", metavar="{init,render,run,retry,check,status,plan,control}"
+        dest="command",
+        metavar="{init,render,run,retry,check,status,plan,control}",
+        parser_class=DevlegateArgumentParser,
     )
     init_parser = commands.add_parser(
         "init", help="initialize project-local protocol templates"
@@ -229,16 +266,23 @@ def build_parser() -> argparse.ArgumentParser:
     retry_parser.add_argument("ticket_id", nargs="?")
     retry_parser.add_argument("--env", metavar="FILE", type=Path)
     control_parser = commands.add_parser("control", help="manage control-plane state")
-    control_commands = control_parser.add_subparsers(dest="control_command")
+    control_commands = control_parser.add_subparsers(
+        dest="control_command", parser_class=DevlegateArgumentParser
+    )
     init_parser = control_commands.add_parser("init")
     init_parser.add_argument("--env", metavar="FILE", type=Path)
     return parser
 
 
 def main() -> int:
-    args = build_parser().parse_args(sys.argv[1:])
+    parser = build_parser()
+    args = parser.parse_args(sys.argv[1:])
     if args.command is None:
-        build_parser().error("a command is required")
+        parser.error("a command is required")
+    if args.command == "control" and args.control_command != "init":
+        DevlegateArgumentParser(prog="devlegate control").error(
+            "a control command is required"
+        )
     env_file = args.env or Path.cwd() / ".env"
     try:
         project_env = Path.cwd() / ".env"
@@ -253,8 +297,6 @@ def main() -> int:
                 seed_project_env(project_env)
             except AgentProtocolError as error:
                 raise DevlegateError(str(error)) from error
-        if args.command == "control" and args.control_command != "init":
-            build_parser().error("a control command is required")
         devlegate = None
         if args.command in {"init", "render", "check", "control"}:
             devlegate = Devlegate(env_file, read_only=True)

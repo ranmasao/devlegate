@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from devlegate import __version__
 from devlegate.application import Application
 from devlegate.cli import (
     Devlegate,
@@ -189,6 +190,82 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         "{init,render,run,retry,check,status,plan,control}" in capsys.readouterr().out
     )
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
+
+
+@pytest.mark.parametrize("command", ["ruun", "рун"])
+def test_unknown_top_level_command_is_concise(command, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", command])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert f"unknown command '{command}'" in stderr
+    assert "devlegate --help" in stderr
+    assert "usage:" not in stderr
+    assert "{init,render,run,retry,check,status,plan,control}" not in stderr
+
+
+def test_invalid_subcommand_argument_is_concise(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "run", "--definitely-invalid"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "devlegate run: unrecognized argument: --definitely-invalid" in stderr
+    assert "devlegate run --help" in stderr
+    assert "usage:" not in stderr
+
+
+def test_missing_commands_are_concise(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "devlegate: a command is required" in stderr
+    assert "devlegate --help" in stderr
+    assert "usage:" not in stderr
+
+    monkeypatch.setattr("sys.argv", ["devlegate", "control"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "devlegate control: a control command is required" in stderr
+    assert "devlegate control --help" in stderr
+    assert "usage:" not in stderr
+
+
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["devlegate", "--help"], "usage: devlegate"),
+        (["devlegate", "run", "--help"], "usage: devlegate run"),
+        (["devlegate", "control", "--help"], "usage: devlegate control"),
+    ],
+)
+def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 0
+    assert expected in capsys.readouterr().out
+
+
+def test_version_remains_unchanged(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "--version"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 0
+    assert capsys.readouterr().out.strip() == f"devlegate {__version__}"
 
 
 def test_check_rejects_missing_project_context(git_fixture):
