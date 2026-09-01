@@ -33,6 +33,16 @@ def test_routes_common_to_both_roles_without_embedding_documents(tmp_path):
     assert "README contents" not in (tmp_path / ".devlegate/project.md").read_text()
 
 
+def test_project_context_accepts_blank_frontmatter_lines(tmp_path):
+    (tmp_path / "README.md").write_text("readme")
+    manifest(
+        tmp_path,
+        '"type": "devlegate.project"\n\n"common":\n  - "README.md"',
+    )
+
+    assert load_project_context(tmp_path).for_role("architect") == (Path("README.md"),)
+
+
 @pytest.mark.parametrize(
     "field, value",
     [
