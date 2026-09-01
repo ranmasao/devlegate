@@ -37,6 +37,7 @@ from devlegate.execution_workspace import (
     parse_worktree_porcelain,
 )
 from devlegate.project_context import ProjectContextError, load_project_context
+from devlegate.runtime_store import FileRuntimeStore, RuntimeStoreError
 from devlegate.tickets import (
     TicketError,
     TicketStore,
@@ -553,7 +554,8 @@ class Devlegate:
             .resolve()
         )
         self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
-        self._state_file = self.state_dir / f"{self._state_key}.json"
+        self._runtime_store = FileRuntimeStore(self.state_dir, self._state_key)
+        self._state_file = self._runtime_store.path
         self.control_worktree = (
             self.state_dir / "worktrees" / self._state_key / "control"
         )
@@ -956,13 +958,7 @@ class Devlegate:
         return self._bootstrap_control()
 
     def _probe_state_access(self) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            dir=self.state_dir,
-            prefix=f".{self._state_key}.access.",
-            delete=True,
-        ):
-            pass
+        self._runtime_store.probe()
 
     def _lock(self):
         lock_root = self.state_dir / "locks"
@@ -980,14 +976,9 @@ class Devlegate:
 
     def _load_state(self) -> dict[str, object]:
         try:
-            with self._state_file.open() as state_file:
-                state = json.load(state_file)
-        except FileNotFoundError:
-            return {"phase": "idle"}
-        except (OSError, json.JSONDecodeError) as error:
-            raise DevlegateError(
-                f"cannot read state file {self._state_file}: {error}"
-            ) from error
+            state = self._runtime_store.load()
+        except RuntimeStoreError as error:
+            raise DevlegateError(str(error)) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
         self._validate_state_invariant(state)
@@ -1100,35 +1091,10 @@ class Devlegate:
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
         self._validate_state_invariant(state)
-        temporary_name = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=self.state_dir,
-                prefix=f".{self._state_key}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary_name = temporary.name
-                json.dump(state, temporary)
-                temporary.write("\n")
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_name, self._state_file)
-            directory_fd = os.open(self.state_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError as error:
-            if temporary_name is not None:
-                try:
-                    os.unlink(temporary_name)
-                except FileNotFoundError:
-                    pass
-            raise DevlegateError(
-                f"cannot write state file {self._state_file}: {error}"
-            ) from error
+            self._runtime_store.replace(state)
+        except RuntimeStoreError as error:
+            raise DevlegateError(str(error)) from error
         self._state = state
 
     def _observe_worktree(self, status: str) -> bool:
@@ -2330,23 +2296,13 @@ export default tool({
 
     def _status_state_observation(self) -> tuple[dict[str, object], str]:
         try:
-            raw = self._state_file.read_bytes()
-        except FileNotFoundError:
-            return {"phase": "idle"}, "missing"
-        except OSError as error:
-            raise DevlegateError(
-                f"cannot read state file {self._state_file}: {error}"
-            ) from error
-        try:
-            state = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise DevlegateError(
-                f"cannot read state file {self._state_file}: {error}"
-            ) from error
+            state, fingerprint = self._runtime_store.observe()
+        except RuntimeStoreError as error:
+            raise DevlegateError(str(error)) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
         self._validate_state_invariant(state)
-        return state, hashlib.sha256(raw).hexdigest()
+        return state, fingerprint
 
     def _git_observation(self, repo: Path, remote_branch: str) -> GitObservation:
         branch_result = _git(
