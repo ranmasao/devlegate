@@ -4,10 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlegate"
-version = "0.3.0"
-description = "A minimal workflow orchestrator skeleton."
+version = "0.4.0"
+description = "Local deterministic orchestrator for agent-driven software development."
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/ranmasao/devlegate"
 
 [project.optional-dependencies]
 dev = [
@@ -20,6 +24,9 @@ devlegate = "devlegate.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+devlegate = ["default_templates/.env.example", "default_templates/artifacts.toml", "default_templates/**/*.tmpl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

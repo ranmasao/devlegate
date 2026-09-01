@@ -6,6 +6,33 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+## 0.4.0 -- 2026-09-01
+
+Control-plane isolation and Devlegate-owned execution lifecycle.
+
+### Added
+
+- Added an independent control branch and Devlegate-owned control worktree outside the product checkout.
+- Added isolated per-ticket execution worktrees and durable execution branches with lineage binding to product and control revisions.
+- Added a typed worker report boundary and durable execution evidence owned by Devlegate.
+- Added the `accepted` workflow state and serialized ancestry-only integration of accepted checkpoints into product history.
+- Added explicit failed-execution retry with stale-attempt and current-admission validation.
+- Added project bootstrap and rendering commands, project-context routing, and packaged Architect and Reviewer protocol artifacts.
+
+### Changed
+
+- Moved canonical workflow state and Git lifecycle ownership off the worker and out of the product checkout.
+- Made review and accepted work serial boundaries, and made only `done` work satisfy dependencies.
+- Made bootstrap adapt to project-owned documentation and templates instead of overwriting them.
+
+### Fixed
+
+- Failed closed on invalid control topology, worker mutations, publication races, unsafe execution workspaces, malformed reports, divergent integration, and invalid bootstrap state.
+
+### Removed
+
+- Removed obsolete automatic recovery phases, generated-artifact staging, and dead compatibility state from the earlier single-checkout workflow.
+
 ## 0.3.0 -- 2026-08-25
 
 Immutable planning, read-only observability, and stricter product boundaries.

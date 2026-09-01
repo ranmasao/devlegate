@@ -16,7 +16,7 @@ class TicketError(ValueError):
 
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-_WORKFLOW_STATES = ("backlog", "todo", "review", "done")
+_WORKFLOW_STATES = ("backlog", "todo", "review", "accepted", "done")
 _METADATA_KEYS = {"type", "title", "depends_on"}
 
 

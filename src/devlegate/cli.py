@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-import string
 import subprocess
 import sys
 import tempfile
@@ -16,13 +15,45 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
 
 from devlegate import __version__
+from devlegate.agent_protocol import (
+    AgentProtocolError,
+    RenderContext,
+    initialize_project,
+    render_project,
+    seed_project_env,
+)
+from devlegate.execution_result import (
+    ExecutionReport,
+    ExecutionReportError,
+    ExecutionReportStore,
+    build_execution_report,
+    new_execution_id,
+)
+from devlegate.execution_workspace import (
+    ExecutionWorkspace,
+    ExecutionWorkspaceError,
+    ExecutionWorkspaceManager,
+    parse_worktree_porcelain,
+)
+from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.tickets import (
     TicketError,
     TicketStore,
     is_canonical_ticket_name,
     load_ticket_store,
+)
+from devlegate.worker_egress import (
+    OpenCodeRunResult,
+    WorkerEgressParser,
+    WorkerRunResult,
+)
+from devlegate.worker_prompt import (
+    WorkDirective,
+    WorkerPromptInput,
+    build_worker_prompt,
 )
 
 
@@ -39,6 +70,20 @@ class SnapshotChanged(Exception):
 
 
 @dataclasses.dataclass(frozen=True)
+class GitObservation:
+    branch: str | None
+    detached: bool
+    local_head: str
+    remote_ref: str
+    remote_head: str | None
+    working_tree_clean: bool
+    working_tree_fingerprint: str
+
+    def as_dict(self) -> dict[str, object]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
 class ExecutionPlan:
     """The immutable scheduling decision for one observed project state."""
 
@@ -48,11 +93,8 @@ class ExecutionPlan:
     ticket_title: str | None = None
     ticket_state: str | None = None
     bound: bool = False
-    branch: str | None = None
-    detached: bool = False
-    local_head: str = ""
-    remote_ref: str = ""
-    remote_head: str | None = None
+    code: GitObservation | None = None
+    control: GitObservation | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -69,11 +111,8 @@ class ExecutionPlan:
             ),
             "bound": self.bound,
             "observation": {
-                "branch": self.branch,
-                "detached": self.detached,
-                "local_head": self.local_head,
-                "remote_ref": self.remote_ref,
-                "remote_head": self.remote_head,
+                "code": self.code.as_dict() if self.code else None,
+                "control": self.control.as_dict() if self.control else None,
             },
         }
 
@@ -83,17 +122,16 @@ class StatusSnapshot:
     phase: str
     bound_ticket_id: str | None
     persisted_body_present: bool
-    branch: str
-    local_head: str
-    remote_ref: str
-    remote_head: str | None
-    working_tree_clean: bool
+    code: GitObservation
+    control: GitObservation | None
     counts: tuple[tuple[str, int], ...]
     runnable: tuple[tuple[str, str], ...]
     blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
     review: tuple[tuple[str, str], ...]
+    accepted: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
     plan: ExecutionPlan
+    failed_executions: tuple["FailedExecution", ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -102,12 +140,9 @@ class StatusSnapshot:
                 "bound_ticket": self.bound_ticket_id,
                 "persisted_body": self.persisted_body_present,
             },
-            "repository": {
-                "branch": self.branch,
-                "local_head": self.local_head,
-                "remote_ref": self.remote_ref,
-                "remote_head": self.remote_head,
-                "working_tree_clean": self.working_tree_clean,
+            "observation": {
+                "code": self.code.as_dict(),
+                "control": self.control.as_dict() if self.control else None,
             },
             "tickets": {
                 "counts": dict(self.counts),
@@ -130,6 +165,10 @@ class StatusSnapshot:
                     {"id": ticket_id, "title": title}
                     for ticket_id, title in self.review
                 ],
+                "accepted": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.accepted
+                ],
                 "next": (
                     {"id": self.next_ticket[0], "title": self.next_ticket[1]}
                     if self.next_ticket is not None
@@ -137,12 +176,41 @@ class StatusSnapshot:
                 ),
             },
             "plan": self.plan.as_dict(),
+            "failed_executions": [
+                failure.as_dict() for failure in self.failed_executions
+            ],
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class FailedExecution:
+    ticket_id: str
+    title: str
+    reason: str
+    retryable: bool
+    nonretryable_reason: str | None = None
+
+    @property
+    def display_reason(self) -> str:
+        return (
+            self.reason
+            if self.retryable
+            else (self.nonretryable_reason or "unknown")
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.ticket_id,
+            "title": self.title,
+            "reason": self.reason,
+            "retryable": self.retryable,
+            "nonretryable_reason": self.nonretryable_reason,
         }
 
 
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
-    for state in ("backlog", "todo", "review", "done"):
+    for state in ("backlog", "todo", "review", "accepted", "done"):
         directory = repo / workflow_paths[state]
         if directory.is_dir():
             entries.append(f"{state}\0dir\n")
@@ -166,6 +234,7 @@ def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
                 digest = ""
             entries.append(f"{state}/{path.name}\0{kind}\0{digest}\n")
     return hashlib.sha256("".join(entries).encode()).hexdigest()
+
 
 def _read_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -290,30 +359,37 @@ def _write_worker_line(text: str, stream) -> None:
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 
 
-def _run_opencode(command: list[str], prompt: str) -> int:
+def _run_opencode(
+    command: list[str],
+    prompt: str,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    event_handler: Callable[[object], None] | None = None,
+) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
         command + [prompt],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=env,
     )
     output_lock = threading.Lock()
-    protocol_failed = False
+    transport_error: str | None = None
 
     def write(text: str, stream) -> None:
         with output_lock:
             _write_worker_text(text, stream)
 
     def consume_stdout() -> None:
-        nonlocal protocol_failed
+        nonlocal transport_error
         assert process.stdout is not None
         while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
-                protocol_failed = True
-                _log(
-                    "OpenCode protocol error: stdout event exceeds maximum size"
-                )
+                transport_error = "stdout event exceeds maximum size"
+                _log(f"OpenCode protocol error: {transport_error}")
                 if not raw_line.endswith(b"\n"):
                     while discarded := process.stdout.readline(
                         MAX_STDOUT_EVENT_BYTES + 1
@@ -324,22 +400,24 @@ def _run_opencode(command: list[str], prompt: str) -> int:
             try:
                 event = json.loads(raw_line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
-                protocol_failed = True
-                _log("OpenCode protocol error: invalid JSON event on stdout")
+                transport_error = "invalid JSON event on stdout"
+                _log(f"OpenCode protocol error: {transport_error}")
                 continue
+            if event_handler is not None:
+                event_handler(event)
             if (
                 not isinstance(event, dict)
                 or event.get("type") not in _OPENCODE_JSON_TYPES
             ):
-                protocol_failed = True
-                _log("OpenCode protocol error: unsupported event on stdout")
+                transport_error = "unsupported event on stdout"
+                _log(f"OpenCode protocol error: {transport_error}")
                 continue
             event_type = event["type"]
             if event_type == "text" or event_type == "reasoning":
                 part = event.get("part")
                 if not isinstance(part, dict) or not isinstance(part.get("text"), str):
-                    protocol_failed = True
-                    _log("OpenCode protocol error: text event has no text part")
+                    transport_error = "text event has no text part"
+                    _log(f"OpenCode protocol error: {transport_error}")
                     continue
                 write(part["text"] + "\n", sys.stdout)
             elif event_type == "tool_use":
@@ -351,8 +429,8 @@ def _run_opencode(command: list[str], prompt: str) -> int:
                     or part["state"].get("status")
                     not in {"pending", "running", "completed", "error"}
                 ):
-                    protocol_failed = True
-                    _log("OpenCode protocol error: invalid tool event on stdout")
+                    transport_error = "invalid tool event on stdout"
+                    _log(f"OpenCode protocol error: {transport_error}")
                     continue
                 tool = part["tool"]
                 write(f"OpenCode tool: {tool}\n", sys.stdout)
@@ -382,19 +460,7 @@ def _run_opencode(command: list[str], prompt: str) -> int:
     returncode = process.wait()
     stdout_thread.join()
     stderr_thread.join()
-    if protocol_failed:
-        return 1
-    return returncode
-
-
-def _has_todo_files(repo: Path, todo_path: str) -> bool:
-    todo_dir = repo / todo_path
-    return todo_dir.is_dir() and any(
-        is_canonical_ticket_name(item.name)
-        and not item.is_symlink()
-        and item.is_file()
-        for item in todo_dir.iterdir()
-    )
+    return OpenCodeRunResult(returncode, transport_error)
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -447,14 +513,6 @@ def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
 
 
-def _render_prompt(template: str, values: dict[str, str]) -> str:
-    """Render configured prompt values while leaving unknown variables intact."""
-    rendered = string.Template(template).safe_substitute(values)
-    for name, value in values.items():
-        rendered = rendered.replace("{{" + name + "}}", value)
-    return rendered
-
-
 class Devlegate:
     """Run the repository polling and agent execution workflow."""
 
@@ -475,63 +533,70 @@ class Devlegate:
 
         self.remote_name = setting("REMOTE_NAME", "origin")
         self.remote_branch = setting("REMOTE_BRANCH", "")
+        self.control_branch = setting("CONTROL_BRANCH", "devlegate/control")
         self.backlog_path = setting("BACKLOG_PATH", "kanban/backlog")
         self.todo_path = setting("TODO_PATH", "kanban/todo")
         self.review_path = setting("REVIEW_PATH", "kanban/review")
+        self.accepted_path = setting("ACCEPTED_PATH", "kanban/accepted")
         self.done_path = setting("DONE_PATH", "kanban/done")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
-        prompt_root = Path(__file__).resolve().parents[2]
-        default_prompt = prompt_root / "agent-prompt.txt"
-        self.agent_prompt_file = Path(
-            setting("AGENT_PROMPT_FILE", str(default_prompt))
-        )
-        default_recovery_prompt = prompt_root / "recovery-prompt.txt"
-        self.recovery_prompt_file = Path(
-            setting("RECOVERY_PROMPT_FILE", str(default_recovery_prompt))
-        )
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
-        self._recovery_pending = False
-        state_default = Path(
-            os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
-        ) / "devlegate"
-        self.state_dir = Path(
-            config.get("STATE_DIR", os.environ.get("STATE_DIR", state_default))
-        ).expanduser()
+        self._retry_ticket_id: str | None = None
+        state_default = (
+            Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+            / "devlegate"
+        )
+        self.state_dir = (
+            Path(config.get("STATE_DIR", os.environ.get("STATE_DIR", state_default)))
+            .expanduser()
+            .resolve()
+        )
         self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
         self._state_file = self.state_dir / f"{self._state_key}.json"
+        self.control_worktree = (
+            self.state_dir / "worktrees" / self._state_key / "control"
+        )
+        self.execution_worktree_root = self.state_dir / "worktrees" / self._state_key
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
         self._workflow_blocker_fingerprint: str | None = None
         self._workflow_validation_succeeded = False
-        self._recovery_pending = False
+        self._retry_ticket_id = None
         self._validate()
         self._state = self._load_state()
-        self._recovery_pending = self._state.get("phase") in {
-            "agent_running",
-            "recovery_pending",
-        }
 
     def _workflow_paths(self) -> dict[str, str]:
         return {
             "backlog": self.backlog_path,
             "todo": self.todo_path,
             "review": self.review_path,
+            "accepted": self.accepted_path,
             "done": self.done_path,
         }
 
     def _ticket_store(self) -> TicketStore:
+        product_workflow = [
+            self.repo / configured_path
+            for configured_path in self._workflow_paths().values()
+        ]
+        if any(path.exists() for path in product_workflow):
+            raise WorkflowBlockedError(
+                "configured managed workflow path exists in the product checkout; "
+                "canonical workflow belongs only to the control plane; resolve "
+                "the conflicting project path explicitly"
+            )
+        self._validate_control_worktree()
         for state, configured_path in self._workflow_paths().items():
-            directory = self.repo / configured_path
+            directory = self.control_worktree / configured_path
             if not directory.is_dir():
                 raise WorkflowBlockedError(
-                    f"managed workflow directory is unavailable: {directory} "
-                    f"({state})"
+                    f"managed workflow directory is unavailable: {directory} ({state})"
                 )
         try:
-            store = load_ticket_store(self.repo, self._workflow_paths())
+            store = load_ticket_store(self.control_worktree, self._workflow_paths())
             self._workflow_validation_succeeded = True
             return store
         except TicketError as error:
@@ -540,6 +605,42 @@ class Devlegate:
             raise WorkflowBlockedError(
                 "managed workflow changed while it was being observed"
             ) from error
+
+    def _validate_control_worktree(self) -> None:
+        if not self.control_worktree.is_dir():
+            raise WorkflowBlockedError(
+                "control worktree is missing; run 'devlegate control init' "
+                f"to attach {self.control_branch}"
+            )
+        registered = _git(self.repo, "worktree", "list", "--porcelain")
+        try:
+            registered_paths = set(parse_worktree_porcelain(registered.stdout))
+        except ExecutionWorkspaceError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        if self.control_worktree.resolve() not in registered_paths:
+            raise WorkflowBlockedError(
+                "control path is not a registered Git worktree for this repository"
+            )
+        root = _git(self.control_worktree, "rev-parse", "--show-toplevel", check=False)
+        if (
+            root.returncode
+            or Path(root.stdout.strip()).resolve() != self.control_worktree.resolve()
+        ):
+            raise WorkflowBlockedError(
+                "control worktree does not resolve to its configured checkout"
+            )
+        branch = _git(
+            self.control_worktree,
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "HEAD",
+            check=False,
+        )
+        if branch.returncode or branch.stdout.strip() != self.control_branch:
+            raise WorkflowBlockedError(
+                f"control worktree is not on configured branch {self.control_branch}"
+            )
 
     @staticmethod
     def _repository_root() -> Path:
@@ -556,14 +657,6 @@ class Devlegate:
 
     def _validate(self) -> None:
         if not self.read_only:
-            if not self.agent_prompt_file.is_file():
-                raise DevlegateError(
-                    f"agent prompt file not found: {self.agent_prompt_file}"
-                )
-            if not self.recovery_prompt_file.is_file():
-                raise DevlegateError(
-                    f"recovery prompt file not found: {self.recovery_prompt_file}"
-                )
             if not self.poll_interval.isdecimal():
                 raise DevlegateError("POLL_INTERVAL must be an integer")
             if not self.opencode_model:
@@ -589,9 +682,12 @@ class Devlegate:
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
             )
-        if not self.read_only and _git(
-            self.repo, "remote", "get-url", self.remote_name, check=False
-        ).returncode:
+        if (
+            not self.read_only
+            and _git(
+                self.repo, "remote", "get-url", self.remote_name, check=False
+            ).returncode
+        ):
             raise DevlegateError(f"git remote not found: {self.remote_name}")
         if not self.read_only:
             self._validate_state_access()
@@ -603,6 +699,263 @@ class Devlegate:
             raise DevlegateError(
                 f"state directory is not writable: {self.state_dir}: {error}"
             ) from error
+
+    def _assert_product_checkout_unchanged(
+        self, expected_branch: str | None, expected_head: str
+    ) -> None:
+        branch_result = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        observed_branch = (
+            branch_result.stdout.strip() if branch_result.returncode == 0 else None
+        )
+        head_result = _git(self.repo, "rev-parse", "HEAD", check=False)
+        observed_head = (
+            head_result.stdout.strip() if head_result.returncode == 0 else None
+        )
+        status_result = _git(
+            self.repo, "status", "--porcelain", check=False
+        )
+        if status_result.returncode:
+            raise DevlegateError(
+                "cannot verify product checkout after worker execution; "
+                "execution isolation cannot be proven"
+            )
+        status = status_result.stdout
+        if (
+            observed_branch != expected_branch
+            or observed_head != expected_head
+            or bool(status)
+        ):
+            raise DevlegateError(
+                "product checkout changed while worker execution was active; "
+                "execution isolation cannot be proven"
+            )
+
+    def _control_remote_exists(self) -> bool:
+        """Observe the control ref without conflating transport failure and absence."""
+        observed = _git(
+            self.repo,
+            "ls-remote",
+            "--heads",
+            self.remote_name,
+            f"refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if observed.returncode:
+            detail = observed.stderr.strip() or "remote could not be observed"
+            raise DevlegateError(
+                f"cannot observe control branch {self.control_branch!r} on "
+                f"remote {self.remote_name}: {detail}"
+            )
+        return bool(observed.stdout.strip())
+
+    def _attach_existing_control(self) -> int:
+        fetch = _git(
+            self.repo, "fetch", self.remote_name, self.control_branch, check=False
+        )
+        if fetch.returncode:
+            raise DevlegateError(
+                f"cannot fetch existing control branch {self.control_branch!r}: "
+                f"{fetch.stderr.strip()}"
+            )
+        remote = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{self.remote_name}/{self.control_branch}",
+            check=False,
+        )
+        if remote.returncode:
+            raise DevlegateError(
+                f"configured control branch {self.control_branch!r} is unavailable "
+                f"on remote {self.remote_name}"
+            )
+        if self.control_worktree.exists() or self.control_worktree.is_symlink():
+            registered = _git(self.repo, "worktree", "list", "--porcelain")
+            try:
+                registered_paths = set(parse_worktree_porcelain(registered.stdout))
+            except ExecutionWorkspaceError as error:
+                raise DevlegateError(str(error)) from error
+            if self.control_worktree.resolve() not in registered_paths:
+                raise DevlegateError(
+                    "existing control path is not a registered Git worktree"
+                )
+            root = _git(
+                self.control_worktree, "rev-parse", "--git-common-dir", check=False
+            )
+            branch = _git(
+                self.control_worktree,
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "HEAD",
+                check=False,
+            )
+            expected_git = _git(
+                self.repo, "rev-parse", "--git-common-dir"
+            ).stdout.strip()
+            if (
+                root.returncode
+                or Path(root.stdout.strip()).resolve() != Path(expected_git).resolve()
+            ):
+                raise DevlegateError(
+                    "existing control worktree belongs to another repository"
+                )
+            if branch.returncode or branch.stdout.strip() != self.control_branch:
+                raise DevlegateError("existing control worktree is on the wrong branch")
+            for state, configured_path in self._workflow_paths().items():
+                if not (self.control_worktree / configured_path).is_dir():
+                    raise DevlegateError(
+                        f"managed workflow directory is unavailable: "
+                        f"{self.control_worktree / configured_path} ({state})"
+                    )
+            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            remote_head = remote.stdout.strip()
+            if (
+                local_head != remote_head
+                and _git(
+                    self.control_worktree,
+                    "merge-base",
+                    "--is-ancestor",
+                    local_head,
+                    remote_head,
+                    check=False,
+                ).returncode
+            ):
+                raise DevlegateError(
+                    "existing control worktree is not compatible with the remote "
+                    "control branch"
+                )
+            print(f"control worktree already attached: {self.control_worktree}")
+            return 0
+        self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
+        local_branch = _git(
+            self.repo,
+            "show-ref",
+            "--verify",
+            f"refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if local_branch.returncode == 0:
+            local_head = _git(
+                self.repo, "rev-parse", self.control_branch
+            ).stdout.strip()
+            remote_head = remote.stdout.strip()
+            if (
+                local_head != remote_head
+                and _git(
+                    self.repo,
+                    "merge-base",
+                    "--is-ancestor",
+                    local_head,
+                    remote_head,
+                    check=False,
+                ).returncode
+            ):
+                raise DevlegateError(
+                    "local control branch diverges from the remote control branch"
+                )
+        args = ["worktree", "add"]
+        if local_branch.returncode:
+            args += ["--track", "-b", self.control_branch]
+            args += [
+                str(self.control_worktree),
+                f"{self.remote_name}/{self.control_branch}",
+            ]
+        else:
+            args += [str(self.control_worktree), self.control_branch]
+        created = _git(self.repo, *args, check=False)
+        if created.returncode:
+            raise DevlegateError(
+                f"cannot attach control worktree: {created.stderr.strip()}"
+            )
+        print(f"attached control worktree: {self.control_worktree}")
+        return 0
+
+    def _bootstrap_control(self) -> int:
+        if self.control_worktree.exists() or self.control_worktree.is_symlink():
+            raise DevlegateError(
+                "expected control worktree path already exists: "
+                f"{self.control_worktree}"
+            )
+        local_branch = _git(
+            self.repo,
+            "show-ref",
+            "--verify",
+            f"refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if local_branch.returncode == 0:
+            raise DevlegateError(
+                f"local control branch {self.control_branch!r} exists while the "
+                "remote branch is absent"
+            )
+        self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
+        created = _git(
+            self.repo,
+            "worktree",
+            "add",
+            "--orphan",
+            "-b",
+            self.control_branch,
+            str(self.control_worktree),
+            check=False,
+        )
+        if created.returncode:
+            raise DevlegateError(
+                f"cannot create fresh control worktree: {created.stderr.strip()}"
+            )
+        try:
+            for configured_path in self._workflow_paths().values():
+                directory = self.control_worktree / configured_path
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / ".gitkeep").touch()
+            added = _git(self.control_worktree, "add", "--all", check=False)
+            if added.returncode:
+                raise DevlegateError(
+                    f"cannot stage initial control state: {added.stderr.strip()}"
+                )
+            committed = _git(
+                self.control_worktree,
+                "commit",
+                "-m",
+                "Initialize Devlegate control plane",
+                check=False,
+            )
+            if committed.returncode:
+                raise DevlegateError(
+                    f"cannot commit initial control state: {committed.stderr.strip()}"
+                )
+            pushed = _git(
+                self.control_worktree,
+                "push",
+                self.remote_name,
+                f"HEAD:refs/heads/{self.control_branch}",
+                check=False,
+            )
+            if pushed.returncode:
+                raise DevlegateError(
+                    f"cannot publish initial control branch: {pushed.stderr.strip()}"
+                )
+            refreshed = _git(
+                self.repo, "fetch", self.remote_name, self.control_branch, check=False
+            )
+            if refreshed.returncode:
+                raise DevlegateError(
+                    "cannot refresh published control branch: "
+                    f"{refreshed.stderr.strip()}"
+                )
+        except DevlegateError:
+            raise
+        print(f"initialized control worktree: {self.control_worktree}")
+        return 0
+
+    def control_init(self) -> int:
+        """Attach an existing control branch or bootstrap a fresh control plane."""
+        if self._control_remote_exists():
+            return self._attach_existing_control()
+        return self._bootstrap_control()
 
     def _probe_state_access(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -650,19 +1003,37 @@ class Devlegate:
             "merge_pending",
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
-            "recovery_failed",
         }
         if phase not in valid_phases:
             raise DevlegateError(f"invalid state phase: {phase}")
-        if phase in {"idle", "recovery_failed"}:
+        failures = state.get("failed_executions", {})
+        if not isinstance(failures, dict) or not all(
+            isinstance(ticket_id, str)
+            and isinstance(value, dict)
+            and all(
+                isinstance(value.get(field), str)
+                for field in (
+                    "execution_id",
+                    "product_head",
+                    "remote_head",
+                    "control_head",
+                    "todo_fingerprint",
+                    "reason",
+                )
+            )
+            for ticket_id, value in failures.items()
+        ):
+            raise DevlegateError("invalid state: failed execution metadata is invalid")
+        if phase == "idle":
             return
         if phase == "merge_pending":
-            required_fields = ("local_head", "remote_head", "changed_paths")
-            if not all(
-                isinstance(state.get(field), str) for field in required_fields
-            ):
+            required_fields = (
+                "local_head",
+                "remote_head",
+                "changed_paths",
+                "control_head",
+            )
+            if not all(isinstance(state.get(field), str) for field in required_fields):
                 raise DevlegateError(
                     "invalid merge_pending state: synchronization coordinates "
                     "are incomplete"
@@ -680,6 +1051,48 @@ class Devlegate:
         if not has_id or not has_body:
             raise DevlegateError(
                 f"invalid {phase} state: selected ticket binding is incomplete"
+            )
+        if not isinstance(state.get("control_head"), str):
+            raise DevlegateError(
+                f"invalid {phase} state: control revision identity is incomplete"
+            )
+        execution_fields = (
+            "execution_ticket_id",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+            "execution_id",
+        )
+        if phase in {"agent_pending", "agent_running"} and (
+            not all(
+                field in state
+                for field in (*execution_fields, "execution_remote_head")
+            )
+            or not all(
+                isinstance(state.get(field), str) and state[field]
+                for field in execution_fields
+            )
+            or not (
+                state.get("execution_remote_head") is None
+                or (
+                    isinstance(state.get("execution_remote_head"), str)
+                    and bool(state["execution_remote_head"])
+                )
+            )
+        ):
+            raise DevlegateError(
+                "invalid state: execution workspace binding is incomplete"
+            )
+        if "execution_remote_head" in state and not (
+            state["execution_remote_head"] is None
+            or (
+                isinstance(state["execution_remote_head"], str)
+                and bool(state["execution_remote_head"])
+            )
+        ):
+            raise DevlegateError(
+                "invalid state: execution remote revision identity is invalid"
             )
 
     def _save_state(self, phase: str, **fields: object) -> None:
@@ -749,9 +1162,7 @@ class Devlegate:
     def _log_sync_failure(
         self, local_head: str, remote_ref: str, stderr: str = ""
     ) -> None:
-        remote_result = _git(
-            self.repo, "rev-parse", remote_ref, check=False
-        )
+        remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
         remote_head = remote_result.stdout.strip() or "<unknown>"
         base_result = _git(
             self.repo, "merge-base", local_head, remote_head, check=False
@@ -762,8 +1173,7 @@ class Devlegate:
             "rev-list",
             "--left-right",
             "--count",
-            local_head,
-            remote_head,
+            f"{local_head}...{remote_head}",
             check=False,
         )
         counts = counts_result.stdout.strip().split()
@@ -788,6 +1198,59 @@ class Devlegate:
         if stderr.strip():
             _log(f"git stderr: {stderr.strip()}")
 
+    def _sync_control(self) -> tuple[str, str]:
+        """Fetch and fast-forward the already initialized control checkout."""
+        self._validate_control_worktree()
+        observation = self._git_observation(self.control_worktree, self.control_branch)
+        if not observation.working_tree_clean:
+            raise WorkflowBlockedError("control working tree is dirty")
+        fetch = _git(
+            self.control_worktree,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.control_branch,
+            check=False,
+        )
+        if fetch.returncode:
+            raise WorkflowBlockedError(
+                f"control fetch failed: {fetch.stderr.strip() or 'unknown git error'}"
+            )
+        remote_ref = f"{self.remote_name}/{self.control_branch}"
+        remote = _git(
+            self.control_worktree,
+            "rev-parse",
+            "--verify",
+            remote_ref,
+            check=False,
+        )
+        if remote.returncode:
+            raise WorkflowBlockedError(f"control remote branch not found: {remote_ref}")
+        remote_head = remote.stdout.strip()
+        local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if local_head != remote_head:
+            ancestor = _git(
+                self.control_worktree,
+                "merge-base",
+                "--is-ancestor",
+                local_head,
+                remote_head,
+                check=False,
+            )
+            if ancestor.returncode:
+                raise WorkflowBlockedError(
+                    "control branch cannot be fast-forwarded; histories diverged"
+                )
+            merge = _git(
+                self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+            )
+            if merge.returncode:
+                raise WorkflowBlockedError(
+                    f"control fast-forward failed: {merge.stderr.strip()}"
+                )
+            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        return local_head, remote_head
+
     def run_once(self) -> int:
         self._workflow_validation_succeeded = False
         branch = _git(
@@ -795,8 +1258,7 @@ class Devlegate:
         )
         if branch.returncode:
             raise WorkflowBlockedError(
-                f"current checkout is detached; expected branch "
-                f"'{self.current_branch}'"
+                f"current checkout is detached; expected branch '{self.current_branch}'"
             )
         actual_branch = branch.stdout.strip()
         if actual_branch != self.current_branch:
@@ -804,28 +1266,24 @@ class Devlegate:
                 f"current checkout branch '{actual_branch}' does not match "
                 f"expected branch '{self.current_branch}'"
             )
+        if self._state.get("phase") == "agent_running":
+            ticket_id = self._state.get("execution_ticket_id") or self._state.get(
+                "selected_ticket_id", "unknown"
+            )
+            execution_id = self._state.get("execution_id", "unknown")
+            raise DevlegateError(
+                f"interrupted execution is ambiguous for ticket {ticket_id} "
+                f"(execution {execution_id}); refusing to launch a worker or "
+                "automatically reconcile it; explicit operator handling is "
+                "required"
+            )
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
-        if self._state.get("phase") == "recovery_running":
-            self._save_state("recovery_failed")
-            self._recovery_pending = False
-            _log("interrupted recovery treated as failed recovery")
-        if self._state.get("phase") == "recovery_failed":
-            if status:
-                if dirty_changed:
-                    _log(
-                        "recovery failed; working tree is still dirty; manual "
-                        "intervention is required"
-                    )
-                return 1
-            self._save_state("idle")
-            self._recovery_pending = False
-            _log("working tree cleaned manually; recovery state cleared")
-        recovery = self._recovery_pending
-        if status and not recovery:
+        if status:
             if dirty_changed:
                 _log("working tree is dirty; refusing to pull or start the agent")
             return 1
+        control_head, control_remote_head = self._sync_control()
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
@@ -833,14 +1291,7 @@ class Devlegate:
         pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
-        if recovery:
-            self._recovery_pending = False
-            remote_head = local_head
-            changed_paths = status.rstrip()
-            self._save_state("recovery_running")
-            _log("starting recovery for unfinished agent work")
-        else:
-            fetch = _git(
+        fetch = _git(
                 self.repo,
                 "fetch",
                 "--prune",
@@ -848,9 +1299,10 @@ class Devlegate:
                 self.remote_branch,
                 check=False,
             )
-            if fetch.returncode:
-                _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
-                return 1
+        if fetch.returncode:
+            _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
+            return 1
+        else:
             remote_result = _git(
                 self.repo, "rev-parse", "--verify", remote_ref, check=False
             )
@@ -983,14 +1435,13 @@ class Devlegate:
                         local_head=local_head,
                         remote_head=target_head,
                         changed_paths=changed_paths,
+                        control_head=control_head,
                     )
                     merge = _git(
                         self.repo, "merge", "--ff-only", remote_ref, check=False
                     )
                     if merge.returncode:
-                        self._log_sync_failure(
-                            local_head, remote_ref, merge.stderr
-                        )
+                        self._log_sync_failure(local_head, remote_ref, merge.stderr)
                         return 1
                     local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
                     if local_head != target_head:
@@ -1003,29 +1454,33 @@ class Devlegate:
                     changed_paths = str(self._state.get("changed_paths", ""))
                 remote_head = target_head
                 synchronized_phase = (
-                    "agent_pending" if pending_agent_execution else "merge_pending"
+                    "agent_pending" if pending_agent_execution else "idle"
                 )
                 synchronized_fields = {
                     "local_head": local_head,
                     "remote_head": target_head,
                     "changed_paths": changed_paths,
+                    "control_head": control_head,
                 }
-                self._save_state(synchronized_phase, **synchronized_fields)
+                self._save_state(
+                    synchronized_phase,
+                    **synchronized_fields,
+                )
                 if state_phase == "merge_pending":
                     _log("resumed after completed merge")
             elif local_head == remote_head:
-                if self._recovery_pending:
-                    self._recovery_pending = False
-                    self._save_state("idle")
                 changed_paths = ""
-            elif _git(
-                self.repo,
-                "merge-base",
-                "--is-ancestor",
-                local_head,
-                remote_head,
-                check=False,
-            ).returncode == 0:
+            elif (
+                _git(
+                    self.repo,
+                    "merge-base",
+                    "--is-ancestor",
+                    local_head,
+                    remote_head,
+                    check=False,
+                ).returncode
+                == 0
+            ):
                 had_remote_change = True
                 changed_paths = _git(
                     self.repo,
@@ -1040,18 +1495,16 @@ class Devlegate:
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
+                    control_head=control_head,
                 )
-                merge = _git(
-                    self.repo, "merge", "--ff-only", remote_ref, check=False
-                )
+                merge = _git(self.repo, "merge", "--ff-only", remote_ref, check=False)
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)
                     return 1
                 actual_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
                 if actual_head != remote_head:
                     raise DevlegateError(
-                        "fast-forward completed without reaching the remote "
-                        "revision"
+                        "fast-forward completed without reaching the remote revision"
                     )
                 _log(
                     f"updated {self.current_branch} from {local_head[:12]} "
@@ -1059,19 +1512,22 @@ class Devlegate:
                 )
                 local_head = actual_head
                 self._save_state(
-                    "merge_pending",
+                    "idle",
                     local_head=local_head,
                     remote_head=remote_head,
                     changed_paths=changed_paths,
                 )
-            elif _git(
-                self.repo,
-                "merge-base",
-                "--is-ancestor",
-                remote_head,
-                local_head,
-                check=False,
-            ).returncode == 0:
+            elif (
+                _git(
+                    self.repo,
+                    "merge-base",
+                    "--is-ancestor",
+                    remote_head,
+                    local_head,
+                    check=False,
+                ).returncode
+                == 0
+            ):
                 local_ahead = True
                 changed_paths = _git(
                     self.repo,
@@ -1090,22 +1546,77 @@ class Devlegate:
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
         ticket_store = self._ticket_store()
-        bound_execution = recovery or pending_agent_execution
+        try:
+            load_project_context(self.repo)
+        except ProjectContextError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        bound_execution = pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
             ticket_store,
             False,
             observation={
-                "branch": self.current_branch,
-                "detached": False,
-                "local_head": local_head,
-                "remote_ref": remote_ref,
-                "remote_head": remote_head,
+                "code": GitObservation(
+                    self.current_branch,
+                    False,
+                    local_head,
+                    remote_ref,
+                    remote_head,
+                    True,
+                    _status_fingerprint(""),
+                ),
+                "control": GitObservation(
+                    self.control_branch,
+                    False,
+                    control_head,
+                    f"{self.remote_name}/{self.control_branch}",
+                    control_remote_head,
+                    True,
+                    _status_fingerprint(""),
+                ),
             },
         )
+        if self._retry_ticket_id is not None:
+            if execution_plan.action != "run-worker" or execution_plan.bound:
+                raise DevlegateError(execution_plan.reason)
+            retry_ticket = ticket_store.by_id.get(self._retry_ticket_id)
+            if (
+                retry_ticket is None
+                or retry_ticket.state != "todo"
+                or retry_ticket not in ticket_store.runnable
+            ):
+                raise DevlegateError(
+                    f"ticket {self._retry_ticket_id} is no longer eligible for retry"
+                )
+            execution_plan = ExecutionPlan(
+                "run-worker", "explicit retry of current failed execution",
+                retry_ticket.id, retry_ticket.title, retry_ticket.state, False,
+                execution_plan.code, execution_plan.control,
+            )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
-        if execution_plan.action == "none" and not recovery:
+        if execution_plan.action == "integrate":
+            assert execution_plan.ticket_id is not None
+            try:
+                control_head = self._integrate_accepted(
+                    execution_plan.ticket_id,
+                    execution_plan.code,
+                    execution_plan.control,
+                )
+            except (DevlegateError, OSError, ExecutionReportError) as error:
+                raise DevlegateError(f"accepted integration failed: {error}") from error
+            todo_fingerprint, _todo_count = _todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )
+            self._save_state(
+                "idle",
+                handled_remote_head=remote_head,
+                handled_control_head=control_head,
+                handled_todo_fingerprint=todo_fingerprint,
+            )
+            _log(f"accepted ticket {execution_plan.ticket_id} integrated")
+            return 0
+        if execution_plan.action == "none":
             selected_ticket = None
         else:
             assert execution_plan.ticket_id is not None
@@ -1117,12 +1628,14 @@ class Devlegate:
                         "invalid execution state: selected ticket binding is incomplete"
                     )
                 selected_ticket = dataclasses.replace(selected_ticket, body=body)
-        if not recovery:
+        execution_id: str | None = None
+        if state_phase in {"idle", "agent_pending", "merge_pending"}:
             todo_fingerprint, todo_count = _todo_fingerprint(
-                self.repo, self.todo_path
+                self.control_worktree, self.todo_path
             )
             generation_is_same = (
                 str(self._state.get("handled_remote_head", "")) == remote_head
+                and str(self._state.get("handled_control_head", "")) == control_head
                 and str(self._state.get("handled_todo_fingerprint", ""))
                 == todo_fingerprint
             )
@@ -1130,6 +1643,7 @@ class Devlegate:
                 self._save_state(
                     "idle",
                     handled_remote_head=remote_head,
+                    handled_control_head=control_head,
                     handled_todo_fingerprint=todo_fingerprint,
                 )
                 if todo_count and ticket_store.tickets:
@@ -1146,116 +1660,638 @@ class Devlegate:
                 else:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
-            if generation_is_same and not pending_agent_execution:
+            failed = self._state.get("failed_executions", {})
+            failed_for_ticket = (
+                failed.get(selected_ticket.id) if isinstance(failed, dict) else None
+            )
+            if self._retry_ticket_id is not None:
+                if not isinstance(failed_for_ticket, dict) or any(
+                    failed_for_ticket.get(field) != expected
+                    for field, expected in (
+                        ("product_head", local_head),
+                        ("remote_head", remote_head),
+                        ("control_head", control_head),
+                        ("todo_fingerprint", todo_fingerprint),
+                    )
+                ):
+                    raise DevlegateError(
+                        f"ticket {self._retry_ticket_id} failed execution is stale; "
+                        "current project state must be reviewed before retry"
+                    )
+            if (
+                self._retry_ticket_id is None
+                and not pending_agent_execution
+                and isinstance(failed_for_ticket, dict)
+                and generation_is_same
+                and failed_for_ticket.get("execution_id")
+            ):
                 _log(
-                    "no new work generation; unchanged todo is already "
-                    "handled"
+                    f"execution failed for {selected_ticket.id}; automatic retry "
+                    "suppressed; explicit retry is required"
                 )
                 return 0
+            if (
+                generation_is_same
+                and not pending_agent_execution
+                and self._retry_ticket_id is None
+            ):
+                _log("no new work generation; unchanged todo is already handled")
+                return 0
+            if self._retry_ticket_id is not None:
+                if selected_ticket.id != self._retry_ticket_id:
+                    raise DevlegateError(
+                        f"ticket {self._retry_ticket_id} is no longer the current "
+                        "runnable ticket"
+                    )
+            existing_lineage = (
+                self._state.get("execution_ticket_id") == selected_ticket.id
+                and isinstance(self._state.get("execution_base_head"), str)
+                and isinstance(self._state.get("execution_control_head"), str)
+            )
+            bound_execution_control = (
+                self._state.get("execution_control_head")
+                if pending_agent_execution and existing_lineage
+                else control_head
+            )
+            execution_base_head = (
+                self._state["execution_base_head"]
+                if existing_lineage
+                else local_head
+            )
+            execution_remote_head = (
+                self._state.get("execution_remote_head")
+                if pending_agent_execution
+                else self._execution_remote_head(f"devlegate/work/{selected_ticket.id}")
+            )
+            if execution_remote_head is not None and not isinstance(
+                execution_remote_head, str
+            ):
+                raise DevlegateError("invalid persisted execution remote identity")
+            execution_id = (
+                self._state.get("execution_id")
+                if pending_agent_execution
+                else new_execution_id()
+            )
+            if not isinstance(execution_id, str) or not execution_id:
+                raise DevlegateError("invalid persisted execution identity")
             self._save_state(
                 "agent_pending",
                 local_head=local_head,
                 remote_head=remote_head,
                 changed_paths=changed_paths,
                 handled_remote_head=remote_head,
+                handled_control_head=control_head,
+                control_head=control_head,
                 handled_todo_fingerprint=todo_fingerprint,
                 selected_ticket_id=selected_ticket.id,
                 selected_ticket_body=selected_ticket.body,
+                execution_ticket_id=selected_ticket.id,
+                execution_base_head=execution_base_head,
+                execution_control_head=bound_execution_control,
+                execution_branch=f"devlegate/work/{selected_ticket.id}",
+                execution_path=str(
+                    self.execution_worktree_root / "work" / selected_ticket.id
+                ),
+                execution_id=execution_id,
+                execution_remote_head=execution_remote_head,
             )
 
-        prompt_values = {
-            "REPO_ROOT": str(self.repo),
-            "REMOTE_NAME": self.remote_name,
-            "REMOTE_BRANCH": self.remote_branch,
-            "BACKLOG_PATH": self.backlog_path,
-            "TODO_PATH": self.todo_path,
-            "REVIEW_PATH": self.review_path,
-            "DONE_PATH": self.done_path,
-            "TODO_DIRECTORY": str(self.repo / self.todo_path),
-            "REVIEW_DIRECTORY": str(self.repo / self.review_path),
-        }
-        recovery_prompt = ""
-        if recovery:
-            recovery_prompt = "\n\n" + _render_prompt(
-                self.recovery_prompt_file.read_text(), prompt_values
-            ).strip("\n")
+        try:
+            workspace = self._prepare_execution_workspace(execution_plan)
+        except ExecutionWorkspaceError as error:
+            raise DevlegateError(str(error)) from error
+        _log(
+            "execution workspace "
+            f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
+            f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
+        )
+        directive = WorkDirective.FRESH
+        if bound_execution or (
+            self._retry_ticket_id is not None and workspace.head != workspace.base_head
+        ):
+            directive = WorkDirective.RESUME
+        if execution_id is None:
+            execution_id = self._state.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            execution_id = new_execution_id()
+        execution_remote_head = self._state.get("execution_remote_head")
+        if "execution_remote_head" not in self._state:
+            execution_remote_head = self._execution_remote_head(workspace.branch)
+        prompt = build_worker_prompt(
+            WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
+        )
         self._save_state(
             "agent_running",
-            selected_ticket_id=selected_ticket.id,
-            selected_ticket_body=selected_ticket.body,
+            execution_ticket_id=selected_ticket.id,
+            execution_base_head=workspace.base_head,
+            execution_control_head=str(self._state["control_head"]),
+            execution_branch=workspace.branch,
+            execution_path=str(workspace.path),
+            execution_id=execution_id,
+            execution_remote_head=execution_remote_head,
         )
-        ticket_file = selected_ticket.path
-        review_file = (
-            self.repo / self.review_path / f"{selected_ticket.id}.md"
-            if selected_ticket.state == "todo"
+        worker_run = self._run_worker(workspace, prompt)
+        self._assert_product_checkout_unchanged(self.current_branch, local_head)
+        try:
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, selected_ticket.id
+            )
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                "submodule changed while worker execution was active; "
+                f"execution dependency integrity cannot be proven: {error}"
+            ) from error
+        execution_result = build_execution_report(
+            execution_id=execution_id,
+            ticket_id=selected_ticket.id,
+            code_base_head=workspace.base_head,
+            control_head=str(self._state["execution_control_head"]),
+            execution_branch=workspace.branch,
+            execution_path=str(workspace.path),
+            workspace_head=None,
+            run=worker_run,
+        )
+        try:
+            checkpoint = manager.checkpoint(workspace, execution_id)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(f"execution checkpoint failed: {error}") from error
+        _log(
+            "execution checkpoint "
+            f"{'created' if checkpoint.commit_created else 'not needed'}: "
+            f"{checkpoint.after_head[:12]}"
+        )
+        try:
+            self._publish_execution_branch(
+                workspace,
+                checkpoint.after_head,
+                self._state.get("execution_remote_head"),
+            )
+        except (DevlegateError, OSError) as error:
+            raise DevlegateError(
+                f"execution branch publication failed: {error}"
+            ) from error
+        report = dataclasses.replace(
+            execution_result,
+            workspace_head=checkpoint.after_head,
+        )
+        try:
+            control_head = self._apply_execution_lifecycle(report)
+        except (DevlegateError, OSError, ExecutionReportError) as error:
+            raise DevlegateError(f"control-plane lifecycle failed: {error}") from error
+        todo_fingerprint, _todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
+        failed_executions = self._state.get("failed_executions", {})
+        if not isinstance(failed_executions, dict):
+            failed_executions = {}
+        if report.result.conclusion == "failed":
+            failed_executions = {
+                **failed_executions,
+                report.ticket_id: {
+                    "execution_id": report.execution_id,
+                    "product_head": local_head,
+                    "remote_head": remote_head,
+                    "control_head": control_head,
+                    "todo_fingerprint": todo_fingerprint,
+                    "reason": report.result.reason,
+                },
+            }
+        else:
+            failed_executions = {
+                ticket_id: metadata
+                for ticket_id, metadata in failed_executions.items()
+                if ticket_id != report.ticket_id
+            }
+        self._save_state(
+            "idle",
+            handled_remote_head=remote_head,
+            handled_control_head=control_head,
+            handled_todo_fingerprint=todo_fingerprint,
+            execution_control_head=control_head,
+            failed_executions=failed_executions,
+        )
+        _log(
+            f"execution {report.result.conclusion}; lifecycle control HEAD "
+            f"{control_head[:12]}"
+        )
+        return 1 if report.result.conclusion == "failed" else 0
+
+    def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
+        if plan.ticket_id is None or plan.code is None or plan.control is None:
+            raise ExecutionWorkspaceError(
+                "execution plan has no complete revision binding"
+            )
+        same_ticket = self._state.get("execution_ticket_id") == plan.ticket_id
+        bound_base = (
+            self._state.get("execution_base_head") if same_ticket else None
+        )
+        bound_control = (
+            self._state.get("execution_control_head")
+            if same_ticket
+            and str(self._state.get("phase"))
+            in {
+                "agent_pending",
+                "agent_running",
+            }
             else None
         )
-        execution_context = (
-            "\n\n--- Devlegate execution context ---\n"
-            f"Repository root: {self.repo}\n"
-            f"Remote: {self.remote_name}\n"
-            f"Branch: {self.remote_branch}\n"
-            f"Pulled revision: {local_head} -> {remote_head}\n"
-            f"Assigned ticket ID: {selected_ticket.id}\n"
-            f"Assigned ticket file: {ticket_file}\n"
-            f"Assigned ticket state: {selected_ticket.state}\n"
-            + (
-                f"Review destination: {review_file}\n"
-                if review_file is not None
-                else "Review destination: already in review; do not move again\n"
+        base_head = bound_base if isinstance(bound_base, str) else plan.code.local_head
+        if isinstance(bound_control, str) and bound_control != plan.control.local_head:
+            raise ExecutionWorkspaceError(
+                "control revision changed after execution was planned; refusing "
+                "stale execution"
             )
-            + f"Changed paths from the pulled revision:\n{changed_paths or '<none>'}\n"
-            "\n--- Assigned work ---\n"
-            f"{selected_ticket.body}"
+        if not isinstance(bound_base, str) and plan.code.local_head != base_head:
+            raise ExecutionWorkspaceError(
+                "planned code revision changed during preparation"
+            )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, plan.ticket_id
         )
-        prompt = (
-            _render_prompt(self.agent_prompt_file.read_text(), prompt_values)
-            + execution_context
-        ).rstrip("\n")
-        prompt += recovery_prompt
-        _log(f"running OpenCode for tickets in {self.todo_path}")
+        persisted_branch = self._state.get("execution_branch") if same_ticket else None
+        persisted_path = self._state.get("execution_path") if same_ticket else None
+        if isinstance(persisted_branch, str) and persisted_branch != manager.branch:
+            raise ExecutionWorkspaceError(
+                f"persisted execution branch {persisted_branch} does not match "
+                f"expected branch {manager.branch}"
+            )
+        if isinstance(persisted_path, str) and Path(persisted_path) != manager.path:
+            raise ExecutionWorkspaceError(
+                f"persisted execution path {persisted_path} does not match "
+                f"expected path {manager.path}"
+            )
+        workspace = manager.prepare(base_head)
+        current_control = _git(
+            self.control_worktree, "rev-parse", "HEAD"
+        ).stdout.strip()
+        if current_control != plan.control.local_head:
+            raise ExecutionWorkspaceError(
+                "control revision changed during workspace preparation; refusing "
+                "stale execution"
+            )
+        return workspace
+
+    def _publish_execution_branch(
+        self,
+        workspace: ExecutionWorkspace,
+        checkpoint_head: str,
+        expected_remote_head: str | None,
+    ) -> None:
+        observed = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        if observed != checkpoint_head:
+            raise DevlegateError("execution HEAD changed before branch publication")
+        observed_remote_head = self._execution_remote_head(workspace.branch)
+        if observed_remote_head != expected_remote_head:
+            raise DevlegateError(
+                "execution branch remote changed during worker execution"
+            )
+        pushed = _git(
+            workspace.path,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{workspace.branch}",
+            check=False,
+        )
+        if pushed.returncode:
+            raise DevlegateError(pushed.stderr.strip() or "unknown Git push error")
+
+    def _execution_remote_head(self, branch: str) -> str | None:
+        remote = _git(
+            self.repo,
+            "ls-remote",
+            self.remote_name,
+            f"refs/heads/{branch}",
+            check=False,
+        )
+        if remote.returncode:
+            raise DevlegateError(
+                remote.stderr.strip() or "cannot observe execution branch remote"
+            )
+        fields = remote.stdout.split()
+        return fields[0] if fields else None
+
+    def _accepted_checkpoint(self, ticket_id: str) -> str:
+        root = self.control_worktree / "executions" / ticket_id
+        if not root.is_dir() or root.is_symlink():
+            raise WorkflowBlockedError(
+                f"accepted ticket {ticket_id} has no durable execution evidence"
+            )
+        reports: list[ExecutionReport] = []
+        for path in sorted(root.glob("*.json")):
+            if path.is_symlink() or not path.is_file():
+                raise WorkflowBlockedError("accepted execution evidence is unsafe")
+            try:
+                report = ExecutionReport.from_dict(json.loads(path.read_text()))
+            except (OSError, json.JSONDecodeError, ExecutionReportError) as error:
+                raise WorkflowBlockedError(
+                    f"malformed execution evidence for accepted ticket {ticket_id}"
+                ) from error
+            if (
+                report.ticket_id == ticket_id
+                and report.result.conclusion == "completed"
+            ):
+                reports.append(report)
+        expected_branch = f"devlegate/work/{ticket_id}"
+        remote_head = self._execution_remote_head(expected_branch)
+        matches = [
+            report for report in reports
+            if report.execution_branch == expected_branch
+            and isinstance(report.workspace_head, str)
+            and report.workspace_head == remote_head
+        ]
+        if remote_head is None or len(matches) != 1:
+            raise WorkflowBlockedError(
+                f"accepted ticket {ticket_id} has ambiguous or missing completed "
+                "execution evidence"
+            )
+        checkpoint = matches[0].workspace_head
+        assert checkpoint is not None
+        if not all(
+            len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+            for value in (
+                checkpoint,
+                matches[0].code_base_head,
+                matches[0].control_head,
+            )
+        ):
+            raise WorkflowBlockedError(
+                "accepted execution evidence has invalid Git identity"
+            )
+        return checkpoint
+
+    def _integrate_accepted(
+        self,
+        ticket_id: str,
+        code: GitObservation | None,
+        control: GitObservation | None,
+    ) -> str:
+        if code is None or control is None:
+            raise WorkflowBlockedError("accepted integration lacks Git observations")
+        self._validate_control_worktree()
+        if not code.working_tree_clean or not control.working_tree_clean:
+            raise WorkflowBlockedError("product or control working tree is dirty")
+        checkpoint = self._accepted_checkpoint(ticket_id)
+        product_ref = f"refs/heads/{self.remote_branch}"
+        observed = _git(
+            self.repo, "ls-remote", self.remote_name, product_ref, check=False
+        )
+        if observed.returncode:
+            raise DevlegateError(
+                observed.stderr.strip() or "cannot observe product branch"
+            )
+        fields = observed.stdout.split()
+        if not fields:
+            raise WorkflowBlockedError("configured product branch is unavailable")
+        product_head = fields[0]
+        def is_ancestor(older: str, newer: str) -> bool:
+            return (
+                _git(
+                    self.repo,
+                    "merge-base",
+                    "--is-ancestor",
+                    older,
+                    newer,
+                    check=False,
+                ).returncode
+                == 0
+            )
+
+        if product_head == checkpoint or is_ancestor(checkpoint, product_head):
+            pass
+        elif is_ancestor(product_head, checkpoint):
+            pushed = _git(
+                self.repo,
+                "push",
+                self.remote_name,
+                f"{checkpoint}:{product_ref}",
+                check=False,
+            )
+            if pushed.returncode:
+                raise DevlegateError(
+                    pushed.stderr.strip() or "product fast-forward push failed"
+                )
+        else:
+            raise WorkflowBlockedError(
+                "product history diverged from accepted checkpoint; v0.4 does not "
+                "rebase or merge"
+            )
+        reobserved = _git(
+            self.repo, "ls-remote", self.remote_name, product_ref, check=False
+        )
+        observed_fields = reobserved.stdout.split()
+        if (
+            reobserved.returncode
+            or not observed_fields
+            or (
+                observed_fields[0] != checkpoint
+                and not is_ancestor(checkpoint, observed_fields[0])
+            )
+        ):
+            raise WorkflowBlockedError(
+                "published product checkpoint could not be proven"
+            )
+        current = _git(self.repo, "rev-parse", "HEAD", check=False)
+        status = _git(self.repo, "status", "--porcelain", check=False)
+        if current.returncode or status.returncode or status.stdout:
+            raise WorkflowBlockedError(
+                "product checkout is not safely synchronized"
+            )
+        if current.stdout.strip() != checkpoint:
+            fetch = _git(
+                self.repo,
+                "fetch",
+                self.remote_name,
+                self.remote_branch,
+                check=False,
+            )
+            if fetch.returncode:
+                raise WorkflowBlockedError("cannot refresh published product branch")
+            sync = _git(
+                self.repo,
+                "merge",
+                "--ff-only",
+                f"{self.remote_name}/{self.remote_branch}",
+                check=False,
+            )
+            if sync.returncode:
+                raise WorkflowBlockedError(
+                    "product checkout cannot be fast-forwarded safely"
+                )
+        return self._complete_accepted(ticket_id, control.local_head)
+
+    def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
+        current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if current != expected_head:
+            raise WorkflowBlockedError(
+                "control HEAD changed during accepted integration"
+            )
+        store = load_ticket_store(self.control_worktree, self._workflow_paths())
+        ticket = store.by_id.get(ticket_id)
+        if ticket is None or ticket.state != "accepted":
+            raise WorkflowBlockedError("accepted ticket changed during integration")
+        target = self.control_worktree / self.done_path / f"{ticket_id}.md"
+        ticket.path.rename(target)
+        _git(self.control_worktree, "add", "-A")
+        commit = _git(
+            self.control_worktree,
+            "commit",
+            "-m",
+            f"Devlegate integrate {ticket_id}",
+            check=False,
+        )
+        if commit.returncode:
+            raise DevlegateError(
+                commit.stderr.strip() or "cannot create control transition"
+            )
+        push = _git(
+            self.control_worktree,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if push.returncode:
+            raise DevlegateError(
+                push.stderr.strip() or "cannot publish control transition"
+            )
+        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
+    def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
+        self._validate_control_worktree()
+        status = _git(self.control_worktree, "status", "--porcelain").stdout
+        if status:
+            raise WorkflowBlockedError("control working tree is dirty")
+        expected_head = report.control_head
+        current_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if current_head != expected_head:
+            raise WorkflowBlockedError(
+                "control HEAD changed after execution admission; refusing "
+                "lifecycle mutation"
+            )
+        try:
+            ticket_store = load_ticket_store(
+                self.control_worktree, self._workflow_paths()
+            )
+        except TicketError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        ticket = ticket_store.by_id.get(report.ticket_id)
+        if ticket is None:
+            raise WorkflowBlockedError(
+                "execution ticket is no longer in managed storage"
+            )
+        ExecutionReportStore(self.control_worktree).write(report)
+        if report.result.conclusion == "completed" and ticket.state == "todo":
+            review = self.control_worktree / self.review_path / f"{ticket.id}.md"
+            if review.exists() or review.is_symlink():
+                raise WorkflowBlockedError("review ticket already exists")
+            ticket.path.rename(review)
+        try:
+            load_ticket_store(self.control_worktree, self._workflow_paths())
+        except TicketError as error:
+            raise WorkflowBlockedError(
+                f"resulting ticket store is invalid: {error}"
+            ) from error
+        _git(self.control_worktree, "add", "-A")
+        committed = _git(
+            self.control_worktree,
+            "commit",
+            "-m",
+            f"Devlegate lifecycle {report.ticket_id} {report.execution_id} "
+            f"{report.result.conclusion}",
+            check=False,
+        )
+        if committed.returncode:
+            raise DevlegateError(
+                committed.stderr.strip() or "cannot create control-plane commit"
+            )
+        pushed = _git(
+            self.control_worktree,
+            "push",
+            self.remote_name,
+            f"HEAD:refs/heads/{self.control_branch}",
+            check=False,
+        )
+        if pushed.returncode:
+            raise DevlegateError(pushed.stderr.strip() or "unknown Git push error")
+        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
+    def _run_worker(
+        self, workspace: ExecutionWorkspace, prompt: str
+    ) -> WorkerRunResult:
+        """Run a worker only in the validated execution workspace."""
+        if not isinstance(workspace, ExecutionWorkspace):
+            raise TypeError("worker workspace must be ExecutionWorkspace")
+        if not isinstance(prompt, str):
+            raise TypeError("worker prompt must be text")
+        execution_path = workspace.path.resolve()
         command = [
             self.opencode_bin,
             "run",
+            "--dir",
+            str(execution_path),
             "--format",
             "json",
-            "--auto",
             "--model",
             self.opencode_model,
         ]
         if self.opencode_agent:
-            command += ["--agent", self.opencode_agent]
-        with _preserve_terminal():
-            agent_status = _run_opencode(command, prompt)
-        if agent_status:
-            phase = "recovery_failed" if recovery else "recovery_pending"
-            self._recovery_pending = False if recovery else True
-            self._save_state(phase)
-            _log(f"agent exited with status {agent_status}")
-            return agent_status
-        if _git(self.repo, "status", "--porcelain").stdout:
-            phase = "recovery_failed" if recovery else "recovery_pending"
-            self._recovery_pending = False if recovery else True
-            self._save_state(phase)
-            _log("agent exited successfully but left uncommitted repository changes")
-            return 1
-        local_after = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
-        if _git(
-            self.repo, "fetch", self.remote_name, self.remote_branch, check=False
-        ).returncode:
-            _log("post-agent fetch failed")
-            return 1
-        remote_after = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
-        if local_after != remote_after:
-            self._save_state("idle")
-            _log(
-                "agent did not leave the local branch synchronized with the remote "
-                "branch; expected it to commit and push"
+            command.extend(("--agent", self.opencode_agent))
+        parser = WorkerEgressParser()
+        config_dir = Path(tempfile.mkdtemp(prefix="devlegate-opencode-"))
+        tool_dir = config_dir / "tools"
+        tool_dir.mkdir()
+        (tool_dir / "devlegate_report.ts").write_text(
+            '''import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "Report the worker's semantic claim to Devlegate.",
+  args: {
+    outcome: tool.schema.enum(["completed", "incomplete", "blocked"]),
+    summary: tool.schema.string(),
+    remaining: tool.schema.array(tool.schema.string()),
+    questions: tool.schema.array(tool.schema.string()),
+  },
+  async execute() {
+    return "devlegate_report accepted"
+  },
+})
+'''
+        )
+        config = {
+            "$schema": "https://opencode.ai/config.json",
+            "permission": {
+                "external_directory": {
+                    "*": "deny",
+                    f"{execution_path}/**": "allow",
+                }
+            },
+        }
+        environment = os.environ.copy()
+        environment["PWD"] = str(execution_path)
+        environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
+        environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+            config, sort_keys=True
+        )
+        try:
+            opencode_result = _run_opencode(
+                command,
+                prompt,
+                cwd=execution_path,
+                env=environment,
+                event_handler=parser.consume,
             )
-            return 1
-        self._save_state("idle")
-        _log("agent completed; local and remote branch heads are synchronized")
-        return 0
+            claim, egress_error = parser.finish()
+            return WorkerRunResult(
+                opencode_result.process_returncode,
+                opencode_result.transport_error,
+                claim,
+                egress_error,
+            )
+        except OSError as error:
+            return WorkerRunResult(-1, str(error), None, None)
+        finally:
+            shutil.rmtree(config_dir, ignore_errors=True)
 
     def run(self, once: bool) -> int:
         with self._lock():
@@ -1314,27 +2350,106 @@ class Devlegate:
         self._validate_state_invariant(state)
         return state, hashlib.sha256(raw).hexdigest()
 
-    def _status_git_observation(self) -> dict[str, object]:
+    def _git_observation(self, repo: Path, remote_branch: str) -> GitObservation:
         branch_result = _git(
-            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+            repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         detached = branch_result.returncode != 0
         branch = branch_result.stdout.strip() if not detached else None
-        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
-        remote_ref = f"{self.remote_name}/{self.remote_branch}"
-        remote_result = _git(
-            self.repo, "rev-parse", "--verify", remote_ref, check=False
+        local_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        remote_ref = f"{self.remote_name}/{remote_branch}"
+        remote_result = _git(repo, "rev-parse", "--verify", remote_ref, check=False)
+        status = _git(repo, "status", "--porcelain").stdout
+        return GitObservation(
+            branch,
+            detached,
+            local_head,
+            remote_ref,
+            remote_result.stdout.strip() if remote_result.returncode == 0 else None,
+            not bool(status),
+            _status_fingerprint(status),
         )
+
+    def _status_git_observation(self) -> dict[str, GitObservation | None]:
+        control = None
+        if self.control_worktree.is_dir():
+            try:
+                self._validate_control_worktree()
+            except WorkflowBlockedError:
+                pass
+            else:
+                control = self._git_observation(
+                    self.control_worktree, self.control_branch
+                )
         return {
-            "branch": branch,
-            "detached": detached,
-            "local_head": local_head,
-            "remote_ref": remote_ref,
-            "remote_head": (
-                remote_result.stdout.strip() if remote_result.returncode == 0 else None
-            ),
-            "status": _git(self.repo, "status", "--porcelain").stdout,
+            "code": self._git_observation(self.repo, self.remote_branch),
+            "control": control,
         }
+
+    def _evaluate_failed_executions(
+        self,
+        failures: object,
+        ticket_store: TicketStore,
+        code: GitObservation,
+        control: GitObservation | None,
+        admission_reason: str | None = None,
+    ) -> tuple[FailedExecution, ...]:
+        if not isinstance(failures, dict):
+            return ()
+        todo_fingerprint = (
+            _todo_fingerprint(self.control_worktree, self.todo_path)[0]
+            if control is not None
+            else None
+        )
+        evaluated: list[FailedExecution] = []
+        for ticket_id, metadata in sorted(failures.items()):
+            if not isinstance(ticket_id, str) or not isinstance(metadata, dict):
+                continue
+            ticket = ticket_store.by_id.get(ticket_id)
+            reason = str(metadata.get("reason", "unknown failure"))
+            invalid_reason: str | None = None
+            if ticket is None:
+                invalid_reason = "ticket is no longer present"
+                title = ticket_id
+            else:
+                title = ticket.title
+                if ticket.state != "todo":
+                    invalid_reason = f"ticket is no longer todo ({ticket.state})"
+                elif ticket not in ticket_store.runnable:
+                    invalid_reason = "ticket is no longer runnable"
+                elif control is None:
+                    invalid_reason = "control worktree is unavailable"
+                elif metadata.get("product_head") != code.local_head:
+                    invalid_reason = "product HEAD changed since the failure"
+                elif metadata.get("control_head") != control.local_head:
+                    invalid_reason = "control generation changed since the failure"
+                elif metadata.get("remote_head") != code.remote_head:
+                    invalid_reason = "product generation changed since the failure"
+                elif metadata.get("todo_fingerprint") != todo_fingerprint:
+                    invalid_reason = "todo workflow changed since the failure"
+            report = None
+            if invalid_reason is None:
+                try:
+                    report = ExecutionReportStore(self.control_worktree).read(
+                        ticket_id, str(metadata["execution_id"])
+                    )
+                except (ExecutionReportError, KeyError):
+                    invalid_reason = "failed execution report is unavailable"
+            if invalid_reason is None and report is not None:
+                if report.result.conclusion != "failed":
+                    invalid_reason = "stored execution report is not failed"
+            if invalid_reason is None and admission_reason is not None:
+                invalid_reason = admission_reason
+            evaluated.append(
+                FailedExecution(
+                    ticket_id,
+                    title,
+                    reason,
+                    invalid_reason is None,
+                    invalid_reason,
+                )
+            )
+        return tuple(evaluated)
 
     def _collect_status_attempt(
         self, *, allow_workflow_blocked: bool = False
@@ -1345,7 +2460,7 @@ class Devlegate:
         self._status_snapshot_hook("after-git-before")
         try:
             workflow_token_before = _workflow_fingerprint(
-                self.repo, self._workflow_paths()
+                self.control_worktree, self._workflow_paths()
             )
         except FileNotFoundError as error:
             raise SnapshotChanged from error
@@ -1367,7 +2482,7 @@ class Devlegate:
         self._status_snapshot_hook("before-verify")
         try:
             workflow_token_after = _workflow_fingerprint(
-                self.repo, self._workflow_paths()
+                self.control_worktree, self._workflow_paths()
             )
         except FileNotFoundError as error:
             raise SnapshotChanged from error
@@ -1390,52 +2505,34 @@ class Devlegate:
     def _make_status_snapshot(
         self,
         state: dict[str, object],
-        git_observation: dict[str, object],
+        git_observation: dict[str, GitObservation | None],
         ticket_store: TicketStore | None,
         workflow_error: DevlegateError | None = None,
     ) -> StatusSnapshot:
+        code = git_observation["code"]
+        control = git_observation["control"]
+        assert code is not None
         if ticket_store is None:
             return StatusSnapshot(
                 phase=str(state["phase"]),
                 bound_ticket_id=None,
                 persisted_body_present=False,
-                branch=(
-                    str(git_observation["branch"])
-                    if git_observation["branch"] is not None
-                    else "<detached>"
-                ),
-                local_head=str(git_observation["local_head"]),
-                remote_ref=str(git_observation["remote_ref"]),
-                remote_head=(
-                    str(git_observation["remote_head"])
-                    if git_observation["remote_head"] is not None
-                    else None
-                ),
-                working_tree_clean=not bool(git_observation["status"]),
+                code=code,
+                control=control,
                 counts=tuple(
                     (state_name, 0)
-                    for state_name in ("backlog", "todo", "review", "done")
+                    for state_name in ("backlog", "todo", "review", "accepted", "done")
                 ),
                 runnable=(),
                 blocked=(),
                 review=(),
+                accepted=(),
                 next_ticket=None,
                 plan=ExecutionPlan(
                     "blocked",
                     str(workflow_error or "workflow is invalid"),
-                    branch=(
-                        str(git_observation["branch"])
-                        if git_observation["branch"] is not None
-                        else None
-                    ),
-                    detached=bool(git_observation.get("detached")),
-                    local_head=str(git_observation["local_head"]),
-                    remote_ref=str(git_observation["remote_ref"]),
-                    remote_head=(
-                        str(git_observation["remote_head"])
-                        if git_observation["remote_head"] is not None
-                        else None
-                    ),
+                    code=code,
+                    control=control,
                 ),
             )
         counts = tuple(
@@ -1443,11 +2540,9 @@ class Devlegate:
                 state_name,
                 sum(ticket.state == state_name for ticket in ticket_store.tickets),
             )
-            for state_name in ("backlog", "todo", "review", "done")
+            for state_name in ("backlog", "todo", "review", "accepted", "done")
         )
-        runnable = tuple(
-            (ticket.id, ticket.title) for ticket in ticket_store.runnable
-        )
+        runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
         blocked = tuple(
             (
                 ticket.id,
@@ -1470,20 +2565,35 @@ class Devlegate:
             for ticket in ticket_store.tickets
             if ticket.state == "review"
         )
+        accepted = tuple(
+            (ticket.id, ticket.title)
+            for ticket in ticket_store.tickets
+            if ticket.state == "accepted"
+        )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
         }
         plan = self._make_execution_plan(
             state,
             ticket_store,
-            bool(git_observation["status"]),
-            not bool(git_observation.get("detached"))
-            and git_observation["branch"] == self.remote_branch,
+            not code.working_tree_clean or not (control and control.working_tree_clean),
+            not code.detached
+            and code.branch == self.remote_branch
+            and control is not None
+            and not control.detached
+            and control.branch == self.control_branch,
             observation=git_observation,
+        )
+        admission_reason = (
+            None
+            if plan.action == "run-worker" and not plan.bound
+            else plan.reason
+        )
+        failures = state.get("failed_executions", {})
+        failed_executions = self._evaluate_failed_executions(
+            failures, ticket_store, code, control, admission_reason
         )
         next_ticket = (
             (
@@ -1500,25 +2610,16 @@ class Devlegate:
             ),
             persisted_body_present=bound_phase
             and isinstance(state.get("selected_ticket_body"), str),
-            branch=(
-                str(git_observation["branch"])
-                if git_observation["branch"] is not None
-                else "<detached>"
-            ),
-            local_head=str(git_observation["local_head"]),
-            remote_ref=str(git_observation["remote_ref"]),
-            remote_head=(
-                str(git_observation["remote_head"])
-                if git_observation["remote_head"] is not None
-                else None
-            ),
-            working_tree_clean=not bool(git_observation["status"]),
+            code=code,
+            control=control,
             counts=counts,
             runnable=runnable,
             blocked=blocked,
             review=review,
+            accepted=accepted,
             next_ticket=next_ticket,
             plan=plan,
+            failed_executions=failed_executions,
         )
 
     def _make_execution_plan(
@@ -1527,52 +2628,54 @@ class Devlegate:
         ticket_store: TicketStore,
         dirty: bool,
         branch_ok: bool = True,
-        observation: dict[str, object] | None = None,
+        observation: dict[str, GitObservation | None] | None = None,
     ) -> ExecutionPlan:
         observation = observation or {}
-        branch = observation.get("branch")
+        code = observation.get("code")
+        control = observation.get("control")
+        assert isinstance(code, GitObservation)
         if not branch_ok:
+            reason = "control worktree is unavailable or on the wrong branch"
+            if code.detached:
+                reason = "detached HEAD is not supported"
             return ExecutionPlan(
                 "blocked",
-                "detached HEAD is not supported"
-                if observation.get("detached")
-                else "current checkout is not on the configured branch",
-                branch=branch if isinstance(branch, str) else None,
-                detached=bool(observation.get("detached")),
-                local_head=str(observation.get("local_head", "")),
-                remote_ref=str(observation.get("remote_ref", "")),
-                remote_head=(
-                    str(observation["remote_head"])
-                    if observation.get("remote_head") is not None
-                    else None
-                ),
+                reason,
+                code=code,
+                control=control,
             )
         if dirty:
-            reason = "working tree is dirty"
+            reason = "code or control working tree is dirty"
             blocked = True
         else:
             reason = ""
             blocked = False
-        identity = {
-            "branch": branch if isinstance(branch, str) else None,
-            "detached": bool(observation.get("detached")),
-            "local_head": str(observation.get("local_head", "")),
-            "remote_ref": str(observation.get("remote_ref", "")),
-            "remote_head": (
-                str(observation["remote_head"])
-                if observation.get("remote_head") is not None
-                else None
-            ),
-        }
+        identity = {"code": code, "control": control}
         if blocked:
             return ExecutionPlan("blocked", reason, **identity)
+        boundary = tuple(
+            ticket
+            for ticket in ticket_store.tickets
+            if ticket.state in {"review", "accepted"}
+        )
+        if len(boundary) > 1:
+            return ExecutionPlan(
+                "blocked",
+                "multiple tickets occupy the review/accepted serial boundary",
+                **identity,
+            )
         bound_phase = str(state["phase"]) in {
             "agent_pending",
             "agent_running",
-            "recovery_pending",
-            "recovery_running",
         }
         if bound_phase:
+            if state["phase"] == "agent_running":
+                return ExecutionPlan(
+                    "blocked",
+                    "interrupted execution has ambiguous outcome; explicit "
+                    "operator handling is required",
+                    **identity,
+                )
             ticket_id = state.get("selected_ticket_id")
             ticket = (
                 ticket_store.by_id.get(ticket_id)
@@ -1589,7 +2692,7 @@ class Devlegate:
                 return ExecutionPlan(
                     "blocked",
                     "selected ticket "
-                    f"{ticket.id} has unexpected recovery state {ticket.state}",
+                    f"{ticket.id} has unexpected bound execution state {ticket.state}",
                     **identity,
                 )
             return ExecutionPlan(
@@ -1600,6 +2703,17 @@ class Devlegate:
                 ticket.state,
                 True,
                 **identity,
+            )
+        if boundary:
+            ticket = boundary[0]
+            if ticket.state == "review":
+                return ExecutionPlan(
+                    "none", f"waiting for review: {ticket.id}", ticket.id,
+                    ticket.title, ticket.state, False, **identity
+                )
+            return ExecutionPlan(
+                "integrate", f"accepted, ready for integration: {ticket.id}",
+                ticket.id, ticket.title, ticket.state, False, **identity
             )
         selected = ticket_store.selected()
         if selected is None:
@@ -1615,6 +2729,8 @@ class Devlegate:
         )
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
+        code = snapshot.code
+        control = snapshot.control
         lines = [
             f"Devlegate {__version__}",
             "",
@@ -1628,21 +2744,49 @@ class Devlegate:
                 else ""
             ),
             "",
-            "Repository:",
-            f"  branch: {snapshot.branch}",
-            f"  local HEAD: {snapshot.local_head}",
-            f"  known remote: {snapshot.remote_ref}",
-            f"  known remote HEAD: {snapshot.remote_head or '<unknown>'}",
-            f"  working tree: {'clean' if snapshot.working_tree_clean else 'dirty'}",
+            "Code plane:",
+            f"  branch: {code.branch or '<detached>'}",
+            f"  local HEAD: {code.local_head}",
+            f"  known remote: {code.remote_ref}",
+            f"  known remote HEAD: {code.remote_head or '<unknown>'}",
+            f"  working tree: {'clean' if code.working_tree_clean else 'dirty'}",
+            "Control plane:",
+            (
+                "  worktree: missing (run 'devlegate control init')"
+                if control is None
+                else f"  branch: {control.branch or '<detached>'}"
+            ),
             "",
             "Tickets:",
         ]
+        if control is not None:
+            lines.extend(
+                [
+                    f"  local HEAD: {control.local_head}",
+                    f"  known remote: {control.remote_ref}",
+                    f"  known remote HEAD: {control.remote_head or '<unknown>'}",
+                    "  working tree: "
+                    f"{'clean' if control.working_tree_clean else 'dirty'}",
+                ]
+            )
         lines.extend(f"  {state}: {count}" for state, count in snapshot.counts)
         lines.extend(["", "Runnable:"])
         lines.extend(
             f"  {ticket_id}  {title}" for ticket_id, title in snapshot.runnable
         )
         if not snapshot.runnable:
+            lines.append("  none")
+        lines.append("Failed executions:")
+        lines.extend(
+            (
+                f"  {failure.ticket_id}  execution: failed  "
+                f"retryable: {'yes' if failure.retryable else 'no'}  "
+                "reason: "
+                f"{failure.display_reason}"
+            )
+            for failure in snapshot.failed_executions
+        )
+        if not snapshot.failed_executions:
             lines.append("  none")
         lines.append("Blocked:")
         if snapshot.blocked:
@@ -1655,10 +2799,14 @@ class Devlegate:
         else:
             lines.append("  none")
         lines.append("Review:")
-        lines.extend(
-            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review
-        )
+        lines.extend(f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review)
         if not snapshot.review:
+            lines.append("  none")
+        lines.append("Accepted:")
+        lines.extend(
+            f"  {ticket_id}  {title}" for ticket_id, title in snapshot.accepted
+        )
+        if not snapshot.accepted:
             lines.append("  none")
         lines.extend(
             [
@@ -1675,7 +2823,7 @@ class Devlegate:
     def status(self, json_output: bool = False) -> int:
         for _attempt in range(3):
             try:
-                snapshot = self._collect_status_attempt()
+                snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
                 break
             except SnapshotChanged:
                 continue
@@ -1687,6 +2835,97 @@ class Devlegate:
             print(json.dumps(snapshot.as_dict(), indent=2, sort_keys=True))
         else:
             print(self._render_status_text(snapshot))
+        return 1 if snapshot.plan.action == "blocked" else 0
+
+    def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
+        snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
+        candidates: list[tuple[str, str, str]] = []
+        for failure in snapshot.failed_executions:
+            if failure.retryable:
+                candidates.append((failure.ticket_id, failure.title, failure.reason))
+        return tuple(candidates)
+
+    def retry(self, ticket_id: str | None = None) -> int:
+        """Authorize exactly one fresh execution after current-state validation."""
+        if ticket_id is None:
+            try:
+                interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
+                    sys.stdout.fileno()
+                )
+            except (OSError, ValueError):
+                interactive = False
+            if not interactive:
+                raise DevlegateError(
+                    "interactive retry requires a terminal; specify a ticket ID:\n"
+                    "devlegate retry <ticket-id>"
+                )
+            candidates = self._retry_candidates()
+            if not candidates:
+                raise DevlegateError("no current failed executions are retryable")
+            print("Failed executions:")
+            for index, (candidate_id, title, reason) in enumerate(candidates, 1):
+                marker = ">" if index == 1 else " "
+                print(f"{marker} {index}) {candidate_id}  {title}\n    {reason}")
+            answer = input("Select number and press Enter (Enter retries first): ")
+            if answer.strip():
+                try:
+                    index = int(answer)
+                    if not 1 <= index <= len(candidates):
+                        raise ValueError
+                except ValueError as error:
+                    raise DevlegateError("invalid retry selection") from error
+            else:
+                index = 1
+            ticket_id = candidates[index - 1][0]
+        candidates = self._retry_candidates()
+        candidate_ids = {candidate[0] for candidate in candidates}
+        if ticket_id not in candidate_ids:
+            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+        self._retry_ticket_id = ticket_id
+        try:
+            with self._lock():
+                return self.run_once()
+        finally:
+            self._retry_ticket_id = None
+
+    def _agent_render_context(self) -> RenderContext:
+        return RenderContext(
+            control_branch=self.control_branch,
+            backlog_path=self.backlog_path,
+            todo_path=self.todo_path,
+            review_path=self.review_path,
+            accepted_path=self.accepted_path,
+            done_path=self.done_path,
+            product_branch=self.remote_branch,
+        )
+
+    def init_project(self, conflicts: str = "abort") -> int:
+        try:
+            _total, changed = initialize_project(
+                self.repo,
+                self._agent_render_context(),
+                conflicts=conflicts,
+                state_dir=self.state_dir,
+            )
+        except AgentProtocolError as error:
+            raise DevlegateError(str(error)) from error
+        print(
+            "initialized Devlegate project protocol templates "
+            f"and rendered {changed} agent protocol artifacts"
+        )
+        return 0
+
+    def render(self, check: bool = False) -> int:
+        try:
+            total, changed = render_project(
+                self.repo, self._agent_render_context(), check=check
+            )
+        except AgentProtocolError as error:
+            raise DevlegateError(str(error)) from error
+        if check:
+            print("generated agent protocol artifacts are current")
+        else:
+            print(f"rendered {total} agent protocol artifacts ({changed} changed)")
         return 0
 
     def plan(self, json_output: bool = False) -> int:
@@ -1710,10 +2949,23 @@ class Devlegate:
             if plan.ticket_id is not None:
                 print(f"  ticket: {plan.ticket_id}  {plan.ticket_title}")
                 print(f"  ticket state: {plan.ticket_state}")
-            print(f"  branch: {plan.branch or '<detached>'}")
-            print(f"  local HEAD: {plan.local_head}")
-            print(f"  known remote: {plan.remote_ref}")
-            print(f"  known remote HEAD: {plan.remote_head or '<unknown>'}")
+            if plan.code:
+                print(f"  code branch: {plan.code.branch or '<detached>'}")
+                print(f"  code local HEAD: {plan.code.local_head}")
+                print(f"  code known remote: {plan.code.remote_ref}")
+                print(
+                    f"  code known remote HEAD: {plan.code.remote_head or '<unknown>'}"
+                )
+            if plan.control:
+                print(f"  control branch: {plan.control.branch or '<detached>'}")
+                print(f"  control local HEAD: {plan.control.local_head}")
+                print(f"  control known remote: {plan.control.remote_ref}")
+                print(
+                    "  control known remote HEAD: "
+                    f"{plan.control.remote_head or '<unknown>'}"
+                )
+            else:
+                print("  control worktree: missing")
             print(f"  reason: {plan.reason}")
             print(f"  bound: {'yes' if plan.bound else 'no'}")
         return 0
@@ -1722,47 +2974,71 @@ class Devlegate:
         """Run read-only configuration and checkout diagnostics."""
         print(f"Devlegate {__version__} preflight")
         status = _git(self.repo, "status", "--porcelain").stdout
-        todo_fingerprint, todo_count = _todo_fingerprint(self.repo, self.todo_path)
+        control_observation = self._status_git_observation()["control"]
+        todo_fingerprint, todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
         ticket_store = None
         ticket_error = ""
         try:
             ticket_store = self._ticket_store()
         except DevlegateError as error:
             ticket_error = str(error)
+        project_context_error = ""
+        try:
+            load_project_context(self.repo)
+        except ProjectContextError as error:
+            project_context_error = str(error)
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
         remote_head = remote_result.stdout.strip()
         generation_differs = (
             str(self._state.get("handled_remote_head", "")) != remote_head
-            or str(self._state.get("handled_todo_fingerprint", ""))
-            != todo_fingerprint
+            or str(self._state.get("handled_control_head", ""))
+            != (
+                _git(
+                    self.control_worktree, "rev-parse", "HEAD", check=False
+                ).stdout.strip()
+                if self.control_worktree.is_dir()
+                else ""
+            )
+            or str(self._state.get("handled_todo_fingerprint", "")) != todo_fingerprint
         )
         checks = [
-            ("configuration", True, ""),
+            (
+                "OPENCODE_MODEL",
+                bool(self.opencode_model),
+                "set OPENCODE_MODEL in the effective configuration",
+            ),
             ("repository root", self.repo.is_dir(), str(self.repo)),
-            ("branch", bool(self.current_branch), self.current_branch),
             (
-                "remote",
-                remote_result.returncode == 0,
-                f"{self.remote_name}/{self.remote_branch}",
+                "product branch",
+                bool(self.current_branch)
+                and self.current_branch == self.remote_branch,
+                f"current={self.current_branch or '<detached>'}, "
+                f"configured={self.remote_branch or '<unset>'}",
             ),
             (
-                "OpenCode executable",
-                shutil.which(self.opencode_bin) is not None,
-                "",
+                "configured remote",
+                _git(
+                    self.repo, "remote", "get-url", self.remote_name, check=False
+                ).returncode
+                == 0,
+                self.remote_name,
             ),
             (
-                "agent prompt",
-                self.agent_prompt_file.is_file(),
-                str(self.agent_prompt_file),
+                "poll interval",
+                self.poll_interval.isdecimal(),
+                "POLL_INTERVAL must be an integer",
             ),
+            ("OpenCode executable", shutil.which(self.opencode_bin) is not None, ""),
             (
-                "recovery prompt",
-                self.recovery_prompt_file.is_file(),
-                str(self.recovery_prompt_file),
+                "state directory",
+                not self.state_dir.is_symlink()
+                and (not self.state_dir.exists() or self.state_dir.is_dir()),
+                str(self.state_dir),
             ),
-            ("state directory", self.state_dir.is_dir(), str(self.state_dir)),
             (
                 "working tree clean",
                 not bool(status),
@@ -1770,6 +3046,42 @@ class Devlegate:
             ),
             ("ticket schema", not ticket_error, ticket_error),
             ("dependency graph", not ticket_error, ticket_error),
+            (
+                "project context",
+                not project_context_error,
+                project_context_error,
+            ),
+            (
+                "control worktree",
+                control_observation is not None,
+                f"{self.control_worktree} (run 'devlegate control init')",
+            ),
+            (
+                "control branch",
+                control_observation is not None
+                and control_observation.branch == self.control_branch,
+                self.control_branch,
+            ),
+            (
+                "control remote",
+                control_observation is not None
+                and control_observation.remote_head is not None,
+                f"{self.remote_name}/{self.control_branch}",
+            ),
+            *[
+                (
+                    f"workflow directory ({state})",
+                    (self.control_worktree / configured_path).is_dir(),
+                    str(self.control_worktree / configured_path),
+                )
+                for state, configured_path in self._workflow_paths().items()
+            ],
+            (
+                "control working tree clean",
+                control_observation is not None
+                and control_observation.working_tree_clean,
+                "",
+            ),
         ]
         failed = False
         for name, passed, detail in checks:
@@ -1791,20 +3103,30 @@ class Devlegate:
                 "rev-list",
                 "--left-right",
                 "--count",
-                local_head,
-                remote_head,
+                f"{local_head}...{remote_head}",
                 check=False,
             ).stdout.strip()
-            print(f"ahead/behind: {counts or '<unknown>'}")
+            count_parts = counts.split()
+            display_counts = (
+                f"{count_parts[0]} {count_parts[1]}"
+                if len(count_parts) == 2
+                else "<unknown>"
+            )
+            print(f"ahead/behind: {display_counts}")
         print(f"todo files: {todo_count}")
         print(f"todo fingerprint: {todo_fingerprint}")
+        if self.control_worktree.is_dir():
+            print(
+                "control HEAD: "
+                + _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            )
         if ticket_store is not None:
             counts = {
                 state: sum(ticket.state == state for ticket in ticket_store.tickets)
-                for state in ("backlog", "todo", "review", "done")
+                for state in ("backlog", "todo", "review", "accepted", "done")
             }
             print("Ticket storage:")
-            for state in ("backlog", "todo", "review", "done"):
+            for state in ("backlog", "todo", "review", "accepted", "done"):
                 print(f"  {state}: {counts[state]}")
             print(f"Runnable tickets: {len(ticket_store.runnable)}")
             selected = ticket_store.selected()
@@ -1836,7 +3158,28 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     commands = parser.add_subparsers(
-        dest="command", metavar="{run,check,status,plan}"
+        dest="command", metavar="{init,render,run,retry,check,status,plan,control}"
+    )
+    init_parser = commands.add_parser(
+        "init", help="initialize project-local protocol templates"
+    )
+    init_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    init_parser.add_argument(
+        "--conflicts",
+        choices=("abort", "backup", "replace"),
+        default="abort",
+        help="policy for unrelated existing rendered artifacts",
+    )
+    render_parser = commands.add_parser(
+        "render", help="render project-local agent protocol artifacts"
+    )
+    render_parser.add_argument(
+        "--check", action="store_true", help="check generated artifacts without writing"
+    )
+    render_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     run_parser = commands.add_parser("run", help="synchronize and run one ticket")
     run_parser.add_argument(
@@ -1858,13 +3201,26 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument(
         "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
-    plan_parser = commands.add_parser(
-        "plan", help="show the read-only execution plan"
-    )
+    plan_parser = commands.add_parser("plan", help="show the read-only execution plan")
     plan_parser.add_argument(
         "--json", action="store_true", help="render the plan as JSON"
     )
     plan_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    retry_parser = commands.add_parser(
+        "retry", help="explicitly retry a current failed execution"
+    )
+    retry_parser.add_argument("ticket_id", nargs="?", help="ticket ID to retry")
+    retry_parser.add_argument(
+        "--env", metavar="FILE", type=Path, help="read a configuration file"
+    )
+    control_parser = commands.add_parser("control", help="manage control-plane state")
+    control_commands = control_parser.add_subparsers(dest="control_command")
+    init_parser = control_commands.add_parser(
+        "init", help="attach the existing remote control branch"
+    )
+    init_parser.add_argument(
         "--env", metavar="FILE", type=Path, help="read a configuration file"
     )
     return parser
@@ -1877,13 +3233,39 @@ def main() -> int:
         build_parser().error("a command is required")
     env_file = args.env or Path.cwd() / ".env"
     try:
-        devlegate = Devlegate(env_file, read_only=args.command in {"status", "plan"})
+        project_env = Path.cwd() / ".env"
+        if args.command == "init":
+            repository_root = Devlegate._repository_root()
+            if repository_root != Path.cwd().resolve():
+                raise DevlegateError(
+                    f"run devlegate from repository root: {repository_root}"
+                )
+        if args.command == "init" and args.env is None and not project_env.exists():
+            try:
+                seed_project_env(project_env)
+            except AgentProtocolError as error:
+                raise DevlegateError(str(error)) from error
+        if args.command == "control" and args.control_command != "init":
+            build_parser().error("a control command is required")
+        devlegate = Devlegate(
+            env_file,
+            read_only=args.command
+            in {"init", "render", "status", "plan", "check", "control"},
+        )
+        if args.command == "init":
+            return devlegate.init_project(args.conflicts)
+        if args.command == "render":
+            return devlegate.render(args.check)
+        if args.command == "control":
+            return devlegate.control_init()
         if args.command == "status":
             return devlegate.status(args.json)
         if args.command == "plan":
             return devlegate.plan(args.json)
         if args.command == "check":
             return devlegate.check()
+        if args.command == "retry":
+            return devlegate.retry(args.ticket_id)
         return devlegate.run(args.once)
     except KeyboardInterrupt:
         return 130

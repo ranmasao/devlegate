@@ -1,0 +1,7 @@
+[[artifact]]
+source = "skills/architect/SKILL.md.tmpl"
+target = "skills/architect/SKILL.md"
+
+[[artifact]]
+source = "skills/reviewer/SKILL.md.tmpl"
+target = "skills/reviewer/SKILL.md"
