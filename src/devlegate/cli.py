@@ -10,14 +10,12 @@ from devlegate import __version__
 from devlegate import runtime as _runtime
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
 from devlegate.runtime import (
-    Devlegate as RuntimeDevlegate,
-)
-from devlegate.runtime import (
     DevlegateError,
     ExecutionPlan,
     StatusSnapshot,
     WorkflowBlockedError,
 )
+from devlegate.service import ServiceEngine
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -29,6 +27,16 @@ _preserve_terminal = _runtime._preserve_terminal
 _run_opencode = _runtime._run_opencode
 MAX_STDOUT_EVENT_BYTES = _runtime.MAX_STDOUT_EVENT_BYTES
 _git = _runtime._git
+
+
+def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine:
+    """Construct the service, retaining only the old import-test seam."""
+    from devlegate import application
+
+    compatibility_type = application.Application
+    if compatibility_type is not _runtime.ServiceEngine:
+        return compatibility_type(env_file, read_only=read_only)
+    return ServiceEngine(env_file, read_only=read_only)
 
 
 def _render_status_text(snapshot: StatusSnapshot) -> str:
@@ -184,7 +192,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
         raise SystemExit(2)
 
 
-class Devlegate(RuntimeDevlegate):
+class Devlegate(ServiceEngine):
     """Legacy CLI-facing runtime surface; presentation remains here."""
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
@@ -287,7 +295,7 @@ def main() -> int:
     try:
         project_env = Path.cwd() / ".env"
         if args.command == "init":
-            repository_root = RuntimeDevlegate._repository_root()
+            repository_root = ServiceEngine._repository_root()
             if repository_root != Path.cwd().resolve():
                 raise DevlegateError(
                     f"run devlegate from repository root: {repository_root}"
@@ -307,9 +315,7 @@ def main() -> int:
         if args.command == "control":
             return devlegate.control_init()
         if args.command == "status":
-            from devlegate.application import Application
-
-            snapshot = Application(env_file, read_only=True).status()
+            snapshot = _service_engine(env_file, read_only=True).status()
             print(
                 json.dumps(snapshot.as_dict(), indent=2, sort_keys=True)
                 if args.json
@@ -317,9 +323,7 @@ def main() -> int:
             )
             return 1 if snapshot.plan.action == "blocked" else 0
         if args.command == "plan":
-            from devlegate.application import Application
-
-            plan = Application(env_file, read_only=True).plan()
+            plan = _service_engine(env_file, read_only=True).plan()
             print(
                 json.dumps(plan.as_dict(), indent=2, sort_keys=True)
                 if args.json
@@ -329,12 +333,8 @@ def main() -> int:
         if args.command == "check":
             return devlegate.check()
         if args.command == "retry":
-            from devlegate.application import Application
-
-            return Application(env_file).retry(args.ticket_id)
-        from devlegate.application import Application
-
-        return Application(env_file).run(args.once)
+            return _service_engine(env_file).retry(args.ticket_id)
+        return _service_engine(env_file).run(args.once)
     except KeyboardInterrupt:
         return 130
     except DevlegateError as error:

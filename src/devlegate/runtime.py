@@ -512,8 +512,8 @@ def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
 
 
-class Devlegate:
-    """Run the repository polling and agent execution workflow."""
+class ServiceEngine:
+    """Own foreground workflow orchestration and mutable runtime operations."""
 
     def __init__(self, env_file: Path, *, read_only: bool = False) -> None:
         if not env_file.is_file():
@@ -2766,6 +2766,10 @@ export default tool({
             )
         return snapshot
 
+    def status(self) -> StatusSnapshot:
+        """Compatibility spelling for the read-only status projection."""
+        return self.status_view()
+
     def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
         snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
         candidates: list[tuple[str, str, str]] = []
@@ -3070,6 +3074,10 @@ export default tool({
             )
         return snapshot.plan
 
+    def plan(self) -> ExecutionPlan:
+        """Compatibility spelling for the read-only plan projection."""
+        return self.plan_view()
+
     def check(self) -> int:
         """Run read-only configuration and checkout diagnostics."""
         print(f"Devlegate {__version__} preflight")
@@ -3244,3 +3252,7 @@ export default tool({
             return 1
         print("\nReady.")
         return 0
+
+
+# Compatibility import for callers of the pre-ServiceEngine runtime surface.
+Devlegate = ServiceEngine
