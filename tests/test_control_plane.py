@@ -41,7 +41,15 @@ def state_payload(state_dir):
     return json.loads(payload)
 
 
-def persist_agent_running(devlegate, state, execution_id="interrupted-old"):
+def persist_agent_running(
+    devlegate,
+    state,
+    execution_id="interrupted-old",
+    *,
+    checkpointed=False,
+    record_start=False,
+    publish=False,
+):
     control = next((state / "worktrees").glob("*/control"))
     code_head = git(devlegate.repo, "rev-parse", "HEAD").stdout.strip()
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
@@ -50,6 +58,19 @@ def persist_agent_running(devlegate, state, execution_id="interrupted-old"):
         devlegate.repo, devlegate.execution_worktree_root, "T-1"
     )
     workspace = manager.prepare(code_head)
+    if checkpointed:
+        (workspace.path / "prior-checkpoint.txt").write_text("prior checkpoint\n")
+        git(workspace.path, "add", "prior-checkpoint.txt")
+        git(workspace.path, "commit", "-m", "prior checkpoint")
+        if publish:
+            git(
+                workspace.path,
+                "push",
+                "origin",
+                f"HEAD:refs/heads/{workspace.branch}",
+            )
+        workspace = manager.prepare(code_head)
+    execution_start_head = workspace.head if record_start else None
     devlegate._save_state(
         "agent_running",
         local_head=code_head,
@@ -67,7 +88,12 @@ def persist_agent_running(devlegate, state, execution_id="interrupted-old"):
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         execution_id=execution_id,
-        execution_remote_head=None,
+        execution_remote_head=workspace.head if publish else None,
+        **(
+            {"execution_start_head": execution_start_head}
+            if record_start
+            else {}
+        ),
     )
     return workspace, control
 
@@ -388,6 +414,24 @@ def test_run_worker_completes_one_lifecycle_attempt(tmp_path):
     assert "execution failed" in result.stdout
     control = next((state / "worktrees").glob("*/control"))
     assert list((control / "executions/T-1").glob("*.json"))
+
+
+def test_execution_start_head_is_persisted_before_worker(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(workspace, _prompt):
+        assert workspace.head == base_head
+        assert devlegate._state["execution_base_head"] == base_head
+        assert devlegate._state["execution_start_head"] == base_head
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    assert state_payload(state)["phase"] == "idle"
 
 
 def test_control_init_rejects_wrong_or_unregistered_existing_path(tmp_path):
@@ -867,6 +911,75 @@ def test_explicit_retry_recovers_agent_running_with_fresh_identity(
         devlegate._state["failed_executions"]["T-1"]["interrupted_execution_id"]
         == old_id
     )
+
+
+def test_explicit_retry_recovers_legacy_published_worktree_at_remote_head(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(
+        devlegate, state, checkpointed=True, publish=True
+    )
+    assert "execution_start_head" not in devlegate._state
+    assert devlegate._state["execution_remote_head"] == workspace.head
+    monkeypatch.setattr(
+        devlegate, "_run_worker", lambda *_args: WorkerRunResult(1, None, None, None)
+    )
+
+    assert devlegate.retry("T-1") == 1
+    assert devlegate._state["phase"] == "idle"
+
+
+def test_explicit_retry_rejects_legacy_worktree_when_remote_advanced(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(
+        devlegate, state, checkpointed=True, publish=True
+    )
+    recorded_remote_head = workspace.head
+    before = dict(devlegate._state)
+    (workspace.path / "remote-advance.txt").write_text("remote advance\n")
+    git(workspace.path, "add", "remote-advance.txt")
+    git(workspace.path, "commit", "-m", "remote advance")
+    git(workspace.path, "push", "origin", f"HEAD:refs/heads/{workspace.branch}")
+    git(workspace.path, "reset", "--hard", recorded_remote_head)
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: pytest.fail("worker"))
+
+    with pytest.raises(DevlegateError, match="remote HEAD changed"):
+        devlegate.retry("T-1")
+
+    assert devlegate._state == before
+
+
+def test_explicit_retry_rejects_worktree_advanced_after_execution_start(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(
+        devlegate, state, checkpointed=True, record_start=True
+    )
+    before = dict(devlegate._state)
+    (workspace.path / "advanced.txt").write_text("advanced\n")
+    git(workspace.path, "add", "advanced.txt")
+    git(workspace.path, "commit", "-m", "advanced after start")
+    calls = []
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    with pytest.raises(DevlegateError, match="does not match the execution start HEAD"):
+        devlegate.retry("T-1")
+
+    assert devlegate._state == before
+    assert calls == []
 
 
 def test_publication_failure_remains_ambiguous_not_retryable(tmp_path, monkeypatch):

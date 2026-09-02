@@ -1748,6 +1748,7 @@ class Devlegate:
         self._save_state(
             "agent_running",
             execution_stage="pre-checkpoint",
+            execution_start_head=workspace.head,
             execution_ticket_id=selected_ticket.id,
             execution_base_head=workspace.base_head,
             execution_control_head=str(self._state["control_head"]),
@@ -2958,9 +2959,32 @@ export default tool({
             workspace = manager._validate_existing(
                 registrations.get(manager.path.resolve()), base_head
             )
-            if workspace.head != base_head:
+            execution_start_head = state.get("execution_start_head")
+            execution_remote_head = state.get("execution_remote_head")
+            if execution_start_head is not None and (
+                not isinstance(execution_start_head, str) or not execution_start_head
+            ):
                 raise ExecutionWorkspaceError(
-                    "execution worktree has a checkpointed HEAD; recovery is ambiguous"
+                    "persisted execution start HEAD is invalid"
+                )
+            if execution_start_head is not None:
+                expected_start_head = execution_start_head
+            elif isinstance(execution_remote_head, str) and execution_remote_head:
+                observed_remote_head = self._execution_remote_head(manager.branch)
+                if observed_remote_head != execution_remote_head:
+                    raise ExecutionWorkspaceError(
+                        "execution worktree remote HEAD changed before recovery"
+                    )
+                expected_start_head = execution_remote_head
+            elif execution_remote_head is None:
+                expected_start_head = base_head
+            else:
+                raise ExecutionWorkspaceError(
+                    "persisted execution remote HEAD is invalid"
+                )
+            if workspace.head != expected_start_head:
+                raise ExecutionWorkspaceError(
+                    "execution worktree HEAD does not match the execution start HEAD"
                 )
             manager.verify_submodules(workspace)
         except (ExecutionWorkspaceError, OSError) as error:
