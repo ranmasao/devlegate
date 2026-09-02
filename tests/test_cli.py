@@ -975,7 +975,7 @@ def test_interactive_retry_selects_only_requested_candidate(monkeypatch, capsys)
     assert "2) T-2" in output
 
 
-def test_interactive_retry_requires_explicit_enter_for_single_candidate(monkeypatch):
+def test_interactive_retry_enter_cancels_without_running(monkeypatch):
     devlegate = object.__new__(Devlegate)
     selected = []
     monkeypatch.setattr(
@@ -993,7 +993,7 @@ def test_interactive_retry_requires_explicit_enter_for_single_candidate(monkeypa
     monkeypatch.setattr("builtins.input", lambda _prompt: "")
 
     assert devlegate.retry() == 0
-    assert selected == ["T-1"]
+    assert selected == []
 
 
 def test_interactive_retry_rejects_invalid_selection_without_running(monkeypatch):

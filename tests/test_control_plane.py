@@ -913,6 +913,55 @@ def test_explicit_retry_recovers_agent_running_with_fresh_identity(
     )
 
 
+def test_interactive_retry_lists_recoverable_agent_running_without_side_effects(
+    tmp_path, monkeypatch, capsys
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    state_before = (next(state.glob("*.sqlite3"))).read_bytes()
+    worktrees_before = git(devlegate.repo, "worktree", "list", "--porcelain").stdout
+    monkeypatch.setattr(os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert devlegate.retry() == 0
+    assert "T-1" in capsys.readouterr().out
+    assert (next(state.glob("*.sqlite3"))).read_bytes() == state_before
+    assert git(devlegate.repo, "worktree", "list", "--porcelain").stdout == (
+        worktrees_before
+    )
+    assert devlegate._state["phase"] == "agent_running"
+
+
+def test_interactive_retry_selection_recovers_agent_running(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    seen = []
+    monkeypatch.setattr(
+        devlegate,
+        "_run_worker",
+        lambda *_args: seen.append(devlegate._state["execution_id"])
+        or WorkerRunResult(1, None, None, None),
+    )
+    monkeypatch.setattr(os, "isatty", lambda _fd: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+
+    assert devlegate.retry() == 1
+    assert seen
+    assert devlegate._state["phase"] == "idle"
+
+
 def test_explicit_retry_recovers_legacy_published_worktree_at_remote_head(
     tmp_path, monkeypatch
 ):

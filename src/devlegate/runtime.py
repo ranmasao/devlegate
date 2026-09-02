@@ -263,6 +263,16 @@ class FailedExecution:
         }
 
 
+@dataclasses.dataclass(frozen=True)
+class RetryCandidate:
+    """Read-only interactive retry option; not persisted runtime state."""
+
+    ticket_id: str
+    title: str
+    reason: str
+    kind: str
+
+
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
     for state in ("backlog", "todo", "review", "accepted", "done"):
@@ -3092,6 +3102,48 @@ export default tool({
                 candidates.append((failure.ticket_id, failure.title, failure.reason))
         return tuple(candidates)
 
+    def _interrupted_retry_candidate(self) -> RetryCandidate | None:
+        state = getattr(self, "_state", {})
+        if not isinstance(state, dict) or state.get("phase") != "agent_running":
+            return None
+        if state.get("execution_stage") not in {None, "pre-checkpoint"}:
+            return None
+        ticket_id = state.get("execution_ticket_id")
+        if not isinstance(ticket_id, str) or not ticket_id:
+            return None
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(ticket_id)
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+        ):
+            return None
+        return RetryCandidate(
+            ticket_id=ticket.id,
+            title=ticket.title,
+            reason="interrupted execution; recovery validation required",
+            kind="interrupted",
+        )
+
+    def _interactive_retry_candidates(self) -> tuple[RetryCandidate, ...]:
+        candidates = [
+            RetryCandidate(ticket_id, title, reason, "failed")
+            for ticket_id, title, reason in self._retry_candidates()
+        ]
+        interrupted = self._interrupted_retry_candidate()
+        if interrupted is not None and all(
+            candidate.ticket_id != interrupted.ticket_id for candidate in candidates
+        ):
+            candidates.append(interrupted)
+        return tuple(candidates)
+
+    def _retry_interactive_candidate(self, candidate: RetryCandidate) -> int:
+        with self._lock():
+            if candidate.kind == "interrupted":
+                self._recover_interrupted_execution(candidate.ticket_id)
+            return self._retry_locked(candidate.ticket_id)
+
     def retry(self, ticket_id: str | None = None) -> int:
         """Authorize exactly one fresh execution after current-state validation."""
         if ticket_id is not None and self._state.get("phase") == "agent_running":
@@ -3110,24 +3162,26 @@ export default tool({
                     "interactive retry requires a terminal; specify a ticket ID:\n"
                     "devlegate retry <ticket-id>"
                 )
-            candidates = self._retry_candidates()
+            candidates = self._interactive_retry_candidates()
             if not candidates:
-                raise DevlegateError("no current failed executions are retryable")
-            print("Failed executions:")
-            for index, (candidate_id, title, reason) in enumerate(candidates, 1):
-                marker = ">" if index == 1 else " "
-                print(f"{marker} {index}) {candidate_id}  {title}\n    {reason}")
-            answer = input("Select number and press Enter (Enter retries first): ")
-            if answer.strip():
-                try:
-                    index = int(answer)
-                    if not 1 <= index <= len(candidates):
-                        raise ValueError
-                except ValueError as error:
-                    raise DevlegateError("invalid retry selection") from error
-            else:
-                index = 1
-            ticket_id = candidates[index - 1][0]
+                raise DevlegateError(
+                    "no current executions are retryable or recoverable"
+                )
+            print("Retry candidates:")
+            for index, candidate in enumerate(candidates, 1):
+                print(f"  {index}) {candidate.ticket_id}  {candidate.title}")
+                print(f"     {candidate.reason}")
+            print("  0) Cancel")
+            answer = input("Select number (Enter = cancel): ").strip()
+            if not answer or answer == "0":
+                return 0
+            try:
+                index = int(answer)
+                if not 1 <= index <= len(candidates):
+                    raise ValueError
+            except ValueError as error:
+                raise DevlegateError("invalid retry selection") from error
+            return self._retry_interactive_candidate(candidates[index - 1])
         with self._lock():
             return self._retry_locked(ticket_id)
 
