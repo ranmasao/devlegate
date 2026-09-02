@@ -17,6 +17,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.runtime import _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
@@ -38,6 +39,37 @@ def state_payload(state_dir):
     ).fetchone()[0]
     connection.close()
     return json.loads(payload)
+
+
+def persist_agent_running(devlegate, state, execution_id="interrupted-old"):
+    control = next((state / "worktrees").glob("*/control"))
+    code_head = git(devlegate.repo, "rev-parse", "HEAD").stdout.strip()
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    todo_fingerprint, _count = _todo_fingerprint(control, devlegate.todo_path)
+    manager = ExecutionWorkspaceManager(
+        devlegate.repo, devlegate.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(code_head)
+    devlegate._save_state(
+        "agent_running",
+        local_head=code_head,
+        remote_head=code_head,
+        changed_paths="",
+        handled_remote_head=code_head,
+        handled_control_head=control_head,
+        handled_todo_fingerprint=todo_fingerprint,
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=code_head,
+        execution_control_head=control_head,
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        execution_id=execution_id,
+        execution_remote_head=None,
+    )
+    return workspace, control
 
 
 def control_fixture(tmp_path):
@@ -707,6 +739,136 @@ def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypat
     assert len(reports) == 2
     assert (control / "kanban/review/T-1.md").exists()
     assert not (control / "kanban/todo/T-1.md").exists()
+
+
+def test_post_worker_integrity_failure_is_persisted_without_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+
+    def worker(workspace, _prompt):
+        (workspace.path / "useful-change.txt").write_text("keep this\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager,
+        "verify_submodules",
+        lambda _manager, _workspace: (_ for _ in ()).throw(
+            ExecutionWorkspaceError("submodule T is dirty")
+        ),
+    )
+
+    with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
+        devlegate.run_once()
+
+    assert devlegate._state["phase"] == "idle"
+    failure = devlegate._collect_status_attempt(
+        allow_workflow_blocked=True
+    ).failed_executions[0]
+    assert failure.ticket_id == "T-1"
+    assert failure.retryable
+    assert "post-worker dependency integrity failure" in failure.reason
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert (execution / "useful-change.txt").read_text() == "keep this\n"
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert list((control / "executions/T-1").glob("*.json")) == []
+    assert git(execution, "log", "--oneline").stdout.count("Devlegate checkpoint") == 0
+
+
+def test_persisted_agent_running_still_refuses_ordinary_restart(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+
+    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+        devlegate.run_once()
+
+    assert devlegate._state["phase"] == "agent_running"
+
+
+def test_explicit_retry_recovers_agent_running_with_fresh_identity(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(devlegate, state)
+    (workspace.path / "useful-change.txt").write_text("keep this\n")
+    old_id = devlegate._state["execution_id"]
+    seen = []
+
+    def worker(current_workspace, _prompt):
+        seen.append(devlegate._state["execution_id"])
+        assert (
+            current_workspace.path / "useful-change.txt"
+        ).read_text() == "keep this\n"
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.retry("T-1") == 1
+
+    assert seen and seen[0] != old_id
+    assert devlegate._state["phase"] == "idle"
+    assert (workspace.path / "useful-change.txt").is_file()
+    assert (
+        devlegate._state["failed_executions"]["T-1"]["interrupted_execution_id"]
+        == old_id
+    )
+
+
+def test_explicit_retry_rejects_mismatched_agent_running_ticket(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    before = dict(devlegate._state)
+    calls = []
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    with pytest.raises(DevlegateError, match="does not match"):
+        devlegate.retry("T-2")
+
+    assert devlegate._state == before
+    assert calls == []
+
+
+def test_explicit_retry_rejects_unsafe_agent_running_workspace(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(devlegate, state)
+    before = dict(devlegate._state)
+    calls = []
+    (workspace.path / "unsafe.txt").write_text("uncommitted dependency change\n")
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager,
+        "verify_submodules",
+        lambda _manager, _workspace: (_ for _ in ()).throw(
+            ExecutionWorkspaceError("submodule T is dirty")
+        ),
+    )
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    with pytest.raises(DevlegateError, match="cannot safely recover"):
+        devlegate.retry("T-1")
+
+    assert devlegate._state == before
+    assert calls == []
+    assert (
+        workspace.path / "unsafe.txt"
+    ).read_text() == "uncommitted dependency change\n"
 
 
 def test_stale_failed_execution_remains_visible_but_not_retryable(

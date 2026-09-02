@@ -1756,17 +1756,33 @@ class Devlegate:
             execution_remote_head=execution_remote_head,
         )
         worker_run = self._run_worker(workspace, prompt)
-        self._assert_product_checkout_unchanged(self.current_branch, local_head)
         try:
+            self._assert_product_checkout_unchanged(self.current_branch, local_head)
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, selected_ticket.id
             )
             manager.verify_submodules(workspace)
         except (ExecutionWorkspaceError, OSError) as error:
+            self._record_post_worker_failure(
+                selected_ticket.id,
+                execution_id,
+                local_head,
+                remote_head,
+                str(error),
+            )
             raise DevlegateError(
-                "submodule changed while worker execution was active; "
+                "post-worker execution integrity failed; "
                 f"execution dependency integrity cannot be proven: {error}"
             ) from error
+        except DevlegateError as error:
+            self._record_post_worker_failure(
+                selected_ticket.id,
+                execution_id,
+                local_head,
+                remote_head,
+                str(error),
+            )
+            raise
         execution_result = build_execution_report(
             execution_id=execution_id,
             ticket_id=selected_ticket.id,
@@ -1811,16 +1827,23 @@ class Devlegate:
         if not isinstance(failed_executions, dict):
             failed_executions = {}
         if report.result.conclusion == "failed":
+            failure = {
+                "execution_id": report.execution_id,
+                "product_head": local_head,
+                "remote_head": remote_head,
+                "control_head": control_head,
+                "todo_fingerprint": todo_fingerprint,
+                "reason": report.result.reason,
+            }
+            prior_failure = failed_executions.get(report.ticket_id)
+            if (
+                isinstance(prior_failure, dict)
+                and prior_failure.get("interrupted") is True
+            ):
+                failure["interrupted_execution_id"] = prior_failure.get("execution_id")
             failed_executions = {
                 **failed_executions,
-                report.ticket_id: {
-                    "execution_id": report.execution_id,
-                    "product_head": local_head,
-                    "remote_head": remote_head,
-                    "control_head": control_head,
-                    "todo_fingerprint": todo_fingerprint,
-                    "reason": report.result.reason,
-                },
+                report.ticket_id: failure,
             }
         else:
             failed_executions = {
@@ -1841,6 +1864,44 @@ class Devlegate:
             f"{control_head[:12]}"
         )
         return 1 if report.result.conclusion == "failed" else 0
+
+    def _record_post_worker_failure(
+        self,
+        ticket_id: str,
+        execution_id: str,
+        local_head: str,
+        remote_head: str,
+        reason: str,
+    ) -> None:
+        control_head = self._state.get("execution_control_head")
+        if not isinstance(control_head, str) or not control_head:
+            control_head = str(self._state.get("control_head", ""))
+        todo_fingerprint, _todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
+        failed_executions = self._state.get("failed_executions", {})
+        if not isinstance(failed_executions, dict):
+            failed_executions = {}
+        failed_executions = {
+            **failed_executions,
+            ticket_id: {
+                "execution_id": execution_id,
+                "product_head": local_head,
+                "remote_head": remote_head,
+                "control_head": control_head,
+                "todo_fingerprint": todo_fingerprint,
+                "reason": f"post-worker dependency integrity failure: {reason}",
+                "interrupted": True,
+            },
+        }
+        self._save_state(
+            "idle",
+            handled_remote_head=remote_head,
+            handled_control_head=control_head,
+            handled_todo_fingerprint=todo_fingerprint,
+            execution_control_head=control_head,
+            failed_executions=failed_executions,
+        )
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
@@ -2389,7 +2450,8 @@ export default tool({
                         ticket_id, str(metadata["execution_id"])
                     )
                 except (ExecutionReportError, KeyError):
-                    invalid_reason = "failed execution report is unavailable"
+                    if metadata.get("interrupted") is not True:
+                        invalid_reason = "failed execution report is unavailable"
             if invalid_reason is None and report is not None:
                 if report.result.conclusion != "failed":
                     invalid_reason = "stored execution report is not failed"
@@ -2707,6 +2769,8 @@ export default tool({
 
     def retry(self, ticket_id: str | None = None) -> int:
         """Authorize exactly one fresh execution after current-state validation."""
+        if ticket_id is not None and self._state.get("phase") == "agent_running":
+            self._recover_interrupted_execution(ticket_id)
         if ticket_id is None:
             try:
                 interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
@@ -2747,6 +2811,124 @@ export default tool({
                 return self.run_once()
         finally:
             self._retry_ticket_id = None
+
+    def _recover_interrupted_execution(self, ticket_id: str) -> None:
+        """Authorize recovery of a stranded post-worker execution only by identity."""
+        state = self._state
+        if state.get("execution_ticket_id") != ticket_id:
+            raise DevlegateError(
+                f"ticket {ticket_id} does not match the persisted interrupted execution"
+            )
+        required = (
+            "local_head",
+            "remote_head",
+            "control_head",
+            "selected_ticket_id",
+            "selected_ticket_body",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+            "execution_id",
+        )
+        if not all(
+            isinstance(state.get(field), str) and state[field] for field in required
+        ):
+            raise DevlegateError(
+                "persisted interrupted execution binding is incomplete"
+            )
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(ticket_id)
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+            or state["selected_ticket_id"] != ticket_id
+            or state["selected_ticket_body"] != ticket.body
+        ):
+            raise DevlegateError(
+                f"ticket {ticket_id} is not the same managed todo execution"
+            )
+        current_local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        if current_local_head != state["local_head"]:
+            raise DevlegateError("product checkout changed since interrupted execution")
+        remote_ref = f"{self.remote_name}/{self.remote_branch}"
+        current_remote = _git(
+            self.repo, "rev-parse", "--verify", remote_ref, check=False
+        )
+        if (
+            current_remote.returncode
+            or current_remote.stdout.strip() != state["remote_head"]
+        ):
+            raise DevlegateError(
+                "product remote generation changed since interrupted execution"
+            )
+        self._validate_control_worktree()
+        current_control_head = _git(
+            self.control_worktree, "rev-parse", "HEAD"
+        ).stdout.strip()
+        execution_control_head = state["execution_control_head"]
+        if (
+            current_control_head != state["control_head"]
+            or current_control_head != execution_control_head
+        ):
+            raise DevlegateError(
+                "control generation changed since interrupted execution"
+            )
+        todo_fingerprint, _todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
+        handled_fingerprint = state.get("handled_todo_fingerprint")
+        if (
+            isinstance(handled_fingerprint, str)
+            and handled_fingerprint
+            and handled_fingerprint != todo_fingerprint
+        ):
+            raise DevlegateError("todo workflow changed since interrupted execution")
+        base_head = state["execution_base_head"]
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if (
+            state["execution_branch"] != manager.branch
+            or Path(state["execution_path"]) != manager.path
+        ):
+            raise DevlegateError("persisted execution workspace binding is invalid")
+        try:
+            manager._validate_base(base_head)
+            manager._validate_branch(base_head)
+            registrations = manager._registrations()
+            workspace = manager._validate_existing(
+                registrations.get(manager.path.resolve()), base_head
+            )
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                f"cannot safely recover interrupted execution: {error}"
+            ) from error
+        failed_executions = state.get("failed_executions", {})
+        if not isinstance(failed_executions, dict):
+            failed_executions = {}
+        failed_executions = {
+            **failed_executions,
+            ticket_id: {
+                "execution_id": state["execution_id"],
+                "product_head": state["local_head"],
+                "remote_head": state["remote_head"],
+                "control_head": state["control_head"],
+                "todo_fingerprint": todo_fingerprint,
+                "reason": "interrupted execution requires explicit retry",
+                "interrupted": True,
+            },
+        }
+        self._save_state(
+            "idle",
+            handled_remote_head=state["remote_head"],
+            handled_control_head=state["control_head"],
+            handled_todo_fingerprint=todo_fingerprint,
+            execution_control_head=state["execution_control_head"],
+            failed_executions=failed_executions,
+        )
 
     def _agent_render_context(self) -> RenderContext:
         return RenderContext(
