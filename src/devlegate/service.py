@@ -1,5 +1,5 @@
 """The single production authority for foreground runtime operations."""
 
-from devlegate.runtime import ServiceEngine
+from devlegate.runtime import ServiceEngine, ServiceSnapshot
 
-__all__ = ["ServiceEngine"]
+__all__ = ["ServiceEngine", "ServiceSnapshot"]

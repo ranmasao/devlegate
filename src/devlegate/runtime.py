@@ -68,6 +68,9 @@ class SnapshotChanged(Exception):
     """The observed project changed during a status snapshot attempt."""
 
 
+_UNSET = object()
+
+
 @dataclasses.dataclass(frozen=True)
 class GitObservation:
     branch: str | None
@@ -178,6 +181,59 @@ class StatusSnapshot:
             "failed_executions": [
                 failure.as_dict() for failure in self.failed_executions
             ],
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ServiceSnapshot:
+    """Immutable, last-published observation of one live service owner."""
+
+    lifecycle: str
+    phase: str
+    execution_stage: str | None
+    worker_running: bool
+    selected_ticket_id: str | None
+    execution_id: str | None
+    product: GitObservation | None
+    control: GitObservation | None
+    counts: tuple[tuple[str, int], ...]
+    runnable: tuple[tuple[str, str], ...]
+    review: tuple[tuple[str, str], ...]
+    accepted: tuple[tuple[str, str], ...]
+    blocked_reason: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "service": {
+                "lifecycle": self.lifecycle,
+                "worker_running": self.worker_running,
+            },
+            "runtime": {
+                "phase": self.phase,
+                "execution_stage": self.execution_stage,
+                "selected_ticket_id": self.selected_ticket_id,
+                "execution_id": self.execution_id,
+            },
+            "observation": {
+                "product": self.product.as_dict() if self.product else None,
+                "control": self.control.as_dict() if self.control else None,
+            },
+            "workflow": {
+                "counts": dict(self.counts),
+                "runnable": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.runnable
+                ],
+                "review": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.review
+                ],
+                "accepted": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.accepted
+                ],
+            },
+            "blocked_reason": self.blocked_reason,
         }
 
 
@@ -567,6 +623,152 @@ class ServiceEngine:
         self._retry_ticket_id = None
         self._validate()
         self._state = self._load_state()
+        self._snapshot_lock = threading.Lock()
+        self._published_snapshot = ServiceSnapshot(
+            lifecycle="initialized",
+            phase=str(self._state["phase"]),
+            execution_stage=(
+                self._state.get("execution_stage")
+                if isinstance(self._state.get("execution_stage"), str)
+                else None
+            ),
+            worker_running=False,
+            selected_ticket_id=(
+                self._state.get("selected_ticket_id")
+                if str(self._state["phase"]) in {"agent_pending", "agent_running"}
+                and isinstance(self._state.get("selected_ticket_id"), str)
+                else None
+            ),
+            execution_id=(
+                self._state.get("execution_id")
+                if str(self._state["phase"]) in {"agent_pending", "agent_running"}
+                and isinstance(self._state.get("execution_id"), str)
+                else None
+            ),
+            product=None,
+            control=None,
+            counts=(),
+            runnable=(),
+            review=(),
+            accepted=(),
+            blocked_reason=None,
+        )
+
+    def service_snapshot(self) -> ServiceSnapshot:
+        """Return the latest published snapshot without performing observation I/O."""
+        with self._snapshot_lock:
+            return self._published_snapshot
+
+    def _publish_service_snapshot(
+        self,
+        *,
+        lifecycle: str | None = None,
+        worker_running: bool | None = None,
+        product: GitObservation | None | object = _UNSET,
+        control: GitObservation | None | object = _UNSET,
+        counts: tuple[tuple[str, int], ...] | object = _UNSET,
+        runnable: tuple[tuple[str, str], ...] | object = _UNSET,
+        review: tuple[tuple[str, str], ...] | object = _UNSET,
+        accepted: tuple[tuple[str, str], ...] | object = _UNSET,
+        blocked_reason: str | None | object = _UNSET,
+    ) -> None:
+        with self._snapshot_lock:
+            current = self._published_snapshot
+            phase = str(self._state.get("phase", "idle"))
+            active = phase in {"agent_pending", "agent_running"}
+            selected_ticket_id = self._state.get("selected_ticket_id")
+            execution_id = self._state.get("execution_id")
+            replacement = ServiceSnapshot(
+                lifecycle=current.lifecycle if lifecycle is None else lifecycle,
+                phase=phase,
+                execution_stage=(
+                    self._state.get("execution_stage")
+                    if active and isinstance(self._state.get("execution_stage"), str)
+                    else None
+                ),
+                worker_running=(
+                    current.worker_running
+                    if worker_running is None
+                    else worker_running
+                ),
+                selected_ticket_id=(
+                    selected_ticket_id
+                    if active and isinstance(selected_ticket_id, str)
+                    else None
+                ),
+                execution_id=(
+                    execution_id if active and isinstance(execution_id, str) else None
+                ),
+                product=(current.product if product is _UNSET else product),
+                control=(current.control if control is _UNSET else control),
+                counts=(current.counts if counts is _UNSET else counts),
+                runnable=(current.runnable if runnable is _UNSET else runnable),
+                review=(current.review if review is _UNSET else review),
+                accepted=(current.accepted if accepted is _UNSET else accepted),
+                blocked_reason=(
+                    current.blocked_reason
+                    if blocked_reason is _UNSET
+                    else blocked_reason
+                ),
+            )
+            self._published_snapshot = replacement
+
+    def _publish_status_snapshot(self, snapshot: StatusSnapshot) -> None:
+        blocked_reason = (
+            snapshot.plan.reason if snapshot.plan.action == "blocked" else None
+        )
+        worker_running = self.service_snapshot().worker_running
+        lifecycle = "worker" if worker_running else (
+            "blocked" if blocked_reason else "ready"
+        )
+        if worker_running:
+            blocked_reason = None
+        self._publish_service_snapshot(
+            lifecycle=lifecycle,
+            product=snapshot.code,
+            control=snapshot.control,
+            counts=snapshot.counts,
+            runnable=snapshot.runnable,
+            review=snapshot.review,
+            accepted=snapshot.accepted,
+            blocked_reason=blocked_reason,
+        )
+
+    def _publish_ticket_projection(
+        self,
+        ticket_store: TicketStore,
+        *,
+        product: GitObservation,
+        control: GitObservation | None,
+        blocked_reason: str | None = None,
+    ) -> None:
+        counts = tuple(
+            (
+                state,
+                sum(ticket.state == state for ticket in ticket_store.tickets),
+            )
+            for state in ("backlog", "todo", "review", "accepted", "done")
+        )
+        self._publish_service_snapshot(
+            lifecycle="blocked" if blocked_reason else "processing",
+            product=product,
+            control=control,
+            counts=counts,
+            runnable=tuple(
+                (ticket.id, ticket.title) for ticket in ticket_store.runnable
+            ),
+            review=tuple(
+                (ticket.id, ticket.title)
+                for ticket in ticket_store.tickets
+                if ticket.state == "review"
+            ),
+            accepted=tuple(
+                (ticket.id, ticket.title)
+                for ticket in ticket_store.tickets
+                if ticket.state == "accepted"
+            ),
+            blocked_reason=blocked_reason,
+        )
 
     def _workflow_paths(self) -> dict[str, str]:
         return {
@@ -1216,6 +1418,7 @@ class ServiceEngine:
         return local_head, remote_head
 
     def run_once(self) -> int:
+        self._publish_service_snapshot(lifecycle="processing")
         self._workflow_validation_succeeded = False
         branch = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
@@ -1235,12 +1438,14 @@ class ServiceEngine:
                 "selected_ticket_id", "unknown"
             )
             execution_id = self._state.get("execution_id", "unknown")
-            raise DevlegateError(
+            reason = (
                 f"interrupted execution is ambiguous for ticket {ticket_id} "
                 f"(execution {execution_id}); refusing to launch a worker or "
                 "automatically reconcile it; explicit operator handling is "
                 "required"
             )
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            raise DevlegateError(reason)
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -1540,6 +1745,16 @@ class ServiceEngine:
                 ),
             },
         )
+        self._publish_ticket_projection(
+            ticket_store,
+            product=execution_plan.code,
+            control=execution_plan.control,
+            blocked_reason=(
+                execution_plan.reason
+                if execution_plan.action == "blocked"
+                else None
+            ),
+        )
         if self._retry_ticket_id is not None:
             if execution_plan.action != "run-worker" or execution_plan.bound:
                 raise DevlegateError(execution_plan.reason)
@@ -1578,6 +1793,7 @@ class ServiceEngine:
                 handled_control_head=control_head,
                 handled_todo_fingerprint=todo_fingerprint,
             )
+            self._publish_service_snapshot(lifecycle="ready", worker_running=False)
             _log(f"accepted ticket {execution_plan.ticket_id} integrated")
             return 0
         if execution_plan.action == "none":
@@ -1720,6 +1936,7 @@ class ServiceEngine:
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
             )
+            self._publish_service_snapshot(worker_running=False)
 
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
@@ -1757,7 +1974,13 @@ class ServiceEngine:
             execution_id=execution_id,
             execution_remote_head=execution_remote_head,
         )
-        worker_run = self._run_worker(workspace, prompt)
+        self._publish_service_snapshot(lifecycle="worker", worker_running=True)
+        try:
+            worker_run = self._run_worker(workspace, prompt)
+        finally:
+            self._publish_service_snapshot(
+                lifecycle="processing", worker_running=False
+            )
         try:
             self._assert_product_checkout_unchanged(self.current_branch, local_head)
             manager = ExecutionWorkspaceManager(
@@ -1866,6 +2089,7 @@ class ServiceEngine:
             execution_control_head=control_head,
             failed_executions=failed_executions,
         )
+        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         _log(
             f"execution {report.result.conclusion}; lifecycle control HEAD "
             f"{control_head[:12]}"
@@ -1909,6 +2133,7 @@ class ServiceEngine:
             execution_control_head=control_head,
             failed_executions=failed_executions,
         )
+        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
@@ -2328,6 +2553,7 @@ export default tool({
 
     def run(self, once: bool) -> int:
         with self._lock():
+            self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             while True:
                 workflow_blocked = False
                 try:
@@ -2335,6 +2561,11 @@ export default tool({
                 except WorkflowBlockedError as error:
                     workflow_blocked = True
                     message = str(error)
+                    self._publish_service_snapshot(
+                        lifecycle="blocked",
+                        worker_running=False,
+                        blocked_reason=message,
+                    )
                     fingerprint = hashlib.sha256(message.encode()).hexdigest()
                     if self._workflow_blocker_fingerprint is None:
                         _log(f"workflow became blocked: {message}")
@@ -2357,6 +2588,10 @@ export default tool({
                     if not (status == 1 and self._dirty_fingerprint is not None):
                         _log(f"run failed with status {status}")
                 if once:
+                    if not self.service_snapshot().worker_running:
+                        self._publish_service_snapshot(
+                            lifecycle="blocked" if workflow_blocked else "ready"
+                        )
                     return status
                 time.sleep(int(self.poll_interval))
 
@@ -2764,6 +2999,7 @@ export default tool({
             raise DevlegateError(
                 "project state changed while status snapshot was being collected"
             )
+        self._publish_status_snapshot(snapshot)
         return snapshot
 
     def status(self) -> StatusSnapshot:
@@ -3072,6 +3308,21 @@ export default tool({
             raise DevlegateError(
                 "project state changed while execution plan was being collected"
             )
+        blocked_reason = (
+            snapshot.plan.reason if snapshot.plan.action == "blocked" else None
+        )
+        worker_running = self.service_snapshot().worker_running
+        lifecycle = "worker" if worker_running else (
+            "blocked" if blocked_reason else "ready"
+        )
+        if worker_running:
+            blocked_reason = None
+        self._publish_service_snapshot(
+            lifecycle=lifecycle,
+            product=snapshot.code,
+            control=snapshot.control,
+            blocked_reason=blocked_reason,
+        )
         return snapshot.plan
 
     def plan(self) -> ExecutionPlan:
