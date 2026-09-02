@@ -1747,6 +1747,7 @@ class Devlegate:
         )
         self._save_state(
             "agent_running",
+            execution_stage="pre-checkpoint",
             execution_ticket_id=selected_ticket.id,
             execution_base_head=workspace.base_head,
             execution_control_head=str(self._state["control_head"]),
@@ -1793,22 +1794,18 @@ class Devlegate:
             workspace_head=None,
             run=worker_run,
         )
+        self._save_state("agent_running", execution_stage="checkpointing")
         try:
             checkpoint = manager.checkpoint(workspace, execution_id)
         except (ExecutionWorkspaceError, OSError) as error:
-            self._record_post_worker_failure(
-                selected_ticket.id,
-                execution_id,
-                local_head,
-                remote_head,
-                str(error),
-            )
             raise DevlegateError(f"execution checkpoint failed: {error}") from error
+        self._save_state("agent_running", execution_stage="post-checkpoint")
         _log(
             "execution checkpoint "
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
             f"{checkpoint.after_head[:12]}"
         )
+        self._save_state("agent_running", execution_stage="publishing")
         try:
             self._publish_execution_branch(
                 workspace,
@@ -1816,30 +1813,18 @@ class Devlegate:
                 self._state.get("execution_remote_head"),
             )
         except (DevlegateError, OSError) as error:
-            self._record_post_worker_failure(
-                selected_ticket.id,
-                execution_id,
-                local_head,
-                remote_head,
-                str(error),
-            )
             raise DevlegateError(
                 f"execution branch publication failed: {error}"
             ) from error
+        self._save_state("agent_running", execution_stage="post-publication")
         report = dataclasses.replace(
             execution_result,
             workspace_head=checkpoint.after_head,
         )
+        self._save_state("agent_running", execution_stage="lifecycle")
         try:
             control_head = self._apply_execution_lifecycle(report)
         except (DevlegateError, OSError, ExecutionReportError) as error:
-            self._record_post_worker_failure(
-                selected_ticket.id,
-                execution_id,
-                local_head,
-                remote_head,
-                str(error),
-            )
             raise DevlegateError(f"control-plane lifecycle failed: {error}") from error
         todo_fingerprint, _todo_count = _todo_fingerprint(
             self.control_worktree, self.todo_path
@@ -2791,7 +2776,9 @@ export default tool({
     def retry(self, ticket_id: str | None = None) -> int:
         """Authorize exactly one fresh execution after current-state validation."""
         if ticket_id is not None and self._state.get("phase") == "agent_running":
-            self._recover_interrupted_execution(ticket_id)
+            with self._lock():
+                self._recover_interrupted_execution(ticket_id)
+                return self._retry_locked(ticket_id)
         if ticket_id is None:
             try:
                 interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
@@ -2822,14 +2809,17 @@ export default tool({
             else:
                 index = 1
             ticket_id = candidates[index - 1][0]
+        with self._lock():
+            return self._retry_locked(ticket_id)
+
+    def _retry_locked(self, ticket_id: str) -> int:
         candidates = self._retry_candidates()
         candidate_ids = {candidate[0] for candidate in candidates}
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         self._retry_ticket_id = ticket_id
         try:
-            with self._lock():
-                return self.run_once()
+            return self.run_once()
         finally:
             self._retry_ticket_id = None
 
@@ -2858,6 +2848,11 @@ export default tool({
             raise DevlegateError(
                 "persisted interrupted execution binding is incomplete"
             )
+        if state.get("execution_stage") not in {None, "pre-checkpoint"}:
+            raise DevlegateError(
+                "persisted execution reached an ambiguous post-worker stage; "
+                "manual operator handling is required"
+            )
         ticket_store = self._ticket_store()
         ticket = ticket_store.by_id.get(ticket_id)
         if (
@@ -2874,6 +2869,19 @@ export default tool({
         if current_local_head != state["local_head"]:
             raise DevlegateError("product checkout changed since interrupted execution")
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
+        product_fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        if product_fetch.returncode:
+            raise DevlegateError(
+                "cannot freshly observe product remote before interrupted recovery: "
+                f"{product_fetch.stderr.strip() or 'unknown git error'}"
+            )
         current_remote = _git(
             self.repo, "rev-parse", "--verify", remote_ref, check=False
         )
@@ -2885,6 +2893,34 @@ export default tool({
                 "product remote generation changed since interrupted execution"
             )
         self._validate_control_worktree()
+        control_fetch = _git(
+            self.control_worktree,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.control_branch,
+            check=False,
+        )
+        if control_fetch.returncode:
+            raise DevlegateError(
+                "cannot freshly observe control remote before interrupted recovery: "
+                f"{control_fetch.stderr.strip() or 'unknown git error'}"
+            )
+        control_remote_ref = f"{self.remote_name}/{self.control_branch}"
+        current_control_remote = _git(
+            self.control_worktree,
+            "rev-parse",
+            "--verify",
+            control_remote_ref,
+            check=False,
+        )
+        if (
+            current_control_remote.returncode
+            or current_control_remote.stdout.strip() != state["control_head"]
+        ):
+            raise DevlegateError(
+                "control remote generation changed since interrupted execution"
+            )
         current_control_head = _git(
             self.control_worktree, "rev-parse", "HEAD"
         ).stdout.strip()
@@ -2922,6 +2958,10 @@ export default tool({
             workspace = manager._validate_existing(
                 registrations.get(manager.path.resolve()), base_head
             )
+            if workspace.head != base_head:
+                raise ExecutionWorkspaceError(
+                    "execution worktree has a checkpointed HEAD; recovery is ambiguous"
+                )
             manager.verify_submodules(workspace)
         except (ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(
@@ -2948,6 +2988,7 @@ export default tool({
             handled_control_head=state["control_head"],
             handled_todo_fingerprint=todo_fingerprint,
             execution_control_head=state["execution_control_head"],
+            interrupted_execution_id=state["execution_id"],
             failed_executions=failed_executions,
         )
 

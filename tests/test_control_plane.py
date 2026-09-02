@@ -795,6 +795,48 @@ def test_persisted_agent_running_still_refuses_ordinary_restart(tmp_path, monkey
     assert devlegate._state["phase"] == "agent_running"
 
 
+def test_locked_agent_running_cannot_be_recovered(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    before = dict(devlegate._state)
+    calls = []
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    with devlegate._lock():
+        with pytest.raises(DevlegateError, match="another devlegate instance"):
+            devlegate.retry("T-1")
+
+    assert devlegate._state == before
+    assert calls == []
+
+
+def test_interrupted_recovery_refreshes_stale_product_remote(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    before = dict(devlegate._state)
+    calls = []
+    publisher = tmp_path / "seed"
+    git(publisher, "switch", "main")
+    (publisher / "remote-advance.txt").write_text("advanced\n")
+    git(publisher, "add", "remote-advance.txt")
+    git(publisher, "commit", "-m", "advance product remote")
+    git(publisher, "push", "origin", "HEAD:main")
+    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+
+    with pytest.raises(DevlegateError, match="product remote generation changed"):
+        devlegate.retry("T-1")
+
+    assert devlegate._state == before
+    assert devlegate._state["phase"] == "agent_running"
+    assert calls == []
+
+
 def test_explicit_retry_recovers_agent_running_with_fresh_identity(
     tmp_path, monkeypatch
 ):
@@ -820,10 +862,44 @@ def test_explicit_retry_recovers_agent_running_with_fresh_identity(
     assert seen and seen[0] != old_id
     assert devlegate._state["phase"] == "idle"
     assert (workspace.path / "useful-change.txt").is_file()
+    assert devlegate._state["interrupted_execution_id"] == old_id
     assert (
         devlegate._state["failed_executions"]["T-1"]["interrupted_execution_id"]
         == old_id
     )
+
+
+def test_publication_failure_remains_ambiguous_not_retryable(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "change.txt").write_text("checkpointed\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(
+        devlegate,
+        "_publish_execution_branch",
+        lambda *_args: (_ for _ in ()).throw(
+            DevlegateError("publication outcome is unknown")
+        ),
+    )
+
+    with pytest.raises(DevlegateError, match="execution branch publication failed"):
+        devlegate.run_once()
+
+    assert devlegate._state["phase"] == "agent_running"
+    assert devlegate._state["execution_stage"] == "publishing"
+    assert devlegate._state.get("failed_executions", {}) == {}
+    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+        devlegate.run_once()
+    with pytest.raises(DevlegateError, match="ambiguous post-worker stage"):
+        devlegate.retry("T-1")
 
 
 def test_explicit_retry_rejects_mismatched_agent_running_ticket(tmp_path, monkeypatch):
