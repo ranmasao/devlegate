@@ -621,6 +621,7 @@ class ServiceEngine:
         self._workflow_blocker_fingerprint: str | None = None
         self._workflow_validation_succeeded = False
         self._retry_ticket_id = None
+        self._stop_event: threading.Event | None = None
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -778,6 +779,22 @@ class ServiceEngine:
             "accepted": self.accepted_path,
             "done": self.done_path,
         }
+
+    @contextmanager
+    def _stop_context(self, stop_event: threading.Event | None):
+        previous = self._stop_event
+        self._stop_event = stop_event
+        try:
+            yield
+        finally:
+            self._stop_event = previous
+
+    def _stop_requested(self) -> bool:
+        return self._stop_event is not None and self._stop_event.is_set()
+
+    def _stop_before_admission(self) -> bool:
+        """Return whether a new mutable operation must not be committed."""
+        return self._stop_requested()
 
     def _ticket_store(self) -> TicketStore:
         product_workflow = [
@@ -1417,8 +1434,19 @@ class ServiceEngine:
             local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
         return local_head, remote_head
 
-    def run_once(self) -> int:
+    def run_once(self, stop_event: threading.Event | None = None) -> int:
+        if stop_event is None:
+            return self._run_once()
+        with self._stop_context(stop_event):
+            return self._run_once()
+
+    def _run_once(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
+        if (
+            self._stop_requested()
+            and self._state.get("phase") != "merge_pending"
+        ):
+            return 0
         self._workflow_validation_succeeded = False
         branch = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
@@ -1434,6 +1462,8 @@ class ServiceEngine:
                 f"expected branch '{self.current_branch}'"
             )
         if self._state.get("phase") == "agent_running":
+            if self._stop_requested():
+                return 0
             ticket_id = self._state.get("execution_ticket_id") or self._state.get(
                 "selected_ticket_id", "unknown"
             )
@@ -1452,7 +1482,13 @@ class ServiceEngine:
             if dirty_changed:
                 _log("working tree is dirty; refusing to pull or start the agent")
             return 1
+        initial_phase = self._state.get("phase")
+        # Observation may finish, but stop before a new synchronization admission.
+        if self._stop_before_admission() and initial_phase != "merge_pending":
+            return 0
         control_head, control_remote_head = self._sync_control()
+        if self._stop_before_admission() and initial_phase != "merge_pending":
+            return 0
         local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
@@ -1599,6 +1635,12 @@ class ServiceEngine:
                         target_head,
                         check=False,
                     ).stdout.rstrip()
+                    if (
+                        self._stop_before_admission()
+                        and initial_phase != "merge_pending"
+                    ):
+                        return 0
+                    # A durable merge_pending record commits this drain region.
                     self._save_state(
                         "merge_pending",
                         local_head=local_head,
@@ -1659,6 +1701,8 @@ class ServiceEngine:
                     remote_head,
                     check=False,
                 ).stdout.rstrip()
+                if self._stop_before_admission():
+                    return 0
                 self._save_state(
                     "merge_pending",
                     local_head=local_head,
@@ -1714,6 +1758,8 @@ class ServiceEngine:
                 had_remote_change = True
                 self._log_sync_failure(local_head, remote_ref)
                 return 1
+        if self._stop_before_admission():
+            return 0
         ticket_store = self._ticket_store()
         try:
             load_project_context(self.repo)
@@ -1755,6 +1801,8 @@ class ServiceEngine:
                 else None
             ),
         )
+        if self._stop_before_admission():
+            return 0
         if self._retry_ticket_id is not None:
             if execution_plan.action != "run-worker" or execution_plan.bound:
                 raise DevlegateError(execution_plan.reason)
@@ -1936,6 +1984,8 @@ class ServiceEngine:
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
             )
+            if self._stop_before_admission():
+                return 0
             self._publish_service_snapshot(worker_running=False)
 
         try:
@@ -1962,6 +2012,9 @@ class ServiceEngine:
         prompt = build_worker_prompt(
             WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
         )
+        # This is the last safe gate before committing agent_running.
+        if self._stop_before_admission():
+            return 0
         self._save_state(
             "agent_running",
             execution_stage="pre-checkpoint",
@@ -2565,10 +2618,14 @@ export default tool({
         once: bool,
         stop_event: threading.Event | None = None,
     ) -> int:
-        with self._lock():
+        with self._stop_context(stop_event), self._lock():
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             while True:
-                if stop_event is not None and stop_event.is_set():
+                if (
+                    stop_event is not None
+                    and stop_event.is_set()
+                    and self._state.get("phase") != "merge_pending"
+                ):
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 workflow_blocked = False

@@ -199,12 +199,12 @@ class Devlegate(ServiceEngine):
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
         return _render_status_text(snapshot)
 
-    def run_once(self) -> int:
+    def run_once(self, stop_event=None) -> int:
         # Preserve the historical CLI test hook while keeping runtime independent.
         runtime_git = _runtime._git
         _runtime._git = _git
         try:
-            return super().run_once()
+            return super().run_once(stop_event)
         finally:
             _runtime._git = runtime_git
 
