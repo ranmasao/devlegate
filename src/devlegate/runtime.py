@@ -2552,9 +2552,25 @@ export default tool({
             shutil.rmtree(config_dir, ignore_errors=True)
 
     def run(self, once: bool) -> int:
+        """Run the legacy foreground polling fallback."""
+        return self._run_polling(once=once)
+
+    def serve(self, stop_event: threading.Event) -> int:
+        """Run the foreground service until the host requests a stop."""
+        return self._run_polling(once=False, stop_event=stop_event)
+
+    def _run_polling(
+        self,
+        *,
+        once: bool,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         with self._lock():
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    self._publish_service_snapshot(lifecycle="ready")
+                    return 0
                 workflow_blocked = False
                 try:
                     status = self.run_once()
@@ -2593,7 +2609,12 @@ export default tool({
                             lifecycle="blocked" if workflow_blocked else "ready"
                         )
                     return status
-                time.sleep(int(self.poll_interval))
+                if stop_event is not None:
+                    if stop_event.wait(int(self.poll_interval)):
+                        self._publish_service_snapshot(lifecycle="ready")
+                        return 0
+                else:
+                    time.sleep(int(self.poll_interval))
 
     def _status_snapshot_hook(self, _point: str) -> None:
         """Testing hook for deterministic snapshot-race simulations."""

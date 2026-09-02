@@ -9,6 +9,7 @@ from typing import NoReturn
 from devlegate import __version__
 from devlegate import runtime as _runtime
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
+from devlegate.daemon import run_daemon
 from devlegate.runtime import (
     DevlegateError,
     ExecutionPlan,
@@ -244,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(
         dest="command",
-        metavar="{init,render,run,retry,check,status,plan,control}",
+        metavar="{init,render,run,daemon,retry,check,status,plan,control}",
         parser_class=DevlegateArgumentParser,
     )
     init_parser = commands.add_parser(
@@ -262,6 +263,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = commands.add_parser("run", help="synchronize and run one ticket")
     run_parser.add_argument("--once", action="store_true")
     run_parser.add_argument("--env", metavar="FILE", type=Path)
+    daemon_parser = commands.add_parser(
+        "daemon", help="run the foreground workflow service"
+    )
+    daemon_parser.add_argument("--env", metavar="FILE", type=Path)
     check_parser = commands.add_parser("check", help="validate setup readiness")
     check_parser.add_argument("--env", metavar="FILE", type=Path)
     for name in ("status", "plan"):
@@ -334,6 +339,8 @@ def main() -> int:
             return devlegate.check()
         if args.command == "retry":
             return _service_engine(env_file).retry(args.ticket_id)
+        if args.command == "daemon":
+            return run_daemon(_service_engine(env_file))
         return _service_engine(env_file).run(args.once)
     except KeyboardInterrupt:
         return 130
