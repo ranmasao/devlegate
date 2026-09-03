@@ -2896,6 +2896,15 @@ class ServiceEngine:
         if parent.returncode:
             return False
         parent_head = parent.stdout.strip()
+        lineage = _git(
+            self.control_worktree,
+            "rev-list",
+            "--reverse",
+            f"{parent_head}..{commit}",
+            check=False,
+        )
+        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+            return False
         ancestor = _git(
             self.control_worktree,
             "merge-base",
@@ -2927,7 +2936,71 @@ class ServiceEngine:
                     f"A\t{self.review_path}/{report.ticket_id}.md",
                 }
             )
-        return names.returncode == 0 and set(names.stdout.splitlines()) == expected
+        if names.returncode != 0 or set(names.stdout.splitlines()) != expected:
+            return False
+        report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
+        report_bytes = _git(
+            self.control_worktree, "show", f"{commit}:{report_path}", check=False
+        )
+        if report_bytes.returncode or report_bytes.stdout != report.to_json():
+            return False
+        if report.result.conclusion == "completed":
+            parent_blob = _git(
+                self.control_worktree,
+                "rev-parse",
+                f"{parent_head}:{self.todo_path}/{report.ticket_id}.md",
+                check=False,
+            )
+            review_blob = _git(
+                self.control_worktree,
+                "rev-parse",
+                f"{commit}:{self.review_path}/{report.ticket_id}.md",
+                check=False,
+            )
+            if (
+                parent_blob.returncode
+                or review_blob.returncode
+                or parent_blob.stdout.strip() != review_blob.stdout.strip()
+            ):
+                return False
+        return True
+
+    def _prove_unpublished_lifecycle_lineage(
+        self, commit: str, remote_head: str, report: ExecutionReport
+    ) -> None:
+        parent = _git(
+            self.control_worktree, "rev-parse", f"{commit}^", check=False
+        )
+        if parent.returncode:
+            raise WorkflowBlockedError("unpublished lifecycle parent is unavailable")
+        parent_head = parent.stdout.strip()
+        parent_remote = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            parent_head,
+            remote_head,
+            check=False,
+        )
+        if parent_remote.returncode:
+            raise WorkflowBlockedError(
+                "unpublished lifecycle parent is not on the fresh remote lineage"
+            )
+        lineage = _git(
+            self.control_worktree,
+            "rev-list",
+            "--reverse",
+            f"{parent_head}..{commit}",
+            check=False,
+        )
+        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+            raise WorkflowBlockedError(
+                "unpublished control history contains more than one commit"
+            )
+        if not self._lifecycle_commit_is_exact(commit, report):
+            raise WorkflowBlockedError(
+                "unpublished control commit is not the exact lifecycle mutation"
+            )
 
     def _remote_lifecycle_commit(
         self, remote_head: str, report: ExecutionReport
@@ -3089,21 +3162,9 @@ class ServiceEngine:
                         check=False,
                     )
                     if relation.returncode:
-                        if not self._lifecycle_commit_is_exact(local_head, report):
-                            raise WorkflowBlockedError(
-                                "local control divergence is not Devlegate's lifecycle"
-                            )
-                        reset = _git(
-                            self.control_worktree,
-                            "reset",
-                            "--hard",
-                            remote_head,
-                            check=False,
+                        raise WorkflowBlockedError(
+                            "local control history diverges from published lifecycle"
                         )
-                        if reset.returncode:
-                            raise WorkflowBlockedError(
-                                "cannot fast-forward control worktree"
-                            )
                     else:
                         merge = _git(
                             self.control_worktree,
@@ -3118,11 +3179,9 @@ class ServiceEngine:
                             )
                 return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
             if local_head != report.control_head:
-                if not self._lifecycle_commit_is_exact(local_head, report):
-                    raise WorkflowBlockedError(
-                        "unpublished control divergence is not the exact lifecycle "
-                        "mutation"
-                    )
+                self._prove_unpublished_lifecycle_lineage(
+                    local_head, remote_head, report
+                )
                 self._prove_control_descendant(remote_head, report)
                 reset = _git(
                     self.control_worktree, "reset", "--hard", remote_head, check=False

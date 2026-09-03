@@ -538,6 +538,61 @@ def test_legacy_lifecycle_commit_replays_on_control_descendant_without_worker(
     assert ExecutionReportStore(control).read("T-1", report.execution_id) == report
 
 
+def test_unrelated_local_parent_blocks_lifecycle_reset(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    monkeypatch.setattr(
+        devlegate,
+        "_run_worker",
+        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+    )
+    monkeypatch.setattr(
+        devlegate,
+        "_apply_execution_lifecycle",
+        lambda _report: (_ for _ in ()).throw(
+            DevlegateError("simulated lifecycle interruption")
+        ),
+    )
+    with pytest.raises(DevlegateError, match="simulated lifecycle interruption"):
+        devlegate.run_once()
+    report = ExecutionReport.from_dict(devlegate._state["pending_execution_report"])
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "manual.txt").write_text("unrelated\n")
+    git(control, "add", "manual.txt")
+    git(control, "commit", "-m", "unrelated local commit")
+    manual = git(control, "rev-parse", "HEAD").stdout.strip()
+    Devlegate._apply_lifecycle_once(devlegate, report)
+    lifecycle = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    architect = tmp_path / "architect"
+    git(tmp_path, "clone", tmp_path / "remote.git", architect)
+    git(architect, "config", "user.email", "test@example.com")
+    git(architect, "config", "user.name", "Test User")
+    git(architect, "switch", "-c", "architect-control", "origin/devlegate/control")
+    (architect / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Future"\n---\nfuture\n'
+    )
+    git(architect, "add", "-A")
+    git(architect, "commit", "-m", "add future ticket")
+    remote_descendant = git(architect, "rev-parse", "HEAD").stdout.strip()
+    git(architect, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    recovered = Devlegate(config)
+    with pytest.raises(
+        DevlegateError, match="parent is not on the fresh remote lineage"
+    ):
+        recovered.run_once()
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == lifecycle
+    assert manual in git(control, "log", "--format=%H").stdout.splitlines()
+    remote_head = git(
+        tmp_path / "remote.git", "rev-parse", "refs/heads/devlegate/control"
+    ).stdout.strip()
+    assert remote_head == remote_descendant
+    assert recovered._state["phase"] == "agent_running"
+
+
 def test_execution_start_head_is_persisted_before_worker(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
