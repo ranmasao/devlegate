@@ -590,7 +590,7 @@ def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
 
 @pytest.mark.parametrize("kind", ["operator_abort", "service_shutdown"])
 def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
-    tmp_path, monkeypatch, kind
+    tmp_path, monkeypatch, kind, capsys
 ):
     engine, config, _state = make_engine(tmp_path, monkeypatch)
     stop_intent = daemon.ShutdownIntent()
@@ -609,6 +609,9 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     metadata = engine._state["failed_executions"]["T-1"]
     assert metadata["interruption_kind"] == kind
     assert metadata["reason"] == "interrupted: " + kind.replace("_", " ")
+    output = capsys.readouterr().out
+    assert "execution interrupted: " + kind.replace("_", " ") in output
+    assert "execution failed;" not in output
 
     fresh = ServiceEngine(config)
     failure = fresh.status_view().failed_executions[0]

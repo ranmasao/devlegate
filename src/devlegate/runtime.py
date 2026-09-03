@@ -440,8 +440,8 @@ def _run_opencode(
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
-        command + [prompt],
-        stdin=subprocess.DEVNULL,
+        command,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,
@@ -450,6 +450,7 @@ def _run_opencode(
     )
     output_lock = threading.Lock()
     transport_error: str | None = None
+    prompt_error: str | None = None
 
     def write(text: str, stream) -> None:
         with output_lock:
@@ -529,6 +530,30 @@ def _run_opencode(
     stderr_thread = threading.Thread(target=consume_stderr)
     stdout_thread.start()
     stderr_thread.start()
+    stdin = getattr(process, "stdin", None)
+
+    def deliver_prompt() -> None:
+        nonlocal prompt_error
+        if stdin is None:
+            return
+        try:
+            remaining = prompt.encode("utf-8")
+            while remaining:
+                written = stdin.write(remaining)
+                if not written:
+                    raise OSError("worker stdin accepted no prompt bytes")
+                remaining = remaining[written:]
+            stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as error:
+            prompt_error = f"worker prompt delivery failed: {error}"
+        finally:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    prompt_thread = threading.Thread(target=deliver_prompt, daemon=True)
+    prompt_thread.start()
     interruption_kind: str | None = None
     worker_process_group = getattr(process, "pid", None)
     if worker_process_group is not None:
@@ -582,6 +607,14 @@ def _run_opencode(
                     break
     stdout_thread.join()
     stderr_thread.join()
+    if prompt_thread.is_alive() and stdin is not None:
+        try:
+            stdin.close()
+        except (OSError, ValueError):
+            pass
+    prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
+    if prompt_error is not None and interruption_kind is None:
+        transport_error = transport_error or prompt_error
     return OpenCodeRunResult(returncode, transport_error, interruption_kind)
 
 
@@ -2225,10 +2258,17 @@ class ServiceEngine:
             failed_executions=failed_executions,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
-        _log(
-            f"execution {report.result.conclusion}; lifecycle control HEAD "
-            f"{control_head[:12]}"
-        )
+        if worker_run.interruption_kind is not None:
+            _log(
+                "execution interrupted: "
+                f"{worker_run.interruption_kind.replace('_', ' ')}; "
+                f"lifecycle control HEAD {control_head[:12]}"
+            )
+        else:
+            _log(
+                f"execution {report.result.conclusion}; lifecycle control HEAD "
+                f"{control_head[:12]}"
+            )
         if worker_run.interruption_kind is not None:
             return 0
         return 1 if report.result.conclusion == "failed" else 0

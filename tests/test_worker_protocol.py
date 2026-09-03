@@ -145,6 +145,40 @@ def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind)
             pytest.fail(f"process {process_id} survived group interruption")
 
 
+def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
+    prompt = (
+        "UNIQUE_PROMPT_MARKER_123456\n"
+        "multiple lines, quotes ' \" and shell-looking $HOME; `rm -rf /`\n"
+        "unicode: \u03c0 \u4e2d\n"
+        + ("large prompt line\n" * 5000)
+    )
+    received = tmp_path / "received.bin"
+    arguments = tmp_path / "arguments.json"
+    script = (
+        "import json, pathlib, sys; "
+        "pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read()); "
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv))"
+    )
+    result = _run_opencode(
+        [sys.executable, "-c", script, str(received), str(arguments)], prompt
+    )
+
+    assert result.process_returncode == 0
+    assert result.transport_error is None
+    assert received.read_bytes() == prompt.encode("utf-8")
+    assert prompt not in json.loads(arguments.read_text())
+
+
+def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
+    prompt = "prompt\n" * 100000
+    result = _run_opencode(
+        [sys.executable, "-c", "raise SystemExit(0)"], prompt
+    )
+
+    assert result.process_returncode == 0
+    assert result.interruption_kind is None
+
+
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_stubborn_worker_group_is_force_killed(tmp_path):
     script = (
