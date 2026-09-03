@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -244,6 +245,7 @@ class FailedExecution:
     reason: str
     retryable: bool
     nonretryable_reason: str | None = None
+    interruption_kind: str | None = None
 
     @property
     def display_reason(self) -> str:
@@ -260,6 +262,7 @@ class FailedExecution:
             "reason": self.reason,
             "retryable": self.retryable,
             "nonretryable_reason": self.nonretryable_reason,
+            "interruption_kind": self.interruption_kind,
         }
 
 
@@ -422,6 +425,8 @@ def _write_worker_line(text: str, stream) -> None:
 
 # Caps raw JSONL events before decode and parsing while leaving normal events intact.
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
+WORKER_TERMINATION_TIMEOUT = 1.0
+WORKER_WAIT_INTERVAL = 0.05
 
 
 def _run_opencode(
@@ -431,6 +436,7 @@ def _run_opencode(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     event_handler: Callable[[object], None] | None = None,
+    stop_request: object | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -440,6 +446,7 @@ def _run_opencode(
         stderr=subprocess.PIPE,
         cwd=cwd,
         env=env,
+        start_new_session=True,
     )
     output_lock = threading.Lock()
     transport_error: str | None = None
@@ -522,10 +529,52 @@ def _run_opencode(
     stderr_thread = threading.Thread(target=consume_stderr)
     stdout_thread.start()
     stderr_thread.start()
-    returncode = process.wait()
+    interruption_kind: str | None = None
+
+    def interrupt(kind: str) -> None:
+        nonlocal interruption_kind
+        if interruption_kind is not None:
+            return
+        interruption_kind = kind
+        try:
+            process_group = os.getpgid(process.pid)
+            os.killpg(
+                process_group,
+                signal.SIGINT if kind == "operator_abort" else signal.SIGTERM,
+            )
+        except (OSError, ProcessLookupError):
+            return
+
+    def finish_interrupted() -> int:
+        try:
+            return process.wait(timeout=WORKER_TERMINATION_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+            return process.wait()
+
+    if stop_request is None:
+        try:
+            returncode = process.wait()
+        except KeyboardInterrupt:
+            interrupt("operator_abort")
+            returncode = finish_interrupted()
+    else:
+        while True:
+            try:
+                returncode = process.wait(timeout=WORKER_WAIT_INTERVAL)
+                break
+            except subprocess.TimeoutExpired:
+                kind = getattr(stop_request, "kind", None)
+                if kind in {"operator_abort", "service_shutdown"}:
+                    interrupt(kind)
+                    returncode = finish_interrupted()
+                    break
     stdout_thread.join()
     stderr_thread.join()
-    return OpenCodeRunResult(returncode, transport_error)
+    return OpenCodeRunResult(returncode, transport_error, interruption_kind)
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -2128,6 +2177,15 @@ class ServiceEngine:
                 "todo_fingerprint": todo_fingerprint,
                 "reason": report.result.reason,
             }
+            if worker_run.interruption_kind in {
+                "operator_abort",
+                "service_shutdown",
+            }:
+                failure["interruption_kind"] = worker_run.interruption_kind
+                failure["reason"] = (
+                    "interrupted: "
+                    + worker_run.interruption_kind.replace("_", " ")
+                )
             prior_failure = failed_executions.get(report.ticket_id)
             if (
                 isinstance(prior_failure, dict)
@@ -2157,6 +2215,8 @@ class ServiceEngine:
             f"execution {report.result.conclusion}; lifecycle control HEAD "
             f"{control_head[:12]}"
         )
+        if worker_run.interruption_kind is not None:
+            return 0
         return 1 if report.result.conclusion == "failed" else 0
 
     def _record_post_worker_failure(
@@ -2595,12 +2655,18 @@ export default tool({
             config, sort_keys=True
         )
         try:
+            stop_request = getattr(self, "_stop_event", None)
             opencode_result = _run_opencode(
                 command,
                 prompt,
                 cwd=execution_path,
                 env=environment,
                 event_handler=parser.consume,
+                **(
+                    {"stop_request": stop_request}
+                    if stop_request is not None
+                    else {}
+                ),
             )
             claim, egress_error = parser.finish()
             return WorkerRunResult(
@@ -2608,6 +2674,7 @@ export default tool({
                 opencode_result.transport_error,
                 claim,
                 egress_error,
+                opencode_result.interruption_kind,
             )
         except OSError as error:
             return WorkerRunResult(-1, str(error), None, None)
@@ -2794,6 +2861,10 @@ export default tool({
                     reason,
                     invalid_reason is None,
                     invalid_reason,
+                    metadata.get("interruption_kind")
+                    if metadata.get("interruption_kind")
+                    in {"operator_abort", "service_shutdown"}
+                    else None,
                 )
             )
         return tuple(evaluated)

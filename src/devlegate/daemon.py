@@ -7,19 +7,41 @@ from collections.abc import Callable
 from devlegate.service import ServiceEngine
 
 
+class ShutdownIntent:
+    """Process-local signal intent with operator abort precedence."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self.kind: str | None = None
+
+    def request(self, kind: str) -> None:
+        if kind == "operator_abort" or self.kind is None:
+            self.kind = kind
+        self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout)
+
+
 def run_daemon(engine: ServiceEngine) -> int:
     """Host one service engine in the foreground until a stop signal arrives."""
-    stop_event = threading.Event()
+    stop_intent = ShutdownIntent()
 
-    def request_stop(_signum: int, _frame: object) -> None:
-        stop_event.set()
+    def request_stop(signum: int, _frame: object) -> None:
+        stop_intent.request(
+            "operator_abort" if signum == signal.SIGINT else "service_shutdown"
+        )
 
     previous: dict[int, Callable[[int, object], object]] = {}
     try:
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous[signum] = signal.getsignal(signum)
             signal.signal(signum, request_stop)
-        return engine.serve(stop_event)
+        result = engine.serve(stop_intent)
+        return 130 if stop_intent.kind == "operator_abort" else result
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)

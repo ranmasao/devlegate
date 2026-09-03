@@ -50,8 +50,16 @@ def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):
     assert isinstance(calls[1][1], FakeServiceEngine)
 
 
-@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
-def test_daemon_host_signal_handler_only_sets_stop_intent(monkeypatch, signum):
+@pytest.mark.parametrize(
+    ("signum", "expected_kind", "expected_status"),
+    [
+        (signal.SIGINT, "operator_abort", 130),
+        (signal.SIGTERM, "service_shutdown", 0),
+    ],
+)
+def test_daemon_host_signal_handler_only_sets_stop_intent(
+    monkeypatch, signum, expected_kind, expected_status
+):
     installed = {}
 
     def install(signum, handler):
@@ -62,13 +70,37 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(monkeypatch, signum):
         def serve(self, stop_event):
             installed[signum](signum, None)
             assert stop_event.is_set()
+            assert stop_event.kind == expected_kind
             return 0
 
     monkeypatch.setattr(daemon.signal, "signal", install)
     monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
 
-    assert daemon.run_daemon(FakeServiceEngine()) == 0
+    assert daemon.run_daemon(FakeServiceEngine()) == expected_status
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
+
+
+@pytest.mark.parametrize(
+    "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
+)
+def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signals):
+    installed = {}
+
+    def install(signum, handler):
+        if callable(handler):
+            installed[signum] = handler
+
+    class FakeServiceEngine:
+        def serve(self, stop_intent):
+            for signum in signals:
+                installed[signum](signum, None)
+            assert stop_intent.kind == "operator_abort"
+            return 0
+
+    monkeypatch.setattr(daemon.signal, "signal", install)
+    monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
+
+    assert daemon.run_daemon(FakeServiceEngine()) == 130
 
 
 def test_daemon_cli_remains_foreground_until_host_returns(tmp_path, monkeypatch):
@@ -554,6 +586,33 @@ def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
     assert worker_calls == [True]
     assert engine.service_snapshot().worker_running is False
     assert engine._state["phase"] == "idle"
+
+
+@pytest.mark.parametrize("kind", ["operator_abort", "service_shutdown"])
+def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
+    tmp_path, monkeypatch, kind
+):
+    engine, config, _state = make_engine(tmp_path, monkeypatch)
+    stop_intent = daemon.ShutdownIntent()
+    workspace_path = []
+
+    def worker(workspace, _prompt):
+        workspace_path.append(workspace.path)
+        (workspace.path / "partial-work.txt").write_text("preserve\n")
+        stop_intent.request(kind)
+        return WorkerRunResult(-2, None, None, None, kind)
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.serve(stop_intent) == 0
+    assert engine._state["phase"] == "idle"
+    assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
+    metadata = engine._state["failed_executions"]["T-1"]
+    assert metadata["interruption_kind"] == kind
+    assert metadata["reason"] == "interrupted: " + kind.replace("_", " ")
+
+    fresh = ServiceEngine(config)
+    failure = fresh.status_view().failed_executions[0]
+    assert failure.interruption_kind == kind
 
 
 def test_daemon_has_no_unix_daemonization_path():

@@ -3,6 +3,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -88,6 +91,76 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     assert result.transport_ok
     assert "ordinary" in output.out
     assert "stderr" in output.err
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path):
+    marker = tmp_path / "processes.json"
+    script = (
+        "import json, os, pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)']); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'worker': os.getpid(), "
+        "'session': os.getsid(0), 'group': os.getpgrp(), 'child': child.pid})); "
+        "child.wait()"
+    )
+
+    class Request:
+        kind = None
+
+    request = Request()
+    result = []
+    thread = threading.Thread(
+        target=lambda: result.append(
+            _run_opencode(
+                [sys.executable, "-c", script, str(marker)],
+                "prompt",
+                stop_request=request,
+            )
+        )
+    )
+    thread.start()
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.01)
+    assert marker.exists()
+    processes = json.loads(marker.read_text())
+    assert processes["session"] != os.getsid(0)
+    assert processes["group"] != os.getpgrp()
+    request.kind = "service_shutdown"
+    thread.join(5)
+    assert not thread.is_alive()
+    assert result[0].interruption_kind == "service_shutdown"
+    for process_id in (processes["worker"], processes["child"]):
+        for _ in range(100):
+            try:
+                os.kill(process_id, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail(f"process {process_id} survived group interruption")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_stubborn_worker_group_is_force_killed(tmp_path):
+    script = (
+        "import signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    )
+
+    class Request:
+        kind = "service_shutdown"
+
+    started = time.monotonic()
+    result = _run_opencode(
+        [sys.executable, "-c", script], "prompt", stop_request=Request()
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.5
+    assert result.interruption_kind == "service_shutdown"
+    assert result.process_returncode == -9
 
 
 @pytest.mark.parametrize(

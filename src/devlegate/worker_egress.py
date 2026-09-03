@@ -20,6 +20,7 @@ class WorkerClaim:
 class OpenCodeRunResult:
     process_returncode: int
     transport_error: str | None = None
+    interruption_kind: str | None = None
 
     @property
     def transport_ok(self) -> bool:
@@ -32,6 +33,7 @@ class WorkerRunResult:
     transport_error: str | None
     claim: WorkerClaim | None
     egress_error: str | None
+    interruption_kind: str | None = None
 
     @property
     def transport_ok(self) -> bool:
