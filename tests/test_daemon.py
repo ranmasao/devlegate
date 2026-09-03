@@ -713,6 +713,87 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
     assert failure.retryable
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    marker = tmp_path / "retry-processes.jsonl"
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)'])\n"
+        "with pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).open('a') as file:\n"
+        "    file.write(json.dumps({'worker': os.getpid(), "
+        "'child': child.pid}) + '\\n')\n"
+        "time.sleep(60)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    environment = {
+        **os.environ,
+        "DEVLEGATE_TEST_MARKER": str(marker),
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    first = subprocess.Popen(
+        [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
+        cwd=working,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for _ in range(500):
+            if marker.exists():
+                break
+            time.sleep(0.01)
+        assert marker.exists()
+        first.kill()
+        first.wait(timeout=10)
+        processes = [json.loads(line) for line in marker.read_text().splitlines()]
+        assert len(processes) == 1
+        assert os.kill(processes[0]["worker"], 0) is None
+
+        second = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "devlegate",
+                "retry",
+                "T-1",
+                "--env",
+                str(config),
+            ],
+            cwd=working,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = second.communicate(timeout=10)
+        assert second.returncode == 1, (stdout, stderr)
+        assert "worker is still alive" in stderr
+        assert len(marker.read_text().splitlines()) == 1
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.wait(timeout=10)
+        if marker.exists():
+            processes = [json.loads(line) for line in marker.read_text().splitlines()]
+            if processes:
+                try:
+                    os.killpg(processes[0]["worker"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
 def test_daemon_has_no_unix_daemonization_path():
     source = open(daemon.__file__, encoding="ascii").read()
     assert "os.fork" not in source
