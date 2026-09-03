@@ -2735,9 +2735,9 @@ export default tool({
         finally:
             shutil.rmtree(config_dir, ignore_errors=True)
 
-    def run(self, once: bool) -> int:
+    def run(self, once: bool, stop_event: threading.Event | None = None) -> int:
         """Run the legacy foreground polling fallback."""
-        return self._run_polling(once=once)
+        return self._run_polling(once=once, stop_event=stop_event)
 
     def serve(self, stop_event: threading.Event) -> int:
         """Run the foreground service until the host requests a stop."""
@@ -3266,18 +3266,30 @@ export default tool({
             candidates.append(interrupted)
         return tuple(candidates)
 
-    def _retry_interactive_candidate(self, candidate: RetryCandidate) -> int:
+    def _retry_interactive_candidate(
+        self,
+        candidate: RetryCandidate,
+        stop_event: threading.Event | None = None,
+    ) -> int:
+        if stop_event is not None and stop_event.is_set():
+            return 0
         with self._lock():
             if candidate.kind == "interrupted":
                 self._recover_interrupted_execution(candidate.ticket_id)
-            return self._retry_locked(candidate.ticket_id)
+            return self._retry_locked(candidate.ticket_id, stop_event)
 
-    def retry(self, ticket_id: str | None = None) -> int:
+    def retry(
+        self,
+        ticket_id: str | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         """Authorize exactly one fresh execution after current-state validation."""
+        if stop_event is not None and stop_event.is_set():
+            return 0
         if ticket_id is not None and self._state.get("phase") == "agent_running":
             with self._lock():
                 self._recover_interrupted_execution(ticket_id)
-                return self._retry_locked(ticket_id)
+                return self._retry_locked(ticket_id, stop_event)
         if ticket_id is None:
             try:
                 interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
@@ -3309,18 +3321,24 @@ export default tool({
                     raise ValueError
             except ValueError as error:
                 raise DevlegateError("invalid retry selection") from error
-            return self._retry_interactive_candidate(candidates[index - 1])
+            return self._retry_interactive_candidate(candidates[index - 1], stop_event)
         with self._lock():
-            return self._retry_locked(ticket_id)
+            return self._retry_locked(ticket_id, stop_event)
 
-    def _retry_locked(self, ticket_id: str) -> int:
+    def _retry_locked(
+        self, ticket_id: str, stop_event: threading.Event | None = None
+    ) -> int:
         candidates = self._retry_candidates()
         candidate_ids = {candidate[0] for candidate in candidates}
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         self._retry_ticket_id = ticket_id
         try:
-            return self.run_once()
+            return (
+                self.run_once()
+                if stop_event is None
+                else self.run_once(stop_event)
+            )
         finally:
             self._retry_ticket_id = None
 

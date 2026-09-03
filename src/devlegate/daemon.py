@@ -28,6 +28,13 @@ class ShutdownIntent:
 
 def run_daemon(engine: ServiceEngine) -> int:
     """Host one service engine in the foreground until a stop signal arrives."""
+    return run_foreground(engine, lambda intent: engine.serve(intent))
+
+
+def run_foreground(
+    engine: ServiceEngine, operation: Callable[[ShutdownIntent], int]
+) -> int:
+    """Run one worker-owning foreground operation under signal ownership."""
     stop_intent = ShutdownIntent()
 
     def request_stop(signum: int, _frame: object) -> None:
@@ -40,7 +47,7 @@ def run_daemon(engine: ServiceEngine) -> int:
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous[signum] = signal.getsignal(signum)
             signal.signal(signum, request_stop)
-        result = engine.serve(stop_intent)
+        result = operation(stop_intent)
         return 130 if stop_intent.kind == "operator_abort" else result
     finally:
         for signum, handler in previous.items():

@@ -1,12 +1,18 @@
+import json
+import os
 import signal
+import subprocess
+import sys
 import threading
+import time
+from pathlib import Path
 
 import pytest
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
 import devlegate.cli as cli
 import devlegate.daemon as daemon
-from devlegate.cli import DevlegateError
+from devlegate.cli import Devlegate, DevlegateError
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
@@ -640,6 +646,68 @@ def test_foreground_operator_abort_stops_after_one_iteration(
     assert engine._state["failed_executions"]["T-1"]["interruption_kind"] == (
         "operator_abort"
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+    marker = tmp_path / "retry-processes.json"
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)'])\n"
+        "pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).write_text(\n"
+        "    json.dumps({'worker': os.getpid(), 'child': child.pid})\n"
+        ")\n"
+        "time.sleep(60)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    environment = {
+        **os.environ,
+        "DEVLEGATE_TEST_MARKER": str(marker),
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
+        cwd=working,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for _ in range(100):
+            if marker.exists():
+                break
+            time.sleep(0.01)
+        assert marker.exists()
+    finally:
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == 0, (stdout, stderr)
+    processes = json.loads(marker.read_text())
+    for process_id in (processes["worker"], processes["child"]):
+        for _ in range(100):
+            try:
+                os.kill(process_id, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail(f"process {process_id} survived retry SIGTERM")
+    fresh = ServiceEngine(config)
+    failure = fresh.status_view().failed_executions[0]
+    assert failure.interruption_kind == "service_shutdown"
+    assert failure.retryable
 
 
 def test_daemon_has_no_unix_daemonization_path():

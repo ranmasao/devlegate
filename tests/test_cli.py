@@ -556,7 +556,7 @@ def test_operational_cli_dispatches_run_through_application(git_fixture, monkeyp
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-        def run(self, once=False):
+        def run(self, once=False, _stop_event=None):
             calls.append(("run", once))
             return 7
 
@@ -577,7 +577,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-        def run(self, once=False):
+        def run(self, once=False, _stop_event=None):
             calls.append(("run", once))
             return 8
 
@@ -614,11 +614,11 @@ def test_all_operational_cli_commands_use_service_engine(
             calls.append("plan")
             return View()
 
-        def run(self, once=False):
+        def run(self, once=False, _stop_event=None):
             calls.append(("run", once))
             return 0
 
-        def retry(self, ticket_id=None):
+        def retry(self, ticket_id=None, _stop_event=None):
             calls.append(("retry", ticket_id))
             return 0
 
@@ -716,7 +716,7 @@ def test_operational_cli_dispatches_retry_through_application(git_fixture, monke
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-        def retry(self, ticket_id=None):
+        def retry(self, ticket_id=None, _stop_event=None):
             calls.append(("retry", ticket_id))
             return 3
 
