@@ -975,7 +975,10 @@ def test_interactive_retry_selects_only_requested_candidate(monkeypatch, capsys)
     assert "2) T-2" in output
 
 
-def test_interactive_retry_enter_cancels_without_running(monkeypatch):
+@pytest.mark.parametrize(
+    "answer", [pytest.param("", id="enter"), pytest.param("0", id="zero")]
+)
+def test_interactive_retry_cancel_without_running(monkeypatch, answer):
     devlegate = object.__new__(Devlegate)
     selected = []
     monkeypatch.setattr(
@@ -990,7 +993,7 @@ def test_interactive_retry_enter_cancels_without_running(monkeypatch):
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
     monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
 
     assert devlegate.retry() == 0
     assert selected == []
