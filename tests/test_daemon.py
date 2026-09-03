@@ -615,6 +615,30 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     assert failure.interruption_kind == kind
 
 
+@pytest.mark.parametrize("once", [False, True])
+def test_foreground_operator_abort_stops_after_one_iteration(
+    tmp_path, monkeypatch, once
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    calls = []
+    workspace_path = []
+
+    def worker(workspace, _prompt):
+        calls.append(True)
+        workspace_path.append(workspace.path)
+        (workspace.path / "partial-work.txt").write_text("preserve\n")
+        return WorkerRunResult(-2, None, None, None, "operator_abort")
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.run(once=once) == 130
+    assert calls == [True]
+    assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
+    assert engine._state["phase"] == "idle"
+    assert engine._state["failed_executions"]["T-1"]["interruption_kind"] == (
+        "operator_abort"
+    )
+
+
 def test_daemon_has_no_unix_daemonization_path():
     source = open(daemon.__file__, encoding="ascii").read()
     assert "os.fork" not in source

@@ -2,6 +2,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -93,8 +94,9 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     assert "stderr" in output.err
 
 
+@pytest.mark.parametrize("kind", ["operator_abort", "service_shutdown"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path):
+def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
     marker = tmp_path / "processes.json"
     script = (
         "import json, os, pathlib, subprocess, sys, time; "
@@ -128,10 +130,10 @@ def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path):
     processes = json.loads(marker.read_text())
     assert processes["session"] != os.getsid(0)
     assert processes["group"] != os.getpgrp()
-    request.kind = "service_shutdown"
+    request.kind = kind
     thread.join(5)
     assert not thread.is_alive()
-    assert result[0].interruption_kind == "service_shutdown"
+    assert result[0].interruption_kind == kind
     for process_id in (processes["worker"], processes["child"]):
         for _ in range(100):
             try:
@@ -151,16 +153,100 @@ def test_stubborn_worker_group_is_force_killed(tmp_path):
     )
 
     class Request:
-        kind = "service_shutdown"
+        kind = None
+
+    request = Request()
+    timer = threading.Timer(0.2, setattr, args=(request, "kind", "service_shutdown"))
+    timer.start()
 
     started = time.monotonic()
     result = _run_opencode(
-        [sys.executable, "-c", script], "prompt", stop_request=Request()
+        [sys.executable, "-c", script], "prompt", stop_request=request
     )
+    timer.cancel()
     elapsed = time.monotonic() - started
     assert elapsed < 2.5
     assert result.interruption_kind == "service_shutdown"
     assert result.process_returncode == -9
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_natural_worker_exit_wins_before_shutdown_observation():
+    class Request:
+        kind = None
+
+    request = Request()
+    result = _run_opencode(
+        [sys.executable, "-c", "raise SystemExit(7)"],
+        "prompt",
+        stop_request=request,
+    )
+    request.kind = "service_shutdown"
+    assert result.process_returncode == 7
+    assert result.interruption_kind is None
+
+
+def test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
+    class Process:
+        pid = 12345
+
+        def __init__(self):
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired("fake", timeout)
+            return 7
+
+        def poll(self):
+            return 7
+
+    process = Process()
+    signals = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 12345)
+    monkeypatch.setattr(os, "killpg", lambda *args: signals.append(args))
+
+    class Request:
+        kind = "service_shutdown"
+
+    result = _run_opencode(["fake"], "prompt", stop_request=Request())
+    assert result.process_returncode == 7
+    assert result.interruption_kind is None
+    assert signals == []
+
+
+def test_foreground_keyboard_interrupt_classifies_operator_abort(monkeypatch):
+    class Process:
+        pid = 12345
+
+        def __init__(self):
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+            self.wait_calls = 0
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise KeyboardInterrupt
+            return -2
+
+        def poll(self):
+            return None
+
+    process = Process()
+    signals = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 12345)
+    monkeypatch.setattr(os, "killpg", lambda *args: signals.append(args))
+
+    result = _run_opencode(["fake"], "prompt")
+    assert result.process_returncode == -2
+    assert result.interruption_kind == "operator_abort"
+    assert signals == [(12345, signal.SIGINT)]
 
 
 @pytest.mark.parametrize(

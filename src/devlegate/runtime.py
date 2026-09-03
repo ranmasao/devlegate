@@ -530,27 +530,35 @@ def _run_opencode(
     stdout_thread.start()
     stderr_thread.start()
     interruption_kind: str | None = None
+    worker_process_group = getattr(process, "pid", None)
+    if worker_process_group is not None:
+        try:
+            worker_process_group = os.getpgid(process.pid)
+        except (OSError, ProcessLookupError):
+            worker_process_group = None
 
     def interrupt(kind: str) -> None:
         nonlocal interruption_kind
         if interruption_kind is not None:
             return
-        interruption_kind = kind
+        if process.poll() is not None or worker_process_group is None:
+            return
         try:
-            process_group = os.getpgid(process.pid)
             os.killpg(
-                process_group,
+                worker_process_group,
                 signal.SIGINT if kind == "operator_abort" else signal.SIGTERM,
             )
         except (OSError, ProcessLookupError):
             return
+        interruption_kind = kind
 
     def finish_interrupted() -> int:
         try:
             return process.wait(timeout=WORKER_TERMINATION_TIMEOUT)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                if worker_process_group is not None:
+                    os.killpg(worker_process_group, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
             return process.wait()
@@ -681,6 +689,7 @@ class ServiceEngine:
         self._workflow_validation_succeeded = False
         self._retry_ticket_id = None
         self._stop_event: threading.Event | None = None
+        self._foreground_abort_requested = False
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -2186,6 +2195,11 @@ class ServiceEngine:
                     "interrupted: "
                     + worker_run.interruption_kind.replace("_", " ")
                 )
+                if (
+                    worker_run.interruption_kind == "operator_abort"
+                    and self._stop_event is None
+                ):
+                    self._foreground_abort_requested = True
             prior_failure = failed_executions.get(report.ticket_id)
             if (
                 isinstance(prior_failure, dict)
@@ -2695,6 +2709,7 @@ export default tool({
         once: bool,
         stop_event: threading.Event | None = None,
     ) -> int:
+        self._foreground_abort_requested = False
         with self._stop_context(stop_event), self._lock():
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             while True:
@@ -2737,6 +2752,8 @@ export default tool({
                 if status and not workflow_blocked:
                     if not (status == 1 and self._dirty_fingerprint is not None):
                         _log(f"run failed with status {status}")
+                if self._foreground_abort_requested:
+                    return 130
                 if once:
                     if not self.service_snapshot().worker_running:
                         self._publish_service_snapshot(
