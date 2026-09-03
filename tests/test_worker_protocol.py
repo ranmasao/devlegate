@@ -180,6 +180,28 @@ def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_worker_identity_persistence_failure_terminates_spawned_group():
+    captured = []
+    script = "import time; time.sleep(60)"
+
+    def fail(identity):
+        captured.append(identity)
+        raise RuntimeError("injected runtime-store failure")
+
+    result = _run_opencode(
+        [sys.executable, "-c", script],
+        "prompt",
+        execution_id="execution-1",
+        worker_identity_handler=fail,
+    )
+
+    assert captured
+    assert "worker identity persistence failed" in (result.transport_error or "")
+    with pytest.raises(ProcessLookupError):
+        os.kill(captured[0].pid, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_stubborn_worker_group_is_force_killed(tmp_path):
     script = (
         "import signal, time; "

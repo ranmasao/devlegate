@@ -276,6 +276,129 @@ class RetryCandidate:
     kind: str
 
 
+@dataclasses.dataclass(frozen=True)
+class WorkerProcessIdentity:
+    execution_id: str
+    pid: int
+    pgid: int
+    sid: int
+    boot_id: str
+    start_time: int
+
+    def as_dict(self) -> dict[str, object]:
+        return dataclasses.asdict(self)
+
+
+def _worker_identity_from_value(
+    value: object, execution_id: object | None = None
+) -> WorkerProcessIdentity | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "execution_id",
+        "pid",
+        "pgid",
+        "sid",
+        "boot_id",
+        "start_time",
+    }:
+        raise DevlegateError("invalid worker identity")
+    if execution_id is not None and value["execution_id"] != execution_id:
+        raise DevlegateError("worker identity does not match execution identity")
+    if (
+        not isinstance(value["execution_id"], str)
+        or not value["execution_id"]
+        or not all(
+            isinstance(value[field], int) and not isinstance(value[field], bool)
+            and value[field] > 0
+            for field in ("pid", "pgid", "sid")
+        )
+        or not isinstance(value["start_time"], int)
+        or isinstance(value["start_time"], bool)
+        or value["start_time"] < 0
+        or not isinstance(value["boot_id"], str)
+        or not value["boot_id"]
+    ):
+        raise DevlegateError("invalid worker identity")
+    return WorkerProcessIdentity(
+        value["execution_id"],
+        value["pid"],
+        value["pgid"],
+        value["sid"],
+        value["boot_id"],
+        value["start_time"],
+    )
+
+
+def _linux_boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def _linux_process_start_time(pid: int) -> int:
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    closing = stat.rfind(")")
+    if closing < 0:
+        raise DevlegateError("worker process identity is malformed")
+    fields = stat[closing + 2 :].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError) as error:
+        raise DevlegateError("worker process identity is malformed") from error
+
+
+def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentity:
+    if os.name != "posix" or not sys.platform.startswith("linux"):
+        raise DevlegateError("strong worker process identity is unavailable")
+    if process.poll() is not None:
+        raise DevlegateError("worker exited before identity capture")
+    pid = process.pid
+    pgid = os.getpgid(pid)
+    sid = os.getsid(pid)
+    if pid <= 0 or pgid <= 0 or sid <= 0 or pgid != pid or sid != pid:
+        raise DevlegateError("worker process group/session identity is invalid")
+    boot_id = _linux_boot_id()
+    start_time = _linux_process_start_time(pid)
+    if not boot_id or start_time < 0:
+        raise DevlegateError("worker process identity is incomplete")
+    return WorkerProcessIdentity(execution_id, pid, pgid, sid, boot_id, start_time)
+
+
+def _worker_group_exists(pgid: int) -> bool | None:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
+    """Classify recorded worker ownership without mutating runtime state."""
+    if os.name != "posix" or not sys.platform.startswith("linux"):
+        return "indeterminate"
+    try:
+        if _linux_boot_id() != identity.boot_id:
+            return "absent"
+        current_start = _linux_process_start_time(identity.pid)
+    except (DevlegateError, OSError):
+        group = _worker_group_exists(identity.pgid)
+        return "absent" if group is False else "indeterminate"
+    try:
+        if (
+            current_start != identity.start_time
+            or os.getpgid(identity.pid) != identity.pgid
+            or os.getsid(identity.pid) != identity.sid
+        ):
+            group = _worker_group_exists(identity.pgid)
+            return "absent" if group is False else "indeterminate"
+    except OSError:
+        return "indeterminate"
+    return "matching-live"
+
+
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
     for state in ("backlog", "todo", "review", "accepted", "done"):
@@ -437,6 +560,8 @@ def _run_opencode(
     env: dict[str, str] | None = None,
     event_handler: Callable[[object], None] | None = None,
     stop_request: object | None = None,
+    execution_id: str | None = None,
+    worker_identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -588,7 +713,23 @@ def _run_opencode(
                 pass
             return process.wait()
 
-    if stop_request is None:
+    identity_error: str | None = None
+    if worker_identity_handler is not None and execution_id is not None:
+        if process.poll() is None:
+            try:
+                worker_identity_handler(_capture_worker_identity(process, execution_id))
+            except Exception as error:
+                if process.poll() is None:
+                    identity_error = f"worker identity persistence failed: {error}"
+                    try:
+                        if worker_process_group is not None:
+                            os.killpg(worker_process_group, signal.SIGTERM)
+                    except (OSError, ProcessLookupError):
+                        pass
+
+    if identity_error is not None:
+        returncode = finish_interrupted()
+    elif stop_request is None:
         try:
             returncode = process.wait()
         except KeyboardInterrupt:
@@ -613,7 +754,9 @@ def _run_opencode(
         except (OSError, ValueError):
             pass
     prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
-    if prompt_error is not None and interruption_kind is None:
+    if identity_error is not None:
+        transport_error = identity_error
+    elif prompt_error is not None and interruption_kind is None:
         transport_error = transport_error or prompt_error
     return OpenCodeRunResult(returncode, transport_error, interruption_kind)
 
@@ -723,6 +866,10 @@ class ServiceEngine:
         self._retry_ticket_id = None
         self._stop_event: threading.Event | None = None
         self._foreground_abort_requested = False
+        self._worker_identity_handler: (
+            Callable[[WorkerProcessIdentity], None] | None
+        ) = None
+        self._worker_execution_id: str | None = None
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -1333,6 +1480,11 @@ class ServiceEngine:
             for ticket_id, value in failures.items()
         ):
             raise DevlegateError("invalid state: failed execution metadata is invalid")
+        identity = _worker_identity_from_value(
+            state.get("worker_identity"), state.get("execution_id")
+        )
+        if phase == "idle" and identity is not None:
+            raise DevlegateError("invalid idle state: worker identity is still active")
         if phase == "idle":
             return
         if phase == "merge_pending":
@@ -1410,6 +1562,7 @@ class ServiceEngine:
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
+            state["worker_identity"] = None
         self._validate_state_invariant(state)
         try:
             self._runtime_store.replace(state)
@@ -2084,6 +2237,7 @@ class ServiceEngine:
                 ),
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
+                worker_identity=None,
             )
             if self._stop_before_admission():
                 return 0
@@ -2127,11 +2281,19 @@ class ServiceEngine:
             execution_path=str(workspace.path),
             execution_id=execution_id,
             execution_remote_head=execution_remote_head,
+            worker_identity=None,
         )
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
+        self._worker_identity_handler = lambda identity: self._save_state(
+            "agent_running", worker_identity=identity.as_dict()
+        )
+        self._worker_execution_id = execution_id
         try:
             worker_run = self._run_worker(workspace, prompt)
         finally:
+            self._worker_identity_handler = None
+            self._worker_execution_id = None
+            self._save_state("agent_running", worker_identity=None)
             self._publish_service_snapshot(
                 lifecycle="processing", worker_running=False
             )
@@ -2710,6 +2872,8 @@ export default tool({
         )
         try:
             stop_request = getattr(self, "_stop_event", None)
+            identity_handler = getattr(self, "_worker_identity_handler", None)
+            execution_id = getattr(self, "_worker_execution_id", None)
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -2719,6 +2883,14 @@ export default tool({
                 **(
                     {"stop_request": stop_request}
                     if stop_request is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "execution_id": execution_id,
+                        "worker_identity_handler": identity_handler,
+                    }
+                    if identity_handler is not None and execution_id is not None
                     else {}
                 ),
             )
@@ -3278,6 +3450,27 @@ export default tool({
                 self._recover_interrupted_execution(candidate.ticket_id)
             return self._retry_locked(candidate.ticket_id, stop_event)
 
+    def _assert_previous_worker_is_safe(self) -> None:
+        identity = _worker_identity_from_value(
+            self._state.get("worker_identity"), self._state.get("execution_id")
+        )
+        if identity is None:
+            raise DevlegateError(
+                "previous worker ownership cannot be proven absent; duplicate "
+                "launch refused"
+            )
+        observation = observe_worker_identity(identity)
+        if observation == "absent":
+            return
+        if observation == "matching-live":
+            raise DevlegateError(
+                "previous execution worker is still alive; duplicate launch refused"
+            )
+        raise DevlegateError(
+            "previous worker ownership cannot be proven absent; duplicate launch "
+            "refused"
+        )
+
     def retry(
         self,
         ticket_id: str | None = None,
@@ -3372,6 +3565,7 @@ export default tool({
                 "persisted execution reached an ambiguous post-worker stage; "
                 "manual operator handling is required"
             )
+        self._assert_previous_worker_is_safe()
         ticket_store = self._ticket_store()
         ticket = ticket_store.by_id.get(ticket_id)
         if (

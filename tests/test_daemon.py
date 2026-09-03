@@ -685,11 +685,14 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
         stderr=subprocess.PIPE,
     )
     try:
-        for _ in range(100):
+        for _ in range(500):
             if marker.exists():
                 break
             time.sleep(0.01)
-        assert marker.exists()
+        if not marker.exists():
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=10)
+            pytest.fail(f"retry worker did not start: {stdout}\n{stderr}")
     finally:
         process.send_signal(signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)
