@@ -1562,6 +1562,8 @@ class ServiceEngine:
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
+            state.pop("pending_execution_report", None)
+            state.pop("execution_interruption_kind", None)
             state["worker_identity"] = None
         self._validate_state_invariant(state)
         try:
@@ -1718,6 +1720,14 @@ class ServiceEngine:
         if self._state.get("phase") == "agent_running":
             if self._stop_requested():
                 return 0
+            if (
+                self._state.get("execution_stage") == "lifecycle"
+                and self._state.get("worker_identity") is None
+            ):
+                report = self._recover_lifecycle_report()
+                control_head = self._apply_execution_lifecycle(report)
+                self._finalize_execution_lifecycle(report, control_head)
+                return 0 if report.result.conclusion != "failed" else 1
             ticket_id = self._state.get("execution_ticket_id") or self._state.get(
                 "selected_ticket_id", "unknown"
             )
@@ -2361,11 +2371,48 @@ class ServiceEngine:
             execution_result,
             workspace_head=checkpoint.after_head,
         )
-        self._save_state("agent_running", execution_stage="lifecycle")
+        self._save_state(
+            "agent_running",
+            execution_stage="lifecycle",
+            pending_execution_report=report.as_dict(),
+            execution_interruption_kind=worker_run.interruption_kind,
+        )
         try:
             control_head = self._apply_execution_lifecycle(report)
         except (DevlegateError, OSError, ExecutionReportError) as error:
             raise DevlegateError(f"control-plane lifecycle failed: {error}") from error
+        self._finalize_execution_lifecycle(
+            report, control_head, local_head, remote_head
+        )
+        if worker_run.interruption_kind is not None:
+            _log(
+                "execution interrupted: "
+                f"{worker_run.interruption_kind.replace('_', ' ')}; "
+                f"lifecycle control HEAD {control_head[:12]}"
+            )
+        else:
+            _log(
+                f"execution {report.result.conclusion}; lifecycle control HEAD "
+                f"{control_head[:12]}"
+            )
+        if worker_run.interruption_kind is not None:
+            return 0
+        return 1 if report.result.conclusion == "failed" else 0
+
+    def _finalize_execution_lifecycle(
+        self,
+        report: ExecutionReport,
+        control_head: str,
+        product_head: str | None = None,
+        product_remote_head: str | None = None,
+    ) -> None:
+        interruption_kind = self._state.get("execution_interruption_kind")
+        if not isinstance(interruption_kind, str):
+            interruption_kind = None
+        product_head = product_head or str(self._state.get("local_head", ""))
+        product_remote_head = product_remote_head or str(
+            self._state.get("remote_head", "")
+        )
         todo_fingerprint, _todo_count = _todo_fingerprint(
             self.control_worktree, self.todo_path
         )
@@ -2375,23 +2422,23 @@ class ServiceEngine:
         if report.result.conclusion == "failed":
             failure = {
                 "execution_id": report.execution_id,
-                "product_head": local_head,
-                "remote_head": remote_head,
+                "product_head": product_head,
+                "remote_head": product_remote_head,
                 "control_head": control_head,
                 "todo_fingerprint": todo_fingerprint,
                 "reason": report.result.reason,
             }
-            if worker_run.interruption_kind in {
+            if interruption_kind in {
                 "operator_abort",
                 "service_shutdown",
             }:
-                failure["interruption_kind"] = worker_run.interruption_kind
+                failure["interruption_kind"] = interruption_kind
                 failure["reason"] = (
                     "interrupted: "
-                    + worker_run.interruption_kind.replace("_", " ")
+                    + interruption_kind.replace("_", " ")
                 )
                 if (
-                    worker_run.interruption_kind == "operator_abort"
+                    interruption_kind == "operator_abort"
                     and self._stop_event is None
                 ):
                     self._foreground_abort_requested = True
@@ -2413,27 +2460,13 @@ class ServiceEngine:
             }
         self._save_state(
             "idle",
-            handled_remote_head=remote_head,
+            handled_remote_head=product_remote_head,
             handled_control_head=control_head,
             handled_todo_fingerprint=todo_fingerprint,
             execution_control_head=control_head,
             failed_executions=failed_executions,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
-        if worker_run.interruption_kind is not None:
-            _log(
-                "execution interrupted: "
-                f"{worker_run.interruption_kind.replace('_', ' ')}; "
-                f"lifecycle control HEAD {control_head[:12]}"
-            )
-        else:
-            _log(
-                f"execution {report.result.conclusion}; lifecycle control HEAD "
-                f"{control_head[:12]}"
-            )
-        if worker_run.interruption_kind is not None:
-            return 0
-        return 1 if report.result.conclusion == "failed" else 0
 
     def _record_post_worker_failure(
         self,
@@ -2754,31 +2787,234 @@ class ServiceEngine:
             )
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
-    def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
-        self._validate_control_worktree()
-        status = _git(self.control_worktree, "status", "--porcelain").stdout
-        if status:
-            raise WorkflowBlockedError("control working tree is dirty")
-        expected_head = report.control_head
-        current_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
-        if current_head != expected_head:
+    def _report_matches_execution_state(self, report: ExecutionReport) -> None:
+        state = self._state
+        expected = {
+            "execution_id": state.get("execution_id"),
+            "ticket_id": state.get("execution_ticket_id"),
+            "control_head": state.get("execution_control_head"),
+            "execution_branch": state.get("execution_branch"),
+            "execution_path": state.get("execution_path"),
+            "code_base_head": state.get("execution_base_head"),
+        }
+        actual = {
+            "execution_id": report.execution_id,
+            "ticket_id": report.ticket_id,
+            "control_head": report.control_head,
+            "execution_branch": report.execution_branch,
+            "execution_path": report.execution_path,
+            "code_base_head": report.code_base_head,
+        }
+        if any(
+            not isinstance(value, str) or not value for value in expected.values()
+        ):
             raise WorkflowBlockedError(
-                "control HEAD changed after execution admission; refusing "
-                "lifecycle mutation"
+                "persisted lifecycle execution binding is incomplete"
             )
+        if actual != expected:
+            raise WorkflowBlockedError(
+                "recovered execution report does not match its durable execution "
+                "binding"
+            )
+        if not isinstance(report.workspace_head, str) or not report.workspace_head:
+            raise WorkflowBlockedError("execution checkpoint identity is missing")
+        observed = self._execution_remote_head(report.execution_branch)
+        if observed != report.workspace_head:
+            raise WorkflowBlockedError(
+                "published execution checkpoint does not match the execution branch"
+            )
+
+    def _recover_lifecycle_report(self) -> ExecutionReport:
+        state = self._state
+        ticket_id = state.get("execution_ticket_id")
+        execution_id = state.get("execution_id")
+        if not isinstance(ticket_id, str) or not isinstance(execution_id, str):
+            raise WorkflowBlockedError("lifecycle recovery identity is incomplete")
+        pending = state.get("pending_execution_report")
+        if isinstance(pending, dict):
+            try:
+                report = ExecutionReport.from_dict(pending)
+            except ExecutionReportError as error:
+                raise WorkflowBlockedError(
+                    f"pending lifecycle report is invalid: {error}"
+                ) from error
+        else:
+            self._validate_control_worktree()
+            try:
+                report = ExecutionReportStore(self.control_worktree).read(
+                    ticket_id, execution_id
+                )
+            except ExecutionReportError as error:
+                raise WorkflowBlockedError(
+                    "lifecycle report evidence is unavailable; recovery is ambiguous"
+                ) from error
+        local_head = state.get("local_head")
+        remote_head = state.get("remote_head")
+        if not isinstance(local_head, str) or not isinstance(remote_head, str):
+            raise WorkflowBlockedError("lifecycle product binding is incomplete")
+        self._assert_product_checkout_unchanged(self.current_branch, local_head)
+        product_fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        product_ref = f"{self.remote_name}/{self.remote_branch}"
+        observed_product = _git(
+            self.repo, "rev-parse", "--verify", product_ref, check=False
+        )
+        if product_fetch.returncode or observed_product.returncode or (
+            observed_product.stdout.strip() != remote_head
+        ):
+            raise WorkflowBlockedError(
+                "product checkout or remote changed before lifecycle recovery"
+            )
+        self._report_matches_execution_state(report)
+        return report
+
+    def _control_report_at(
+        self, commit: str, report: ExecutionReport
+    ) -> ExecutionReport | None:
+        path = f"executions/{report.ticket_id}/{report.execution_id}.json"
+        shown = _git(self.control_worktree, "show", f"{commit}:{path}", check=False)
+        if shown.returncode:
+            return None
         try:
-            ticket_store = load_ticket_store(
-                self.control_worktree, self._workflow_paths()
+            recovered = ExecutionReport.from_dict(json.loads(shown.stdout))
+        except (ExecutionReportError, json.JSONDecodeError):
+            return None
+        return recovered if recovered.as_dict() == report.as_dict() else None
+
+    def _lifecycle_commit_is_exact(
+        self, commit: str, report: ExecutionReport
+    ) -> bool:
+        parent = _git(
+            self.control_worktree, "rev-parse", f"{commit}^", check=False
+        )
+        if parent.returncode:
+            return False
+        parent_head = parent.stdout.strip()
+        ancestor = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            report.control_head,
+            parent_head,
+            check=False,
+        )
+        if ancestor.returncode:
+            return False
+        if self._control_report_at(commit, report) is None:
+            return False
+        names = _git(
+            self.control_worktree,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-r",
+            commit,
+            check=False,
+        )
+        report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
+        expected = {f"A\t{report_path}"}
+        if report.result.conclusion == "completed":
+            expected.update(
+                {
+                    f"D\t{self.todo_path}/{report.ticket_id}.md",
+                    f"A\t{self.review_path}/{report.ticket_id}.md",
+                }
             )
-        except TicketError as error:
-            raise WorkflowBlockedError(str(error)) from error
-        ticket = ticket_store.by_id.get(report.ticket_id)
-        if ticket is None:
+        return names.returncode == 0 and set(names.stdout.splitlines()) == expected
+
+    def _remote_lifecycle_commit(
+        self, remote_head: str, report: ExecutionReport
+    ) -> str | None:
+        path = f"executions/{report.ticket_id}/{report.execution_id}.json"
+        history = _git(
+            self.control_worktree,
+            "log",
+            "--format=%H",
+            remote_head,
+            "--",
+            path,
+            check=False,
+        )
+        if history.returncode:
+            return None
+        for commit in history.stdout.splitlines():
+            if self._lifecycle_commit_is_exact(commit, report):
+                return commit
+        return None
+
+    def _prove_control_descendant(
+        self, candidate: str, report: ExecutionReport
+    ) -> None:
+        ancestor = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            report.control_head,
+            candidate,
+            check=False,
+        )
+        if ancestor.returncode:
             raise WorkflowBlockedError(
-                "execution ticket is no longer in managed storage"
+                "control history diverged from the execution admission generation"
             )
-        ExecutionReportStore(self.control_worktree).write(report)
-        if report.result.conclusion == "completed" and ticket.state == "todo":
+        original_path = f"{self.todo_path}/{report.ticket_id}.md"
+        original = _git(
+            self.control_worktree,
+            "show",
+            f"{report.control_head}:{original_path}",
+            check=False,
+        )
+        current = _git(
+            self.control_worktree, "show", f"{candidate}:{original_path}", check=False
+        )
+        if (
+            original.returncode
+            or current.returncode
+            or original.stdout != current.stdout
+        ):
+            raise WorkflowBlockedError(
+                "control descendant changed the active ticket; lifecycle replay refused"
+            )
+        original_lines = original.stdout.splitlines(keepends=True)
+        delimiters = [
+            index
+            for index, line in enumerate(original_lines)
+            if line.rstrip("\r\n") == "---"
+        ]
+        if len(delimiters) < 2:
+            raise WorkflowBlockedError("active ticket admission evidence is invalid")
+        original_body = "".join(original_lines[delimiters[1] + 1 :])
+        if self._state.get("selected_ticket_body") != original_body:
+            raise WorkflowBlockedError(
+                "persisted active ticket body does not match admission"
+            )
+
+    def _apply_lifecycle_once(self, report: ExecutionReport) -> str:
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(report.ticket_id)
+        if ticket is None or ticket.state != "todo":
+            raise WorkflowBlockedError(
+                "execution ticket is not in its expected todo state"
+            )
+        if report.result.conclusion == "completed":
+            boundary = tuple(
+                item for item in ticket_store.tickets
+                if item.state in {"review", "accepted"} and item.id != ticket.id
+            )
+            if boundary:
+                raise WorkflowBlockedError(
+                    "review/accepted serial boundary conflicts with lifecycle replay"
+                )
+        report_store = ExecutionReportStore(self.control_worktree)
+        report_store.write(report)
+        if report.result.conclusion == "completed":
             review = self.control_worktree / self.review_path / f"{ticket.id}.md"
             if review.exists() or review.is_symlink():
                 raise WorkflowBlockedError("review ticket already exists")
@@ -2802,16 +3038,128 @@ class ServiceEngine:
             raise DevlegateError(
                 committed.stderr.strip() or "cannot create control-plane commit"
             )
-        pushed = _git(
-            self.control_worktree,
-            "push",
-            self.remote_name,
-            f"HEAD:refs/heads/{self.control_branch}",
-            check=False,
-        )
-        if pushed.returncode:
-            raise DevlegateError(pushed.stderr.strip() or "unknown Git push error")
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
+    def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
+        self._report_matches_execution_state(report)
+        self._validate_control_worktree()
+        for _attempt in range(3):
+            status = _git(self.control_worktree, "status", "--porcelain").stdout
+            if status:
+                raise WorkflowBlockedError("control working tree is dirty")
+            fetched = _git(
+                self.control_worktree,
+                "fetch",
+                "--prune",
+                self.remote_name,
+                self.control_branch,
+                check=False,
+            )
+            if fetched.returncode:
+                raise WorkflowBlockedError(
+                    "cannot freshly observe control remote before lifecycle: "
+                    f"{fetched.stderr.strip() or 'unknown git error'}"
+                )
+            remote_ref = f"{self.remote_name}/{self.control_branch}"
+            remote_result = _git(
+                self.control_worktree, "rev-parse", "--verify", remote_ref, check=False
+            )
+            if remote_result.returncode:
+                raise WorkflowBlockedError("control remote branch is unavailable")
+            remote_head = remote_result.stdout.strip()
+            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            existing = self._remote_lifecycle_commit(remote_head, report)
+            if existing is not None:
+                parent = _git(
+                    self.control_worktree, "rev-parse", f"{existing}^", check=False
+                )
+                if parent.returncode:
+                    raise WorkflowBlockedError(
+                        "published lifecycle parent is unavailable"
+                    )
+                lifecycle_parent = parent.stdout.strip()
+                self._prove_control_descendant(lifecycle_parent, report)
+                if local_head != remote_head:
+                    relation = _git(
+                        self.control_worktree,
+                        "merge-base",
+                        "--is-ancestor",
+                        local_head,
+                        remote_head,
+                        check=False,
+                    )
+                    if relation.returncode:
+                        if not self._lifecycle_commit_is_exact(local_head, report):
+                            raise WorkflowBlockedError(
+                                "local control divergence is not Devlegate's lifecycle"
+                            )
+                        reset = _git(
+                            self.control_worktree,
+                            "reset",
+                            "--hard",
+                            remote_head,
+                            check=False,
+                        )
+                        if reset.returncode:
+                            raise WorkflowBlockedError(
+                                "cannot fast-forward control worktree"
+                            )
+                    else:
+                        merge = _git(
+                            self.control_worktree,
+                            "merge",
+                            "--ff-only",
+                            remote_ref,
+                            check=False,
+                        )
+                        if merge.returncode:
+                            raise WorkflowBlockedError(
+                                "cannot fast-forward control worktree"
+                            )
+                return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            if local_head != report.control_head:
+                if not self._lifecycle_commit_is_exact(local_head, report):
+                    raise WorkflowBlockedError(
+                        "unpublished control divergence is not the exact lifecycle "
+                        "mutation"
+                    )
+                self._prove_control_descendant(remote_head, report)
+                reset = _git(
+                    self.control_worktree, "reset", "--hard", remote_head, check=False
+                )
+                if reset.returncode:
+                    raise WorkflowBlockedError(
+                        "cannot replay lifecycle on control descendant"
+                    )
+            elif remote_head != report.control_head:
+                self._prove_control_descendant(remote_head, report)
+                _log(
+                    f"control advanced during execution: {report.control_head[:12]} "
+                    f"-> {remote_head[:12]}; replaying compatible lifecycle"
+                )
+                merge = _git(
+                    self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+                )
+                if merge.returncode:
+                    raise WorkflowBlockedError("cannot fast-forward control descendant")
+            else:
+                self._prove_control_descendant(report.control_head, report)
+            lifecycle_head = self._apply_lifecycle_once(report)
+            pushed = _git(
+                self.control_worktree,
+                "push",
+                self.remote_name,
+                f"HEAD:refs/heads/{self.control_branch}",
+                check=False,
+            )
+            if pushed.returncode == 0:
+                return lifecycle_head
+            _log(
+                f"lifecycle push raced with control update; retrying ({_attempt + 1}/3)"
+            )
+        raise WorkflowBlockedError(
+            "control lifecycle reconciliation retry bound exceeded"
+        )
 
     def _run_worker(
         self, workspace: ExecutionWorkspace, prompt: str
