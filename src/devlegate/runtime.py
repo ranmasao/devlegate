@@ -3034,6 +3034,32 @@ class ServiceEngine:
                 "binding"
             )
 
+    def _prove_product_generation(self) -> None:
+        state = self._state
+        local_head = state.get("local_head")
+        remote_head = state.get("remote_head")
+        if not isinstance(local_head, str) or not isinstance(remote_head, str):
+            raise WorkflowBlockedError("execution product binding is incomplete")
+        self._assert_product_checkout_unchanged(self.current_branch, local_head)
+        product_fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        product_ref = f"{self.remote_name}/{self.remote_branch}"
+        observed_product = _git(
+            self.repo, "rev-parse", "--verify", product_ref, check=False
+        )
+        if product_fetch.returncode or observed_product.returncode or (
+            observed_product.stdout.strip() != remote_head
+        ):
+            raise WorkflowBlockedError(
+                "product checkout or remote changed before execution recovery"
+            )
+
     def _execution_workspace_for_recovery(self) -> ExecutionWorkspace:
         state = self._state
         ticket_id = state.get("execution_ticket_id")
@@ -3106,6 +3132,7 @@ class ServiceEngine:
     def _recover_checkpoint_publication(self) -> None:
         state = self._state
         stage = state.get("execution_stage")
+        self._prove_product_generation()
         pending = state.get("pending_execution_report")
         try:
             report = ExecutionReport.from_dict(pending)
@@ -3139,9 +3166,11 @@ class ServiceEngine:
                         "execution worktree contains ambiguous checkpoint history"
                     )
             report = dataclasses.replace(report, workspace_head=checkpoint_head)
-            workspace = dataclasses.replace(
-                workspace, head=checkpoint_head, dirty=False
-            )
+            workspace = self._execution_workspace_for_recovery()
+            if workspace.head != checkpoint_head or workspace.dirty:
+                raise WorkflowBlockedError(
+                    "execution worktree changed or is dirty after checkpoint"
+                )
             self._save_state(
                 "agent_running",
                 execution_stage="post-checkpoint",
@@ -3222,25 +3251,7 @@ class ServiceEngine:
         remote_head = state.get("remote_head")
         if not isinstance(local_head, str) or not isinstance(remote_head, str):
             raise WorkflowBlockedError("lifecycle product binding is incomplete")
-        self._assert_product_checkout_unchanged(self.current_branch, local_head)
-        product_fetch = _git(
-            self.repo,
-            "fetch",
-            "--prune",
-            self.remote_name,
-            self.remote_branch,
-            check=False,
-        )
-        product_ref = f"{self.remote_name}/{self.remote_branch}"
-        observed_product = _git(
-            self.repo, "rev-parse", "--verify", product_ref, check=False
-        )
-        if product_fetch.returncode or observed_product.returncode or (
-            observed_product.stdout.strip() != remote_head
-        ):
-            raise WorkflowBlockedError(
-                "product checkout or remote changed before lifecycle recovery"
-            )
+        self._prove_product_generation()
         self._report_matches_execution_state(report)
         return report
 

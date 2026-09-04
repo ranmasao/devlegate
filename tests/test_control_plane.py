@@ -826,8 +826,9 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
     assert (execution / "partial.txt").read_text() == "preserve\n"
 
 
+@pytest.mark.parametrize("dirty_after_checkpoint", [False, True])
 def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, dirty_after_checkpoint
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -870,6 +871,22 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         ).stdout
     )
     assert checkpoint_count == 1
+
+    if dirty_after_checkpoint:
+        (execution / "late-change.txt").write_text("must remain\n")
+        recovered = Devlegate(config)
+        monkeypatch.setattr(
+            recovered,
+            "_run_worker",
+            lambda *_args: pytest.fail("dirty checkpoint recovery reran worker"),
+        )
+        with pytest.raises(DevlegateError, match="ambiguous checkpoint history"):
+            recovered.run_once()
+        assert (execution / "late-change.txt").read_text() == "must remain\n"
+        assert not git(
+            execution, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+        ).stdout.strip()
+        return
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
@@ -930,6 +947,61 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
         "origin",
         "refs/heads/devlegate/work/T-1",
     ).stdout.split()[0] == git(execution, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    original_checkpoint = ExecutionWorkspaceManager.checkpoint
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager,
+        "checkpoint",
+        lambda *_args: (_ for _ in ()).throw(
+            ExecutionWorkspaceError("simulated checkpoint crash")
+        ),
+    )
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    with pytest.raises(DevlegateError, match="checkpoint failed"):
+        devlegate.run_once()
+    monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", original_checkpoint)
+
+    publisher = tmp_path / "publisher"
+    git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+    (publisher / "product-change.txt").write_text("advanced\n")
+    git(publisher, "add", "product-change.txt")
+    git(publisher, "commit", "-m", "advance product")
+    git(publisher, "push", "origin", "HEAD:main")
+
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    before = git(execution, "rev-parse", "HEAD").stdout.strip()
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("stale recovery launched worker"),
+    )
+    with pytest.raises(
+        DevlegateError, match="product checkout or remote changed"
+    ):
+        recovered.run_once()
+    assert recovered._state["execution_stage"] == "checkpointing"
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == before
+    assert not git(
+        execution, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout.strip()
 
 
 def test_post_publication_recovery_replays_lifecycle_without_worker(
