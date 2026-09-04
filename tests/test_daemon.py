@@ -388,7 +388,7 @@ def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
     with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
         engine.run_once(stop_event)
     assert engine._state["phase"] == "idle"
-    assert engine._state["failed_executions"]["T-1"]["interrupted"] is True
+    assert "interrupted" not in engine._state["failed_executions"]["T-1"]
 
 
 def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
@@ -613,6 +613,7 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     assert engine._state["phase"] == "idle"
     assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
     metadata = engine._state["failed_executions"]["T-1"]
+    assert metadata["interrupted"] is True
     assert metadata["interruption_kind"] == kind
     assert metadata["reason"] == "interrupted: " + kind.replace("_", " ")
     output = capsys.readouterr().out
@@ -622,6 +623,17 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     fresh = ServiceEngine(config)
     failure = fresh.status_view().failed_executions[0]
     assert failure.interruption_kind == kind
+    calls = []
+    monkeypatch.setattr(
+        fresh,
+        "_run_worker",
+        lambda _workspace, _prompt: (
+            calls.append(True),
+            WorkerRunResult(1, None, None, None),
+        )[1],
+    )
+    assert fresh.run_once() == (0 if kind == "operator_abort" else 1)
+    assert calls == ([] if kind == "operator_abort" else [True])
 
 
 @pytest.mark.parametrize("once", [False, True])
@@ -856,7 +868,18 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
             except ProcessLookupError:
                 break
             time.sleep(0.01)
-        assert restarted.run_once() == 0
+        launches = []
+        monkeypatch.setattr(
+            restarted,
+            "_run_worker",
+            lambda workspace, prompt: (
+                launches.append((workspace.path, prompt)),
+                WorkerRunResult(1, None, None, None),
+            )[1],
+        )
+        assert restarted.run_once() == 1
+        assert len(launches) == 1
+        assert "Continue the existing implementation" in launches[0][1]
         assert restarted._state["phase"] == "idle"
     finally:
         try:

@@ -1063,16 +1063,23 @@ def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch)
             helper.wait(timeout=10)
 
     recovered = Devlegate(config)
+    old_execution_id = recovered._state["execution_id"]
+    prompts = []
     monkeypatch.setattr(
         recovered,
         "_run_worker",
-        lambda *_args: pytest.fail("process-loss reconciliation launched worker"),
+        lambda workspace, prompt: (
+            prompts.append((workspace.path, prompt)),
+            WorkerRunResult(1, None, None, None),
+        )[1],
     )
-    assert recovered.run_once() == 0
+    assert recovered.run_once() == 1
     assert recovered._state["phase"] == "idle"
     metadata = recovered._state["failed_executions"]["T-1"]
-    assert metadata["interrupted"] is True
-    assert metadata["interruption_kind"] == "process_loss"
+    assert metadata["execution_id"] != old_execution_id
+    assert metadata["interrupted_execution_id"] == old_execution_id
+    assert len(prompts) == 1
+    assert "Continue the existing implementation" in prompts[0][1]
     assert (workspace.path / "partial.txt").read_text() == "preserve\n"
 
 
@@ -1109,17 +1116,20 @@ def test_startup_post_worker_normalizes_without_worker_launch(tmp_path, monkeypa
         "agent_running", execution_stage="post-worker", worker_identity=None
     )
     recovered = Devlegate(config)
+    prompts = []
     monkeypatch.setattr(
         recovered,
         "_run_worker",
-        lambda *_args: pytest.fail("post-worker reconciliation launched worker"),
+        lambda workspace, prompt: (
+            prompts.append((workspace.path, prompt)),
+            WorkerRunResult(1, None, None, None),
+        )[1],
     )
 
-    assert recovered.run_once() == 0
+    assert recovered.run_once() == 1
     assert recovered._state["phase"] == "idle"
-    assert recovered._state["failed_executions"]["T-1"]["interruption_kind"] == (
-        "process_loss"
-    )
+    assert len(prompts) == 1
+    assert "Continue the existing implementation" in prompts[0][1]
     assert (workspace.path / "partial.txt").read_text() == "preserve\n"
 
 

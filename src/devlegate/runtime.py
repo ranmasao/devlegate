@@ -878,6 +878,7 @@ class ServiceEngine:
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
         self._retry_ticket_id: str | None = None
+        self._automatic_resume_ticket_id: str | None = None
         state_default = (
             Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
             / "devlegate"
@@ -899,6 +900,7 @@ class ServiceEngine:
         self._workflow_blocker_fingerprint: str | None = None
         self._workflow_validation_succeeded = False
         self._retry_ticket_id = None
+        self._automatic_resume_ticket_id = None
         self._stop_event: threading.Event | None = None
         self._foreground_abort_requested = False
         self._worker_identity_handler: (
@@ -1763,11 +1765,14 @@ class ServiceEngine:
         return local_head, remote_head
 
     def run_once(self, stop_event: threading.Event | None = None) -> int:
-        with self._lock():
-            if stop_event is None:
-                return self._run_once()
-            with self._stop_context(stop_event):
-                return self._run_once()
+        try:
+            with self._lock():
+                if stop_event is None:
+                    return self._run_once()
+                with self._stop_context(stop_event):
+                    return self._run_once()
+        finally:
+            self._automatic_resume_ticket_id = None
 
     def _run_once(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
@@ -1801,8 +1806,14 @@ class ServiceEngine:
                 control_head = self._apply_execution_lifecycle(report)
                 self._finalize_execution_lifecycle(report, control_head)
                 return 0 if report.result.conclusion != "failed" else 1
-            self._reconcile_stranded_execution()
-            return 0
+            automatic_ticket = self._reconcile_stranded_execution()
+            if automatic_ticket is None or self._stop_requested():
+                return 0
+            self._automatic_resume_ticket_id = automatic_ticket
+            try:
+                return self._run_once()
+            finally:
+                self._automatic_resume_ticket_id = None
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -2130,20 +2141,34 @@ class ServiceEngine:
         )
         if self._stop_before_admission():
             return 0
-        if self._retry_ticket_id is not None:
+        if (
+            self._retry_ticket_id is not None
+            or self._automatic_resume_ticket_id is not None
+        ):
+            authorized_ticket_id = (
+                self._retry_ticket_id
+                if self._retry_ticket_id is not None
+                else self._automatic_resume_ticket_id
+            )
+            assert authorized_ticket_id is not None
             if execution_plan.action != "run-worker" or execution_plan.bound:
                 raise DevlegateError(execution_plan.reason)
-            retry_ticket = ticket_store.by_id.get(self._retry_ticket_id)
+            retry_ticket = ticket_store.by_id.get(authorized_ticket_id)
             if (
                 retry_ticket is None
                 or retry_ticket.state != "todo"
                 or retry_ticket not in ticket_store.runnable
             ):
                 raise DevlegateError(
-                    f"ticket {self._retry_ticket_id} is no longer eligible for retry"
+                    f"ticket {authorized_ticket_id} is no longer eligible for retry"
                 )
             execution_plan = ExecutionPlan(
-                "run-worker", "explicit retry of current failed execution",
+                "run-worker",
+                (
+                    "automatic resume of safely interrupted execution"
+                    if self._automatic_resume_ticket_id is not None
+                    else "explicit retry of current failed execution"
+                ),
                 retry_ticket.id, retry_ticket.title, retry_ticket.state, False,
                 execution_plan.code, execution_plan.control,
             )
@@ -2219,7 +2244,35 @@ class ServiceEngine:
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
             )
-            if self._retry_ticket_id is not None:
+            interrupted_failure = (
+                isinstance(failed_for_ticket, dict)
+                and failed_for_ticket.get("interrupted") is True
+            )
+            if (
+                self._retry_ticket_id is None
+                and self._automatic_resume_ticket_id is None
+                and execution_plan.action == "run-worker"
+                and not execution_plan.bound
+                and interrupted_failure
+            ):
+                if (
+                    failed_for_ticket.get("interruption_kind")
+                    in {"service_shutdown", "process_loss"}
+                    and generation_is_same
+                ):
+                    self._automatic_resume_ticket_id = selected_ticket.id
+                else:
+                    _log(
+                        f"interrupted execution for {selected_ticket.id} is not "
+                        "eligible for automatic resume; explicit retry is required"
+                    )
+                    return 0
+            authorized_ticket_id = (
+                self._retry_ticket_id
+                if self._retry_ticket_id is not None
+                else self._automatic_resume_ticket_id
+            )
+            if authorized_ticket_id is not None:
                 if not isinstance(failed_for_ticket, dict) or any(
                     failed_for_ticket.get(field) != expected
                     for field, expected in (
@@ -2230,11 +2283,20 @@ class ServiceEngine:
                     )
                 ):
                     raise DevlegateError(
-                        f"ticket {self._retry_ticket_id} failed execution is stale; "
+                        f"ticket {authorized_ticket_id} failed execution is stale; "
                         "current project state must be reviewed before retry"
+                    )
+                if self._automatic_resume_ticket_id is not None and (
+                    failed_for_ticket.get("interrupted") is not True
+                    or failed_for_ticket.get("interruption_kind")
+                    not in {"service_shutdown", "process_loss"}
+                ):
+                    raise DevlegateError(
+                        "automatic resume requires a safely interrupted execution"
                     )
             if (
                 self._retry_ticket_id is None
+                and self._automatic_resume_ticket_id is None
                 and not pending_agent_execution
                 and isinstance(failed_for_ticket, dict)
                 and generation_is_same
@@ -2251,10 +2313,17 @@ class ServiceEngine:
                         f"ticket {self._retry_ticket_id} is no longer the current "
                         "runnable ticket"
                     )
+            if self._automatic_resume_ticket_id is not None and (
+                selected_ticket.id != self._automatic_resume_ticket_id
+            ):
+                raise DevlegateError(
+                    "automatic resume ticket is no longer the current runnable ticket"
+                )
             if (
                 generation_is_same
                 and not pending_agent_execution
                 and self._retry_ticket_id is None
+                and self._automatic_resume_ticket_id is None
                 and self._state.get("execution_ticket_id") == selected_ticket.id
             ):
                 _log("no new work generation; unchanged todo is already handled")
@@ -2326,8 +2395,24 @@ class ServiceEngine:
             f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
         )
         directive = WorkDirective.FRESH
-        if bound_execution or (
-            self._retry_ticket_id is not None and workspace.head != workspace.base_head
+        retrying_interrupted = False
+        if self._retry_ticket_id is not None:
+            failures = self._state.get("failed_executions", {})
+            failure = (
+                failures.get(selected_ticket.id)
+                if isinstance(failures, dict)
+                else None
+            )
+            retrying_interrupted = (
+                isinstance(failure, dict) and failure.get("interrupted") is True
+            )
+        if (
+            bound_execution
+            or self._automatic_resume_ticket_id is not None
+            or (
+                self._retry_ticket_id is not None
+                and (workspace.head != workspace.base_head or retrying_interrupted)
+            )
         ):
             directive = WorkDirective.RESUME
         if execution_id is None:
@@ -2512,6 +2597,7 @@ class ServiceEngine:
                 "operator_abort",
                 "service_shutdown",
             }:
+                failure["interrupted"] = True
                 failure["interruption_kind"] = interruption_kind
                 failure["reason"] = (
                     "interrupted: "
@@ -2574,7 +2660,7 @@ class ServiceEngine:
                 "control_head": control_head,
                 "todo_fingerprint": todo_fingerprint,
                 "reason": f"post-worker dependency integrity failure: {reason}",
-                "interrupted": True,
+                "report_unavailable": True,
             },
         }
         self._save_state(
@@ -3590,7 +3676,10 @@ export default tool({
                         ticket_id, str(metadata["execution_id"])
                     )
                 except (ExecutionReportError, KeyError):
-                    if metadata.get("interrupted") is not True:
+                    if not (
+                        metadata.get("interrupted") is True
+                        or metadata.get("report_unavailable") is True
+                    ):
                         invalid_reason = "failed execution report is unavailable"
             if invalid_reason is None and report is not None:
                 if report.result.conclusion != "failed":
@@ -4098,7 +4187,7 @@ export default tool({
         finally:
             self._retry_ticket_id = None
 
-    def _reconcile_stranded_execution(self) -> None:
+    def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         state = self._state
         kind = state.get("execution_interruption_kind")
@@ -4126,12 +4215,20 @@ export default tool({
                 )
             else:
                 self._normalize_stranded_execution(kind)
-                return
+                return (
+                    str(state["execution_ticket_id"])
+                    if kind in {"service_shutdown", "process_loss"}
+                    else None
+                )
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             raise DevlegateError(reason)
         if stage == "post-worker":
             self._normalize_stranded_execution(kind)
-            return
+            return (
+                str(state["execution_ticket_id"])
+                if kind in {"service_shutdown", "process_loss"}
+                else None
+            )
         reason = (
             f"previous Devlegate owner was lost during unsafe execution stage "
             f"{stage or 'unknown'}; reconciliation is blocked"

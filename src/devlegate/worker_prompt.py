@@ -39,7 +39,9 @@ _DIRECTIVES = {
     WorkDirective.FRESH: "Implement the assigned work in the current workspace.",
     WorkDirective.RESUME: (
         "Continue the existing implementation in the current workspace. "
-        "Preserve useful existing changes and complete the assigned work."
+        "Inspect the existing workspace and current changes before editing. "
+        "Preserve useful existing changes and do not discard valid partial work. "
+        "Continue the same assigned work."
     ),
     WorkDirective.REWORK: (
         "Revise the existing implementation according to the supplied feedback "
