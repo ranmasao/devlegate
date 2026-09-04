@@ -1482,21 +1482,35 @@ class ServiceEngine:
         return handle
 
     def _mutation_owner_live(self) -> bool:
-        """Probe the project lock without acquiring or creating ownership."""
+        """Observe the project lock without opening it for ownership."""
+        if sys.platform != "linux":
+            return False
         lock_file = self.state_dir / "locks" / f"{self._state_key}.lock"
         try:
-            handle = lock_file.open("r")
+            identity = lock_file.stat()
+            with open("/proc/locks", encoding="ascii") as locks:
+                entries = locks.read().splitlines()
         except OSError:
             return False
-        try:
+        for entry in entries:
+            fields = entry.split()
+            if len(fields) < 6 or fields[1] != "FLOCK":
+                continue
+            lock_device, separator, lock_inode = fields[5].rpartition(":")
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+                lock_major, lock_minor = (
+                    int(part, 16) for part in lock_device.split(":", 1)
+                )
+            except ValueError:
+                continue
+            if (
+                separator
+                and (lock_major, lock_minor)
+                == (os.major(identity.st_dev), os.minor(identity.st_dev))
+                and lock_inode == str(identity.st_ino)
+            ):
                 return True
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            return False
-        finally:
-            handle.close()
+        return False
 
     def _load_state(self) -> dict[str, object]:
         try:
