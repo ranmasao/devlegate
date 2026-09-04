@@ -173,7 +173,7 @@ def test_agent_running_fails_closed_without_dispatch(
     restarted = Devlegate(git_fixture["config"])
     calls = []
     monkeypatch.setattr(restarted, "_run_worker", lambda *_args: calls.append(True))
-    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+    with pytest.raises(DevlegateError, match="unsafe execution stage"):
         restarted.run_once()
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -207,6 +207,6 @@ def test_unresolved_agent_phase_survives_repeated_runs(
         execution_remote_head=None,
     )
     for _ in range(2):
-        with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+        with pytest.raises(DevlegateError, match="unsafe execution stage"):
             devlegate.run_once()
     assert state_payload(git_fixture)["phase"] == "agent_running"

@@ -562,6 +562,7 @@ def _run_opencode(
     stop_request: object | None = None,
     execution_id: str | None = None,
     worker_identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
+    interruption_handler: Callable[[str], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -680,6 +681,7 @@ def _run_opencode(
     prompt_thread = threading.Thread(target=deliver_prompt, daemon=True)
     prompt_thread.start()
     interruption_kind: str | None = None
+    interruption_error: str | None = None
     worker_process_group = getattr(process, "pid", None)
     if worker_process_group is not None:
         try:
@@ -688,7 +690,7 @@ def _run_opencode(
             worker_process_group = None
 
     def interrupt(kind: str) -> None:
-        nonlocal interruption_kind
+        nonlocal interruption_error, interruption_kind
         if interruption_kind is not None:
             return
         if process.poll() is not None or worker_process_group is None:
@@ -701,6 +703,11 @@ def _run_opencode(
         except (OSError, ProcessLookupError):
             return
         interruption_kind = kind
+        if interruption_handler is not None:
+            try:
+                interruption_handler(kind)
+            except Exception as error:
+                interruption_error = f"interruption persistence failed: {error}"
 
     def finish_interrupted() -> int:
         try:
@@ -756,6 +763,8 @@ def _run_opencode(
     prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
     if identity_error is not None:
         transport_error = identity_error
+    elif interruption_error is not None:
+        transport_error = interruption_error
     elif prompt_error is not None and interruption_kind is None:
         transport_error = transport_error or prompt_error
     return OpenCodeRunResult(returncode, transport_error, interruption_kind)
@@ -870,6 +879,7 @@ class ServiceEngine:
             Callable[[WorkerProcessIdentity], None] | None
         ) = None
         self._worker_execution_id: str | None = None
+        self._worker_interruption_handler: Callable[[str], None] | None = None
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -1483,6 +1493,16 @@ class ServiceEngine:
         identity = _worker_identity_from_value(
             state.get("worker_identity"), state.get("execution_id")
         )
+        interruption_kind = state.get("execution_interruption_kind")
+        if interruption_kind is not None and (
+            not isinstance(interruption_kind, str)
+            or interruption_kind not in {
+            "operator_abort",
+            "service_shutdown",
+            "process_loss",
+            }
+        ):
+            raise DevlegateError("invalid execution interruption kind")
         if phase == "idle" and identity is not None:
             raise DevlegateError("invalid idle state: worker identity is still active")
         if phase == "idle":
@@ -1517,6 +1537,32 @@ class ServiceEngine:
             raise DevlegateError(
                 f"invalid {phase} state: control revision identity is incomplete"
             )
+        stage = state.get("execution_stage")
+        if stage is not None and stage not in {
+            "worker-launch",
+            "worker-running",
+            "post-worker",
+            "pre-checkpoint",
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        }:
+            raise DevlegateError("invalid execution stage")
+        if phase == "agent_running" and stage == "worker-running" and identity is None:
+            raise DevlegateError("worker-running state requires worker identity")
+        if phase == "agent_running" and stage in {
+            "worker-launch",
+            "post-worker",
+            "pre-checkpoint",
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        } and identity is not None:
+            raise DevlegateError("later execution stage cannot retain worker identity")
         execution_fields = (
             "execution_ticket_id",
             "execution_base_head",
@@ -1691,10 +1737,11 @@ class ServiceEngine:
         return local_head, remote_head
 
     def run_once(self, stop_event: threading.Event | None = None) -> int:
-        if stop_event is None:
-            return self._run_once()
-        with self._stop_context(stop_event):
-            return self._run_once()
+        with self._lock():
+            if stop_event is None:
+                return self._run_once()
+            with self._stop_context(stop_event):
+                return self._run_once()
 
     def _run_once(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
@@ -1728,18 +1775,8 @@ class ServiceEngine:
                 control_head = self._apply_execution_lifecycle(report)
                 self._finalize_execution_lifecycle(report, control_head)
                 return 0 if report.result.conclusion != "failed" else 1
-            ticket_id = self._state.get("execution_ticket_id") or self._state.get(
-                "selected_ticket_id", "unknown"
-            )
-            execution_id = self._state.get("execution_id", "unknown")
-            reason = (
-                f"interrupted execution is ambiguous for ticket {ticket_id} "
-                f"(execution {execution_id}); refusing to launch a worker or "
-                "automatically reconcile it; explicit operator handling is "
-                "required"
-            )
-            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
-            raise DevlegateError(reason)
+            self._reconcile_stranded_execution()
+            return 0
         status = _git(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -2282,7 +2319,7 @@ class ServiceEngine:
             return 0
         self._save_state(
             "agent_running",
-            execution_stage="pre-checkpoint",
+            execution_stage="worker-launch",
             execution_start_head=workspace.head,
             execution_ticket_id=selected_ticket.id,
             execution_base_head=workspace.base_head,
@@ -2295,15 +2332,28 @@ class ServiceEngine:
         )
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         self._worker_identity_handler = lambda identity: self._save_state(
-            "agent_running", worker_identity=identity.as_dict()
+            "agent_running",
+            execution_stage="worker-running",
+            worker_identity=identity.as_dict(),
         )
         self._worker_execution_id = execution_id
+        self._worker_interruption_handler = lambda kind: self._save_state(
+            "agent_running", execution_interruption_kind=kind
+        )
+        worker_returned = False
         try:
             worker_run = self._run_worker(workspace, prompt)
+            worker_returned = True
         finally:
             self._worker_identity_handler = None
             self._worker_execution_id = None
-            self._save_state("agent_running", worker_identity=None)
+            self._worker_interruption_handler = None
+            if worker_returned:
+                self._save_state(
+                    "agent_running",
+                    execution_stage="post-worker",
+                    worker_identity=None,
+                )
             self._publish_service_snapshot(
                 lifecycle="processing", worker_running=False
             )
@@ -3022,14 +3072,18 @@ class ServiceEngine:
                 return commit
         return None
 
-    def _prove_control_descendant(
-        self, candidate: str, report: ExecutionReport
+    def _prove_bound_ticket_descendant(
+        self,
+        candidate: str,
+        control_head: str,
+        ticket_id: str,
+        selected_body: str,
     ) -> None:
         ancestor = _git(
             self.control_worktree,
             "merge-base",
             "--is-ancestor",
-            report.control_head,
+            control_head,
             candidate,
             check=False,
         )
@@ -3037,11 +3091,11 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "control history diverged from the execution admission generation"
             )
-        original_path = f"{self.todo_path}/{report.ticket_id}.md"
+        original_path = f"{self.todo_path}/{ticket_id}.md"
         original = _git(
             self.control_worktree,
             "show",
-            f"{report.control_head}:{original_path}",
+            f"{control_head}:{original_path}",
             check=False,
         )
         current = _git(
@@ -3064,10 +3118,20 @@ class ServiceEngine:
         if len(delimiters) < 2:
             raise WorkflowBlockedError("active ticket admission evidence is invalid")
         original_body = "".join(original_lines[delimiters[1] + 1 :])
-        if self._state.get("selected_ticket_body") != original_body:
+        if selected_body != original_body:
             raise WorkflowBlockedError(
                 "persisted active ticket body does not match admission"
             )
+
+    def _prove_control_descendant(
+        self, candidate: str, report: ExecutionReport
+    ) -> None:
+        self._prove_bound_ticket_descendant(
+            candidate,
+            report.control_head,
+            report.ticket_id,
+            str(self._state.get("selected_ticket_body", "")),
+        )
 
     def _apply_lifecycle_once(self, report: ExecutionReport) -> str:
         ticket_store = self._ticket_store()
@@ -3281,6 +3345,9 @@ export default tool({
             stop_request = getattr(self, "_stop_event", None)
             identity_handler = getattr(self, "_worker_identity_handler", None)
             execution_id = getattr(self, "_worker_execution_id", None)
+            interruption_handler = getattr(
+                self, "_worker_interruption_handler", None
+            )
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -3298,6 +3365,11 @@ export default tool({
                         "worker_identity_handler": identity_handler,
                     }
                     if identity_handler is not None and execution_id is not None
+                    else {}
+                ),
+                **(
+                    {"interruption_handler": interruption_handler}
+                    if interruption_handler is not None
                     else {}
                 ),
             )
@@ -3341,7 +3413,11 @@ export default tool({
                     return 0
                 workflow_blocked = False
                 try:
-                    status = self.run_once()
+                    status = (
+                        self.run_once()
+                        if "run_once" in self.__dict__
+                        else self._run_once()
+                    )
                 except WorkflowBlockedError as error:
                     workflow_blocked = True
                     message = str(error)
@@ -3498,8 +3574,11 @@ export default tool({
                     invalid_reason is None,
                     invalid_reason,
                     metadata.get("interruption_kind")
-                    if metadata.get("interruption_kind")
-                    in {"operator_abort", "service_shutdown"}
+                    if metadata.get("interruption_kind") in {
+                        "operator_abort",
+                        "service_shutdown",
+                        "process_loss",
+                    }
                     else None,
                 )
             )
@@ -3724,6 +3803,40 @@ export default tool({
         }
         if bound_phase:
             if state["phase"] == "agent_running":
+                stage = state.get("execution_stage")
+                if stage == "worker-running":
+                    identity_value = _worker_identity_from_value(
+                        state.get("worker_identity"), state.get("execution_id")
+                    )
+                    if identity_value is not None:
+                        observation = observe_worker_identity(identity_value)
+                        if observation == "matching-live":
+                            reason = (
+                                "persisted worker ownership is matching-live; "
+                                "startup reconciliation is blocked"
+                            )
+                        elif observation == "indeterminate":
+                            reason = (
+                                "persisted worker ownership is indeterminate; "
+                                "startup reconciliation is blocked"
+                            )
+                        else:
+                            reason = (
+                                "persisted worker ownership is absent; mutation-owner "
+                                "reconciliation is required"
+                            )
+                        return ExecutionPlan(
+                            "blocked",
+                            reason,
+                            **identity,
+                        )
+                elif stage == "post-worker":
+                    return ExecutionPlan(
+                        "blocked",
+                        "persisted post-worker state awaits mutation-owner "
+                        "reconciliation",
+                        **identity,
+                    )
                 return ExecutionPlan(
                     "blocked",
                     "interrupted execution has ambiguous outcome; explicit "
@@ -3888,7 +4001,14 @@ export default tool({
             return 0
         if ticket_id is not None and self._state.get("phase") == "agent_running":
             with self._lock():
-                self._recover_interrupted_execution(ticket_id)
+                if self._state.get("execution_stage") in {
+                    "worker-launch",
+                    "worker-running",
+                    "post-worker",
+                }:
+                    self._reconcile_stranded_execution()
+                else:
+                    self._recover_interrupted_execution(ticket_id)
                 return self._retry_locked(ticket_id, stop_event)
         if ticket_id is None:
             try:
@@ -3934,13 +4054,213 @@ export default tool({
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         self._retry_ticket_id = ticket_id
         try:
-            return (
-                self.run_once()
-                if stop_event is None
-                else self.run_once(stop_event)
-            )
+            if "run_once" in self.__dict__:
+                return (
+                    self.run_once()
+                    if stop_event is None
+                    else self.run_once(stop_event)
+                )
+            if stop_event is None:
+                return self._run_once()
+            with self._stop_context(stop_event):
+                return self._run_once()
         finally:
             self._retry_ticket_id = None
+
+    def _reconcile_stranded_execution(self) -> None:
+        """Classify a lost owner and normalize only proven post-worker state."""
+        state = self._state
+        kind = state.get("execution_interruption_kind")
+        if kind is None:
+            kind = "process_loss"
+            self._save_state("agent_running", execution_interruption_kind=kind)
+        if kind not in {"operator_abort", "service_shutdown", "process_loss"}:
+            raise DevlegateError("invalid execution interruption kind")
+        stage = state.get("execution_stage")
+        identity = _worker_identity_from_value(
+            state.get("worker_identity"), state.get("execution_id")
+        )
+        if stage == "worker-running":
+            assert identity is not None
+            observation = observe_worker_identity(identity)
+            if observation == "matching-live":
+                reason = (
+                    "previous Devlegate owner was lost; execution worker is still "
+                    "alive; automatic reconciliation is blocked"
+                )
+            elif observation == "indeterminate":
+                reason = (
+                    "previous Devlegate owner was lost; worker ownership is "
+                    "indeterminate; reconciliation is blocked"
+                )
+            else:
+                self._normalize_stranded_execution(kind)
+                return
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            raise DevlegateError(reason)
+        if stage == "post-worker":
+            self._normalize_stranded_execution(kind)
+            return
+        reason = (
+            f"previous Devlegate owner was lost during unsafe execution stage "
+            f"{stage or 'unknown'}; reconciliation is blocked"
+        )
+        self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+        raise DevlegateError(reason)
+
+    def _normalize_stranded_execution(self, interruption_kind: str) -> None:
+        state = self._state
+        required = (
+            "local_head",
+            "remote_head",
+            "selected_ticket_id",
+            "selected_ticket_body",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+            "execution_id",
+        )
+        if not all(
+            isinstance(state.get(field), str) and state[field] for field in required
+        ):
+            raise DevlegateError(
+                "persisted interrupted execution binding is incomplete"
+            )
+        self._assert_product_checkout_unchanged(
+            self.current_branch, str(state["local_head"])
+        )
+        product_ref = f"{self.remote_name}/{self.remote_branch}"
+        product_fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        product_remote = _git(
+            self.repo, "rev-parse", "--verify", product_ref, check=False
+        )
+        if (
+            product_fetch.returncode
+            or product_remote.returncode
+            or product_remote.stdout.strip() != state["remote_head"]
+        ):
+            raise DevlegateError(
+                "product generation changed before interrupted execution recovery"
+            )
+        self._validate_control_worktree()
+        status = _git(self.control_worktree, "status", "--porcelain").stdout
+        if status:
+            raise DevlegateError("control working tree is dirty")
+        control_fetch = _git(
+            self.control_worktree,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.control_branch,
+            check=False,
+        )
+        control_ref = f"{self.remote_name}/{self.control_branch}"
+        current_remote = _git(
+            self.control_worktree, "rev-parse", "--verify", control_ref, check=False
+        )
+        if control_fetch.returncode or current_remote.returncode:
+            raise DevlegateError("cannot freshly observe control remote")
+        control_head = current_remote.stdout.strip()
+        local_control = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        local_is_ancestor = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            local_control,
+            control_head,
+            check=False,
+        )
+        if local_is_ancestor.returncode:
+            raise DevlegateError("local control history diverged during recovery")
+        self._prove_bound_ticket_descendant(
+            control_head,
+            str(state["execution_control_head"]),
+            str(state["execution_ticket_id"]),
+            str(state["selected_ticket_body"]),
+        )
+        if local_control != control_head:
+            merged = _git(
+                self.control_worktree, "merge", "--ff-only", control_ref, check=False
+            )
+            if merged.returncode:
+                raise DevlegateError(
+                    "cannot fast-forward compatible control descendant"
+                )
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(str(state["execution_ticket_id"]))
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+            or ticket.body != state["selected_ticket_body"]
+        ):
+            raise DevlegateError("persisted execution ticket is not safely recoverable")
+        base_head = str(state["execution_base_head"])
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, str(state["execution_ticket_id"])
+        )
+        if (
+            state["execution_branch"] != manager.branch
+            or Path(str(state["execution_path"])) != manager.path
+        ):
+            raise DevlegateError("persisted execution workspace binding is invalid")
+        try:
+            manager._validate_base(base_head)
+            manager._validate_branch(base_head)
+            registrations = manager._registrations()
+            workspace = manager._validate_existing(
+                registrations.get(manager.path.resolve()), base_head
+            )
+            start_head = state.get("execution_start_head")
+            if not isinstance(start_head, str) or not start_head:
+                raise ExecutionWorkspaceError("execution start HEAD is unavailable")
+            if workspace.head != start_head:
+                raise ExecutionWorkspaceError(
+                    "execution worktree HEAD does not match execution start HEAD"
+                )
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                f"cannot safely normalize interrupted execution: {error}"
+            ) from error
+        failures = state.get("failed_executions", {})
+        if not isinstance(failures, dict):
+            failures = {}
+        failures = {
+            **failures,
+            str(state["execution_ticket_id"]): {
+                "execution_id": state["execution_id"],
+                "product_head": state["local_head"],
+                "remote_head": state["remote_head"],
+                "control_head": control_head,
+                "todo_fingerprint": _todo_fingerprint(
+                    self.control_worktree, self.todo_path
+                )[0],
+                "reason": f"interrupted: {interruption_kind.replace('_', ' ')}",
+                "interrupted": True,
+                "interruption_kind": interruption_kind,
+            },
+        }
+        self._save_state(
+            "idle",
+            handled_remote_head=state["remote_head"],
+            handled_control_head=control_head,
+            handled_todo_fingerprint=_todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )[0],
+            execution_control_head=state["execution_control_head"],
+            interrupted_execution_id=state["execution_id"],
+            failed_executions=failures,
+        )
+        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
 
     def _recover_interrupted_execution(self, ticket_id: str) -> None:
         """Authorize recovery of a stranded post-worker execution only by identity."""
@@ -4113,6 +4433,13 @@ export default tool({
         failed_executions = state.get("failed_executions", {})
         if not isinstance(failed_executions, dict):
             failed_executions = {}
+        interruption_kind = state.get("execution_interruption_kind")
+        if interruption_kind not in {
+            "operator_abort",
+            "service_shutdown",
+            "process_loss",
+        }:
+            interruption_kind = "process_loss"
         failed_executions = {
             **failed_executions,
             ticket_id: {
@@ -4121,8 +4448,9 @@ export default tool({
                 "remote_head": state["remote_head"],
                 "control_head": state["control_head"],
                 "todo_fingerprint": todo_fingerprint,
-                "reason": "interrupted execution requires explicit retry",
+                "reason": f"interrupted: {interruption_kind.replace('_', ' ')}",
                 "interrupted": True,
+                "interruption_kind": interruption_kind,
             },
         }
         self._save_state(

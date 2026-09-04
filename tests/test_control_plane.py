@@ -1010,10 +1010,11 @@ def test_persisted_agent_running_still_refuses_ordinary_restart(tmp_path, monkey
     devlegate = Devlegate(config)
     persist_agent_running(devlegate, state)
 
-    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+    with pytest.raises(DevlegateError, match="unsafe execution stage"):
         devlegate.run_once()
 
     assert devlegate._state["phase"] == "agent_running"
+    assert devlegate._state["execution_interruption_kind"] == "process_loss"
 
 
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
@@ -1031,6 +1032,95 @@ def test_stranded_agent_running_without_worker_identity_refuses_retry(
     with pytest.raises(DevlegateError, match="ownership cannot be proven absent"):
         devlegate.retry("T-1")
     assert calls == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(
+        devlegate, state, record_start=True
+    )
+    (workspace.path / "partial.txt").write_text("preserve\n")
+    helper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        identity = _capture_worker_identity(helper, devlegate._state["execution_id"])
+        devlegate._save_state(
+            "agent_running",
+            execution_stage="worker-running",
+            worker_identity=identity.as_dict(),
+        )
+        os.killpg(os.getpgid(helper.pid), signal.SIGKILL)
+        helper.wait(timeout=10)
+    finally:
+        if helper.poll() is None:
+            os.killpg(os.getpgid(helper.pid), signal.SIGKILL)
+            helper.wait(timeout=10)
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("process-loss reconciliation launched worker"),
+    )
+    assert recovered.run_once() == 0
+    assert recovered._state["phase"] == "idle"
+    metadata = recovered._state["failed_executions"]["T-1"]
+    assert metadata["interrupted"] is True
+    assert metadata["interruption_kind"] == "process_loss"
+    assert (workspace.path / "partial.txt").read_text() == "preserve\n"
+
+
+def test_startup_launch_window_remains_blocked_without_identity(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state, record_start=True)
+    devlegate._save_state(
+        "agent_running", execution_stage="worker-launch", worker_identity=None
+    )
+    recovered = Devlegate(config)
+    calls = []
+    monkeypatch.setattr(recovered, "_run_worker", lambda *_args: calls.append(True))
+
+    with pytest.raises(DevlegateError, match="unsafe execution stage worker-launch"):
+        recovered.run_once()
+    assert recovered._state["phase"] == "agent_running"
+    assert recovered._state["execution_interruption_kind"] == "process_loss"
+    assert calls == []
+
+
+def test_startup_post_worker_normalizes_without_worker_launch(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(
+        devlegate, state, record_start=True
+    )
+    (workspace.path / "partial.txt").write_text("preserve\n")
+    devlegate._save_state(
+        "agent_running", execution_stage="post-worker", worker_identity=None
+    )
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("post-worker reconciliation launched worker"),
+    )
+
+    assert recovered.run_once() == 0
+    assert recovered._state["phase"] == "idle"
+    assert recovered._state["failed_executions"]["T-1"]["interruption_kind"] == (
+        "process_loss"
+    )
+    assert (workspace.path / "partial.txt").read_text() == "preserve\n"
 
 
 def test_matching_live_worker_identity_refuses_retry_without_signaling(
@@ -1328,7 +1418,7 @@ def test_publication_failure_remains_ambiguous_not_retryable(tmp_path, monkeypat
     assert devlegate._state["phase"] == "agent_running"
     assert devlegate._state["execution_stage"] == "publishing"
     assert devlegate._state.get("failed_executions", {}) == {}
-    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+    with pytest.raises(DevlegateError, match="unsafe execution stage"):
         devlegate.run_once()
     with pytest.raises(DevlegateError, match="ambiguous post-worker stage"):
         devlegate.retry("T-1")

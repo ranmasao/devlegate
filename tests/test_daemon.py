@@ -351,7 +351,7 @@ def test_stop_after_agent_running_commit_still_drains_attempt(
         original_save(phase, **fields)
         if (
             phase == "agent_running"
-            and fields.get("execution_stage") == "pre-checkpoint"
+            and fields.get("execution_stage") == "worker-launch"
         ):
             stop_event.set()
 
