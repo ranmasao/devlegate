@@ -1283,6 +1283,20 @@ def test_persisted_agent_running_still_refuses_ordinary_restart(tmp_path, monkey
     assert devlegate._state["execution_interruption_kind"] == "process_loss"
 
 
+def test_check_reports_stranded_runtime_state_not_ready(tmp_path, monkeypatch, capsys):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+
+    assert devlegate.check() == 1
+    output = capsys.readouterr().out
+    assert "FAIL  runtime state" in output
+    assert "mutation-owner reconciliation is required" in output
+    assert "\nReady." not in output
+
+
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
     tmp_path, monkeypatch
 ):

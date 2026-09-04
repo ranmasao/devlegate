@@ -17,6 +17,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
 )
+from devlegate.runtime import WorkflowBlockedError
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
@@ -86,6 +87,45 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
 
 
+def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, capsys):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        engine,
+        "_run_worker",
+        lambda *_args: WorkerRunResult(1, None, None, None),
+    )
+
+    assert engine.run(once=True) == 1
+    output = capsys.readouterr().out
+    assert "worker failed: worker exited with status 1" in output
+    assert "run failed with status 1" not in output
+
+
+def test_foreground_repeated_blocker_is_suppressed_until_changed(
+    tmp_path, monkeypatch, capsys
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    stop_event = threading.Event()
+    calls = 0
+
+    def run_once():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise WorkflowBlockedError("execution recovery is blocked")
+        if calls == 2:
+            raise WorkflowBlockedError("execution recovery is blocked")
+        if calls == 3:
+            raise WorkflowBlockedError("execution recovery changed")
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(engine, "run_once", run_once)
+    engine.poll_interval = "0"
+    assert engine.serve(stop_event) == 0
+    output = capsys.readouterr().out
+    assert output.count("workflow became blocked: execution recovery is blocked") == 1
+    assert output.count("workflow remains blocked: execution recovery changed") == 1
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )

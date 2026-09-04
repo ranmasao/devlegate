@@ -898,6 +898,8 @@ class ServiceEngine:
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
         self._workflow_blocker_fingerprint: str | None = None
+        self._foreground_diagnostic_fingerprint: str | None = None
+        self._iteration_diagnostic: str | None = None
         self._workflow_validation_succeeded = False
         self._retry_ticket_id = None
         self._automatic_resume_ticket_id = None
@@ -2542,6 +2544,10 @@ class ServiceEngine:
             workspace_head=None,
             run=worker_run,
         )
+        if execution_result.result.conclusion == "failed":
+            self._iteration_diagnostic = (
+                f"worker failed: {execution_result.result.reason}"
+            )
         self._save_state(
             "agent_running",
             execution_stage="checkpointing",
@@ -3744,6 +3750,7 @@ export default tool({
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 workflow_blocked = False
+                self._iteration_diagnostic = None
                 try:
                     status = (
                         self.run_once()
@@ -3767,7 +3774,7 @@ export default tool({
                     status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
                     detail = getattr(error, "stderr", None) or str(error)
-                    _log(f"run failed: {detail.strip()}")
+                    self._iteration_diagnostic = f"execution failed: {detail.strip()}"
                     status = 1
                 else:
                     if (
@@ -3777,8 +3784,15 @@ export default tool({
                         _log("workflow is valid again")
                         self._workflow_blocker_fingerprint = None
                 if status and not workflow_blocked:
-                    if not (status == 1 and self._dirty_fingerprint is not None):
-                        _log(f"run failed with status {status}")
+                    diagnostic = self._iteration_diagnostic
+                    if diagnostic is None:
+                        diagnostic = f"execution failed: run returned status {status}"
+                    fingerprint = hashlib.sha256(diagnostic.encode()).hexdigest()
+                    if self._foreground_diagnostic_fingerprint != fingerprint:
+                        _log(diagnostic)
+                    self._foreground_diagnostic_fingerprint = fingerprint
+                elif not workflow_blocked:
+                    self._foreground_diagnostic_fingerprint = None
                 if self._foreground_abort_requested:
                     return 130
                 if once:
@@ -4990,6 +5004,15 @@ export default tool({
                 control_observation is not None
                 and control_observation.working_tree_clean,
                 "",
+            ),
+            (
+                "runtime state",
+                self._state.get("phase") == "idle",
+                (
+                    f"phase={self._state.get('phase')}, "
+                    f"stage={self._state.get('execution_stage') or 'none'}; "
+                    "mutation-owner reconciliation is required"
+                ),
             ),
         ]
         failed = False
