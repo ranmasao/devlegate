@@ -1591,6 +1591,28 @@ class ServiceEngine:
             "lifecycle",
         } and identity is not None:
             raise DevlegateError("later execution stage cannot retain worker identity")
+        if phase == "agent_running" and stage in {
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+        }:
+            pending = state.get("pending_execution_report")
+            try:
+                report = ExecutionReport.from_dict(pending)
+            except ExecutionReportError as error:
+                raise DevlegateError(
+                    f"invalid {stage} state: pending execution report is invalid"
+                ) from error
+            if stage == "checkpointing":
+                if report.workspace_head is not None:
+                    raise DevlegateError(
+                        "invalid checkpointing state: checkpoint identity is premature"
+                    )
+            elif not report.workspace_head:
+                raise DevlegateError(
+                    f"invalid {stage} state: checkpoint identity is missing"
+                )
         execution_fields = (
             "execution_ticket_id",
             "execution_base_head",
@@ -1798,6 +1820,17 @@ class ServiceEngine:
         if self._state.get("phase") == "agent_running":
             if self._stop_requested():
                 return 0
+            if self._state.get("execution_stage") in {
+                "checkpointing",
+                "post-checkpoint",
+                "publishing",
+                "post-publication",
+            }:
+                self._recover_checkpoint_publication()
+                report = self._recover_lifecycle_report()
+                control_head = self._apply_execution_lifecycle(report)
+                self._finalize_execution_lifecycle(report, control_head)
+                return 0 if report.result.conclusion != "failed" else 1
             if (
                 self._state.get("execution_stage") == "lifecycle"
                 and self._state.get("worker_identity") is None
@@ -2509,12 +2542,24 @@ class ServiceEngine:
             workspace_head=None,
             run=worker_run,
         )
-        self._save_state("agent_running", execution_stage="checkpointing")
+        self._save_state(
+            "agent_running",
+            execution_stage="checkpointing",
+            pending_execution_report=execution_result.as_dict(),
+        )
         try:
             checkpoint = manager.checkpoint(workspace, execution_id)
         except (ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(f"execution checkpoint failed: {error}") from error
-        self._save_state("agent_running", execution_stage="post-checkpoint")
+        report = dataclasses.replace(
+            execution_result,
+            workspace_head=checkpoint.after_head,
+        )
+        self._save_state(
+            "agent_running",
+            execution_stage="post-checkpoint",
+            pending_execution_report=report.as_dict(),
+        )
         _log(
             "execution checkpoint "
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
@@ -2532,10 +2577,6 @@ class ServiceEngine:
                 f"execution branch publication failed: {error}"
             ) from error
         self._save_state("agent_running", execution_stage="post-publication")
-        report = dataclasses.replace(
-            execution_result,
-            workspace_head=checkpoint.after_head,
-        )
         self._save_state(
             "agent_running",
             execution_stage="lifecycle",
@@ -2954,6 +2995,16 @@ class ServiceEngine:
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
     def _report_matches_execution_state(self, report: ExecutionReport) -> None:
+        self._report_matches_execution_binding(report)
+        if not isinstance(report.workspace_head, str) or not report.workspace_head:
+            raise WorkflowBlockedError("execution checkpoint identity is missing")
+        observed = self._execution_remote_head(report.execution_branch)
+        if observed != report.workspace_head:
+            raise WorkflowBlockedError(
+                "published execution checkpoint does not match the execution branch"
+            )
+
+    def _report_matches_execution_binding(self, report: ExecutionReport) -> None:
         state = self._state
         expected = {
             "execution_id": state.get("execution_id"),
@@ -2982,12 +3033,165 @@ class ServiceEngine:
                 "recovered execution report does not match its durable execution "
                 "binding"
             )
-        if not isinstance(report.workspace_head, str) or not report.workspace_head:
-            raise WorkflowBlockedError("execution checkpoint identity is missing")
-        observed = self._execution_remote_head(report.execution_branch)
-        if observed != report.workspace_head:
+
+    def _execution_workspace_for_recovery(self) -> ExecutionWorkspace:
+        state = self._state
+        ticket_id = state.get("execution_ticket_id")
+        base_head = state.get("execution_base_head")
+        branch = state.get("execution_branch")
+        path = state.get("execution_path")
+        if not all(isinstance(value, str) and value for value in (
+            ticket_id, base_head, branch, path
+        )):
             raise WorkflowBlockedError(
-                "published execution checkpoint does not match the execution branch"
+                "execution workspace recovery binding is incomplete"
+            )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if branch != manager.branch or Path(path) != manager.path:
+            raise WorkflowBlockedError("execution workspace binding is invalid")
+        try:
+            manager._validate_base(base_head)
+            manager._validate_branch(base_head)
+            registrations = manager._registrations()
+            workspace = manager._validate_existing(
+                registrations.get(manager.path.resolve()), base_head
+            )
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise WorkflowBlockedError(
+                f"cannot validate execution workspace recovery: {error}"
+            ) from error
+        return workspace
+
+    def _checkpoint_commit_is_exact(
+        self, workspace: ExecutionWorkspace, commit: str, start_head: str
+    ) -> bool:
+        parent = _git(
+            workspace.path, "rev-parse", "--verify", f"{commit}^", check=False
+        )
+        if parent.returncode or parent.stdout.strip() != start_head:
+            return False
+        parents = _git(
+            workspace.path,
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            commit,
+            check=False,
+        )
+        if parents.returncode or len(parents.stdout.split()) != 2:
+            return False
+        lineage = _git(
+            workspace.path,
+            "rev-list",
+            "--reverse",
+            f"{start_head}..{commit}",
+            check=False,
+        )
+        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+            return False
+        subject = _git(
+            workspace.path, "log", "-1", "--format=%s", commit, check=False
+        )
+        if subject.returncode or subject.stdout.rstrip("\r\n") != (
+            f"Devlegate checkpoint {self._state['execution_ticket_id']} "
+            f"{self._state['execution_id']}"
+        ):
+            return False
+        return not workspace.dirty
+
+    def _recover_checkpoint_publication(self) -> None:
+        state = self._state
+        stage = state.get("execution_stage")
+        pending = state.get("pending_execution_report")
+        try:
+            report = ExecutionReport.from_dict(pending)
+        except ExecutionReportError as error:
+            raise WorkflowBlockedError(
+                "pending execution report is invalid; recovery is ambiguous"
+            ) from error
+        self._report_matches_execution_binding(report)
+        workspace = self._execution_workspace_for_recovery()
+        start_head = state.get("execution_start_head")
+        if not isinstance(start_head, str) or not start_head:
+            raise WorkflowBlockedError("execution start HEAD is unavailable")
+        checkpoint_head: str
+        if stage == "checkpointing":
+            if workspace.head == start_head:
+                try:
+                    checkpoint = ExecutionWorkspaceManager(
+                        self.repo, self.execution_worktree_root, report.ticket_id
+                    ).checkpoint(workspace, report.execution_id)
+                except (ExecutionWorkspaceError, OSError) as error:
+                    raise WorkflowBlockedError(
+                        f"cannot recover execution checkpoint: {error}"
+                    ) from error
+                checkpoint_head = checkpoint.after_head
+            else:
+                checkpoint_head = workspace.head
+                if not self._checkpoint_commit_is_exact(
+                    workspace, checkpoint_head, start_head
+                ):
+                    raise WorkflowBlockedError(
+                        "execution worktree contains ambiguous checkpoint history"
+                    )
+            report = dataclasses.replace(report, workspace_head=checkpoint_head)
+            workspace = dataclasses.replace(
+                workspace, head=checkpoint_head, dirty=False
+            )
+            self._save_state(
+                "agent_running",
+                execution_stage="post-checkpoint",
+                pending_execution_report=report.as_dict(),
+            )
+            stage = "post-checkpoint"
+        if stage in {"post-checkpoint", "publishing"}:
+            if report.workspace_head is None or workspace.head != report.workspace_head:
+                raise WorkflowBlockedError(
+                    "execution worktree HEAD does not match the proven checkpoint"
+                )
+            if workspace.dirty:
+                raise WorkflowBlockedError(
+                    "execution worktree is dirty after the proven checkpoint"
+                )
+            remote = self._execution_remote_head(report.execution_branch)
+            expected_remote = state.get("execution_remote_head")
+            if expected_remote is not None and not isinstance(expected_remote, str):
+                raise WorkflowBlockedError("execution remote identity is invalid")
+            if remote == expected_remote:
+                self._publish_execution_branch(
+                    workspace, report.workspace_head, expected_remote
+                )
+                remote = self._execution_remote_head(report.execution_branch)
+            if remote != report.workspace_head:
+                raise WorkflowBlockedError(
+                    "execution remote does not match the proven checkpoint"
+                )
+            self._save_state(
+                "agent_running",
+                execution_stage="post-publication",
+                pending_execution_report=report.as_dict(),
+            )
+            stage = "post-publication"
+        if stage == "post-publication":
+            if report.workspace_head is None or workspace.head != report.workspace_head:
+                raise WorkflowBlockedError(
+                    "execution worktree HEAD changed after publication"
+                )
+            if (
+                self._execution_remote_head(report.execution_branch)
+                != report.workspace_head
+            ):
+                raise WorkflowBlockedError(
+                    "published execution checkpoint is no longer exact"
+                )
+            self._save_state(
+                "agent_running",
+                execution_stage="lifecycle",
+                pending_execution_report=report.as_dict(),
             )
 
     def _recover_lifecycle_report(self) -> ExecutionReport:

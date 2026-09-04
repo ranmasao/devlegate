@@ -782,6 +782,201 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     assert not (working / "implementation.txt").exists()
 
 
+def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    original_checkpoint = ExecutionWorkspaceManager.checkpoint
+    failed = False
+
+    def fail_once(manager, workspace, execution_id):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise ExecutionWorkspaceError("simulated checkpoint crash")
+        return original_checkpoint(manager, workspace, execution_id)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", fail_once)
+    with pytest.raises(DevlegateError, match="checkpoint failed"):
+        devlegate.run_once()
+    assert devlegate._state["execution_stage"] == "checkpointing"
+    assert devlegate._state["pending_execution_report"]["workspace_head"] is None
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("checkpoint recovery reran worker"),
+    )
+    assert recovered.run_once() == 0
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/review/T-1.md").is_file()
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert (execution / "partial.txt").read_text() == "preserve\n"
+
+
+def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    original_save = devlegate._save_state
+    crashed = False
+
+    def crash_before_post(phase, **fields):
+        nonlocal crashed
+        if (
+            phase == "agent_running"
+            and fields.get("execution_stage") == "post-checkpoint"
+        ):
+            crashed = True
+            raise RuntimeError("simulated state crash")
+        original_save(phase, **fields)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate, "_save_state", crash_before_post)
+    with pytest.raises(RuntimeError, match="simulated state crash"):
+        devlegate.run_once()
+    assert crashed
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint_count = int(
+        git(
+            execution,
+            "rev-list",
+            "--count",
+            "--all",
+            "--grep",
+            "Devlegate checkpoint",
+        ).stdout
+    )
+    assert checkpoint_count == 1
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("checkpoint recovery reran worker"),
+    )
+    assert recovered.run_once() == 0
+    assert int(
+        git(
+            execution,
+            "rev-list",
+            "--count",
+            "--all",
+            "--grep",
+            "Devlegate checkpoint",
+        ).stdout
+    ) == 1
+
+
+def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(
+        devlegate,
+        "_publish_execution_branch",
+        lambda *_args: (_ for _ in ()).throw(
+            DevlegateError("simulated publication crash")
+        ),
+    )
+    with pytest.raises(DevlegateError, match="publication failed"):
+        devlegate.run_once()
+    assert devlegate._state["execution_stage"] == "publishing"
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("publication recovery reran worker"),
+    )
+    assert recovered.run_once() == 0
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/review/T-1.md").is_file()
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert git(
+        execution,
+        "ls-remote",
+        "origin",
+        "refs/heads/devlegate/work/T-1",
+    ).stdout.split()[0] == git(execution, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_post_publication_recovery_replays_lifecycle_without_worker(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    original_save = devlegate._save_state
+    crashed = False
+
+    def crash_after_publication(phase, **fields):
+        nonlocal crashed
+        if (
+            phase == "agent_running"
+            and fields.get("execution_stage") == "post-publication"
+        ):
+            crashed = True
+            raise RuntimeError("simulated state crash")
+        original_save(phase, **fields)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate, "_save_state", crash_after_publication)
+    with pytest.raises(RuntimeError, match="simulated state crash"):
+        devlegate.run_once()
+    assert crashed
+    assert devlegate._state["execution_stage"] == "publishing"
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_run_worker",
+        lambda *_args: pytest.fail("post-publication recovery reran worker"),
+    )
+    assert recovered.run_once() == 0
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/review/T-1.md").is_file()
+
+
 def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     tmp_path, monkeypatch
 ):
@@ -1012,7 +1207,6 @@ def test_persisted_agent_running_still_refuses_ordinary_restart(tmp_path, monkey
 
     with pytest.raises(DevlegateError, match="unsafe execution stage"):
         devlegate.run_once()
-
     assert devlegate._state["phase"] == "agent_running"
     assert devlegate._state["execution_interruption_kind"] == "process_loss"
 
@@ -1428,8 +1622,9 @@ def test_publication_failure_remains_ambiguous_not_retryable(tmp_path, monkeypat
     assert devlegate._state["phase"] == "agent_running"
     assert devlegate._state["execution_stage"] == "publishing"
     assert devlegate._state.get("failed_executions", {}) == {}
-    with pytest.raises(DevlegateError, match="unsafe execution stage"):
+    with pytest.raises(DevlegateError, match="publication outcome is unknown"):
         devlegate.run_once()
+    assert devlegate._state["execution_stage"] == "publishing"
     with pytest.raises(DevlegateError, match="ambiguous post-worker stage"):
         devlegate.retry("T-1")
 
