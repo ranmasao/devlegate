@@ -1481,6 +1481,23 @@ class ServiceEngine:
             ) from error
         return handle
 
+    def _mutation_owner_live(self) -> bool:
+        """Probe the project lock without acquiring or creating ownership."""
+        lock_file = self.state_dir / "locks" / f"{self._state_key}.lock"
+        try:
+            handle = lock_file.open("r")
+        except OSError:
+            return False
+        try:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
+        finally:
+            handle.close()
+
     def _load_state(self) -> dict[str, object]:
         try:
             state = self._runtime_store.load()
@@ -4928,6 +4945,8 @@ export default tool({
             )
             or str(self._state.get("handled_todo_fingerprint", "")) != todo_fingerprint
         )
+        phase = str(self._state.get("phase"))
+        owner_live = self._mutation_owner_live()
         checks = [
             (
                 "OPENCODE_MODEL",
@@ -5007,11 +5026,21 @@ export default tool({
             ),
             (
                 "runtime state",
-                self._state.get("phase") == "idle",
+                phase == "idle" or owner_live,
                 (
-                    f"phase={self._state.get('phase')}, "
-                    f"stage={self._state.get('execution_stage') or 'none'}; "
-                    "mutation-owner reconciliation is required"
+                    "idle"
+                    if phase == "idle"
+                    else (
+                        f"phase={phase}, stage="
+                        f"{self._state.get('execution_stage') or 'none'}; "
+                        "mutation owner is active"
+                        if owner_live
+                        else (
+                            f"phase={phase}, stage="
+                            f"{self._state.get('execution_stage') or 'none'}; "
+                            "mutation-owner reconciliation is required"
+                        )
+                    )
                 ),
             ),
         ]

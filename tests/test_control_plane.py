@@ -1297,6 +1297,53 @@ def test_check_reports_stranded_runtime_state_not_ready(tmp_path, monkeypatch, c
     assert "\nReady." not in output
 
 
+def test_check_reports_active_runtime_when_mutation_owner_is_live(
+    tmp_path, monkeypatch, capsys
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    persist_agent_running(devlegate, state)
+
+    with devlegate._lock():
+        assert devlegate.check() == 0
+    output = capsys.readouterr().out
+    assert "OK    runtime state" in output
+    assert "mutation owner is active" in output
+    assert "\nReady." in output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process identity")
+def test_check_does_not_treat_orphan_worker_as_runtime_owner(
+    tmp_path, monkeypatch, capsys
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    workspace, _control = persist_agent_running(devlegate, state)
+    helper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        identity = _capture_worker_identity(helper, devlegate._state["execution_id"])
+        devlegate._save_state(
+            "agent_running",
+            execution_stage="worker-running",
+            worker_identity=identity.as_dict(),
+        )
+        assert devlegate.check() == 1
+        output = capsys.readouterr().out
+        assert "mutation-owner reconciliation is required" in output
+        assert "\nReady." not in output
+        assert workspace.path.is_dir()
+    finally:
+        helper.kill()
+        helper.wait(timeout=10)
+
+
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
     tmp_path, monkeypatch
 ):
