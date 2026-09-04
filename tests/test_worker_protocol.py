@@ -145,6 +145,38 @@ def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind)
             pytest.fail(f"process {process_id} survived group interruption")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
+    marker = tmp_path / "natural-exit.json"
+    script = (
+        "import json, os, pathlib, subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'child': child.pid})); "
+        "sys.stdout.close(); sys.stderr.close(); os._exit(0)"
+    )
+    identities = []
+    result = _run_opencode(
+        [sys.executable, "-c", script, str(marker)],
+        "prompt",
+        execution_id="execution-1",
+        worker_identity_handler=identities.append,
+    )
+    assert marker.exists()
+    child = json.loads(marker.read_text())["child"]
+    assert result.worker_group_retired is False
+    assert result.transport_error == (
+        "worker leader exited but execution process group is still alive"
+    )
+    assert identities
+    assert os.kill(child, 0) is None
+    try:
+        os.killpg(identities[0].pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
     prompt = (
         "UNIQUE_PROMPT_MARKER_123456\n"

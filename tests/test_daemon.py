@@ -794,6 +794,77 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
                     pass
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    marker = tmp_path / "natural-worker.json"
+    worker = tmp_path / "natural-worker.py"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).write_text("
+        "json.dumps({'worker': os.getpid(), 'child': child.pid}))\n"
+        "sys.stdout.close(); sys.stderr.close(); os._exit(0)\n"
+    )
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    worker.chmod(0o755)
+    monkeypatch.chdir(working)
+    monkeypatch.setenv("DEVLEGATE_TEST_MARKER", str(marker))
+    engine = ServiceEngine(config)
+    original_worker = engine._run_worker
+
+    def run_worker(workspace, prompt):
+        result = original_worker(workspace, prompt)
+        assert result.worker_group_retired is False
+        return result
+
+    monkeypatch.setattr(engine, "_run_worker", run_worker)
+    try:
+        with pytest.raises(
+            DevlegateError, match="process group is still alive"
+        ):
+            engine.run_once()
+        assert marker.exists()
+        processes = json.loads(marker.read_text())
+        assert os.kill(processes["child"], 0) is None
+        assert engine._state["phase"] == "agent_running"
+        assert engine._state["execution_stage"] == "worker-running"
+        assert engine._state["worker_identity"]["pid"] == processes["worker"]
+        control = next((state / "worktrees").glob("*/control"))
+        assert not list((control / "executions").glob("**/*.json"))
+        restarted = ServiceEngine(config)
+        monkeypatch.setattr(
+            restarted,
+            "_run_worker",
+            lambda *_args: pytest.fail("restart reconciliation launched worker"),
+        )
+        with pytest.raises(DevlegateError, match="ownership is indeterminate"):
+            restarted.run_once()
+        assert os.kill(processes["child"], 0) is None
+        os.killpg(processes["worker"], signal.SIGKILL)
+        for _ in range(100):
+            try:
+                os.kill(processes["child"], 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        assert restarted.run_once() == 0
+        assert restarted._state["phase"] == "idle"
+    finally:
+        try:
+            os.killpg(processes["worker"], signal.SIGKILL)
+        except (NameError, ProcessLookupError):
+            pass
+
+
 def test_daemon_has_no_unix_daemonization_path():
     source = open(daemon.__file__, encoding="ascii").read()
     assert "os.fork" not in source

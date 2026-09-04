@@ -375,6 +375,18 @@ def _worker_group_exists(pgid: int) -> bool | None:
     return True
 
 
+def _prove_worker_group_retired(pgid: int) -> bool:
+    """Prove a recorded group is gone without signaling it."""
+    deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
+    while True:
+        observed = _worker_group_exists(pgid)
+        if observed is False:
+            return True
+        if observed is None or time.monotonic() >= deadline:
+            return False
+        time.sleep(WORKER_WAIT_INTERVAL)
+
+
 def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
     """Classify recorded worker ownership without mutating runtime state."""
     if os.name != "posix" or not sys.platform.startswith("linux"):
@@ -767,7 +779,21 @@ def _run_opencode(
         transport_error = interruption_error
     elif prompt_error is not None and interruption_kind is None:
         transport_error = transport_error or prompt_error
-    return OpenCodeRunResult(returncode, transport_error, interruption_kind)
+    group_retired = (
+        True
+        if worker_identity_handler is None
+        else (
+            worker_process_group is not None
+            and _prove_worker_group_retired(worker_process_group)
+        )
+    )
+    if not group_retired:
+        transport_error = transport_error or (
+            "worker leader exited but execution process group is still alive"
+        )
+    return OpenCodeRunResult(
+        returncode, transport_error, interruption_kind, group_retired
+    )
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -2348,7 +2374,7 @@ class ServiceEngine:
             self._worker_identity_handler = None
             self._worker_execution_id = None
             self._worker_interruption_handler = None
-            if worker_returned:
+            if worker_returned and worker_run.worker_group_retired:
                 self._save_state(
                     "agent_running",
                     execution_stage="post-worker",
@@ -2356,6 +2382,10 @@ class ServiceEngine:
                 )
             self._publish_service_snapshot(
                 lifecycle="processing", worker_running=False
+            )
+        if not worker_run.worker_group_retired:
+            raise DevlegateError(
+                "worker leader exited but execution process group is still alive"
             )
         try:
             self._assert_product_checkout_unchanged(self.current_branch, local_head)
@@ -3380,6 +3410,7 @@ export default tool({
                 claim,
                 egress_error,
                 opencode_result.interruption_kind,
+                opencode_result.worker_group_retired,
             )
         except OSError as error:
             return WorkerRunResult(-1, str(error), None, None)
