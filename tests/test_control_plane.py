@@ -1365,6 +1365,25 @@ def test_check_does_not_treat_orphan_worker_as_runtime_owner(
         helper.wait(timeout=10)
 
 
+def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, capsys):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    old_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    seed = tmp_path / "seed"
+    (seed / "kanban/backlog/refresh.md").write_text("refresh\n")
+    git(seed, "add", "kanban/backlog/refresh.md")
+    git(seed, "commit", "-m", "refresh control")
+    git(seed, "push", "origin", "HEAD:devlegate/control")
+
+    new_head, _remote_head = devlegate._sync_control()
+    output = capsys.readouterr().out
+    assert new_head != old_head
+    assert f"control updated: {old_head} -> {new_head}" in output
+
+
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
     tmp_path, monkeypatch
 ):

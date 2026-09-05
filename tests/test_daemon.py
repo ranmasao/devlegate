@@ -101,7 +101,7 @@ def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, cap
     assert "run failed with status 1" not in output
 
 
-def test_foreground_repeated_blocker_is_suppressed_until_changed(
+def test_foreground_repeated_blocker_is_reported_until_changed(
     tmp_path, monkeypatch, capsys
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -124,8 +124,8 @@ def test_foreground_repeated_blocker_is_suppressed_until_changed(
     engine.poll_interval = "0"
     assert engine.serve(stop_event) == 0
     output = capsys.readouterr().out
-    assert output.count("workflow became blocked: execution recovery is blocked") == 1
-    assert output.count("workflow remains blocked: execution recovery changed") == 1
+    assert output.count("workflow blocked: execution recovery is blocked") == 2
+    assert output.count("workflow blocked: execution recovery changed") == 1
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )

@@ -1797,6 +1797,7 @@ class ServiceEngine:
         remote_head = remote.stdout.strip()
         local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
         if local_head != remote_head:
+            previous_head = local_head
             ancestor = _git(
                 self.control_worktree,
                 "merge-base",
@@ -1817,6 +1818,7 @@ class ServiceEngine:
                     f"control fast-forward failed: {merge.stderr.strip()}"
                 )
             local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            _log(f"control updated: {previous_head} -> {local_head}")
         return local_head, remote_head
 
     def run_once(self, stop_event: threading.Event | None = None) -> int:
@@ -3797,10 +3799,7 @@ export default tool({
                         blocked_reason=message,
                     )
                     fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                    if self._workflow_blocker_fingerprint is None:
-                        _log(f"workflow became blocked: {message}")
-                    elif self._workflow_blocker_fingerprint != fingerprint:
-                        _log(f"workflow remains blocked: {message}")
+                    _log(f"workflow blocked: {message}")
                     self._workflow_blocker_fingerprint = fingerprint
                     status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
