@@ -1530,6 +1530,65 @@ def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     ).stdout.strip()
 
 
+def test_dirty_product_can_become_valid_update_base_target(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (working / "uncommitted-product.txt").write_text("operator work\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    evidence = reconciliation["evidence_ref"]
+    (working / "product-b.txt").write_text("product B\n")
+    git(working, "add", "uncommitted-product.txt", "product-b.txt")
+    git(working, "commit", "-m", "commit product work")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    assert devlegate.reconcile_update_base("T-1", target) == 0
+    assert devlegate._state["reconciliation"]["status"] == "resolved"
+    assert devlegate._state["resume_required"]["status"] == "required"
+    assert git(working, "rev-parse", evidence).stdout.strip() == reconciliation[
+        "worker_checkpoint"
+    ]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
+
+
+def test_still_dirty_product_blocks_update_base_without_rewrite(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (working / "uncommitted-product.txt").write_text("operator work\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="product checkout is dirty"):
+        devlegate.reconcile_update_base("T-1", reconciliation["original_base"])
+    assert devlegate._state["reconciliation"]["status"] == "pending"
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+
+
 def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
     tmp_path, monkeypatch
 ):
@@ -1558,6 +1617,68 @@ def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
         "origin",
         "refs/heads/devlegate/work/T-1",
     ).stdout.strip()
+
+
+def test_detached_product_can_be_restored_for_update_base(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        git(working, "switch", "--detach", base)
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    evidence = reconciliation["evidence_ref"]
+    git(working, "switch", "main")
+    (working / "restored-product.txt").write_text("product B\n")
+    git(working, "add", "restored-product.txt")
+    git(working, "commit", "-m", "restore product branch")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    assert devlegate.reconcile_update_base("T-1", target) == 0
+    assert devlegate._state["reconciliation"]["status"] == "resolved"
+    assert devlegate._state["resume_required"]["status"] == "required"
+    assert git(working, "rev-parse", evidence).stdout.strip() == reconciliation[
+        "worker_checkpoint"
+    ]
+
+
+def test_still_detached_product_blocks_update_base_without_rewrite(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        git(working, "switch", "--detach", base)
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="wrong branch"):
+        devlegate.reconcile_update_base("T-1", reconciliation["original_base"])
+    assert devlegate._state["reconciliation"]["status"] == "pending"
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
 
 
 def test_stranded_agent_running_without_worker_identity_refuses_retry(

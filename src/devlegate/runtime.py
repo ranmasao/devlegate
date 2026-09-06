@@ -4639,10 +4639,6 @@ export default tool({
                 raise DevlegateError(
                     "requested ticket does not match pending reconciliation"
                 )
-            if reconciliation.get("product_target_eligible") is not True:
-                raise DevlegateError(
-                    "observed product state is not eligible for update-base"
-                )
             target_result = _git(
                 self.repo, "rev-parse", "--verify", f"{onto}^{{commit}}", check=False
             )
@@ -4651,43 +4647,22 @@ export default tool({
             target = target_result.stdout.strip()
             if not target:
                 raise DevlegateError("requested reconciliation target is empty")
-            if _git(self.repo, "status", "--porcelain").stdout:
-                raise DevlegateError("product checkout is dirty")
-            branch = _git(
-                self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-            )
-            if branch.returncode or branch.stdout.strip() != self.remote_branch:
+            original_base = str(reconciliation["original_base"])
+            product = self._observe_product_generation(original_base)
+            if product["branch"] != self.current_branch:
                 raise DevlegateError("product checkout is on the wrong branch")
-            current_product = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+            if product["dirty"]:
+                raise DevlegateError("product checkout is dirty")
+            current_product = str(product["local_head"])
             if current_product != target:
                 raise DevlegateError(
                     "requested reconciliation target is not the current product HEAD"
                 )
-            fetched = _git(
-                self.repo,
-                "fetch",
-                "--prune",
-                self.remote_name,
-                self.remote_branch,
-                check=False,
-            )
-            remote = _git(
-                self.repo,
-                "rev-parse",
-                "--verify",
-                f"{self.remote_name}/{self.remote_branch}",
-                check=False,
-            )
-            if (
-                fetched.returncode
-                or remote.returncode
-                or remote.stdout.strip() != target
-            ):
+            if str(product["remote_head"]) != target:
                 raise DevlegateError(
                     "requested reconciliation target is not the fresh product "
                     "remote HEAD"
                 )
-            original_base = str(reconciliation["original_base"])
             ancestor = _git(
                 self.repo,
                 "merge-base",
