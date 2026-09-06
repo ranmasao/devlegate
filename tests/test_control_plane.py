@@ -1390,20 +1390,16 @@ def test_product_drift_enters_reconciliation_and_update_base_resumes(
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
-    publisher = tmp_path / "publisher"
-    git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
-    git(publisher, "config", "user.email", "test@example.com")
-    git(publisher, "config", "user.name", "Test User")
     devlegate = Devlegate(config)
     observed = []
 
     def worker(workspace, prompt):
         observed.append((workspace.path, prompt, devlegate._state["execution_id"]))
         (workspace.path / "implementation.txt").write_text("worker work\n")
-        (publisher / "product-change.txt").write_text("product B\n")
-        git(publisher, "add", "product-change.txt")
-        git(publisher, "commit", "-m", "advance product")
-        git(publisher, "push", "origin", "HEAD:main")
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
@@ -1501,6 +1497,67 @@ def test_reconcile_update_base_conflict_preserves_original_checkpoint(
         git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
         == original_head
     )
+
+
+def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (working / "uncommitted-product.txt").write_text("operator work\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert reconciliation["product_dirty"] is True
+    assert reconciliation["product_target_eligible"] is False
+    assert (working / "uncommitted-product.txt").read_text() == "operator work\n"
+    assert not git(working, "status", "--porcelain").stdout == ""
+    assert not git(
+        next((state / "worktrees").glob("*/work/T-1")),
+        "ls-remote",
+        "origin",
+        "refs/heads/devlegate/work/T-1",
+    ).stdout.strip()
+
+
+def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        git(working, "switch", "--detach", base)
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert reconciliation["product_target_eligible"] is False
+    assert git(working, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"
+    assert not git(
+        next((state / "worktrees").glob("*/work/T-1")),
+        "ls-remote",
+        "origin",
+        "refs/heads/devlegate/work/T-1",
+    ).stdout.strip()
 
 
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
@@ -2144,18 +2201,20 @@ def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
         )
 
     monkeypatch.setattr(devlegate, "_run_worker", worker)
-    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
-        devlegate.run_once()
+    assert devlegate.run_once() == 1
 
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert (working / "product.txt").read_text() == "unexpected\n"
-    assert not list((control / "executions/T-1").glob("*.json"))
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == reconciliation["worker_checkpoint"]
+    )
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
-    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
-        "Devlegate checkpoint"
-    )
+    assert reconciliation["product_dirty"] is True
 
 
 def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
@@ -2175,17 +2234,19 @@ def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
         )
 
     monkeypatch.setattr(devlegate, "_run_worker", worker)
-    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
-        devlegate.run_once()
+    assert devlegate.run_once() == 1
 
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert git(working, "status", "--porcelain").stdout == ""
-    assert not list((control / "executions/T-1").glob("*.json"))
-    assert (control / "kanban/todo/T-1.md").exists()
-    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
-        "Devlegate checkpoint"
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == reconciliation["worker_checkpoint"]
     )
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert reconciliation["product_target_eligible"] is True
 
 
 def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
@@ -2203,11 +2264,16 @@ def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
         )
 
     monkeypatch.setattr(devlegate, "_run_worker", worker)
-    with pytest.raises(DevlegateError, match="execution isolation cannot be proven"):
-        devlegate.run_once()
+    assert devlegate.run_once() == 1
 
     control = next((state / "worktrees").glob("*/control"))
-    assert not list((control / "executions/T-1").glob("*.json"))
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert git(
+        next((state / "worktrees").glob("*/work/T-1")),
+        "rev-parse",
+        reconciliation["evidence_ref"],
+    ).stdout.strip() == reconciliation["worker_checkpoint"]
     assert (control / "kanban/todo/T-1.md").exists()
 
 
@@ -2237,15 +2303,17 @@ def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
 
     monkeypatch.setattr(cli, "_git", git_with_failed_status)
     monkeypatch.setattr(devlegate, "_run_worker", worker)
-    with pytest.raises(DevlegateError, match="cannot verify product checkout"):
-        devlegate.run_once()
+    assert devlegate.run_once() == 1
 
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    assert not list((control / "executions/T-1").glob("*.json"))
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert reconciliation["product_target_eligible"] is False
     assert (control / "kanban/todo/T-1.md").exists()
-    assert not git(execution, "log", "-1", "--pretty=%s").stdout.startswith(
-        "Devlegate checkpoint"
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == reconciliation["worker_checkpoint"]
     )
 
 

@@ -2577,7 +2577,6 @@ class ServiceEngine:
                 "worker leader exited but execution process group is still alive"
             )
         try:
-            self._assert_product_checkout_unchanged(self.current_branch, local_head)
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, selected_ticket.id
             )
@@ -2640,36 +2639,16 @@ class ServiceEngine:
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
             f"{checkpoint.after_head[:12]}"
         )
-        current_product_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
-        product_fetch = _git(
-            self.repo,
-            "fetch",
-            "--prune",
-            self.remote_name,
-            self.remote_branch,
-            check=False,
-        )
-        product_remote = _git(
-            self.repo,
-            "rev-parse",
-            "--verify",
-            f"{self.remote_name}/{self.remote_branch}",
-            check=False,
-        )
-        if product_fetch.returncode or product_remote.returncode:
-            raise DevlegateError(
-                "cannot observe product generation after worker completion"
-            )
-        current_product_remote = product_remote.stdout.strip()
-        if (
-            current_product_head != workspace.base_head
-            or current_product_remote != workspace.base_head
-        ):
+        product = self._observe_product_generation(workspace.base_head)
+        current_product_remote = product["remote_head"]
+        if not product["stable"]:
             reconciliation_product = (
-                current_product_head
-                if current_product_head != workspace.base_head
+                product["local_head"]
+                if product["local_head"] != workspace.base_head
                 else current_product_remote
             )
+            if not reconciliation_product:
+                reconciliation_product = workspace.base_head
             evidence_ref = self._reconciliation_evidence_ref(
                 selected_ticket.id, execution_id
             )
@@ -2703,6 +2682,11 @@ class ServiceEngine:
                 "execution_branch": workspace.branch,
                 "execution_path": str(workspace.path),
                 "evidence_ref": evidence_ref,
+                "product_branch": product["branch"] or "",
+                "product_local_head": product["local_head"],
+                "product_dirty": product["dirty"],
+                "product_observation": product["reason"],
+                "product_target_eligible": product["target_eligible"],
             }
             self._save_state(
                 "idle",
@@ -2714,6 +2698,7 @@ class ServiceEngine:
                 f"reconciliation required: ticket {selected_ticket.id}; "
                 f"original base {workspace.base_head}; "
                 f"observed product {reconciliation_product}; "
+                f"product state {product['reason']}; "
                 f"worker checkpoint {checkpoint.after_head}"
             )
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
@@ -3151,6 +3136,63 @@ class ServiceEngine:
     @staticmethod
     def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
         return f"refs/devlegate/reconciliation/{ticket_id}/{execution_id}"
+
+    def _observe_product_generation(self, admitted_head: str) -> dict[str, object]:
+        branch_result = _git(
+            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else None
+        head_result = _git(self.repo, "rev-parse", "HEAD", check=False)
+        local_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+        status_result = _git(self.repo, "status", "--porcelain", check=False)
+        dirty = bool(status_result.stdout) if status_result.returncode == 0 else True
+        fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        remote_result = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{self.remote_name}/{self.remote_branch}",
+            check=False,
+        )
+        remote_head = (
+            remote_result.stdout.strip()
+            if fetch.returncode == 0 and remote_result.returncode == 0
+            else ""
+        )
+        branch_ok = branch == self.current_branch
+        observation = []
+        if not branch_ok:
+            observation.append("wrong product branch or detached checkout")
+        if dirty:
+            observation.append("product checkout is dirty")
+        if not local_head or not remote_head:
+            observation.append("product generation could not be observed")
+        if local_head and local_head != admitted_head:
+            observation.append("local product HEAD advanced")
+        if remote_head and remote_head != admitted_head:
+            observation.append("remote product HEAD advanced")
+        target_eligible = branch_ok and not dirty and bool(local_head and remote_head)
+        stable = (
+            target_eligible
+            and local_head == admitted_head
+            and remote_head == admitted_head
+        )
+        return {
+            "stable": stable,
+            "branch": branch,
+            "local_head": local_head,
+            "remote_head": remote_head,
+            "dirty": dirty,
+            "target_eligible": target_eligible,
+            "reason": "; ".join(observation) if observation else "stable",
+        }
 
     def _report_matches_execution_state(self, report: ExecutionReport) -> None:
         self._report_matches_execution_binding(report)
@@ -4596,6 +4638,10 @@ export default tool({
             if reconciliation.get("ticket_id") != ticket_id:
                 raise DevlegateError(
                     "requested ticket does not match pending reconciliation"
+                )
+            if reconciliation.get("product_target_eligible") is not True:
+                raise DevlegateError(
+                    "observed product state is not eligible for update-base"
                 )
             target_result = _git(
                 self.repo, "rev-parse", "--verify", f"{onto}^{{commit}}", check=False

@@ -95,6 +95,11 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
         lines.append("  none")
     if snapshot.reconciliation is not None:
         reconciliation = snapshot.reconciliation
+        product_branch = reconciliation.get("product_branch", "") or "detached"
+        product_local_head = reconciliation.get("product_local_head", "")
+        product_dirty = reconciliation.get("product_dirty", False)
+        target_eligible = reconciliation.get("product_target_eligible", False)
+        product_observation = reconciliation.get("product_observation", "")
         lines.extend(
             [
                 "Reconciliation required:",
@@ -102,6 +107,11 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
                 f"  original base: {reconciliation['original_base']}",
                 f"  observed product: {reconciliation['observed_product']}",
                 f"  worker checkpoint: {reconciliation['worker_checkpoint']}",
+                f"  product branch: {product_branch}",
+                f"  product local HEAD: {product_local_head}",
+                f"  product dirty: {product_dirty}",
+                f"  update-base eligible: {target_eligible}",
+                f"  product observation: {product_observation}",
             ]
         )
     lines.append("Blocked:")
