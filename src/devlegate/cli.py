@@ -93,6 +93,17 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
     )
     if not snapshot.failed_executions:
         lines.append("  none")
+    if snapshot.reconciliation is not None:
+        reconciliation = snapshot.reconciliation
+        lines.extend(
+            [
+                "Reconciliation required:",
+                f"  ticket: {reconciliation['ticket_id']}",
+                f"  original base: {reconciliation['original_base']}",
+                f"  observed product: {reconciliation['observed_product']}",
+                f"  worker checkpoint: {reconciliation['worker_checkpoint']}",
+            ]
+        )
     lines.append("Blocked:")
     if snapshot.blocked:
         for ticket_id, title, blockers in snapshot.blocked:
@@ -245,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(
         dest="command",
-        metavar="{init,render,run,daemon,retry,check,status,plan,control}",
+        metavar="{init,render,run,daemon,retry,reconcile,check,status,plan,control}",
         parser_class=DevlegateArgumentParser,
     )
     init_parser = commands.add_parser(
@@ -278,6 +289,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retry_parser.add_argument("ticket_id", nargs="?")
     retry_parser.add_argument("--env", metavar="FILE", type=Path)
+    reconcile_parser = commands.add_parser(
+        "reconcile", help="resolve a pending product-base reconciliation"
+    )
+    reconcile_commands = reconcile_parser.add_subparsers(
+        dest="reconcile_command", parser_class=DevlegateArgumentParser
+    )
+    update_base_parser = reconcile_commands.add_parser("update-base")
+    update_base_parser.add_argument("ticket_id")
+    update_base_parser.add_argument("--onto", required=True)
+    update_base_parser.add_argument("--env", metavar="FILE", type=Path)
     control_parser = commands.add_parser("control", help="manage control-plane state")
     control_commands = control_parser.add_subparsers(
         dest="control_command", parser_class=DevlegateArgumentParser
@@ -295,6 +316,10 @@ def main() -> int:
     if args.command == "control" and args.control_command != "init":
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"
+        )
+    if args.command == "reconcile" and args.reconcile_command != "update-base":
+        DevlegateArgumentParser(prog="devlegate reconcile").error(
+            "a reconcile command is required"
         )
     env_file = args.env or Path.cwd() / ".env"
     try:
@@ -342,6 +367,9 @@ def main() -> int:
             return run_foreground(
                 engine, lambda intent: engine.retry(args.ticket_id, intent)
             )
+        if args.command == "reconcile":
+            engine = _service_engine(env_file)
+            return engine.reconcile_update_base(args.ticket_id, args.onto)
         if args.command == "daemon":
             return run_daemon(_service_engine(env_file))
         engine = _service_engine(env_file)

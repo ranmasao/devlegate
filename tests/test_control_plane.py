@@ -1384,6 +1384,125 @@ def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, caps
     assert f"control updated: {old_head} -> {new_head}" in output
 
 
+def test_product_drift_enters_reconciliation_and_update_base_resumes(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    publisher = tmp_path / "publisher"
+    git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+    devlegate = Devlegate(config)
+    observed = []
+
+    def worker(workspace, prompt):
+        observed.append((workspace.path, prompt, devlegate._state["execution_id"]))
+        (workspace.path / "implementation.txt").write_text("worker work\n")
+        (publisher / "product-change.txt").write_text("product B\n")
+        git(publisher, "add", "product-change.txt")
+        git(publisher, "commit", "-m", "advance product")
+        git(publisher, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    assert reconciliation["status"] == "pending"
+    assert reconciliation["original_base"] != reconciliation["observed_product"]
+    assert reconciliation["worker_checkpoint"]
+    status = devlegate.status_view()
+    assert status.reconciliation["original_base"] == reconciliation["original_base"]
+    assert status.reconciliation["worker_checkpoint"] == reconciliation[
+        "worker_checkpoint"
+    ]
+    assert not git(
+        next((state / "worktrees").glob("*/work/T-1")),
+        "ls-remote",
+        "origin",
+        "refs/heads/devlegate/work/T-1",
+    ).stdout.strip()
+    old_id = reconciliation["execution_id"]
+    evidence = reconciliation["evidence_ref"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    assert git(execution, "rev-parse", evidence).stdout.strip() == reconciliation[
+        "worker_checkpoint"
+    ]
+
+    git(working, "pull", "--ff-only", "origin", "main")
+    assert (
+        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
+        == 0
+    )
+    assert devlegate._state["reconciliation"]["status"] == "resolved"
+    assert devlegate._state["resume_required"]["status"] == "required"
+    assert git(execution, "rev-parse", "HEAD^").returncode == 0
+
+    resumed = Devlegate(config)
+    resumed_ids = []
+    prompts = []
+
+    def resumed_worker(workspace, prompt):
+        resumed_ids.append(resumed._state["execution_id"])
+        prompts.append(prompt)
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "validated", (), ()), None
+        )
+
+    monkeypatch.setattr(resumed, "_run_worker", resumed_worker)
+    assert resumed.run_once() == 0
+    assert resumed_ids[0] != old_id
+    assert "Continue the existing implementation" in prompts[0]
+    assert (execution / "implementation.txt").read_text() == "worker work\n"
+    assert (
+        next((state / "worktrees").glob("*/control"))
+        / "kanban/review/T-1.md"
+    ).is_file()
+
+
+def test_reconcile_update_base_conflict_preserves_original_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    publisher = tmp_path / "publisher"
+    git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "shared.txt").write_text("worker\n")
+        (publisher / "shared.txt").write_text("product\n")
+        git(publisher, "add", "shared.txt")
+        git(publisher, "commit", "-m", "advance product")
+        git(publisher, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    assert devlegate.run_once() == 1
+    reconciliation = devlegate._state["reconciliation"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    original_head = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(working, "pull", "--ff-only", "origin", "main")
+
+    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
+        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
+    assert devlegate._state["reconciliation"]["status"] == "pending"
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
+    assert not git(execution, "status", "--porcelain").stdout
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == original_head
+    )
+
+
 def test_stranded_agent_running_without_worker_identity_refuses_retry(
     tmp_path, monkeypatch
 ):
@@ -2385,7 +2504,6 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     (execution / "implementation.txt").write_text("checkpoint\n")
     git(execution, "add", "implementation.txt")
     git(execution, "commit", "-m", "execution checkpoint")
-    execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
     product = tmp_path / "seed"
     git(product, "switch", "main")
     (product / "product-update.txt").write_text("product\n")
@@ -2413,7 +2531,8 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     )
 
     assert invoke(working, "run", "--once", config=config).returncode == 1
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
+    assert not execution.exists()
+    assert state_payload(state)["reconciliation"]["status"] == "pending"
 
 
 def test_unchanged_prepared_generation_is_quiet(tmp_path):

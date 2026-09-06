@@ -135,6 +135,7 @@ class StatusSnapshot:
     next_ticket: tuple[str, str] | None
     plan: ExecutionPlan
     failed_executions: tuple["FailedExecution", ...] = ()
+    reconciliation: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -182,6 +183,7 @@ class StatusSnapshot:
             "failed_executions": [
                 failure.as_dict() for failure in self.failed_executions
             ],
+            "reconciliation": self.reconciliation,
         }
 
 
@@ -1533,6 +1535,30 @@ class ServiceEngine:
         }
         if phase not in valid_phases:
             raise DevlegateError(f"invalid state phase: {phase}")
+        reconciliation = state.get("reconciliation")
+        if reconciliation is not None:
+            if not isinstance(reconciliation, dict) or reconciliation.get(
+                "status"
+            ) not in {"pending", "resolved"}:
+                raise DevlegateError("invalid reconciliation state")
+            required_reconciliation = (
+                "ticket_id",
+                "execution_id",
+                "original_base",
+                "observed_product",
+                "worker_checkpoint",
+                "product_remote_head",
+                "control_head",
+                "execution_branch",
+                "execution_path",
+                "evidence_ref",
+            )
+            if not all(
+                isinstance(reconciliation.get(field), str)
+                and reconciliation[field]
+                for field in required_reconciliation
+            ):
+                raise DevlegateError("invalid reconciliation identity")
         failures = state.get("failed_executions", {})
         if not isinstance(failures, dict) or not all(
             isinstance(ticket_id, str)
@@ -2277,6 +2303,7 @@ class ServiceEngine:
                     )
                 selected_ticket = dataclasses.replace(selected_ticket, body=body)
         execution_id: str | None = None
+        resume_required = False
         if state_phase in {"idle", "agent_pending", "merge_pending"}:
             todo_fingerprint, todo_count = _todo_fingerprint(
                 self.control_worktree, self.todo_path
@@ -2311,6 +2338,12 @@ class ServiceEngine:
             failed = self._state.get("failed_executions", {})
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
+            )
+            resume_required = (
+                isinstance(self._state.get("resume_required"), dict)
+                and self._state["resume_required"].get("status") == "required"
+                and self._state["resume_required"].get("ticket_id")
+                == selected_ticket.id
             )
             interrupted_failure = (
                 isinstance(failed_for_ticket, dict)
@@ -2392,6 +2425,7 @@ class ServiceEngine:
                 and not pending_agent_execution
                 and self._retry_ticket_id is None
                 and self._automatic_resume_ticket_id is None
+                and not resume_required
                 and self._state.get("execution_ticket_id") == selected_ticket.id
             ):
                 _log("no new work generation; unchanged todo is already handled")
@@ -2448,6 +2482,7 @@ class ServiceEngine:
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
                 worker_identity=None,
+                resume_required=None,
             )
             if self._stop_before_admission():
                 return 0
@@ -2476,6 +2511,7 @@ class ServiceEngine:
             )
         if (
             bound_execution
+            or resume_required
             or self._automatic_resume_ticket_id is not None
             or (
                 self._retry_ticket_id is not None
@@ -2604,6 +2640,85 @@ class ServiceEngine:
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
             f"{checkpoint.after_head[:12]}"
         )
+        current_product_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        product_fetch = _git(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        product_remote = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{self.remote_name}/{self.remote_branch}",
+            check=False,
+        )
+        if product_fetch.returncode or product_remote.returncode:
+            raise DevlegateError(
+                "cannot observe product generation after worker completion"
+            )
+        current_product_remote = product_remote.stdout.strip()
+        if (
+            current_product_head != workspace.base_head
+            or current_product_remote != workspace.base_head
+        ):
+            reconciliation_product = (
+                current_product_head
+                if current_product_head != workspace.base_head
+                else current_product_remote
+            )
+            evidence_ref = self._reconciliation_evidence_ref(
+                selected_ticket.id, execution_id
+            )
+            existing_evidence = _git(
+                self.repo, "rev-parse", "--verify", evidence_ref, check=False
+            )
+            if existing_evidence.returncode == 0 and (
+                existing_evidence.stdout.strip() != checkpoint.after_head
+            ):
+                raise DevlegateError("reconciliation evidence ref is inconsistent")
+            pinned = _git(
+                self.repo,
+                "update-ref",
+                evidence_ref,
+                checkpoint.after_head,
+                check=False,
+            )
+            if pinned.returncode:
+                raise DevlegateError(
+                    "cannot pin reconciliation worker checkpoint evidence"
+                )
+            reconciliation = {
+                "status": "pending",
+                "ticket_id": selected_ticket.id,
+                "execution_id": execution_id,
+                "original_base": workspace.base_head,
+                "observed_product": reconciliation_product,
+                "worker_checkpoint": checkpoint.after_head,
+                "product_remote_head": current_product_remote,
+                "control_head": str(self._state["execution_control_head"]),
+                "execution_branch": workspace.branch,
+                "execution_path": str(workspace.path),
+                "evidence_ref": evidence_ref,
+            }
+            self._save_state(
+                "idle",
+                handled_remote_head=current_product_remote,
+                handled_control_head=str(self._state["control_head"]),
+                reconciliation=reconciliation,
+            )
+            reason = (
+                f"reconciliation required: ticket {selected_ticket.id}; "
+                f"original base {workspace.base_head}; "
+                f"observed product {reconciliation_product}; "
+                f"worker checkpoint {checkpoint.after_head}"
+            )
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            _log(reason)
+            return 1
         self._save_state("agent_running", execution_stage="publishing")
         try:
             self._publish_execution_branch(
@@ -3032,6 +3147,10 @@ class ServiceEngine:
                 push.stderr.strip() or "cannot publish control transition"
             )
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
+    @staticmethod
+    def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
+        return f"refs/devlegate/reconciliation/{ticket_id}/{execution_id}"
 
     def _report_matches_execution_state(self, report: ExecutionReport) -> None:
         self._report_matches_execution_binding(report)
@@ -4132,6 +4251,11 @@ export default tool({
             next_ticket=next_ticket,
             plan=plan,
             failed_executions=failed_executions,
+            reconciliation=(
+                dict(state["reconciliation"])
+                if isinstance(state.get("reconciliation"), dict)
+                else None
+            ),
         )
 
     def _make_execution_plan(
@@ -4156,13 +4280,26 @@ export default tool({
                 code=code,
                 control=control,
             )
+        identity = {"code": code, "control": control}
+        reconciliation = state.get("reconciliation")
+        if (
+            isinstance(reconciliation, dict)
+            and reconciliation.get("status") == "pending"
+        ):
+            reason = (
+                "reconciliation required: "
+                f"ticket {reconciliation['ticket_id']}; "
+                f"original base {reconciliation['original_base']}; "
+                f"observed product {reconciliation['observed_product']}; "
+                f"worker checkpoint {reconciliation['worker_checkpoint']}"
+            )
+            return ExecutionPlan("blocked", reason, **identity)
         if dirty:
             reason = "code or control working tree is dirty"
             blocked = True
         else:
             reason = ""
             blocked = False
-        identity = {"code": code, "control": control}
         if blocked:
             return ExecutionPlan("blocked", reason, **identity)
         boundary = tuple(
@@ -4445,6 +4582,173 @@ export default tool({
                 return self._run_once()
         finally:
             self._retry_ticket_id = None
+
+    def reconcile_update_base(self, ticket_id: str, onto: str) -> int:
+        """Transplant one preserved worker checkpoint onto an explicit base."""
+        with self._lock():
+            reconciliation = self._state.get("reconciliation")
+            if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
+                "pending"
+            ):
+                raise DevlegateError(
+                    f"ticket {ticket_id} has no pending reconciliation"
+                )
+            if reconciliation.get("ticket_id") != ticket_id:
+                raise DevlegateError(
+                    "requested ticket does not match pending reconciliation"
+                )
+            target_result = _git(
+                self.repo, "rev-parse", "--verify", f"{onto}^{{commit}}", check=False
+            )
+            if target_result.returncode:
+                raise DevlegateError("requested reconciliation target is not a commit")
+            target = target_result.stdout.strip()
+            if not target:
+                raise DevlegateError("requested reconciliation target is empty")
+            if _git(self.repo, "status", "--porcelain").stdout:
+                raise DevlegateError("product checkout is dirty")
+            branch = _git(
+                self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+            )
+            if branch.returncode or branch.stdout.strip() != self.remote_branch:
+                raise DevlegateError("product checkout is on the wrong branch")
+            current_product = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+            if current_product != target:
+                raise DevlegateError(
+                    "requested reconciliation target is not the current product HEAD"
+                )
+            fetched = _git(
+                self.repo,
+                "fetch",
+                "--prune",
+                self.remote_name,
+                self.remote_branch,
+                check=False,
+            )
+            remote = _git(
+                self.repo,
+                "rev-parse",
+                "--verify",
+                f"{self.remote_name}/{self.remote_branch}",
+                check=False,
+            )
+            if (
+                fetched.returncode
+                or remote.returncode
+                or remote.stdout.strip() != target
+            ):
+                raise DevlegateError(
+                    "requested reconciliation target is not the fresh product "
+                    "remote HEAD"
+                )
+            original_base = str(reconciliation["original_base"])
+            ancestor = _git(
+                self.repo,
+                "merge-base",
+                "--is-ancestor",
+                original_base,
+                target,
+                check=False,
+            )
+            if ancestor.returncode:
+                raise DevlegateError(
+                    "requested reconciliation target is not a descendant of "
+                    "the original base"
+                )
+            evidence = str(reconciliation["evidence_ref"])
+            preserved = _git(
+                self.repo, "rev-parse", "--verify", evidence, check=False
+            )
+            if preserved.returncode or preserved.stdout.strip() != reconciliation[
+                "worker_checkpoint"
+            ]:
+                raise DevlegateError("preserved worker checkpoint evidence changed")
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, ticket_id
+            )
+            if (
+                reconciliation["execution_branch"] != manager.branch
+                or Path(str(reconciliation["execution_path"])) != manager.path
+            ):
+                raise DevlegateError("reconciliation workspace binding is invalid")
+            workspace = self._execution_workspace_for_recovery()
+            if workspace.head != reconciliation["worker_checkpoint"] or workspace.dirty:
+                raise DevlegateError(
+                    "execution workspace changed before reconciliation"
+                )
+            execution_remote = self._execution_remote_head(manager.branch)
+            if execution_remote is not None:
+                raise DevlegateError(
+                    "published execution history cannot be rewritten without force push"
+                )
+            if not self._checkpoint_commit_is_exact(
+                workspace,
+                str(reconciliation["worker_checkpoint"]),
+                original_base,
+            ):
+                raise DevlegateError(
+                    "execution lineage is not the supported one-commit shape"
+                )
+            if str(reconciliation["worker_checkpoint"]) == original_base:
+                raise DevlegateError(
+                    "reconciliation requires a worker checkpoint commit"
+                )
+            try:
+                rebased = _git(
+                    workspace.path,
+                    "rebase",
+                    "--onto",
+                    target,
+                    original_base,
+                    check=False,
+                )
+                if rebased.returncode:
+                    _git(workspace.path, "rebase", "--abort", check=False)
+                    restored = _git(
+                        workspace.path, "rev-parse", "HEAD", check=False
+                    ).stdout.strip()
+                    clean = not _git(
+                        workspace.path, "status", "--porcelain", check=False
+                    ).stdout
+                    if restored != reconciliation["worker_checkpoint"] or not clean:
+                        raise DevlegateError(
+                            "reconciliation conflict could not be safely aborted"
+                        )
+                    raise DevlegateError(
+                        "reconciliation conflict; manual/advanced reconciliation "
+                        "is required"
+                    )
+            except OSError as error:
+                raise DevlegateError(f"reconciliation failed: {error}") from error
+            updated = self._execution_workspace_for_recovery()
+            if updated.dirty or updated.head == target:
+                raise DevlegateError("reconciled execution lineage is invalid")
+            parent = _git(
+                updated.path, "rev-parse", "--verify", "HEAD^", check=False
+            )
+            if parent.returncode or parent.stdout.strip() != target:
+                raise DevlegateError("reconciled execution base proof failed")
+            resolved = {
+                **reconciliation,
+                "status": "resolved",
+                "effective_base": target,
+            }
+            todo_fingerprint, _count = _todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )
+            self._save_state(
+                "idle",
+                execution_base_head=target,
+                execution_start_head=target,
+                execution_remote_head=None,
+                handled_remote_head=target,
+                handled_control_head=str(reconciliation["control_head"]),
+                handled_todo_fingerprint=todo_fingerprint,
+                reconciliation=resolved,
+                resume_required={"ticket_id": ticket_id, "status": "required"},
+            )
+            _log(f"reconciliation resolved for {ticket_id}; resume required")
+            return 0
 
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""

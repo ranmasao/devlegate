@@ -188,7 +188,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         main()
     assert error.value.code == 0
     assert (
-        "{init,render,run,daemon,retry,check,status,plan,control}"
+        "{init,render,run,daemon,retry,reconcile,check,status,plan,control}"
         in capsys.readouterr().out
     )
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
