@@ -1,5 +1,9 @@
+import json
+import os
 import shutil
 import socket
+import stat
+import struct
 import tempfile
 import time
 from pathlib import Path
@@ -8,7 +12,10 @@ import pytest
 from test_control_plane import control_fixture, invoke
 
 import devlegate.daemon as daemon
+import devlegate.ipc_server as ipc_server
 from devlegate.ipc_protocol import (
+    MAX_PAYLOAD_BYTES,
+    encode_frame,
     encode_request,
     parse_response,
     receive_frame,
@@ -213,6 +220,225 @@ def test_excessively_long_socket_path_fails_as_devlegate_error(
 
     with pytest.raises(DevlegateError, match="IPC socket path is too long"):
         server.start()
+
+
+def test_same_project_second_daemon_cannot_disturb_first_socket(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine_a, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    authority = engine_a._lock()
+    server_a = UnixIPCServer(engine_a, engine_a.ipc_socket_path)
+    server_a.start()
+    try:
+        engine_b = ServiceEngine(engine_a.env_file)
+        with pytest.raises(DevlegateError, match="already running"):
+            daemon.run_daemon(engine_b)
+        assert engine_a.ipc_socket_path.is_socket()
+        assert request(engine_a.ipc_socket_path, "a", "ping").ok
+    finally:
+        server_a.stop()
+        authority.close()
+
+
+def test_stale_socket_is_replaced_after_runtime_authority_is_acquired(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine.ipc_socket_path.parent.mkdir(parents=True, exist_ok=True)
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(engine.ipc_socket_path))
+    stale.close()
+
+    def host(_engine, _operation):
+        assert request(engine.ipc_socket_path, "1", "ping").ok
+        return 0
+
+    monkeypatch.setattr(daemon, "run_foreground", host)
+    assert daemon.run_daemon(engine) == 0
+    assert not engine.ipc_socket_path.exists()
+
+
+def test_active_endpoint_fails_closed_without_unlinking_it(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server_a = UnixIPCServer(engine, engine.ipc_socket_path)
+    server_b = UnixIPCServer(engine, engine.ipc_socket_path)
+    server_a.start()
+    try:
+        with pytest.raises(DevlegateError, match="endpoint is active"):
+            server_b.start()
+        assert request(engine.ipc_socket_path, "1", "ping").ok
+    finally:
+        server_b.stop()
+        server_a.stop()
+
+
+def test_socket_directory_and_endpoint_permissions(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    directory = engine.ipc_socket_path.parent
+    directory.mkdir(parents=True)
+    os.chmod(directory, 0o755)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    try:
+        assert stat.S_IMODE(os.stat(directory).st_mode) == 0o700
+        assert stat.S_IMODE(os.stat(engine.ipc_socket_path).st_mode) == 0o600
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("object_kind", ["file", "symlink"])
+def test_unexpected_socket_path_objects_fail_closed(
+    tmp_path, monkeypatch, short_state_dir, object_kind
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    path = engine.ipc_socket_path
+    path.parent.mkdir(parents=True)
+    if object_kind == "file":
+        path.write_text("not a socket")
+    else:
+        target = path.parent / "target"
+        target.write_text("target")
+        path.symlink_to(target)
+    with pytest.raises(DevlegateError, match="not a socket"):
+        UnixIPCServer(engine, path).start()
+
+
+def test_foreign_socket_directory_owner_fails_closed(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    real_uid = os.geteuid()
+    monkeypatch.setattr(ipc_server.os, "geteuid", lambda: real_uid + 1)
+
+    with pytest.raises(DevlegateError, match="directory has unsafe ownership"):
+        UnixIPCServer(engine, engine.ipc_socket_path).start()
+
+
+def test_foreign_socket_owner_fails_closed(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    path = engine.ipc_socket_path
+    path.parent.mkdir(parents=True)
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(path))
+    stale.close()
+    real_uid = os.geteuid()
+    calls = 0
+
+    def fake_uid():
+        nonlocal calls
+        calls += 1
+        return real_uid if calls == 1 else real_uid + 1
+
+    monkeypatch.setattr(ipc_server.os, "geteuid", fake_uid)
+    try:
+        with pytest.raises(DevlegateError, match="path has unsafe ownership"):
+            UnixIPCServer(engine, path).start()
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_cleanup_does_not_remove_replaced_endpoint(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.path.unlink()
+        replacement.bind(str(server.path))
+        server.stop()
+        assert server.path.exists()
+    finally:
+        replacement.close()
+        server.path.unlink(missing_ok=True)
+
+
+def test_wrong_peer_credential_is_rejected_without_stopping_server(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    monkeypatch.setattr(
+        "devlegate.ipc_server._peer_credentials_are_current_user", lambda _socket: False
+    )
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        connection.connect(str(server.path))
+        assert receive_frame(connection.makefile("rb")) is None
+    finally:
+        connection.close()
+        server.stop()
+
+
+def test_real_socket_framing_failures_leave_server_usable(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+
+    def raw_response(data: bytes, shutdown_write: bool = False):
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(2)
+        connection.connect(str(server.path))
+        connection.sendall(data)
+        if shutdown_write:
+            connection.shutdown(socket.SHUT_WR)
+        stream = connection.makefile("rwb")
+        response = parse_response(receive_frame(stream))
+        stream.close()
+        connection.close()
+        return response
+
+    try:
+        invalid_utf8 = raw_response(encode_frame(b"\xff"))
+        invalid_json = raw_response(encode_frame(b"{"))
+        invalid_shape = raw_response(encode_frame(b"[]"))
+        unsupported = raw_response(
+            encode_frame(
+                json.dumps(
+                    {"version": 2, "id": "v", "method": "ping", "payload": {}}
+                ).encode()
+            )
+        )
+        oversized = raw_response(struct.pack(">I", MAX_PAYLOAD_BYTES + 1))
+        truncated_header = raw_response(b"\x00", shutdown_write=True)
+        truncated_payload = raw_response(
+            struct.pack(">I", 3) + b"ab", shutdown_write=True
+        )
+        assert invalid_utf8.error["code"] == "malformed_protocol"
+        assert invalid_json.error["code"] == "malformed_protocol"
+        assert invalid_shape.error["code"] == "invalid_request"
+        assert unsupported.error["code"] == "unsupported_version"
+        assert oversized.error["code"] == "oversized_frame"
+        assert truncated_header.error["code"] == "malformed_protocol"
+        assert truncated_payload.error["code"] == "malformed_protocol"
+        assert request(server.path, "ok", "ping").ok
+    finally:
+        server.stop()
+
+
+def test_shutdown_unblocks_partial_client(tmp_path, monkeypatch, short_state_dir):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.connect(str(server.path))
+    connection.sendall(b"\x00")
+    started = time.monotonic()
+    server.stop()
+    elapsed = time.monotonic() - started
+    connection.close()
+    assert elapsed < 1
+    assert not server.path.exists()
 
 
 def test_dispatch_uses_service_views_without_persistence_access():

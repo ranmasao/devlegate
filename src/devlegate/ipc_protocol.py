@@ -16,10 +16,11 @@ _REQUEST_FIELDS = {"version", "id", "method", "payload"}
 class IPCProtocolError(ValueError):
     """A protocol or framing error with a stable machine-readable code."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, fatal: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.fatal = fatal
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,9 @@ def receive_frame(stream: BinaryIO) -> bytes | None:
     length = _HEADER.unpack(header)[0]
     if length > MAX_PAYLOAD_BYTES:
         raise IPCProtocolError(
-            "oversized_frame", "advertised payload exceeds the maximum size"
+            "oversized_frame",
+            "advertised payload exceeds the maximum size",
+            fatal=True,
         )
     return _read_exact(stream, length)
 
@@ -216,7 +219,9 @@ def _read_exact(
         if not chunk:
             if allow_clean_eof and not chunks:
                 return None
-            raise IPCProtocolError("malformed_protocol", "frame is truncated")
+            raise IPCProtocolError(
+                "malformed_protocol", "frame is truncated", fatal=True
+            )
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)

@@ -13,7 +13,7 @@ import tempfile
 import termios
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable
 
@@ -3929,18 +3929,26 @@ export default tool({
         """Run the legacy foreground polling fallback."""
         return self._run_polling(once=once, stop_event=stop_event)
 
-    def serve(self, stop_event: threading.Event) -> int:
+    def serve(
+        self, stop_event: threading.Event, lock_handle: object | None = None
+    ) -> int:
         """Run the foreground service until the host requests a stop."""
-        return self._run_polling(once=False, stop_event=stop_event)
+        return self._run_polling(
+            once=False, stop_event=stop_event, lock_handle=lock_handle
+        )
 
     def _run_polling(
         self,
         *,
         once: bool,
         stop_event: threading.Event | None = None,
+        lock_handle: object | None = None,
     ) -> int:
         self._foreground_abort_requested = False
-        with self._stop_context(stop_event), self._lock():
+        authority = (
+            nullcontext(lock_handle) if lock_handle is not None else self._lock()
+        )
+        with self._stop_context(stop_event), authority:
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             while True:
                 if (

@@ -31,12 +31,16 @@ def run_daemon(engine: ServiceEngine) -> int:
     """Host one service engine in the foreground until a stop signal arrives."""
     if not hasattr(engine, "state_dir"):
         return run_foreground(engine, lambda intent: engine.serve(intent))
+    authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
-    server.start()
     try:
-        return run_foreground(engine, lambda intent: engine.serve(intent))
+        server.start()
+        return run_foreground(
+            engine, lambda intent: engine.serve(intent, lock_handle=authority)
+        )
     finally:
         server.stop()
+        authority.close()
 
 
 def run_foreground(
