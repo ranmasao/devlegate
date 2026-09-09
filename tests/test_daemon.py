@@ -438,7 +438,156 @@ def test_merge_pending_retries_matching_shutdown_fetch(
     assert "unknown git error" not in output
 
 
-def test_merge_pending_repeated_matching_shutdown_is_bounded(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("kind", "returncode"),
+    [
+        ("operator_abort", -signal.SIGINT),
+        ("service_shutdown", -signal.SIGTERM),
+    ],
+)
+def test_merge_pending_retries_matching_product_merge(
+    tmp_path, monkeypatch, kind, returncode
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    publisher = tmp_path / "seed"
+    git(publisher, "switch", "main")
+    (publisher / "remote-change.txt").write_text("remote\n")
+    git(publisher, "add", "remote-change.txt")
+    git(publisher, "commit", "-m", "remote change")
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    git(publisher, "push", "origin", "HEAD:main")
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=target,
+        changed_paths="remote-change.txt\n",
+        control_head=control,
+    )
+    original_git = runtime._git
+    merge_calls = 0
+
+    def interrupt_product_merge(repo, *args, check=True):
+        nonlocal merge_calls
+        if repo == engine.repo and args[:2] == ("merge", "--ff-only"):
+            merge_calls += 1
+            if merge_calls == 1:
+                return subprocess.CompletedProcess(["git"], returncode, "", "")
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", interrupt_product_merge)
+
+    def operation(stop_intent):
+        stop_intent.request(kind)
+        return engine.serve(stop_intent)
+
+    expected_result = 130 if kind == "operator_abort" else 0
+    assert daemon.run_foreground(engine, operation) == expected_result
+    assert merge_calls == 2
+    assert engine._state["phase"] == "idle"
+    assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
+
+
+def test_merge_pending_retries_product_merge_then_preserves_real_failure(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    publisher = tmp_path / "seed"
+    git(publisher, "switch", "main")
+    (publisher / "remote-change.txt").write_text("remote\n")
+    git(publisher, "add", "remote-change.txt")
+    git(publisher, "commit", "-m", "remote change")
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    git(publisher, "push", "origin", "HEAD:main")
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=target,
+        changed_paths="remote-change.txt\n",
+        control_head=control,
+    )
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request("operator_abort")
+    original_git = runtime._git
+    merge_calls = 0
+
+    def fail_product_retry(repo, *args, check=True):
+        nonlocal merge_calls
+        if repo == engine.repo and args[:2] == ("merge", "--ff-only"):
+            merge_calls += 1
+            if merge_calls == 1:
+                return subprocess.CompletedProcess(
+                    ["git"], -signal.SIGINT, "", ""
+                )
+            return subprocess.CompletedProcess(
+                ["git"], 128, "", "fatal: merge failed"
+            )
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", fail_product_retry)
+
+    with engine._stop_context(stop_intent):
+        assert engine._run_once() == 1
+    assert merge_calls == 2
+    assert engine._state["phase"] == "merge_pending"
+
+
+def test_merge_pending_retries_matching_control_merge(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    remote_url = git(
+        engine.control_worktree, "remote", "get-url", "origin"
+    ).stdout.strip()
+    publisher = tmp_path / "control-seed"
+    git(tmp_path, "clone", remote_url, publisher)
+    git(publisher, "switch", "--track", "origin/devlegate/control")
+    git(publisher, "config", "user.name", "Devlegate Test")
+    git(publisher, "config", "user.email", "devlegate@example.test")
+    (publisher / "control-change.txt").write_text("control\n")
+    git(publisher, "add", "control-change.txt")
+    git(publisher, "commit", "-m", "control change")
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    git(publisher, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=local,
+        changed_paths="",
+        control_head=control,
+    )
+    original_git = runtime._git
+    merge_calls = 0
+
+    def interrupt_control_merge(repo, *args, check=True):
+        nonlocal merge_calls
+        if (
+            repo == engine.control_worktree
+            and args[:2] == ("merge", "--ff-only")
+        ):
+            merge_calls += 1
+            if merge_calls == 1:
+                return subprocess.CompletedProcess(
+                    ["git"], -signal.SIGINT, "", ""
+                )
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", interrupt_control_merge)
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request("operator_abort")
+
+    assert engine.serve(stop_intent) == 0
+    assert merge_calls == 2
+    assert engine._state["phase"] == "idle"
+    assert git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip() == target
+
+
+def test_merge_pending_repeated_matching_git_interrupt_is_bounded(
+    tmp_path, monkeypatch
+):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
     control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
@@ -465,8 +614,9 @@ def test_merge_pending_repeated_matching_shutdown_is_bounded(tmp_path, monkeypat
 
     with engine._stop_context(stop_intent):
         with pytest.raises(ShutdownInterrupted):
-            engine._git_fetch(
+            engine._git_runtime(
                 engine.control_worktree,
+                "fetch",
                 "--prune",
                 engine.remote_name,
                 engine.control_branch,

@@ -1109,16 +1109,20 @@ class ServiceEngine:
         ):
             raise ShutdownInterrupted
 
-    def _git_fetch(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-        """Retry one matching shutdown interruption while draining merge_pending."""
-        result = _git(repo, "fetch", *args, check=False)
+    def _git_runtime(
+        self, repo: Path, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        """Run Git under the foreground shutdown policy for this runtime region."""
+        result = _git(repo, *args, check=False)
         if result.returncode and self._state.get("phase") == "merge_pending":
             try:
                 self._raise_on_shutdown_interruption(result)
             except ShutdownInterrupted:
-                result = _git(repo, "fetch", *args, check=False)
+                result = _git(repo, *args, check=False)
         if result.returncode:
             self._raise_on_shutdown_interruption(result)
+        if check:
+            result.check_returncode()
         return result
 
     def _stop_before_admission(self) -> bool:
@@ -1160,7 +1164,7 @@ class ServiceEngine:
                 "control worktree is missing; run 'devlegate control init' "
                 f"to attach {self.control_branch}"
             )
-        registered = _git(self.repo, "worktree", "list", "--porcelain")
+        registered = self._git_runtime(self.repo, "worktree", "list", "--porcelain")
         try:
             registered_paths = set(parse_worktree_porcelain(registered.stdout))
         except ExecutionWorkspaceError as error:
@@ -1169,7 +1173,9 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "control path is not a registered Git worktree for this repository"
             )
-        root = _git(self.control_worktree, "rev-parse", "--show-toplevel", check=False)
+        root = self._git_runtime(
+            self.control_worktree, "rev-parse", "--show-toplevel", check=False
+        )
         if (
             root.returncode
             or Path(root.stdout.strip()).resolve() != self.control_worktree.resolve()
@@ -1177,7 +1183,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "control worktree does not resolve to its configured checkout"
             )
-        branch = _git(
+        branch = self._git_runtime(
             self.control_worktree,
             "symbolic-ref",
             "--quiet",
@@ -1837,19 +1843,20 @@ class ServiceEngine:
         observation = self._git_observation(self.control_worktree, self.control_branch)
         if not observation.working_tree_clean:
             raise WorkflowBlockedError("control working tree is dirty")
-        fetch = self._git_fetch(
+        fetch = self._git_runtime(
             self.control_worktree,
+            "fetch",
             "--prune",
             self.remote_name,
             self.control_branch,
+            check=False,
         )
         if fetch.returncode:
-            self._raise_on_shutdown_interruption(fetch)
             raise WorkflowBlockedError(
                 f"control fetch failed: {fetch.stderr.strip() or 'unknown git error'}"
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
-        remote = _git(
+        remote = self._git_runtime(
             self.control_worktree,
             "rev-parse",
             "--verify",
@@ -1859,10 +1866,12 @@ class ServiceEngine:
         if remote.returncode:
             raise WorkflowBlockedError(f"control remote branch not found: {remote_ref}")
         remote_head = remote.stdout.strip()
-        local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        local_head = self._git_runtime(
+            self.control_worktree, "rev-parse", "HEAD"
+        ).stdout.strip()
         if local_head != remote_head:
             previous_head = local_head
-            ancestor = _git(
+            ancestor = self._git_runtime(
                 self.control_worktree,
                 "merge-base",
                 "--is-ancestor",
@@ -1874,14 +1883,16 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "control branch cannot be fast-forwarded; histories diverged"
                 )
-            merge = _git(
+            merge = self._git_runtime(
                 self.control_worktree, "merge", "--ff-only", remote_ref, check=False
             )
             if merge.returncode:
                 raise WorkflowBlockedError(
                     f"control fast-forward failed: {merge.stderr.strip()}"
                 )
-            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            local_head = self._git_runtime(
+                self.control_worktree, "rev-parse", "HEAD"
+            ).stdout.strip()
             _log(f"control updated: {previous_head} -> {local_head}")
         return local_head, remote_head
 
@@ -1903,7 +1914,7 @@ class ServiceEngine:
         ):
             return 0
         self._workflow_validation_succeeded = False
-        branch = _git(
+        branch = self._git_runtime(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         if branch.returncode:
@@ -1946,7 +1957,7 @@ class ServiceEngine:
                 return self._run_once()
             finally:
                 self._automatic_resume_ticket_id = None
-        status = _git(self.repo, "status", "--porcelain").stdout
+        status = self._git_runtime(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
             if dirty_changed:
@@ -1959,25 +1970,26 @@ class ServiceEngine:
         control_head, control_remote_head = self._sync_control()
         if self._stop_before_admission() and initial_phase != "merge_pending":
             return 0
-        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        local_head = self._git_runtime(self.repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
         pending_sync = state_phase in {"agent_pending", "merge_pending"}
         pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
-        fetch = self._git_fetch(
+        fetch = self._git_runtime(
                 self.repo,
+                "fetch",
                 "--prune",
                 self.remote_name,
                 self.remote_branch,
+                check=False,
         )
         if fetch.returncode:
-            self._raise_on_shutdown_interruption(fetch)
             _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
             return 1
         else:
-            remote_result = _git(
+            remote_result = self._git_runtime(
                 self.repo, "rev-parse", "--verify", remote_ref, check=False
             )
             if remote_result.returncode:
@@ -1986,7 +1998,9 @@ class ServiceEngine:
                     f"git stderr: {remote_result.stderr.strip() or 'unknown git error'}"
                 )
                 return 1
-            remote_head = _git(self.repo, "rev-parse", remote_ref).stdout.strip()
+            remote_head = self._git_runtime(
+                self.repo, "rev-parse", remote_ref
+            ).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
             if pending_sync:
                 persisted_local_head = str(self._state.get("local_head", ""))
@@ -1998,7 +2012,7 @@ class ServiceEngine:
                         )
                 elif local_head != persisted_local_head:
                     persisted_local_is_ancestor = (
-                        _git(
+                        self._git_runtime(
                             self.repo,
                             "merge-base",
                             "--is-ancestor",
@@ -2009,7 +2023,7 @@ class ServiceEngine:
                         == 0
                     )
                     current_local_is_ancestor = (
-                        _git(
+                        self._git_runtime(
                             self.repo,
                             "merge-base",
                             "--is-ancestor",
@@ -2035,7 +2049,7 @@ class ServiceEngine:
 
                 target_is_current = target_head == remote_head
                 target_is_ancestor = (
-                    _git(
+                    self._git_runtime(
                         self.repo,
                         "merge-base",
                         "--is-ancestor",
@@ -2064,7 +2078,7 @@ class ServiceEngine:
                 preserve_local_ahead = False
                 if local_ahead_pending:
                     local_is_ancestor = (
-                        _git(
+                        self._git_runtime(
                             self.repo,
                             "merge-base",
                             "--is-ancestor",
@@ -2075,7 +2089,7 @@ class ServiceEngine:
                         == 0
                     )
                     remote_is_ancestor = (
-                        _git(
+                        self._git_runtime(
                             self.repo,
                             "merge-base",
                             "--is-ancestor",
@@ -2096,7 +2110,7 @@ class ServiceEngine:
                             f"local HEAD {local_head[:12]}"
                         )
                 if local_head != target_head and not preserve_local_ahead:
-                    changed_paths = _git(
+                    changed_paths = self._git_runtime(
                         self.repo,
                         "diff",
                         "--name-only",
@@ -2117,13 +2131,15 @@ class ServiceEngine:
                         changed_paths=changed_paths,
                         control_head=control_head,
                     )
-                    merge = _git(
+                    merge = self._git_runtime(
                         self.repo, "merge", "--ff-only", remote_ref, check=False
                     )
                     if merge.returncode:
                         self._log_sync_failure(local_head, remote_ref, merge.stderr)
                         return 1
-                    local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+                    local_head = self._git_runtime(
+                        self.repo, "rev-parse", "HEAD"
+                    ).stdout.strip()
                     if local_head != target_head:
                         raise DevlegateError(
                             "fast-forward completed without reaching the target "
@@ -2151,7 +2167,7 @@ class ServiceEngine:
             elif local_head == remote_head:
                 changed_paths = ""
             elif (
-                _git(
+                self._git_runtime(
                     self.repo,
                     "merge-base",
                     "--is-ancestor",
@@ -2162,7 +2178,7 @@ class ServiceEngine:
                 == 0
             ):
                 had_remote_change = True
-                changed_paths = _git(
+                changed_paths = self._git_runtime(
                     self.repo,
                     "diff",
                     "--name-only",
@@ -2179,11 +2195,15 @@ class ServiceEngine:
                     changed_paths=changed_paths,
                     control_head=control_head,
                 )
-                merge = _git(self.repo, "merge", "--ff-only", remote_ref, check=False)
+                merge = self._git_runtime(
+                    self.repo, "merge", "--ff-only", remote_ref, check=False
+                )
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)
                     return 1
-                actual_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+                actual_head = self._git_runtime(
+                    self.repo, "rev-parse", "HEAD"
+                ).stdout.strip()
                 if actual_head != remote_head:
                     raise DevlegateError(
                         "fast-forward completed without reaching the remote revision"
@@ -2200,7 +2220,7 @@ class ServiceEngine:
                     changed_paths=changed_paths,
                 )
             elif (
-                _git(
+                self._git_runtime(
                     self.repo,
                     "merge-base",
                     "--is-ancestor",
@@ -2211,7 +2231,7 @@ class ServiceEngine:
                 == 0
             ):
                 local_ahead = True
-                changed_paths = _git(
+                changed_paths = self._git_runtime(
                     self.repo,
                     "diff",
                     "--name-only",
@@ -4061,15 +4081,17 @@ export default tool({
         return state, fingerprint
 
     def _git_observation(self, repo: Path, remote_branch: str) -> GitObservation:
-        branch_result = _git(
+        branch_result = self._git_runtime(
             repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         detached = branch_result.returncode != 0
         branch = branch_result.stdout.strip() if not detached else None
-        local_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        local_head = self._git_runtime(repo, "rev-parse", "HEAD").stdout.strip()
         remote_ref = f"{self.remote_name}/{remote_branch}"
-        remote_result = _git(repo, "rev-parse", "--verify", remote_ref, check=False)
-        status = _git(repo, "status", "--porcelain").stdout
+        remote_result = self._git_runtime(
+            repo, "rev-parse", "--verify", remote_ref, check=False
+        )
+        status = self._git_runtime(repo, "status", "--porcelain").stdout
         return GitObservation(
             branch,
             detached,
