@@ -70,6 +70,7 @@ class SnapshotChanged(Exception):
 
 
 _UNSET = object()
+_IPC_SOCKET_KEY_LENGTH = 32
 
 
 @dataclasses.dataclass(frozen=True)
@@ -948,7 +949,8 @@ class ServiceEngine:
     @property
     def ipc_socket_path(self) -> Path:
         """Return the project-specific daemon IPC socket path."""
-        return self.state_dir / "sockets" / f"{self._state_key}.sock"
+        socket_key = self._state_key[:_IPC_SOCKET_KEY_LENGTH]
+        return self.state_dir / "sockets" / f"{socket_key}.sock"
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""

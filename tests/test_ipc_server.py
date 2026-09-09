@@ -1,3 +1,4 @@
+import shutil
 import socket
 import tempfile
 import time
@@ -13,19 +14,33 @@ from devlegate.ipc_protocol import (
     receive_frame,
     send_frame,
 )
-from devlegate.ipc_server import UnixIPCServer, dispatch_read_only
+from devlegate.ipc_server import (
+    UNIX_SOCKET_PATH_MAX_BYTES,
+    UnixIPCServer,
+    dispatch_read_only,
+)
+from devlegate.runtime import DevlegateError
 from devlegate.service import ServiceEngine
 
 
-def make_engine(tmp_path, monkeypatch):
+def make_engine(tmp_path, monkeypatch, state_override=None):
     working, config, state = control_fixture(tmp_path)
-    short_state = Path(tempfile.mkdtemp(prefix="c-state-", dir="/tmp"))
-    config.write_text(
-        config.read_text().replace(str(state), str(short_state))
-    )
+    if state_override is not None:
+        config.write_text(
+            config.read_text().replace(str(state), str(state_override))
+        )
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
-    return ServiceEngine(config), short_state
+    return ServiceEngine(config), state
+
+
+@pytest.fixture
+def short_state_dir():
+    path = Path(tempfile.mkdtemp(prefix="c-state-", dir="/tmp"))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def request(socket_path, request_id, method, payload=None):
@@ -40,8 +55,8 @@ def request(socket_path, request_id, method, payload=None):
 
 
 @pytest.fixture
-def running_server(tmp_path, monkeypatch):
-    engine, state = make_engine(tmp_path, monkeypatch)
+def running_server(tmp_path, monkeypatch, short_state_dir):
+    engine, state = make_engine(tmp_path, monkeypatch, short_state_dir)
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     try:
@@ -50,8 +65,10 @@ def running_server(tmp_path, monkeypatch):
         server.stop()
 
 
-def test_daemon_owns_socket_under_state_dir_and_removes_it(tmp_path, monkeypatch):
-    engine, _state = make_engine(tmp_path, monkeypatch)
+def test_daemon_owns_socket_under_state_dir_and_removes_it(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     observed = []
 
     def host(_engine, _operation):
@@ -116,9 +133,9 @@ def test_client_disconnect_does_not_stop_server(running_server):
 
 
 def test_distinct_projects_share_state_dir_without_socket_collision(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, short_state_dir
 ):
-    shared_state = Path(tempfile.mkdtemp(prefix="c-shared-", dir="/tmp"))
+    shared_state = short_state_dir
     project_a = tmp_path / "project-a"
     project_b = tmp_path / "project-b"
     project_a.mkdir()
@@ -156,6 +173,46 @@ def test_distinct_projects_share_state_dir_without_socket_collision(
     finally:
         server_a.stop()
     assert not engine_a.ipc_socket_path.exists()
+
+
+def test_socket_uses_compact_key_and_preserves_full_runtime_identity(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    socket_key = engine.ipc_socket_path.stem
+
+    assert len(socket_key) == 32
+    assert engine._state_key.startswith(socket_key)
+    assert engine._runtime_store.path == (
+        engine.state_dir / f"{engine._state_key}.sqlite3"
+    )
+    assert engine.control_worktree == (
+        engine.state_dir / "worktrees" / engine._state_key / "control"
+    )
+    assert engine.execution_worktree_root == (
+        engine.state_dir / "worktrees" / engine._state_key
+    )
+
+
+def test_default_like_linux_state_path_fits_socket_limit(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    representative = Path("/home/example-user/.local/state/devlegate")
+    path = representative / "sockets" / f"{engine.ipc_socket_path.stem}.sock"
+
+    assert len(str(path).encode()) <= UNIX_SOCKET_PATH_MAX_BYTES
+
+
+def test_excessively_long_socket_path_fails_as_devlegate_error(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    long_state = Path("/") / ("state-" + "x" * 120)
+    server = UnixIPCServer(
+        engine, long_state / "sockets" / f"{engine.ipc_socket_path.stem}.sock"
+    )
+
+    with pytest.raises(DevlegateError, match="IPC socket path is too long"):
+        server.start()
 
 
 def test_dispatch_uses_service_views_without_persistence_access():
