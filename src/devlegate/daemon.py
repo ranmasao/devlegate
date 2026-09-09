@@ -4,6 +4,7 @@ import signal
 import threading
 from collections.abc import Callable
 
+from devlegate.ipc_server import UnixIPCServer
 from devlegate.service import ServiceEngine
 
 
@@ -28,7 +29,14 @@ class ShutdownIntent:
 
 def run_daemon(engine: ServiceEngine) -> int:
     """Host one service engine in the foreground until a stop signal arrives."""
-    return run_foreground(engine, lambda intent: engine.serve(intent))
+    if not hasattr(engine, "state_dir"):
+        return run_foreground(engine, lambda intent: engine.serve(intent))
+    server = UnixIPCServer(engine, engine.state_dir)
+    server.start()
+    try:
+        return run_foreground(engine, lambda intent: engine.serve(intent))
+    finally:
+        server.stop()
 
 
 def run_foreground(

@@ -29,6 +29,10 @@ class IPCRequest:
     method: str
     payload: dict[str, object]
 
+    @property
+    def id(self) -> str:
+        return self.request_id
+
 
 @dataclass(frozen=True)
 class IPCResponse:
@@ -37,6 +41,10 @@ class IPCResponse:
     ok: bool
     result: dict[str, object] | None = None
     error: dict[str, str] | None = None
+
+    @property
+    def id(self) -> str:
+        return self.request_id
 
     def as_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
@@ -64,13 +72,14 @@ def send_frame(stream: BinaryIO, payload: bytes) -> None:
     offset = 0
     while offset < len(frame):
         written = stream.write(frame[offset:])
-        if written is None:
-            written = len(frame) - offset
-        if written <= 0:
+        if written is None or written <= 0:
             raise IPCProtocolError(
                 "malformed_protocol", "stream write made no progress"
             )
         offset += written
+    flush = getattr(stream, "flush", None)
+    if callable(flush):
+        flush()
 
 
 def receive_frame(stream: BinaryIO) -> bytes | None:
@@ -112,6 +121,65 @@ def parse_request(payload: bytes) -> IPCRequest:
     return IPCRequest(version, request_id, method, request_payload)
 
 
+def encode_request(
+    request_id: str, method: str, payload: dict[str, object]
+) -> bytes:
+    """Encode one version-one request payload."""
+    _require_text(request_id, "request id")
+    _require_text(method, "request method")
+    if not isinstance(payload, dict):
+        raise IPCProtocolError("invalid_request", "request payload must be an object")
+    return _encode_json(
+        {
+            "version": PROTOCOL_VERSION,
+            "id": request_id,
+            "method": method,
+            "payload": payload,
+        }
+    )
+
+
+def parse_response(payload: bytes) -> IPCResponse:
+    """Decode and strictly validate one response payload."""
+    value = _decode_json(payload)
+    if not isinstance(value, dict):
+        raise IPCProtocolError("malformed_protocol", "response must be a JSON object")
+    common = {"version", "id", "ok"}
+    if not common.issubset(value):
+        raise IPCProtocolError("malformed_protocol", "response fields are invalid")
+    version = value["version"]
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise IPCProtocolError(
+            "malformed_protocol", "response version must be an integer"
+        )
+    if version != PROTOCOL_VERSION:
+        raise IPCProtocolError("unsupported_version", "response version is unsupported")
+    request_id = value["id"]
+    if not isinstance(request_id, str):
+        raise IPCProtocolError("malformed_protocol", "response id must be text")
+    ok = value["ok"]
+    if not isinstance(ok, bool):
+        raise IPCProtocolError("malformed_protocol", "response ok must be boolean")
+    if ok:
+        if set(value) != common | {"result"} or not isinstance(
+            value["result"], dict
+        ):
+            raise IPCProtocolError(
+                "malformed_protocol", "successful response is invalid"
+            )
+        return IPCResponse(version, request_id, True, result=value["result"])
+    if set(value) != common | {"error"} or not isinstance(value["error"], dict):
+        raise IPCProtocolError("malformed_protocol", "error response is invalid")
+    error = value["error"]
+    if set(error) != {"code", "message"}:
+        raise IPCProtocolError("malformed_protocol", "error details are invalid")
+    if not all(
+        isinstance(error[key], str) and error[key] for key in ("code", "message")
+    ):
+        raise IPCProtocolError("malformed_protocol", "error details are invalid")
+    return IPCResponse(version, request_id, False, error=error)
+
+
 def encode_success_response(
     request_id: str, result: dict[str, object]
 ) -> bytes:
@@ -125,7 +193,8 @@ def encode_success_response(
 
 def encode_error_response(request_id: str, code: str, message: str) -> bytes:
     """Encode a protocol error response payload."""
-    _require_text(request_id, "response id")
+    if not isinstance(request_id, str):
+        raise IPCProtocolError("invalid_request", "response id must be text")
     _require_text(code, "error code")
     _require_text(message, "error message")
     response = IPCResponse(
@@ -192,8 +261,10 @@ __all__ = [
     "PROTOCOL_VERSION",
     "encode_error_response",
     "encode_frame",
+    "encode_request",
     "encode_success_response",
     "parse_request",
+    "parse_response",
     "receive_frame",
     "send_frame",
 ]

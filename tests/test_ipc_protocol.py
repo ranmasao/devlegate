@@ -9,8 +9,10 @@ from devlegate.ipc_protocol import (
     IPCProtocolError,
     encode_error_response,
     encode_frame,
+    encode_request,
     encode_success_response,
     parse_request,
+    parse_response,
     receive_frame,
     send_frame,
 )
@@ -61,6 +63,22 @@ def test_success_and_error_response_payloads():
     }
 
 
+def test_request_and_response_codecs_round_trip():
+    request = parse_request(encode_request("request-1", "ping", {"value": 1}))
+    success = parse_response(encode_success_response("request-1", {"value": 1}))
+    error = parse_response(
+        encode_error_response("request-1", "invalid_request", "bad input")
+    )
+
+    assert request.id == "request-1"
+    assert request.method == "ping"
+    assert success.ok and success.result == {"value": 1}
+    assert not error.ok and error.error == {
+        "code": "invalid_request",
+        "message": "bad input",
+    }
+
+
 def test_multiple_frames_and_chunked_reads():
     stream = io.BytesIO(encode_frame(b"one") + encode_frame(b"two"))
     assert receive_frame(stream) == b"one"
@@ -80,6 +98,15 @@ def test_send_frame_handles_partial_writes():
     stream = PartialWriter()
     send_frame(stream, b"payload")
     assert stream.getvalue() == encode_frame(b"payload")
+
+
+def test_send_frame_none_write_is_a_failure():
+    class NoneWriter:
+        def write(self, _value: bytes) -> None:
+            return None
+
+    with pytest.raises(IPCProtocolError, match="no progress"):
+        send_frame(NoneWriter(), b"payload")
 
 
 def test_exact_limit_is_accepted_and_over_limit_is_rejected_before_payload_read():
@@ -134,3 +161,17 @@ def test_response_encoders_validate_shapes():
         encode_success_response("request-1", [])  # type: ignore[arg-type]
     with pytest.raises(IPCProtocolError, match="response id"):
         encode_success_response("", {})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"version": 1, "id": "x", "ok": True, "error": {}},
+        {"version": 1, "id": "x", "ok": False, "result": {}},
+        {"version": 1, "id": "x", "ok": True, "result": []},
+        {"version": 1, "id": "x", "ok": False, "error": {"code": "x"}},
+    ],
+)
+def test_inconsistent_responses_are_rejected(value):
+    with pytest.raises(IPCProtocolError, match="response|error"):
+        parse_response(json.dumps(value).encode())
