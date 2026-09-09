@@ -945,6 +945,11 @@ class ServiceEngine:
             blocked_reason=None,
         )
 
+    @property
+    def ipc_socket_path(self) -> Path:
+        """Return the project-specific daemon IPC socket path."""
+        return self.state_dir / "sockets" / f"{self._state_key}.sock"
+
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
         with self._snapshot_lock:

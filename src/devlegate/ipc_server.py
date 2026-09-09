@@ -17,8 +17,6 @@ from devlegate.ipc_protocol import (
 )
 from devlegate.runtime import DevlegateError
 
-SOCKET_FILENAME = "devlegate.sock"
-
 
 def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]:
     """Dispatch only the read-only E1 methods through the service API."""
@@ -36,9 +34,9 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
 class UnixIPCServer:
     """Serve one request at a time over a project-local Unix socket."""
 
-    def __init__(self, engine: object, state_dir: Path) -> None:
+    def __init__(self, engine: object, socket_path: Path) -> None:
         self.engine = engine
-        self.path = state_dir / SOCKET_FILENAME
+        self.path = socket_path
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -124,4 +122,4 @@ class UnixIPCServer:
             stream.close()
 
 
-__all__ = ["SOCKET_FILENAME", "UnixIPCServer", "dispatch_read_only"]
+__all__ = ["UnixIPCServer", "dispatch_read_only"]

@@ -1,5 +1,7 @@
 import socket
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 from test_control_plane import control_fixture, invoke
@@ -11,15 +13,19 @@ from devlegate.ipc_protocol import (
     receive_frame,
     send_frame,
 )
-from devlegate.ipc_server import SOCKET_FILENAME, UnixIPCServer, dispatch_read_only
+from devlegate.ipc_server import UnixIPCServer, dispatch_read_only
 from devlegate.service import ServiceEngine
 
 
 def make_engine(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
+    short_state = Path(tempfile.mkdtemp(prefix="c-state-", dir="/tmp"))
+    config.write_text(
+        config.read_text().replace(str(state), str(short_state))
+    )
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
-    return ServiceEngine(config), state
+    return ServiceEngine(config), short_state
 
 
 def request(socket_path, request_id, method, payload=None):
@@ -36,7 +42,7 @@ def request(socket_path, request_id, method, payload=None):
 @pytest.fixture
 def running_server(tmp_path, monkeypatch):
     engine, state = make_engine(tmp_path, monkeypatch)
-    server = UnixIPCServer(engine, state)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     try:
         yield engine, state, server
@@ -45,23 +51,23 @@ def running_server(tmp_path, monkeypatch):
 
 
 def test_daemon_owns_socket_under_state_dir_and_removes_it(tmp_path, monkeypatch):
-    engine, state = make_engine(tmp_path, monkeypatch)
+    engine, _state = make_engine(tmp_path, monkeypatch)
     observed = []
 
     def host(_engine, _operation):
-        assert (state / SOCKET_FILENAME).is_socket()
+        assert engine.ipc_socket_path.is_socket()
         observed.append(True)
         return 0
 
     monkeypatch.setattr(daemon, "run_foreground", host)
     assert daemon.run_daemon(engine) == 0
     assert observed == [True]
-    assert not (state / SOCKET_FILENAME).exists()
+    assert not engine.ipc_socket_path.exists()
 
 
 def test_ping_status_and_plan_work_over_unix_socket(running_server):
-    engine, state, _server = running_server
-    path = state / SOCKET_FILENAME
+    engine, _state, _server = running_server
+    path = engine.ipc_socket_path
 
     ping = request(path, "1", "ping")
     status = request(path, "2", "status")
@@ -73,8 +79,8 @@ def test_ping_status_and_plan_work_over_unix_socket(running_server):
 
 
 def test_unknown_method_returns_structured_error(running_server):
-    _engine, state, _server = running_server
-    response = request(state / SOCKET_FILENAME, "1", "unknown")
+    _engine, _state, _server = running_server
+    response = request(_server.path, "1", "unknown")
 
     assert not response.ok
     assert response.error == {
@@ -84,9 +90,9 @@ def test_unknown_method_returns_structured_error(running_server):
 
 
 def test_malformed_request_does_not_crash_server(running_server):
-    _engine, state, _server = running_server
+    _engine, _state, _server = running_server
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.connect(str(state / SOCKET_FILENAME))
+    connection.connect(str(_server.path))
     stream = connection.makefile("rwb")
     send_frame(stream, b"not-json")
     response = parse_response(receive_frame(stream))
@@ -99,14 +105,57 @@ def test_malformed_request_does_not_crash_server(running_server):
 
 
 def test_client_disconnect_does_not_stop_server(running_server):
-    _engine, state, _server = running_server
+    _engine, _state, _server = running_server
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.connect(str(state / SOCKET_FILENAME))
+    connection.connect(str(_server.path))
     connection.close()
     time.sleep(0.05)
 
-    response = request(state / SOCKET_FILENAME, "2", "ping")
+    response = request(_server.path, "2", "ping")
     assert response.ok
+
+
+def test_distinct_projects_share_state_dir_without_socket_collision(
+    tmp_path, monkeypatch
+):
+    shared_state = Path(tempfile.mkdtemp(prefix="c-shared-", dir="/tmp"))
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    project_a.mkdir()
+    project_b.mkdir()
+    working_a, config_a, _state_a = control_fixture(project_a)
+    working_b, config_b, _state_b = control_fixture(project_b)
+    for config in (config_a, config_b):
+        config.write_text(
+            config.read_text().replace(
+                str(config.parent / "state"), str(shared_state)
+            )
+        )
+    assert invoke(working_a, "control", "init", config=config_a).returncode == 0
+    assert invoke(working_b, "control", "init", config=config_b).returncode == 0
+
+    monkeypatch.chdir(working_a)
+    engine_a = ServiceEngine(config_a)
+    monkeypatch.chdir(working_b)
+    engine_b = ServiceEngine(config_b)
+    assert engine_a.ipc_socket_path != engine_b.ipc_socket_path
+    server_a = UnixIPCServer(engine_a, engine_a.ipc_socket_path)
+    server_b = UnixIPCServer(engine_b, engine_b.ipc_socket_path)
+    server_a.start()
+    try:
+        server_b.start()
+        try:
+            assert engine_a.ipc_socket_path.is_socket()
+            assert engine_b.ipc_socket_path.is_socket()
+            assert request(engine_a.ipc_socket_path, "a", "ping").ok
+            assert request(engine_b.ipc_socket_path, "b", "ping").ok
+        finally:
+            server_b.stop()
+        assert engine_a.ipc_socket_path.is_socket()
+        assert not engine_b.ipc_socket_path.exists()
+    finally:
+        server_a.stop()
+    assert not engine_a.ipc_socket_path.exists()
 
 
 def test_dispatch_uses_service_views_without_persistence_access():
