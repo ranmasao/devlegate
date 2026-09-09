@@ -1,12 +1,13 @@
 import dataclasses
 import hashlib
+import io
 import json
 import os
 import socket
 import sqlite3
 import subprocess
 import sys
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,16 @@ def cli_daemon(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     config = _short_runtime_config(git_fixture)
     engine = ServiceEngine(config)
+    engine.control_worktree.parent.mkdir(parents=True, exist_ok=True)
+    git(
+        engine.repo,
+        "worktree",
+        "move",
+        git_fixture["control"],
+        engine.control_worktree,
+    )
+    with redirect_stdout(io.StringIO()):
+        assert engine.control_init() == 0
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
@@ -557,6 +568,36 @@ def test_plan_uses_daemon_ipc_without_fallback(
     assert json.loads(capsys.readouterr().out) == expected
 
 
+def test_blocked_dependency_status_uses_daemon_semantics(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    control = cli_daemon.control_worktree
+    (control / "kanban/review/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nreview\n'
+    )
+    (control / "kanban/todo/T-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Waiting"\n'
+        '"depends_on":\n  - "D-1"\n---\nwaiting\n'
+    )
+    git(control, "add", ".")
+    git(control, "commit", "-m", "add blocked dependency")
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--env", str(config)],
+    )
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "T-1  Waiting" in output
+    assert "by D-1 [review]" in output
+
+
 def test_daemon_application_error_is_authoritative(
     cli_daemon, git_fixture, monkeypatch, capsys
 ):
@@ -682,6 +723,46 @@ def test_stale_socket_without_authority_uses_guarded_fallback(
         assert endpoint.exists()
     finally:
         endpoint.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("command", ["status", "plan"])
+def test_subdirectory_requires_repository_root_without_daemon(
+    git_fixture, monkeypatch, capsys, command
+):
+    config = _short_runtime_config(git_fixture)
+    subdirectory = git_fixture["working"] / "subdir"
+    subdirectory.mkdir()
+    monkeypatch.chdir(subdirectory)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", command, "--env", str(config)],
+    )
+
+    assert main() == 1
+    assert "run devlegate from repository root" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["status", "plan"])
+def test_subdirectory_requires_repository_root_with_daemon(
+    cli_daemon, git_fixture, monkeypatch, capsys, command
+):
+    config = _short_runtime_config(git_fixture)
+    subdirectory = git_fixture["working"] / "subdir"
+    subdirectory.mkdir()
+    monkeypatch.chdir(subdirectory)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", command, "--env", str(config)],
+    )
+
+    assert main() == 1
+    assert "run devlegate from repository root" in capsys.readouterr().err
 
 
 def test_application_status_and_plan_return_immutable_views(git_fixture, monkeypatch):

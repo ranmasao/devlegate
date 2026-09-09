@@ -73,7 +73,10 @@ class RuntimeLocator:
                 f"configuration file not found: {env_file} "
                 f"(copy devlegate's .env.example to $PWD/.env)"
             )
-        return cls.from_config(env_file, repository_root(), read_env(env_file))
+        repo = repository_root()
+        if Path.cwd().resolve() != repo:
+            raise RuntimeLocatorError(f"run devlegate from repository root: {repo}")
+        return cls.from_config(env_file, repo, read_env(env_file))
 
     @classmethod
     def from_config(

@@ -180,14 +180,17 @@ def _optional_observation(value: object, label: str) -> GitObservation | None:
 
 def _counts(value: object) -> tuple[tuple[str, int], ...]:
     mapping = _mapping(value, "ticket counts")
+    expected = ("backlog", "todo", "review", "accepted", "done")
+    if set(mapping) != set(expected):
+        raise ValueError("ticket counts must contain exactly the expected states")
     counts = []
-    for key, number in mapping.items():
+    for key in expected:
+        number = mapping[key]
         if (
-            not isinstance(key, str)
-            or not isinstance(number, int)
+            not isinstance(number, int)
             or isinstance(number, bool)
         ):
-            raise ValueError("ticket counts must map text to integers")
+            raise ValueError("ticket counts must contain integer values")
         counts.append((key, number))
     return tuple(counts)
 
@@ -213,7 +216,7 @@ def _blocked(value: object) -> tuple[tuple[str, str, tuple[tuple[str, str], ...]
     entries = []
     for item in value:
         mapping = _mapping(item, "blocked ticket")
-        blockers = _ticket_pairs(mapping["blocked_by"], "blocked dependency")
+        blockers = _dependency_pairs(mapping["blocked_by"])
         entries.append(
             (
                 _text(mapping["id"], "blocked id"),
@@ -222,6 +225,21 @@ def _blocked(value: object) -> tuple[tuple[str, str, tuple[tuple[str, str], ...]
             )
         )
     return tuple(entries)
+
+
+def _dependency_pairs(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, list):
+        raise ValueError("blocked dependencies must be a list")
+    pairs = []
+    for item in value:
+        mapping = _mapping(item, "blocked dependency")
+        pairs.append(
+            (
+                _text(mapping["id"], "dependency id"),
+                _text(mapping["state"], "dependency state"),
+            )
+        )
+    return tuple(pairs)
 
 
 def _optional_pair(value: object, label: str) -> tuple[str, str] | None:

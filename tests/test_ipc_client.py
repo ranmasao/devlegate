@@ -1,15 +1,23 @@
 import socket
 import threading
+from copy import deepcopy
 
 import pytest
 
-from devlegate.ipc_client import IPCClientError, request
+from devlegate.cli import _render_status_text
+from devlegate.ipc_client import IPCClientError, decode_plan, decode_status, request
 from devlegate.ipc_protocol import (
     encode_error_response,
     encode_success_response,
     parse_request,
     receive_frame,
     send_frame,
+)
+from devlegate.runtime import (
+    ExecutionPlan,
+    FailedExecution,
+    GitObservation,
+    StatusSnapshot,
 )
 
 
@@ -69,3 +77,141 @@ def test_request_surfaces_application_error(tmp_path):
         request(path, "status")
     assert raised.value.application is True
     thread.join(timeout=2)
+
+
+def representative_observation(branch="main"):
+    return GitObservation(
+        branch,
+        False,
+        "local-head",
+        "origin/main",
+        "remote-head",
+        True,
+        "fingerprint",
+    )
+
+
+def representative_plan():
+    observation = representative_observation()
+    return ExecutionPlan(
+        "run-worker",
+        "deterministic runnable ticket selection",
+        "T-1",
+        "Ticket",
+        "todo",
+        True,
+        observation,
+        representative_observation("devlegate/control"),
+    )
+
+
+def test_status_round_trip_preserves_complete_view():
+    plan = representative_plan()
+    snapshot = StatusSnapshot(
+        "agent_running",
+        "T-1",
+        True,
+        representative_observation(),
+        representative_observation("devlegate/control"),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("T-1", "Ticket"),),
+        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (("R-1", "Review"),),
+        (("A-1", "Accepted"),),
+        ("T-1", "Ticket"),
+        plan,
+        (FailedExecution("F-1", "Failed", "broken", True, None, "operator_abort"),),
+        {"ticket": "T-1", "onto": "main"},
+    )
+
+    assert decode_status(snapshot.as_dict()) == snapshot
+
+
+def test_plan_round_trip_preserves_complete_view():
+    plan = representative_plan()
+
+    assert decode_plan(plan.as_dict()) == plan
+
+
+def test_status_text_is_identical_after_ipc_round_trip():
+    snapshot = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        representative_observation(),
+        representative_observation("devlegate/control"),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("T-1", "Ticket"),),
+        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (("R-1", "Review"),),
+        (("A-1", "Accepted"),),
+        ("T-1", "Ticket"),
+        representative_plan(),
+    )
+
+    ipc_text = _render_status_text(decode_status(snapshot.as_dict()))
+    direct_text = _render_status_text(snapshot)
+    assert ipc_text == direct_text
+
+
+def test_counts_decode_in_canonical_order():
+    value = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        representative_observation(),
+        None,
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (),
+        (),
+        (),
+        (),
+        None,
+        ExecutionPlan("none", "none", code=representative_observation()),
+    ).as_dict()
+    value["tickets"]["counts"] = {
+        "done": 5,
+        "accepted": 4,
+        "review": 3,
+        "todo": 2,
+        "backlog": 1,
+    }
+
+    assert decode_status(value).counts == (
+        ("backlog", 1),
+        ("todo", 2),
+        ("review", 3),
+        ("accepted", 4),
+        ("done", 5),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["tickets"]["blocked"][0]["blocked_by"][0].pop("state"),
+        lambda value: value["tickets"]["counts"].pop("todo"),
+        lambda value: value["tickets"]["counts"].update({"unexpected": 1}),
+        lambda value: value["tickets"]["counts"].update({"todo": True}),
+    ],
+)
+def test_malformed_status_nested_shapes_raise_ipc_error(mutate):
+    snapshot = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        representative_observation(),
+        None,
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (),
+        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (),
+        (),
+        None,
+        ExecutionPlan("none", "none", code=representative_observation()),
+    )
+    value = deepcopy(snapshot.as_dict())
+    mutate(value)
+
+    with pytest.raises(IPCClientError):
+        decode_status(value)
