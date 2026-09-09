@@ -17,7 +17,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
 )
-from devlegate.runtime import WorkflowBlockedError
+from devlegate.runtime import ShutdownInterrupted, WorkflowBlockedError
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
@@ -27,6 +27,61 @@ def make_engine(tmp_path, monkeypatch):
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     return ServiceEngine(config), config, state
+
+
+@pytest.mark.parametrize(
+    ("kind", "returncode"),
+    [
+        ("operator_abort", -signal.SIGINT),
+        ("service_shutdown", -signal.SIGTERM),
+    ],
+)
+def test_matching_shutdown_signal_is_control_flow(
+    tmp_path, monkeypatch, kind, returncode
+):
+    engine, _, _ = make_engine(tmp_path, monkeypatch)
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request(kind)
+    result = subprocess.CompletedProcess([], returncode, "", "")
+
+    with engine._stop_context(stop_intent):
+        with pytest.raises(ShutdownInterrupted):
+            engine._raise_on_shutdown_interruption(result)
+
+
+@pytest.mark.parametrize(
+    ("kind", "returncode"),
+    [
+        (None, -signal.SIGINT),
+        ("operator_abort", -signal.SIGTERM),
+        ("service_shutdown", 1),
+    ],
+)
+def test_unmatched_git_failure_remains_diagnostic(
+    tmp_path, monkeypatch, kind, returncode
+):
+    engine, _, _ = make_engine(tmp_path, monkeypatch)
+    stop_intent = daemon.ShutdownIntent()
+    if kind is not None:
+        stop_intent.request(kind)
+    result = subprocess.CompletedProcess([], returncode, "", "")
+
+    with engine._stop_context(stop_intent):
+        engine._raise_on_shutdown_interruption(result)
+
+
+def test_polling_exits_cleanly_after_shutdown_interrupted_git(tmp_path, monkeypatch):
+    engine, _, _ = make_engine(tmp_path, monkeypatch)
+    stop_intent = daemon.ShutdownIntent()
+
+    def run_once():
+        stop_intent.request("operator_abort")
+        raise ShutdownInterrupted
+
+    engine.run_once = run_once
+
+    assert engine.serve(stop_intent) == 0
+    assert engine.service_snapshot().lifecycle == "ready"
 
 
 def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):

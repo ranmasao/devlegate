@@ -65,6 +65,10 @@ class WorkflowBlockedError(DevlegateError):
     """The repository cannot currently be interpreted safely for scheduling."""
 
 
+class ShutdownInterrupted(Exception):
+    """A requested shutdown interrupted a foreground Git child."""
+
+
 class SnapshotChanged(Exception):
     """The observed project changed during a status snapshot attempt."""
 
@@ -1089,6 +1093,22 @@ class ServiceEngine:
     def _stop_requested(self) -> bool:
         return self._stop_event is not None and self._stop_event.is_set()
 
+    def _raise_on_shutdown_interruption(
+        self, result: subprocess.CompletedProcess[str]
+    ) -> None:
+        """Keep an intentional signal interruption out of workflow diagnostics."""
+        kind = getattr(self._stop_event, "kind", None)
+        expected_signal = {
+            "operator_abort": signal.SIGINT,
+            "service_shutdown": signal.SIGTERM,
+        }.get(kind)
+        if (
+            self._stop_requested()
+            and expected_signal is not None
+            and result.returncode == -expected_signal
+        ):
+            raise ShutdownInterrupted
+
     def _stop_before_admission(self) -> bool:
         """Return whether a new mutable operation must not be committed."""
         return self._stop_requested()
@@ -1814,6 +1834,7 @@ class ServiceEngine:
             check=False,
         )
         if fetch.returncode:
+            self._raise_on_shutdown_interruption(fetch)
             raise WorkflowBlockedError(
                 f"control fetch failed: {fetch.stderr.strip() or 'unknown git error'}"
             )
@@ -1942,8 +1963,9 @@ class ServiceEngine:
                 self.remote_name,
                 self.remote_branch,
                 check=False,
-            )
+        )
         if fetch.returncode:
+            self._raise_on_shutdown_interruption(fetch)
             _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
             return 1
         else:
@@ -3966,6 +3988,9 @@ export default tool({
                         if "run_once" in self.__dict__
                         else self._run_once()
                     )
+                except ShutdownInterrupted:
+                    self._publish_service_snapshot(lifecycle="ready")
+                    return 0
                 except WorkflowBlockedError as error:
                     workflow_blocked = True
                     message = str(error)
