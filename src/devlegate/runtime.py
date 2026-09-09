@@ -38,6 +38,12 @@ from devlegate.execution_workspace import (
     parse_worktree_porcelain,
 )
 from devlegate.project_context import ProjectContextError, load_project_context
+from devlegate.runtime_locator import (
+    RuntimeLocator,
+    RuntimeLocatorError,
+    read_env,
+    repository_root,
+)
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.tickets import (
     TicketError,
@@ -74,9 +80,6 @@ class SnapshotChanged(Exception):
 
 
 _UNSET = object()
-_IPC_SOCKET_KEY_LENGTH = 32
-
-
 @dataclasses.dataclass(frozen=True)
 class GitObservation:
     branch: str | None
@@ -447,26 +450,10 @@ def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
 
 
 def _read_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
     try:
-        lines = path.read_text().splitlines()
-    except OSError as error:
-        raise DevlegateError(
-            f"cannot read configuration file: {path}: {error}"
-        ) from error
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        name, separator, value = line.partition("=")
-        if separator and name.strip().replace("_", "a").isalnum():
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
-            values[name.strip()] = value
-    return values
+        return read_env(path)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
 
 
 def _git(
@@ -886,16 +873,9 @@ class ServiceEngine:
         self.read_only = read_only
         self._retry_ticket_id: str | None = None
         self._automatic_resume_ticket_id: str | None = None
-        state_default = (
-            Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
-            / "devlegate"
-        )
-        self.state_dir = (
-            Path(config.get("STATE_DIR", os.environ.get("STATE_DIR", state_default)))
-            .expanduser()
-            .resolve()
-        )
-        self._state_key = hashlib.sha256(str(self.repo).encode()).hexdigest()
+        self._locator = RuntimeLocator.from_config(env_file, self.repo, config)
+        self.state_dir = self._locator.state_dir
+        self._state_key = self._locator.state_key
         self._runtime_store = SQLiteRuntimeStore(self.state_dir, self._state_key)
         self._state_file = self._runtime_store.path
         self.control_worktree = (
@@ -953,8 +933,7 @@ class ServiceEngine:
     @property
     def ipc_socket_path(self) -> Path:
         """Return the project-specific daemon IPC socket path."""
-        socket_key = self._state_key[:_IPC_SOCKET_KEY_LENGTH]
-        return self.state_dir / "sockets" / f"{socket_key}.sock"
+        return self._locator.socket_path
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
@@ -1198,16 +1177,10 @@ class ServiceEngine:
 
     @staticmethod
     def _repository_root() -> Path:
-        result = subprocess.run(
-            ["git", "-C", str(Path.cwd()), "rev-parse", "--show-toplevel"],
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode:
-            raise DevlegateError(
-                f"current directory is not a git repository: {Path.cwd()}"
-            )
-        return Path(result.stdout.strip()).resolve()
+        try:
+            return repository_root()
+        except RuntimeLocatorError as error:
+            raise DevlegateError(str(error)) from error
 
     def _validate(self) -> None:
         if not self.read_only:
@@ -1515,9 +1488,8 @@ class ServiceEngine:
         self._runtime_store.probe()
 
     def _lock(self):
-        lock_root = self.state_dir / "locks"
-        lock_root.mkdir(parents=True, exist_ok=True)
-        lock_file = lock_root / f"{self._state_key}.lock"
+        lock_file = self._locator.lock_path
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_file.open("w")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1532,7 +1504,7 @@ class ServiceEngine:
         """Observe the project lock without opening it for ownership."""
         if sys.platform != "linux":
             return False
-        lock_file = self.state_dir / "locks" / f"{self._state_key}.lock"
+        lock_file = self._locator.lock_path
         try:
             identity = lock_file.stat()
             with open("/proc/locks", encoding="ascii") as locks:

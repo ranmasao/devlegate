@@ -2,6 +2,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -19,7 +20,10 @@ from devlegate.cli import (
     build_parser,
     main,
 )
+from devlegate.ipc_client import IPCClientError
+from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
+from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
 from devlegate.service import ServiceEngine
 
 
@@ -108,6 +112,31 @@ def git_fixture(tmp_path):
         "state": state,
         "tmp": tmp_path,
     }
+
+
+@pytest.fixture
+def cli_daemon(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    engine = ServiceEngine(config)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    try:
+        yield engine
+    finally:
+        server.stop()
+        authority.close()
+
+
+def _short_runtime_config(git_fixture):
+    suffix = hashlib.sha256(str(git_fixture["tmp"]).encode()).hexdigest()[:8]
+    state = Path("/tmp") / f"devlegate-f1-{suffix}"
+    config = git_fixture["tmp"] / "devlegate-f1.env"
+    config.write_text(git_fixture["config"].read_text().replace(
+        str(git_fixture["state"]), str(state)
+    ))
+    return config
 
 
 @pytest.fixture
@@ -477,17 +506,182 @@ def test_init_seeds_missing_project_env_from_package(git_fixture):
     assert env.read_bytes() == before
 
 
-def test_read_only_commands_do_not_create_state_or_fetch(git_fixture):
+def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture):
     state = git_fixture["tmp"] / "read-only-state"
     config = git_fixture["tmp"] / "read-only.env"
     config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={state}\n")
     before = git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
     result = invoke(git_fixture, "plan", "--json", env_file=config)
     assert result.returncode == 0
-    assert not state.exists()
+    assert not list(state.glob("*.sqlite3"))
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip() == before
     )
+
+
+def test_status_uses_daemon_ipc_without_fallback(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    config = _short_runtime_config(git_fixture)
+    expected = cli_daemon.status_view().as_dict()
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--json", "--env", str(config)],
+    )
+
+    assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_plan_uses_daemon_ipc_without_fallback(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    config = _short_runtime_config(git_fixture)
+    expected = cli_daemon.plan_view().as_dict()
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "plan", "--json", "--env", str(config)],
+    )
+
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_daemon_application_error_is_authoritative(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    def fail_status():
+        raise DevlegateError("authoritative daemon failure")
+
+    monkeypatch.setattr(cli_daemon, "status_view", fail_status)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+    )
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--env", str(config)],
+    )
+
+    assert main() == 1
+    assert "authoritative daemon failure" in capsys.readouterr().err
+
+
+def test_daemon_protocol_error_is_not_bypassed(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        "devlegate.cli.request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            IPCClientError("daemon IPC protocol error: malformed response")
+        ),
+    )
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+    )
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "plan", "--env", str(config)],
+    )
+
+    assert main() == 1
+    assert "daemon authority exists" in capsys.readouterr().err
+
+
+def test_authority_guard_blocks_exclusive_lock_and_shared_guard_blocks_daemon(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    locator = RuntimeLocator.from_env(config)
+    with locator.absence_guard():
+        engine = ServiceEngine(config, read_only=True)
+        with pytest.raises(DevlegateError, match="another devlegate instance"):
+            engine._lock()
+
+    authority = engine._lock()
+    try:
+        with pytest.raises(RuntimeAuthorityPresent):
+            with locator.absence_guard():
+                pass
+    finally:
+        authority.close()
+
+
+@pytest.mark.parametrize("make_endpoint", [False, True])
+def test_ipc_unavailable_with_authority_fails_closed(
+    git_fixture, monkeypatch, capsys, make_endpoint
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    engine = ServiceEngine(config)
+    authority = engine._lock()
+    endpoint = engine.ipc_socket_path
+    listener = None
+    try:
+        if make_endpoint:
+            endpoint.parent.mkdir(parents=True, exist_ok=True)
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(str(endpoint))
+            listener.close()
+            listener = None
+        monkeypatch.setattr(
+            "devlegate.cli._service_engine",
+            lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["devlegate", "status", "--env", str(config)],
+        )
+
+        assert main() == 1
+        assert "daemon authority exists" in capsys.readouterr().err
+    finally:
+        if listener is not None:
+            listener.close()
+        endpoint.unlink(missing_ok=True)
+        authority.close()
+
+
+def test_stale_socket_without_authority_uses_guarded_fallback(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    engine = ServiceEngine(config)
+    endpoint = engine.ipc_socket_path
+    endpoint.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(endpoint))
+    listener.close()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "plan", "--json", "--env", str(config)],
+    )
+
+    try:
+        assert main() == 0
+        assert json.loads(capsys.readouterr().out)["action"] == "blocked"
+        assert endpoint.exists()
+    finally:
+        endpoint.unlink(missing_ok=True)
 
 
 def test_application_status_and_plan_return_immutable_views(git_fixture, monkeypatch):
