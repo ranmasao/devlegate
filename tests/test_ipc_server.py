@@ -4,6 +4,7 @@ import shutil
 import socket
 import stat
 import struct
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -422,6 +423,59 @@ def test_real_socket_framing_failures_leave_server_usable(
         assert truncated_header.error["code"] == "malformed_protocol"
         assert truncated_payload.error["code"] == "malformed_protocol"
         assert request(server.path, "ok", "ping").ok
+    finally:
+        server.stop()
+
+
+def test_huge_integer_json_is_normalized_and_server_remains_usable(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    try:
+        limit = sys.get_int_max_str_digits()
+        digits = (limit + 1) if limit else 100_000
+        payload = (
+            b'{"version":1,"id":"huge","method":"ping","payload":{"value":'
+            + b"9" * digits
+            + b"}}"
+        )
+        assert len(payload) < MAX_PAYLOAD_BYTES
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(2)
+        connection.connect(str(server.path))
+        stream = connection.makefile("rwb")
+        send_frame(stream, payload)
+        response = parse_response(receive_frame(stream))
+        stream.close()
+        connection.close()
+        assert response.error["code"] == "malformed_protocol"
+        assert request(server.path, "after-huge", "ping").ok
+    finally:
+        server.stop()
+
+
+def test_deeply_nested_json_is_normalized_and_server_remains_usable(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    try:
+        depth = max(sys.getrecursionlimit() * 10, 10_000)
+        payload = b"[" * depth + b"]" * depth
+        assert len(payload) < MAX_PAYLOAD_BYTES
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(2)
+        connection.connect(str(server.path))
+        stream = connection.makefile("rwb")
+        send_frame(stream, payload)
+        response = parse_response(receive_frame(stream))
+        stream.close()
+        connection.close()
+        assert response.error["code"] == "malformed_protocol"
+        assert request(server.path, "after-deep", "ping").ok
     finally:
         server.stop()
 

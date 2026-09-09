@@ -241,7 +241,7 @@ def _decode_json(payload: bytes) -> object:
         ) from error
     try:
         return json.loads(text)
-    except json.JSONDecodeError as error:
+    except (ValueError, RecursionError) as error:
         raise IPCProtocolError(
             "malformed_protocol", "payload is not valid JSON"
         ) from error
