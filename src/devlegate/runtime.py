@@ -1109,6 +1109,18 @@ class ServiceEngine:
         ):
             raise ShutdownInterrupted
 
+    def _git_fetch(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        """Retry one matching shutdown interruption while draining merge_pending."""
+        result = _git(repo, "fetch", *args, check=False)
+        if result.returncode and self._state.get("phase") == "merge_pending":
+            try:
+                self._raise_on_shutdown_interruption(result)
+            except ShutdownInterrupted:
+                result = _git(repo, "fetch", *args, check=False)
+        if result.returncode:
+            self._raise_on_shutdown_interruption(result)
+        return result
+
     def _stop_before_admission(self) -> bool:
         """Return whether a new mutable operation must not be committed."""
         return self._stop_requested()
@@ -1825,13 +1837,11 @@ class ServiceEngine:
         observation = self._git_observation(self.control_worktree, self.control_branch)
         if not observation.working_tree_clean:
             raise WorkflowBlockedError("control working tree is dirty")
-        fetch = _git(
+        fetch = self._git_fetch(
             self.control_worktree,
-            "fetch",
             "--prune",
             self.remote_name,
             self.control_branch,
-            check=False,
         )
         if fetch.returncode:
             self._raise_on_shutdown_interruption(fetch)
@@ -1956,13 +1966,11 @@ class ServiceEngine:
         pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
-        fetch = _git(
+        fetch = self._git_fetch(
                 self.repo,
-                "fetch",
                 "--prune",
                 self.remote_name,
                 self.remote_branch,
-                check=False,
         )
         if fetch.returncode:
             self._raise_on_shutdown_interruption(fetch)

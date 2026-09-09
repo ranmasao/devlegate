@@ -12,6 +12,7 @@ from test_control_plane import control_fixture, git, invoke, persist_agent_runni
 
 import devlegate.cli as cli
 import devlegate.daemon as daemon
+import devlegate.runtime as runtime
 from devlegate.cli import Devlegate, DevlegateError
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
@@ -378,6 +379,139 @@ def test_persisted_merge_pending_drains_even_when_stop_already_set(
     assert engine.serve(stop_event) == 0
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
     assert engine._state["phase"] == "idle"
+
+
+@pytest.mark.parametrize(
+    ("kind", "returncode"),
+    [
+        ("operator_abort", -signal.SIGINT),
+        ("service_shutdown", -signal.SIGTERM),
+    ],
+)
+def test_merge_pending_retries_matching_shutdown_fetch(
+    tmp_path, monkeypatch, capsys, kind, returncode
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    publisher = tmp_path / "seed"
+    git(publisher, "switch", "main")
+    (publisher / "remote-change.txt").write_text("remote\n")
+    git(publisher, "add", "remote-change.txt")
+    git(publisher, "commit", "-m", "remote change")
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    git(publisher, "push", "origin", "HEAD:main")
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=target,
+        changed_paths="remote-change.txt\n",
+        control_head=control,
+    )
+    original_git = runtime._git
+    fetch_calls = 0
+
+    def interrupt_first_fetch(repo, *args, check=True):
+        nonlocal fetch_calls
+        if args and args[0] == "fetch":
+            fetch_calls += 1
+            if fetch_calls == 1:
+                return subprocess.CompletedProcess(
+                    ["git"], returncode, "", ""
+                )
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", interrupt_first_fetch)
+
+    def operation(stop_intent):
+        stop_intent.request(kind)
+        return engine.serve(stop_intent)
+
+    expected_result = 130 if kind == "operator_abort" else 0
+    assert daemon.run_foreground(engine, operation) == expected_result
+    assert fetch_calls == 3
+    assert engine._state["phase"] == "idle"
+    assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
+    output = capsys.readouterr().out
+    assert "workflow blocked" not in output
+    assert "execution failed" not in output
+    assert "unknown git error" not in output
+
+
+def test_merge_pending_repeated_matching_shutdown_is_bounded(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=local,
+        changed_paths="",
+        control_head=control,
+    )
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request("operator_abort")
+    original_git = runtime._git
+    fetch_calls = 0
+
+    def interrupt_fetch(repo, *args, check=True):
+        nonlocal fetch_calls
+        if args and args[0] == "fetch":
+            fetch_calls += 1
+            return subprocess.CompletedProcess(["git"], -signal.SIGINT, "", "")
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", interrupt_fetch)
+
+    with engine._stop_context(stop_intent):
+        with pytest.raises(ShutdownInterrupted):
+            engine._git_fetch(
+                engine.control_worktree,
+                "--prune",
+                engine.remote_name,
+                engine.control_branch,
+            )
+    assert fetch_calls == 2
+
+
+@pytest.mark.parametrize(
+    ("kind", "returncode"),
+    [
+        ("operator_abort", 128),
+        ("operator_abort", -signal.SIGTERM),
+    ],
+)
+def test_merge_pending_nonmatching_fetch_failure_is_not_retried(
+    tmp_path, monkeypatch, kind, returncode
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    local = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "merge_pending",
+        local_head=local,
+        remote_head=local,
+        changed_paths="",
+        control_head=control,
+    )
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request(kind)
+    original_git = runtime._git
+    fetch_calls = 0
+
+    def fail_fetch(repo, *args, check=True):
+        nonlocal fetch_calls
+        if args and args[0] == "fetch":
+            fetch_calls += 1
+            return subprocess.CompletedProcess(["git"], returncode, "", "")
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", fail_fetch)
+
+    with engine._stop_context(stop_intent):
+        with pytest.raises(WorkflowBlockedError):
+            engine._run_once()
+    assert fetch_calls == 1
 
 
 def test_existing_agent_pending_is_preserved_on_stop(tmp_path, monkeypatch):
