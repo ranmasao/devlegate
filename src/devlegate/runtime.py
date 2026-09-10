@@ -4169,15 +4169,23 @@ export default tool({
             shutil.rmtree(config_dir, ignore_errors=True)
 
     def run(self, once: bool, stop_event: threading.Event | None = None) -> int:
-        """Run the legacy foreground polling fallback."""
+        """Run the polling loop without hosting authority or IPC.
+
+        Production CLI commands use the service host; this remains a narrow
+        internal compatibility seam for direct runtime tests and callers.
+        """
         return self._run_polling(once=once, stop_event=stop_event)
 
     def serve(
-        self, stop_event: threading.Event, lock_handle: object | None = None
+        self,
+        stop_event: threading.Event,
+        lock_handle: object | None = None,
+        *,
+        once: bool = False,
     ) -> int:
         """Run the foreground service until the host requests a stop."""
         return self._run_polling(
-            once=False, stop_event=stop_event, lock_handle=lock_handle
+            once=once, stop_event=stop_event, lock_handle=lock_handle
         )
 
     def _has_recoverable_execution_stage(self) -> bool:

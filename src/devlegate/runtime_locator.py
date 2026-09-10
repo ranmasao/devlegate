@@ -102,7 +102,15 @@ class RuntimeLocator:
     @property
     def socket_path(self) -> Path:
         socket_key = self.state_key[: self.socket_key_length]
-        return self.state_dir / "sockets" / f"{socket_key}.sock"
+        path = self.state_dir / "sockets" / f"{socket_key}.sock"
+        if len(str(path).encode()) <= 107:
+            return path
+        fallback_directory = hashlib.sha256(
+            str(self.state_dir).encode()
+        ).hexdigest()[:8]
+        return Path("/tmp") / (
+            f".devlegate-sockets-{os.getuid()}-{fallback_directory}"
+        ) / f"{socket_key}.sock"
 
     @contextlib.contextmanager
     def absence_guard(self) -> Iterator[object]:

@@ -3,10 +3,13 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import signal
 import socket
 import sqlite3
 import subprocess
 import sys
+import time
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
@@ -35,12 +38,15 @@ def git(cwd, *args):
 
 
 @pytest.fixture
-def git_fixture(tmp_path):
+def git_fixture(tmp_path, request):
     bare = tmp_path / "remote.git"
     seed = tmp_path / "seed"
     working = tmp_path / "working"
     publisher = tmp_path / "publisher"
-    state = tmp_path / "state"
+    state = Path("/tmp") / (
+        "devlegate-test-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]
+    )
+    request.addfinalizer(lambda: shutil.rmtree(state, ignore_errors=True))
 
     git(tmp_path, "init", "--bare", bare)
     git(tmp_path, "init", "-b", "main", seed)
@@ -964,8 +970,8 @@ def test_operational_cli_dispatches_run_through_application(git_fixture, monkeyp
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-        def run(self, once=False, _stop_event=None):
-            calls.append(("run", once))
+        def serve(self, _stop_event, *, once=False):
+            calls.append(("serve", once))
             return 7
 
     monkeypatch.setattr("devlegate.application.Application", FakeApplication)
@@ -975,7 +981,7 @@ def test_operational_cli_dispatches_run_through_application(git_fixture, monkeyp
     monkeypatch.chdir(git_fixture["working"])
 
     assert main() == 7
-    assert calls == [("init", git_fixture["config"], False), ("run", True)]
+    assert calls == [("init", git_fixture["config"], False), ("serve", True)]
 
 
 def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeypatch):
@@ -985,8 +991,8 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-        def run(self, once=False, _stop_event=None):
-            calls.append(("run", once))
+        def serve(self, _stop_event, *, once=False):
+            calls.append(("serve", once))
             return 8
 
     monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
@@ -996,7 +1002,71 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     monkeypatch.chdir(git_fixture["working"])
 
     assert main() == 8
-    assert calls == [("init", git_fixture["config"], False), ("run", True)]
+    assert calls == [("init", git_fixture["config"], False), ("serve", True)]
+
+
+def test_run_uses_shared_foreground_service_host(git_fixture, monkeypatch):
+    calls = []
+
+    def host(engine, *, once=False):
+        calls.append((engine, once))
+        return 0
+
+    monkeypatch.setattr("devlegate.cli.run_service", host)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "run", "--once", "--env", str(git_fixture["config"])],
+    )
+    monkeypatch.chdir(git_fixture["working"])
+
+    assert main() == 0
+    assert len(calls) == 1
+    assert calls[0][1] is True
+
+
+def test_run_hosts_real_ipc_status_and_plan_until_stopped(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    git_fixture["config"].write_text(
+        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "devlegate",
+            "run",
+            "--env",
+            str(git_fixture["config"]),
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    socket_path = ServiceEngine(git_fixture["config"]).ipc_socket_path
+    try:
+        deadline = time.monotonic() + 10
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert socket_path.is_socket()
+        status = invoke(git_fixture, "status", "--json")
+        plan = invoke(git_fixture, "plan", "--json")
+        assert status.returncode == 0, status.stderr
+        assert plan.returncode == 0, plan.stderr
+        assert json.loads(status.stdout)["execution"]["phase"] == "idle"
+        assert "action" in json.loads(plan.stdout)
+        assert process.poll() is None
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+        process.wait(timeout=10)
+    assert not socket_path.exists()
 
 
 def test_all_operational_cli_commands_use_service_engine(
@@ -1022,8 +1092,8 @@ def test_all_operational_cli_commands_use_service_engine(
             calls.append("plan")
             return View()
 
-        def run(self, once=False, _stop_event=None):
-            calls.append(("run", once))
+        def serve(self, _stop_event, *, once=False):
+            calls.append(("serve", once))
             return 0
 
         def retry(self, ticket_id=None, _stop_event=None):
@@ -1047,7 +1117,7 @@ def test_all_operational_cli_commands_use_service_engine(
         ("init", git_fixture["config"], True),
         "plan",
         ("init", git_fixture["config"], False),
-        ("run", True),
+        ("serve", True),
     ]
 
 

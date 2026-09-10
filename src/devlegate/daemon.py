@@ -27,21 +27,35 @@ class ShutdownIntent:
         return self._event.wait(timeout)
 
 
-def run_daemon(engine: ServiceEngine) -> int:
-    """Host one service engine in the foreground until a stop signal arrives."""
+def run_service(engine: ServiceEngine, *, once: bool = False) -> int:
+    """Host one service engine with its runtime authority and IPC endpoint."""
     if not hasattr(engine, "state_dir"):
-        return run_foreground(engine, lambda intent: engine.serve(intent))
+        operation = (
+            (lambda intent: engine.serve(intent, once=True))
+            if once
+            else (lambda intent: engine.serve(intent))
+        )
+        return run_foreground(
+            engine, operation
+        )
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     try:
         server.start()
         return run_foreground(
             engine,
-            lambda intent: engine.serve(intent, lock_handle=authority),
+            lambda intent: engine.serve(
+                intent, lock_handle=authority, once=once
+            ),
         )
     finally:
         server.stop()
         authority.close()
+
+
+def run_daemon(engine: ServiceEngine) -> int:
+    """Host one service engine in the foreground until a stop signal arrives."""
+    return run_service(engine)
 
 
 def run_foreground(

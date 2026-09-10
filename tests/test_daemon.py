@@ -120,8 +120,9 @@ def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):
         (signal.SIGTERM, "service_shutdown", 0),
     ],
 )
+@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
 def test_daemon_host_signal_handler_only_sets_stop_intent(
-    monkeypatch, signum, expected_kind, expected_status
+    monkeypatch, signum, expected_kind, expected_status, host
 ):
     installed = {}
 
@@ -139,7 +140,7 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
     monkeypatch.setattr(daemon.signal, "signal", install)
     monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
 
-    assert daemon.run_daemon(FakeServiceEngine()) == expected_status
+    assert host(FakeServiceEngine()) == expected_status
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
 
 
@@ -185,7 +186,10 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )
-def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signals):
+@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
+def test_daemon_host_operator_abort_precedes_service_shutdown(
+    monkeypatch, signals, host
+):
     installed = {}
 
     def install(signum, handler):
@@ -202,7 +206,7 @@ def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signa
     monkeypatch.setattr(daemon.signal, "signal", install)
     monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
 
-    assert daemon.run_daemon(FakeServiceEngine()) == 130
+    assert host(FakeServiceEngine()) == 130
 
 
 def test_daemon_cli_remains_foreground_until_host_returns(tmp_path, monkeypatch):

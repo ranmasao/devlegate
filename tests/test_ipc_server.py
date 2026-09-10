@@ -227,8 +227,9 @@ def test_excessively_long_socket_path_fails_as_devlegate_error(
         server.start()
 
 
-def test_same_project_second_daemon_cannot_disturb_first_socket(
-    tmp_path, monkeypatch, short_state_dir
+@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
+def test_same_project_second_service_host_cannot_disturb_first_socket(
+    tmp_path, monkeypatch, short_state_dir, host
 ):
     engine_a, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     authority = engine_a._lock()
@@ -237,12 +238,30 @@ def test_same_project_second_daemon_cannot_disturb_first_socket(
     try:
         engine_b = ServiceEngine(engine_a.env_file)
         with pytest.raises(DevlegateError, match="already running"):
-            daemon.run_daemon(engine_b)
+            host(engine_b)
         assert engine_a.ipc_socket_path.is_socket()
         assert request(engine_a.ipc_socket_path, "a", "ping").ok
     finally:
         server_a.stop()
         authority.close()
+
+
+def test_service_host_once_owns_authority_and_socket_lifecycle(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    calls = []
+
+    def iteration():
+        calls.append(True)
+        return 0
+
+    monkeypatch.setattr(engine, "run_once", iteration)
+    assert daemon.run_service(engine, once=True) == 0
+    assert calls == [True]
+    assert not engine.ipc_socket_path.exists()
+    authority = engine._lock()
+    authority.close()
 
 
 def test_stale_socket_is_replaced_after_runtime_authority_is_acquired(
