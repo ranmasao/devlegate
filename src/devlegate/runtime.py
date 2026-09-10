@@ -4180,6 +4180,17 @@ export default tool({
             once=False, stop_event=stop_event, lock_handle=lock_handle
         )
 
+    def _has_recoverable_execution_stage(self) -> bool:
+        return self._state.get("phase") == "agent_running" and self._state.get(
+            "execution_stage"
+        ) in {
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        }
+
     def _run_polling(
         self,
         *,
@@ -4248,11 +4259,18 @@ export default tool({
                         status = 1
                 except DevlegateError as error:
                     if operator_command is None:
-                        raise
-                    self._iteration_diagnostic = (
-                        f"retry {operator_command.ticket_id} rejected: {error}"
-                    )
-                    status = 1
+                        if not once and self._has_recoverable_execution_stage():
+                            self._iteration_diagnostic = (
+                                f"execution failed: {error}"
+                            )
+                            status = 1
+                        else:
+                            raise
+                    else:
+                        self._iteration_diagnostic = (
+                            f"retry {operator_command.ticket_id} rejected: {error}"
+                        )
+                        status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
                     detail = getattr(error, "stderr", None) or str(error)
                     self._iteration_diagnostic = f"execution failed: {detail.strip()}"

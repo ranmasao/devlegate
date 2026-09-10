@@ -439,6 +439,74 @@ def test_merge_pending_retries_matching_shutdown_fetch(
 
 
 @pytest.mark.parametrize(
+    "stage",
+    ["checkpointing", "post-checkpoint", "publishing", "post-publication", "lifecycle"],
+)
+def test_service_survives_recoverable_stage_devlegate_error(
+    tmp_path, monkeypatch, capsys, stage
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.poll_interval = "1"
+    first_iteration = threading.Event()
+    allow_failure = threading.Event()
+    calls = []
+    stop_event = threading.Event()
+
+    def iteration():
+        calls.append(True)
+        if len(calls) == 1:
+            engine._state["phase"] = "agent_running"
+            engine._state["execution_stage"] = stage
+            first_iteration.set()
+            allow_failure.wait(2)
+            raise DevlegateError("simulated publication transport failure")
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(engine, "_run_once", iteration)
+    thread = threading.Thread(
+        target=lambda: engine.serve(stop_event), daemon=True
+    )
+    thread.start()
+    assert first_iteration.wait(2)
+    allow_failure.set()
+    engine.wake()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert calls == [True, True]
+    assert engine._state["phase"] == "agent_running"
+    assert engine._state["execution_stage"] == stage
+    assert "simulated publication transport failure" in capsys.readouterr().out
+
+
+def test_recoverable_stage_error_keeps_once_semantics(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine._state["phase"] = "agent_running"
+    engine._state["execution_stage"] = "publishing"
+    monkeypatch.setattr(
+        engine,
+        "_run_once",
+        lambda: (_ for _ in ()).throw(DevlegateError("one-shot failure")),
+    )
+
+    with pytest.raises(DevlegateError, match="one-shot failure"):
+        engine.run(once=True)
+
+
+def test_unrelated_devlegate_error_still_escapes_service(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        engine,
+        "_run_once",
+        lambda: (_ for _ in ()).throw(DevlegateError("fatal invariant")),
+    )
+
+    with pytest.raises(DevlegateError, match="fatal invariant"):
+        engine.serve(threading.Event())
+
+
+@pytest.mark.parametrize(
     ("kind", "returncode"),
     [
         ("operator_abort", -signal.SIGINT),

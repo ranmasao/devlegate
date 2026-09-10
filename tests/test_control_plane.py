@@ -6,6 +6,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -947,6 +948,58 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
         "origin",
         "refs/heads/devlegate/work/T-1",
     ).stdout.split()[0] == git(execution, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_service_recovers_publication_failure_without_rerunning_worker(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    devlegate.poll_interval = "1"
+    worker_calls = 0
+    publication_calls = 0
+
+    def worker(workspace, _prompt):
+        nonlocal worker_calls
+        worker_calls += 1
+        (workspace.path / "partial.txt").write_text("preserve\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    original_publish = devlegate._publish_execution_branch
+
+    def publish(*args):
+        nonlocal publication_calls
+        publication_calls += 1
+        if publication_calls == 1:
+            raise DevlegateError("simulated publication outage")
+        return original_publish(*args)
+
+    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate, "_publish_execution_branch", publish)
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=lambda: devlegate.serve(stop_event), daemon=True
+    )
+    thread.start()
+
+    for _ in range(300):
+        if publication_calls == 2:
+            stop_event.set()
+            devlegate.wake()
+            break
+        stop_event.wait(0.01)
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert worker_calls == 1
+    assert publication_calls == 2
+    assert devlegate._state["phase"] == "idle"
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/review/T-1.md").is_file()
 
 
 def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
