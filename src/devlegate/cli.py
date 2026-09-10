@@ -209,7 +209,10 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
     )
     if not snapshot.failed_executions:
         lines.append("  none")
-    if snapshot.reconciliation is not None:
+    if (
+        snapshot.reconciliation is not None
+        and snapshot.reconciliation.get("status") == "pending"
+    ):
         reconciliation = snapshot.reconciliation
         product_branch = reconciliation.get("product_branch", "") or "detached"
         product_local_head = reconciliation.get("product_local_head", "")

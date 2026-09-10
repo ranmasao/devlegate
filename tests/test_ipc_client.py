@@ -176,6 +176,48 @@ def test_status_text_is_identical_after_ipc_round_trip():
     assert ipc_text == direct_text
 
 
+@pytest.mark.parametrize("status", ["pending", "resolved"])
+def test_reconciliation_text_distinguishes_actionable_history(status):
+    reconciliation = {
+        "status": status,
+        "ticket_id": "T-1",
+        "original_base": "base-1",
+        "observed_product": "product-1",
+        "worker_checkpoint": "checkpoint-1",
+        "product_branch": "main",
+        "product_local_head": "local-1",
+        "product_dirty": False,
+        "product_target_eligible": True,
+        "product_observation": "clean",
+    }
+    snapshot = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        representative_observation(),
+        representative_observation("devlegate/control"),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (),
+        (),
+        (),
+        (),
+        None,
+        representative_plan(),
+        reconciliation=reconciliation,
+    )
+
+    text = _render_status_text(snapshot)
+    payload = snapshot.as_dict()
+    assert payload["reconciliation"]["status"] == status
+    if status == "pending":
+        assert "Reconciliation required:" in text
+        assert "  update-base eligible: True" in text
+    else:
+        assert "Reconciliation required:" not in text
+        assert "  ticket: T-1" not in text
+    assert snapshot.plan.action == "run-worker"
+
+
 def test_counts_decode_in_canonical_order():
     value = StatusSnapshot(
         "idle",
