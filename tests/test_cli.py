@@ -603,7 +603,7 @@ def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
 ):
     accepted = []
 
-    def submit(ticket_id):
+    def submit(ticket_id, *, request_id):
         accepted.append(ticket_id)
         return {"accepted": True, "ticket_id": ticket_id}
 
@@ -690,7 +690,7 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
     monkeypatch.setattr(
         cli_daemon,
         "submit_retry",
-        lambda ticket_id: submitted.append(ticket_id)
+        lambda ticket_id, *, request_id: submitted.append(ticket_id)
         or {"accepted": True, "ticket_id": ticket_id},
     )
     monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)

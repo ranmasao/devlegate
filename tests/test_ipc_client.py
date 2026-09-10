@@ -101,6 +101,52 @@ def test_mutable_transport_failure_is_uncertain_and_not_replayed(tmp_path):
         thread.join(timeout=2)
 
 
+def test_mutable_ambiguous_delivery_replays_same_request_identity(tmp_path):
+    path = tmp_path / "ipc-replay.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(2)
+    received = []
+
+    def serve():
+        try:
+            for attempt in range(2):
+                connection, _address = listener.accept()
+                stream = connection.makefile("rwb")
+                try:
+                    message = parse_request(receive_frame(stream))
+                    received.append(message)
+                    if attempt == 1:
+                        send_frame(
+                            stream,
+                            encode_success_response(
+                                message.request_id,
+                                {"accepted": True, "ticket_id": "T-1"},
+                            ),
+                        )
+                finally:
+                    stream.close()
+                    connection.close()
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    result = request(
+        path,
+        "retry",
+        {"ticket_id": "T-1"},
+        mutable=True,
+    )
+    thread.join(timeout=2)
+
+    assert result == {"accepted": True, "ticket_id": "T-1"}
+    assert len(received) == 2
+    assert received[0].request_id == received[1].request_id
+    assert received[0].method == received[1].method == "retry"
+    assert received[0].payload == received[1].payload == {"ticket_id": "T-1"}
+
+
 def representative_observation(branch="main"):
     return GitObservation(
         branch,

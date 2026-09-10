@@ -529,9 +529,9 @@ def test_retry_submission_runs_on_service_owner_thread(
 
     original_submit = engine.submit_retry
 
-    def submit(ticket_id):
+    def submit(ticket_id, *, request_id):
         submitted_thread.append(threading.get_ident())
-        return original_submit(ticket_id)
+        return original_submit(ticket_id, request_id=request_id)
 
     def execute(ticket_id, _stop_event=None):
         assert ticket_id == "T-1"
@@ -625,6 +625,84 @@ def test_read_only_ipc_remains_available_while_owner_retry_is_active(
     assert not owner.is_alive()
 
 
+def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine._interactive_retry_candidates = lambda: (
+        RetryCandidate("T-1", "Ticket", "failed", "failed"),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    executions = []
+
+    def execute(ticket_id, _stop_event=None):
+        executions.append(ticket_id)
+        started.set()
+        release.wait(2)
+        return 0
+
+    monkeypatch.setattr(engine, "_run_once", lambda: 0)
+    monkeypatch.setattr(engine, "_retry_owned", execute)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    stop_event = threading.Event()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        first = request(
+            engine.ipc_socket_path,
+            "request-x",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert first.ok
+        assert started.wait(2)
+        duplicate = request(
+            engine.ipc_socket_path,
+            "request-x",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert duplicate.ok
+        assert duplicate.result == first.result
+        different_id = request(
+            engine.ipc_socket_path,
+            "request-y",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert not different_id.ok
+        assert "already pending or running" in different_id.error["message"]
+        collision = request(
+            engine.ipc_socket_path,
+            "request-x",
+            "retry",
+            {"ticket_id": "T-2"},
+        )
+        assert not collision.ok
+        assert "request id collision" in collision.error["message"]
+        assert executions == ["T-1"]
+    finally:
+        release.set()
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=3)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
+
+    restarted = ServiceEngine(engine.env_file)
+    replay = restarted.submit_retry("T-1", request_id="request-x")
+    assert replay == {"accepted": True, "ticket_id": "T-1"}
+    assert not restarted._operator_command_pending()
+
+
 @pytest.mark.parametrize("interactive", [False, True])
 def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
     tmp_path, monkeypatch, short_state_dir, capsys, interactive
@@ -647,11 +725,17 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
         return result
 
     monkeypatch.setattr(engine, "_retry_owned", retry_owned)
+    monkeypatch.setattr(engine, "_run_once", lambda: 0)
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     stop_event = threading.Event()
-    owner = None
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
     try:
         candidates = request(
             engine.ipc_socket_path,
@@ -670,20 +754,6 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
         monkeypatch.setattr(sys, "argv", argv)
         assert cli.main() == 0
         assert "retry accepted: T-1" in capsys.readouterr().out
-        busy = request(
-            engine.ipc_socket_path,
-            "retry-again",
-            "retry",
-            {"ticket_id": "T-1"},
-        )
-        assert not busy.ok
-        assert "already pending or running" in busy.error["message"]
-        owner = threading.Thread(
-            target=engine.serve,
-            args=(stop_event,),
-            kwargs={"lock_handle": authority},
-        )
-        owner.start()
         assert recovered.wait(5)
         assert candidate_response == ["T-1"]
     finally:
@@ -725,7 +795,7 @@ def test_matching_live_worker_rejects_retry_without_queueing(
     )
 
     with pytest.raises(DevlegateError, match="worker is already running"):
-        engine.submit_retry("T-1")
+        engine.submit_retry("T-1", request_id="live-worker")
     assert not engine._operator_command_pending()
 
 
@@ -741,7 +811,23 @@ def test_wrong_ticket_is_rejected_for_recoverable_execution(
     )
 
     with pytest.raises(DevlegateError, match="does not match"):
-        engine.submit_retry("T-2")
+        engine.submit_retry("T-2", request_id="wrong-ticket")
+    assert not engine._operator_command_pending()
+
+
+def test_worker_launch_stage_is_rejected_before_durable_ack(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    persist_agent_running(engine, engine.state_dir)
+    engine._save_state(
+        "agent_running",
+        execution_stage="worker-launch",
+        worker_identity=None,
+    )
+
+    with pytest.raises(DevlegateError, match="not currently retryable"):
+        engine.submit_retry("T-1", request_id="worker-launch")
     assert not engine._operator_command_pending()
 
 

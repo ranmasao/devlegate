@@ -286,11 +286,30 @@ class RetryCandidate:
     kind: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class RetryCommand:
     """One process-local operator mutation submitted to the service owner."""
 
+    request_id: str
+    fingerprint: str
     ticket_id: str
+    preliminary_ready: threading.Event = dataclasses.field(
+        default_factory=threading.Event
+    )
+    admission_event: threading.Event = dataclasses.field(
+        default_factory=threading.Event
+    )
+    admission_result: dict[str, object] | None = None
+    admission_error: DevlegateError | None = None
+
+
+def _retry_request_fingerprint(ticket_id: str) -> str:
+    payload = json.dumps(
+        {"method": "retry", "payload": {"ticket_id": ticket_id}},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -899,8 +918,10 @@ class ServiceEngine:
         self._automatic_resume_ticket_id = None
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.Lock()
+        self._receipt_lock = threading.Lock()
         self._operator_command: RetryCommand | None = None
         self._operator_active = False
+        self._operator_active_command: RetryCommand | None = None
         self._service_wake = threading.Event()
         self._foreground_abort_requested = False
         self._worker_identity_handler: (
@@ -962,8 +983,59 @@ class ServiceEngine:
             for candidate in self._interactive_retry_candidates()
         )
 
-    def submit_retry(self, ticket_id: str) -> dict[str, object]:
-        """Admit one retry command without executing it on the IPC thread."""
+    def submit_retry(
+        self, ticket_id: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit one retry intent and wait only for owner-side admission."""
+        fingerprint = _retry_request_fingerprint(ticket_id)
+        new_command = False
+        with self._operator_command_lock:
+            receipt = self._mutable_receipt(request_id)
+            if receipt is not None:
+                if (
+                    receipt.get("method") != "retry"
+                    or receipt.get("fingerprint") != fingerprint
+                    or receipt.get("accepted") is not True
+                ):
+                    raise DevlegateError(
+                        "request id collision: retry request semantics differ"
+                    )
+                return {"accepted": True, "ticket_id": ticket_id}
+            existing = self._operator_command or self._operator_active_command
+            if existing is not None:
+                if existing.request_id == request_id:
+                    if existing.fingerprint != fingerprint:
+                        raise DevlegateError(
+                            "request id collision: retry request semantics differ"
+                        )
+                    command = existing
+                else:
+                    raise DevlegateError(
+                        "daemon runtime command already pending or running"
+                    )
+            else:
+                command = RetryCommand(request_id, fingerprint, ticket_id)
+                self._operator_command = command
+                new_command = True
+        if new_command:
+            try:
+                self._validate_retry_admission(ticket_id)
+            except DevlegateError as error:
+                command.admission_error = error
+                command.admission_event.set()
+                with self._operator_command_lock:
+                    if self._operator_command is command:
+                        self._operator_command = None
+                raise
+            command.preliminary_ready.set()
+            self.wake()
+        if command.admission_event.is_set():
+            return self._admission_result(command)
+        command.admission_event.wait()
+        return self._admission_result(command)
+
+    def _validate_retry_admission(self, ticket_id: str) -> None:
+        """Perform preliminary admission; the owner repeats this before ACK."""
         if self.service_snapshot().worker_running:
             raise DevlegateError("daemon worker is already running")
         if self._state.get("phase") == "agent_running":
@@ -986,45 +1058,103 @@ class ServiceEngine:
             if stage not in {
                 None,
                 "pre-checkpoint",
-                "worker-launch",
                 "worker-running",
                 "post-worker",
             }:
-                raise DevlegateError(
-                    "persisted execution is not currently retryable"
-                )
-        else:
-            candidate_ids = {
-                candidate.ticket_id
-                for candidate in self._interactive_retry_candidates()
+                raise DevlegateError("persisted execution is not currently retryable")
+            return
+        candidate_ids = {
+            candidate.ticket_id for candidate in self._interactive_retry_candidates()
+        }
+        if ticket_id not in candidate_ids:
+            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+
+    @staticmethod
+    def _admission_result(command: RetryCommand) -> dict[str, object]:
+        if command.admission_error is not None:
+            raise command.admission_error
+        if command.admission_result is None:
+            raise DevlegateError("daemon did not produce a retry admission result")
+        return command.admission_result
+
+    def _mutable_receipt(self, request_id: str) -> dict[str, object] | None:
+        with self._receipt_lock:
+            receipts = self._state.get("mutable_receipts", {})
+            if not isinstance(receipts, dict):
+                raise DevlegateError("invalid mutable request receipt state")
+            receipt = receipts.get(request_id)
+            if receipt is None:
+                return None
+            if not isinstance(receipt, dict) or set(receipt) != {
+                "method",
+                "fingerprint",
+                "ticket_id",
+                "accepted",
+            }:
+                raise DevlegateError("invalid mutable request receipt")
+            if not all(
+                isinstance(receipt[field], str) and receipt[field]
+                for field in ("method", "fingerprint", "ticket_id")
+            ) or not isinstance(receipt["accepted"], bool):
+                raise DevlegateError("invalid mutable request receipt")
+            return dict(receipt)
+
+    def _record_retry_admission(self, command: RetryCommand) -> None:
+        with self._receipt_lock:
+            receipts = self._state.get("mutable_receipts", {})
+            if not isinstance(receipts, dict):
+                raise DevlegateError("invalid mutable request receipt state")
+            updated = dict(receipts)
+            updated[command.request_id] = {
+                "method": "retry",
+                "fingerprint": command.fingerprint,
+                "ticket_id": command.ticket_id,
+                "accepted": True,
             }
-            if ticket_id not in candidate_ids:
-                raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
-        with self._operator_command_lock:
-            if self._operator_active or self._operator_command is not None:
-                raise DevlegateError(
-                    "daemon runtime command already pending or running"
-                )
-            self._operator_command = RetryCommand(ticket_id)
-        self.wake()
-        return {"accepted": True, "ticket_id": ticket_id}
+            self._save_state(
+                str(self._state["phase"]),
+                mutable_receipts=updated,
+            )
+
+    def _admit_operator_command(self, command: RetryCommand) -> None:
+        try:
+            self._validate_retry_admission(command.ticket_id)
+            self._record_retry_admission(command)
+            command.admission_result = {
+                "accepted": True,
+                "ticket_id": command.ticket_id,
+            }
+        except DevlegateError as error:
+            command.admission_error = error
+            raise
+        finally:
+            command.admission_event.set()
 
     def _take_operator_command(self) -> RetryCommand | None:
         with self._operator_command_lock:
-            if self._operator_command is None or self._operator_active:
+            if (
+                self._operator_command is None
+                or not self._operator_command.preliminary_ready.is_set()
+                or self._operator_active
+            ):
                 return None
             command = self._operator_command
             self._operator_command = None
             self._operator_active = True
+            self._operator_active_command = command
             return command
 
     def _release_operator_command(self) -> None:
         with self._operator_command_lock:
             self._operator_active = False
+            self._operator_active_command = None
 
     def _operator_command_pending(self) -> bool:
         with self._operator_command_lock:
-            return self._operator_command is not None
+            return bool(
+                self._operator_command is not None
+                and self._operator_command.preliminary_ready.is_set()
+            )
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
@@ -4085,6 +4215,7 @@ export default tool({
                 self._iteration_diagnostic = None
                 try:
                     if operator_command is not None:
+                        self._admit_operator_command(operator_command)
                         status = self._retry_owned(
                             operator_command.ticket_id, stop_event
                         )

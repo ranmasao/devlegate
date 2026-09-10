@@ -1223,7 +1223,7 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
         )
         stdout, stderr = second.communicate(timeout=10)
         assert second.returncode == 1, (stdout, stderr)
-        assert "daemon worker is already running" in stderr
+        assert "daemon runtime command already pending or running" in stderr
         assert len(marker.read_text().splitlines()) == 1
     finally:
         if first.poll() is None:

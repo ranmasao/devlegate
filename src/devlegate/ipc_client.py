@@ -43,9 +43,41 @@ def request(
     *,
     timeout: float = 2.0,
     mutable: bool = False,
+    request_id: str | None = None,
 ) -> dict[str, object]:
-    """Issue one bounded protocol-v1 request and return its structured result."""
-    request_id = uuid.uuid4().hex
+    """Issue one bounded request, replaying an ambiguous mutable delivery once."""
+    request_id = request_id or uuid.uuid4().hex
+    attempts = 2 if mutable else 1
+    for attempt in range(attempts):
+        try:
+            return _request_once(
+                socket_path,
+                method,
+                payload,
+                request_id=request_id,
+                timeout=timeout,
+                mutable=mutable,
+            )
+        except IPCClientError as error:
+            if mutable and attempt > 0 and not error.application:
+                raise IPCClientError(
+                    "retry request outcome is uncertain; inspect status before "
+                    "retrying",
+                    uncertain=True,
+                ) from error
+            if not mutable or not error.uncertain or attempt + 1 == attempts:
+                raise
+
+
+def _request_once(
+    socket_path: Path,
+    method: str,
+    payload: dict[str, object] | None,
+    *,
+    request_id: str,
+    timeout: float,
+    mutable: bool,
+) -> dict[str, object]:
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(timeout)
     connected = False

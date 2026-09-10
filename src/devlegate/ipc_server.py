@@ -56,7 +56,7 @@ def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
         raise IPCProtocolError(
             "invalid_request", "retry ticket_id must be non-empty text"
         )
-    return engine.submit_retry(ticket_id)
+    return engine.submit_retry(ticket_id, request_id=request.request_id)
 
 
 class UnixIPCServer:
