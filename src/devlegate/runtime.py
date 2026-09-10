@@ -287,12 +287,14 @@ class RetryCandidate:
 
 
 @dataclasses.dataclass
-class RetryCommand:
+class OperatorCommand:
     """One process-local operator mutation submitted to the service owner."""
 
     request_id: str
+    method: str
     fingerprint: str
     ticket_id: str
+    onto: str | None = None
     preliminary_ready: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -303,13 +305,23 @@ class RetryCommand:
     admission_error: DevlegateError | None = None
 
 
-def _retry_request_fingerprint(ticket_id: str) -> str:
+def _mutation_fingerprint(method: str, payload: dict[str, str]) -> str:
     payload = json.dumps(
-        {"method": "retry", "payload": {"ticket_id": ticket_id}},
+        {"method": method, "payload": payload},
         sort_keys=True,
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _retry_request_fingerprint(ticket_id: str) -> str:
+    return _mutation_fingerprint("retry", {"ticket_id": ticket_id})
+
+
+def _reconcile_request_fingerprint(ticket_id: str, onto: str) -> str:
+    return _mutation_fingerprint(
+        "reconcile-update-base", {"ticket_id": ticket_id, "onto": onto}
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -919,9 +931,9 @@ class ServiceEngine:
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.Lock()
         self._receipt_lock = threading.Lock()
-        self._operator_command: RetryCommand | None = None
+        self._operator_command: OperatorCommand | None = None
         self._operator_active = False
-        self._operator_active_command: RetryCommand | None = None
+        self._operator_active_command: OperatorCommand | None = None
         self._service_wake = threading.Event()
         self._foreground_abort_requested = False
         self._worker_identity_handler: (
@@ -987,26 +999,56 @@ class ServiceEngine:
         self, ticket_id: str, *, request_id: str
     ) -> dict[str, object]:
         """Submit one retry intent and wait only for owner-side admission."""
-        fingerprint = _retry_request_fingerprint(ticket_id)
+        return self._submit_operator_command(
+            method="retry",
+            ticket_id=ticket_id,
+            request_id=request_id,
+            fingerprint=_retry_request_fingerprint(ticket_id),
+        )
+
+    def submit_reconcile_update_base(
+        self, ticket_id: str, onto: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit one reconciliation intent for owner-side admission."""
+        return self._submit_operator_command(
+            method="reconcile-update-base",
+            ticket_id=ticket_id,
+            onto=onto,
+            request_id=request_id,
+            fingerprint=_reconcile_request_fingerprint(ticket_id, onto),
+        )
+
+    def _submit_operator_command(
+        self,
+        *,
+        method: str,
+        ticket_id: str,
+        request_id: str,
+        fingerprint: str,
+        onto: str | None = None,
+    ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
             receipt = self._mutable_receipt(request_id)
             if receipt is not None:
                 if (
-                    receipt.get("method") != "retry"
+                    receipt.get("method") != method
                     or receipt.get("fingerprint") != fingerprint
                     or receipt.get("accepted") is not True
                 ):
                     raise DevlegateError(
-                        "request id collision: retry request semantics differ"
+                        f"request id collision: {method} request semantics differ"
                     )
-                return {"accepted": True, "ticket_id": ticket_id}
+                return self._operator_ack(method, ticket_id, onto)
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
                 if existing.request_id == request_id:
-                    if existing.fingerprint != fingerprint:
+                    if (
+                        existing.method != method
+                        or existing.fingerprint != fingerprint
+                    ):
                         raise DevlegateError(
-                            "request id collision: retry request semantics differ"
+                            f"request id collision: {method} request semantics differ"
                         )
                     command = existing
                 else:
@@ -1014,12 +1056,14 @@ class ServiceEngine:
                         "daemon runtime command already pending or running"
                     )
             else:
-                command = RetryCommand(request_id, fingerprint, ticket_id)
+                command = OperatorCommand(
+                    request_id, method, fingerprint, ticket_id, onto
+                )
                 self._operator_command = command
                 new_command = True
         if new_command:
             try:
-                self._validate_retry_admission(ticket_id)
+                self._validate_operator_admission(command)
             except DevlegateError as error:
                 command.admission_error = error
                 command.admission_event.set()
@@ -1069,12 +1113,45 @@ class ServiceEngine:
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
 
+    def _validate_reconcile_admission(self, ticket_id: str, onto: str) -> None:
+        if not onto:
+            raise DevlegateError("requested reconciliation target is empty")
+        reconciliation = self._state.get("reconciliation")
+        if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
+            "pending"
+        ):
+            raise DevlegateError(f"ticket {ticket_id} has no pending reconciliation")
+        if reconciliation.get("ticket_id") != ticket_id:
+            raise DevlegateError(
+                "requested ticket does not match pending reconciliation"
+            )
+
+    def _validate_operator_admission(self, command: OperatorCommand) -> None:
+        if command.method == "retry":
+            self._validate_retry_admission(command.ticket_id)
+            return
+        if command.method == "reconcile-update-base":
+            assert command.onto is not None
+            self._validate_reconcile_admission(command.ticket_id, command.onto)
+            return
+        raise DevlegateError(f"unsupported operator command: {command.method}")
+
     @staticmethod
-    def _admission_result(command: RetryCommand) -> dict[str, object]:
+    def _operator_ack(
+        method: str, ticket_id: str, onto: str | None
+    ) -> dict[str, object]:
+        if method == "retry":
+            return {"accepted": True, "ticket_id": ticket_id}
+        assert method == "reconcile-update-base"
+        assert onto is not None
+        return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
+
+    @staticmethod
+    def _admission_result(command: OperatorCommand) -> dict[str, object]:
         if command.admission_error is not None:
             raise command.admission_error
         if command.admission_result is None:
-            raise DevlegateError("daemon did not produce a retry admission result")
+            raise DevlegateError("daemon did not produce an operator admission result")
         return command.admission_result
 
     def _mutable_receipt(self, request_id: str) -> dict[str, object] | None:
@@ -1099,14 +1176,14 @@ class ServiceEngine:
                 raise DevlegateError("invalid mutable request receipt")
             return dict(receipt)
 
-    def _record_retry_admission(self, command: RetryCommand) -> None:
+    def _record_operator_admission(self, command: OperatorCommand) -> None:
         with self._receipt_lock:
             receipts = self._state.get("mutable_receipts", {})
             if not isinstance(receipts, dict):
                 raise DevlegateError("invalid mutable request receipt state")
             updated = dict(receipts)
             updated[command.request_id] = {
-                "method": "retry",
+                "method": command.method,
                 "fingerprint": command.fingerprint,
                 "ticket_id": command.ticket_id,
                 "accepted": True,
@@ -1116,21 +1193,20 @@ class ServiceEngine:
                 mutable_receipts=updated,
             )
 
-    def _admit_operator_command(self, command: RetryCommand) -> None:
+    def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
-            self._validate_retry_admission(command.ticket_id)
-            self._record_retry_admission(command)
-            command.admission_result = {
-                "accepted": True,
-                "ticket_id": command.ticket_id,
-            }
+            self._validate_operator_admission(command)
+            self._record_operator_admission(command)
+            command.admission_result = self._operator_ack(
+                command.method, command.ticket_id, command.onto
+            )
         except DevlegateError as error:
             command.admission_error = error
             raise
         finally:
             command.admission_event.set()
 
-    def _take_operator_command(self) -> RetryCommand | None:
+    def _take_operator_command(self) -> OperatorCommand | None:
         with self._operator_command_lock:
             if (
                 self._operator_command is None
@@ -4199,6 +4275,12 @@ export default tool({
             "lifecycle",
         }
 
+    def _has_pending_reconciliation(self) -> bool:
+        reconciliation = self._state.get("reconciliation")
+        return isinstance(reconciliation, dict) and reconciliation.get("status") == (
+            "pending"
+        )
+
     def _run_polling(
         self,
         *,
@@ -4235,9 +4317,16 @@ export default tool({
                 try:
                     if operator_command is not None:
                         self._admit_operator_command(operator_command)
-                        status = self._retry_owned(
-                            operator_command.ticket_id, stop_event
-                        )
+                        if operator_command.method == "retry":
+                            status = self._retry_owned(
+                                operator_command.ticket_id, stop_event
+                            )
+                        else:
+                            assert operator_command.method == "reconcile-update-base"
+                            assert operator_command.onto is not None
+                            status = self._reconcile_update_base_owned(
+                                operator_command.ticket_id, operator_command.onto
+                            )
                     else:
                         status = (
                             self.run_once()
@@ -4250,7 +4339,8 @@ export default tool({
                 except WorkflowBlockedError as error:
                     if operator_command is not None:
                         self._iteration_diagnostic = (
-                            f"retry {operator_command.ticket_id} rejected: {error}"
+                            f"{operator_command.method} {operator_command.ticket_id} "
+                            f"rejected: {error}"
                         )
                         status = 1
                     else:
@@ -4267,7 +4357,19 @@ export default tool({
                         status = 1
                 except DevlegateError as error:
                     if operator_command is None:
-                        if not once and self._has_recoverable_execution_stage():
+                        if not once and self._has_pending_reconciliation():
+                            workflow_blocked = True
+                            message = str(error)
+                            self._publish_service_snapshot(
+                                lifecycle="blocked",
+                                worker_running=False,
+                                blocked_reason=message,
+                            )
+                            fingerprint = hashlib.sha256(message.encode()).hexdigest()
+                            _log(f"workflow blocked: {message}")
+                            self._workflow_blocker_fingerprint = fingerprint
+                            status = 1
+                        elif not once and self._has_recoverable_execution_stage():
                             self._iteration_diagnostic = (
                                 f"execution failed: {error}"
                             )
@@ -4276,7 +4378,8 @@ export default tool({
                             raise
                     else:
                         self._iteration_diagnostic = (
-                            f"retry {operator_command.ticket_id} rejected: {error}"
+                            f"{operator_command.method} {operator_command.ticket_id} "
+                            f"rejected: {error}"
                         )
                         status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
@@ -4980,7 +5083,14 @@ export default tool({
 
     def reconcile_update_base(self, ticket_id: str, onto: str) -> int:
         """Transplant one preserved worker checkpoint onto an explicit base."""
-        with self._lock():
+        return self._reconcile_update_base_owned(ticket_id, onto, _take_lock=True)
+
+    def _reconcile_update_base_owned(
+        self, ticket_id: str, onto: str, *, _take_lock: bool = False
+    ) -> int:
+        """Run reconciliation with authority held by the service owner."""
+        authority = self._lock() if _take_lock else nullcontext()
+        with authority:
             reconciliation = self._state.get("reconciliation")
             if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
                 "pending"

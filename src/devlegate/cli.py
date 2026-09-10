@@ -14,6 +14,7 @@ from devlegate.daemon import run_daemon, run_service
 from devlegate.ipc_client import (
     IPCClientError,
     decode_plan,
+    decode_reconcile_ack,
     decode_retry_ack,
     decode_retry_candidates,
     decode_status,
@@ -153,6 +154,28 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
     print(f"retry accepted: {ticket_id}")
+    return 0
+
+
+def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "daemon is not running for this checkout; start `devlegate run`"
+            )
+        result = request(
+            locator.socket_path,
+            "reconcile-update-base",
+            {"ticket_id": ticket_id, "onto": onto},
+            mutable=True,
+        )
+        decode_reconcile_ack(result, ticket_id, onto)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    print(f"reconciliation accepted: {ticket_id}")
     return 0
 
 
@@ -496,8 +519,7 @@ def main() -> int:
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id)
         if args.command == "reconcile":
-            engine = _service_engine(env_file)
-            return engine.reconcile_update_base(args.ticket_id, args.onto)
+            return _reconcile_daemon(env_file, args.ticket_id, args.onto)
         if args.command == "daemon":
             return run_daemon(_service_engine(env_file))
         engine = _service_engine(env_file)

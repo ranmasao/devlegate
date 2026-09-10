@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
-from test_control_plane import control_fixture, invoke, persist_agent_running
+from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
 import devlegate.cli as cli
 import devlegate.daemon as daemon
@@ -33,6 +33,7 @@ from devlegate.ipc_server import (
 )
 from devlegate.runtime import DevlegateError, RetryCandidate
 from devlegate.service import ServiceEngine
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
 def make_engine(tmp_path, monkeypatch, state_override=None):
@@ -57,6 +58,7 @@ def short_state_dir():
 
 def request(socket_path, request_id, method, payload=None):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(5)
     connection.connect(str(socket_path))
     stream = connection.makefile("rwb")
     send_frame(stream, encode_request(request_id, method, payload or {}))
@@ -722,6 +724,131 @@ def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
     assert not restarted._operator_command_pending()
 
 
+def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
+    tmp_path, monkeypatch, short_state_dir
+):
+    working, config, state = control_fixture(tmp_path)
+    config.write_text(config.read_text().replace(str(state), str(short_state_dir)))
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker work\n")
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.run_once() == 1
+    reconciliation = engine._state["reconciliation"]
+    target = reconciliation["observed_product"]
+    execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
+    git(working, "pull", "--ff-only", "origin", "main")
+
+    submitted_thread = []
+    executed_thread = []
+    reconciliation_started = threading.Event()
+    reconciliation_release = threading.Event()
+    executed = threading.Event()
+    original_owned = engine._reconcile_update_base_owned
+
+    def owned(ticket_id, onto, **kwargs):
+        executed_thread.append(threading.get_ident())
+        reconciliation_started.set()
+        assert reconciliation_release.wait(3)
+        result = original_owned(ticket_id, onto, **kwargs)
+        executed.set()
+        return result
+
+    monkeypatch.setattr(engine, "_reconcile_update_base_owned", owned)
+    original_submit = engine.submit_reconcile_update_base
+
+    def submit(ticket_id, onto, *, request_id):
+        submitted_thread.append(threading.get_ident())
+        return original_submit(ticket_id, onto, request_id=request_id)
+
+    monkeypatch.setattr(engine, "submit_reconcile_update_base", submit)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    stop_event = threading.Event()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        response = request(
+            engine.ipc_socket_path,
+            "reconcile-request",
+            "reconcile-update-base",
+            {"ticket_id": "T-1", "onto": target},
+        )
+        assert response.ok
+        assert response.result == {
+            "accepted": True,
+            "ticket_id": "T-1",
+            "onto": target,
+        }
+        assert reconciliation_started.wait(2)
+        busy = request(
+            engine.ipc_socket_path,
+            "retry-while-reconcile",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert not busy.ok
+        assert "already pending or running" in busy.error["message"]
+        reconciliation_release.set()
+        assert executed.wait(3)
+        assert submitted_thread[0] != executed_thread[0]
+        assert executed_thread[0] == owner.ident
+        duplicate = request(
+            engine.ipc_socket_path,
+            "reconcile-request",
+            "reconcile-update-base",
+            {"ticket_id": "T-1", "onto": target},
+        )
+        assert duplicate.ok
+        collision = request(
+            engine.ipc_socket_path,
+            "reconcile-request",
+            "reconcile-update-base",
+            {"ticket_id": "T-1", "onto": "different-target"},
+        )
+        assert not collision.ok
+        assert "request id collision" in collision.error["message"]
+        cross_method = request(
+            engine.ipc_socket_path,
+            "reconcile-request",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert not cross_method.ok
+        assert "request id collision" in cross_method.error["message"]
+    finally:
+        reconciliation_release.set()
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=3)
+        server.stop()
+        authority.close()
+
+    assert engine._state["reconciliation"]["status"] == "resolved"
+    assert engine._state["resume_required"]["status"] == "required"
+    assert (execution / "implementation.txt").read_text() == "worker work\n"
+    restarted = ServiceEngine(config)
+    assert restarted.submit_reconcile_update_base(
+        "T-1", target, request_id="reconcile-request"
+    ) == {"accepted": True, "ticket_id": "T-1", "onto": target}
+
+
 @pytest.mark.parametrize("interactive", [False, True])
 def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
     tmp_path, monkeypatch, short_state_dir, capsys, interactive
@@ -848,6 +975,25 @@ def test_worker_launch_stage_is_rejected_before_durable_ack(
     with pytest.raises(DevlegateError, match="not currently retryable"):
         engine.submit_retry("T-1", request_id="worker-launch")
     assert not engine._operator_command_pending()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ticket_id": "T-1"},
+        {"onto": "B"},
+        {"ticket_id": "T-1", "onto": "B", "extra": "nope"},
+        {"ticket_id": "", "onto": "B"},
+        {"ticket_id": "T-1", "onto": ""},
+    ],
+)
+def test_reconcile_mutation_payload_is_strict(payload):
+    class FakeEngine:
+        def submit_reconcile_update_base(self, *_args, **_kwargs):
+            pytest.fail("invalid reconciliation payload was queued")
+
+    with pytest.raises(IPCProtocolError):
+        dispatch_mutation(FakeEngine(), _request("reconcile-update-base", payload))
 
 
 def _request(method, payload=None):

@@ -45,18 +45,39 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
 
 def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
-    if request.method != "retry":
-        raise IPCProtocolError(
-            "unknown_method", f"unsupported method: {request.method}"
+    if request.method == "retry":
+        if set(request.payload) != {"ticket_id"}:
+            raise IPCProtocolError(
+                "invalid_request", "retry payload fields are invalid"
+            )
+        ticket_id = request.payload["ticket_id"]
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise IPCProtocolError(
+                "invalid_request", "retry ticket_id must be non-empty text"
+            )
+        return engine.submit_retry(ticket_id, request_id=request.request_id)
+    if request.method == "reconcile-update-base":
+        if set(request.payload) != {"ticket_id", "onto"}:
+            raise IPCProtocolError(
+                "invalid_request",
+                "reconciliation payload fields are invalid",
+            )
+        ticket_id = request.payload["ticket_id"]
+        onto = request.payload["onto"]
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation ticket_id must be non-empty text"
+            )
+        if not isinstance(onto, str) or not onto:
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation onto must be non-empty text"
+            )
+        return engine.submit_reconcile_update_base(
+            ticket_id, onto, request_id=request.request_id
         )
-    if set(request.payload) != {"ticket_id"}:
-        raise IPCProtocolError("invalid_request", "retry payload fields are invalid")
-    ticket_id = request.payload["ticket_id"]
-    if not isinstance(ticket_id, str) or not ticket_id:
-        raise IPCProtocolError(
-            "invalid_request", "retry ticket_id must be non-empty text"
-        )
-    return engine.submit_retry(ticket_id, request_id=request.request_id)
+    raise IPCProtocolError(
+        "unknown_method", f"unsupported method: {request.method}"
+    )
 
 
 class UnixIPCServer:
@@ -247,7 +268,7 @@ class UnixIPCServer:
                     if payload is None:
                         return
                     request = parse_request(payload)
-                    if request.method == "retry":
+                    if request.method in {"retry", "reconcile-update-base"}:
                         result = dispatch_mutation(self.engine, request)
                     else:
                         result = dispatch_read_only(self.engine, request)

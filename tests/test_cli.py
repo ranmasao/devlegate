@@ -629,6 +629,140 @@ def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
     assert "retry accepted: T-1" in capsys.readouterr().out
 
 
+def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    accepted = []
+
+    def submit(ticket_id, onto, *, request_id):
+        accepted.append((ticket_id, onto, request_id))
+        return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
+
+    monkeypatch.setattr(cli_daemon, "submit_reconcile_update_base", submit)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("CLI constructed mutable engine"),
+    )
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            "abc123",
+            "--env",
+            str(config),
+        ],
+    )
+
+    assert main() == 0
+    assert accepted and accepted[0][:2] == ("T-1", "abc123")
+    assert "reconciliation accepted: T-1" in capsys.readouterr().out
+
+
+def test_reconcile_refuses_without_daemon_without_constructing_engine(
+    git_fixture, monkeypatch, capsys
+):
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct reconciliation fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            "abc123",
+            "--env",
+            str(config),
+        ],
+    )
+
+    assert main() == 1
+    assert "daemon is not running" in capsys.readouterr().err
+
+
+def test_reconcile_refuses_connectable_socket_without_authority(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    locator = RuntimeLocator.from_env(config)
+    locator.socket_path.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(locator.socket_path))
+    listener.listen(1)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct reconciliation fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            "abc123",
+            "--env",
+            str(config),
+        ],
+    )
+    try:
+        assert main() == 1
+        assert "daemon is not running" in capsys.readouterr().err
+        listener.settimeout(0.2)
+        with pytest.raises(socket.timeout):
+            listener.accept()
+    finally:
+        listener.close()
+        locator.socket_path.unlink(missing_ok=True)
+
+
+def test_reconcile_fails_closed_when_authority_exists_without_socket(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    engine = ServiceEngine(config)
+    authority = engine._lock()
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct reconciliation fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            "abc123",
+            "--env",
+            str(config),
+        ],
+    )
+    try:
+        assert main() == 1
+        assert "daemon IPC unavailable" in capsys.readouterr().err
+    finally:
+        authority.close()
+
+
 def test_retry_refuses_connectable_socket_without_authority(
     git_fixture, monkeypatch, capsys
 ):

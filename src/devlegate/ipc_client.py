@@ -36,6 +36,12 @@ class IPCClientError(Exception):
         self.uncertain = uncertain
 
 
+def _uncertain_message(method: str) -> str:
+    if method == "retry":
+        return "retry request outcome is uncertain; inspect status before retrying"
+    return f"{method} request outcome is uncertain; inspect status before retrying"
+
+
 def request(
     socket_path: Path,
     method: str,
@@ -61,8 +67,7 @@ def request(
         except IPCClientError as error:
             if mutable and attempt > 0 and not error.application:
                 raise IPCClientError(
-                    "retry request outcome is uncertain; inspect status before "
-                    "retrying",
+                    _uncertain_message(method),
                     uncertain=True,
                 ) from error
             if not mutable or not error.uncertain or attempt + 1 == attempts:
@@ -94,8 +99,7 @@ def _request_once(
         except (OSError, IPCProtocolError) as error:
             if mutable and connected:
                 raise IPCClientError(
-                    "retry request outcome is uncertain; inspect status before "
-                    "retrying",
+                    _uncertain_message(method),
                     uncertain=True,
                 ) from error
             raise IPCClientError(f"daemon IPC unavailable: {error}") from error
@@ -104,7 +108,7 @@ def _request_once(
     if payload is None:
         if mutable:
             raise IPCClientError(
-                "retry request outcome is uncertain; inspect status before retrying",
+                _uncertain_message(method),
                 uncertain=True,
             )
         raise IPCClientError("daemon IPC returned no response")
@@ -113,14 +117,14 @@ def _request_once(
     except IPCProtocolError as error:
         if mutable:
             raise IPCClientError(
-                "retry request outcome is uncertain; inspect status before retrying",
+                _uncertain_message(method),
                 uncertain=True,
             ) from error
         raise IPCClientError(f"daemon IPC protocol error: {error}") from error
     if response.request_id != request_id:
         if mutable:
             raise IPCClientError(
-                "retry request outcome is uncertain; inspect status before retrying",
+                _uncertain_message(method),
                 uncertain=True,
             )
         raise IPCClientError("daemon IPC response id does not match request")
@@ -133,7 +137,7 @@ def _request_once(
     if response.result is None:
         if mutable:
             raise IPCClientError(
-                "retry request outcome is uncertain; inspect status before retrying",
+                _uncertain_message(method),
                 uncertain=True,
             )
         raise IPCClientError("daemon IPC response has no result")
@@ -171,6 +175,23 @@ def decode_retry_ack(value: dict[str, object], ticket_id: str) -> None:
         raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
     if value["accepted"] is not True or value["ticket_id"] != ticket_id:
         raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
+
+
+def decode_reconcile_ack(
+    value: dict[str, object], ticket_id: str, onto: str
+) -> None:
+    if set(value) != {"accepted", "ticket_id", "onto"}:
+        raise IPCClientError(
+            "daemon IPC returned invalid reconciliation acknowledgement"
+        )
+    if (
+        value["accepted"] is not True
+        or value["ticket_id"] != ticket_id
+        or value["onto"] != onto
+    ):
+        raise IPCClientError(
+            "daemon IPC returned invalid reconciliation acknowledgement"
+        )
 
 
 def decode_plan(value: dict[str, object]) -> ExecutionPlan:
