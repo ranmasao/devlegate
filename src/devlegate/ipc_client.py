@@ -1,4 +1,4 @@
-"""Bounded read-only Unix IPC client for the foreground CLI."""
+"""Bounded Unix IPC client for read-only views and daemon commands."""
 
 from __future__ import annotations
 
@@ -24,38 +24,73 @@ from devlegate.runtime import (
 class IPCClientError(Exception):
     """A transport, protocol, or daemon application response error."""
 
-    def __init__(self, message: str, *, application: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        application: bool = False,
+        uncertain: bool = False,
+    ) -> None:
         super().__init__(message)
         self.application = application
+        self.uncertain = uncertain
 
 
 def request(
-    socket_path: Path, method: str, *, timeout: float = 2.0
+    socket_path: Path,
+    method: str,
+    payload: dict[str, object] | None = None,
+    *,
+    timeout: float = 2.0,
+    mutable: bool = False,
 ) -> dict[str, object]:
-    """Issue one protocol-v1 read-only request and return its structured result."""
+    """Issue one bounded protocol-v1 request and return its structured result."""
     request_id = uuid.uuid4().hex
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(timeout)
+    connected = False
     try:
         try:
             connection.connect(str(socket_path))
+            connected = True
             stream = connection.makefile("rwb")
             try:
-                send_frame(stream, encode_request(request_id, method, {}))
+                send_frame(stream, encode_request(request_id, method, payload or {}))
                 payload = receive_frame(stream)
             finally:
                 stream.close()
         except (OSError, IPCProtocolError) as error:
+            if mutable and connected:
+                raise IPCClientError(
+                    "retry request outcome is uncertain; inspect status before "
+                    "retrying",
+                    uncertain=True,
+                ) from error
             raise IPCClientError(f"daemon IPC unavailable: {error}") from error
     finally:
         connection.close()
     if payload is None:
+        if mutable:
+            raise IPCClientError(
+                "retry request outcome is uncertain; inspect status before retrying",
+                uncertain=True,
+            )
         raise IPCClientError("daemon IPC returned no response")
     try:
         response = parse_response(payload)
     except IPCProtocolError as error:
+        if mutable:
+            raise IPCClientError(
+                "retry request outcome is uncertain; inspect status before retrying",
+                uncertain=True,
+            ) from error
         raise IPCClientError(f"daemon IPC protocol error: {error}") from error
     if response.request_id != request_id:
+        if mutable:
+            raise IPCClientError(
+                "retry request outcome is uncertain; inspect status before retrying",
+                uncertain=True,
+            )
         raise IPCClientError("daemon IPC response id does not match request")
     if not response.ok:
         error = response.error or {}
@@ -64,8 +99,46 @@ def request(
             application=True,
         )
     if response.result is None:
+        if mutable:
+            raise IPCClientError(
+                "retry request outcome is uncertain; inspect status before retrying",
+                uncertain=True,
+            )
         raise IPCClientError("daemon IPC response has no result")
     return response.result
+
+
+def decode_retry_candidates(value: dict[str, object]) -> tuple[dict[str, str], ...]:
+    try:
+        candidates = value["candidates"]
+        if not isinstance(candidates, list):
+            raise ValueError("candidates must be a list")
+        result = []
+        for item in candidates:
+            if not isinstance(item, dict) or set(item) != {
+                "id",
+                "title",
+                "reason",
+                "kind",
+            }:
+                raise ValueError("retry candidate shape is invalid")
+            if not all(isinstance(item[key], str) and item[key] for key in item):
+                raise ValueError("retry candidate fields must be non-empty text")
+            result.append({key: item[key] for key in item})
+        if set(value) != {"candidates"}:
+            raise ValueError("retry candidate response fields are invalid")
+        return tuple(result)
+    except (KeyError, TypeError, ValueError) as error:
+        raise IPCClientError(
+            f"daemon IPC returned invalid retry candidates: {error}"
+        ) from error
+
+
+def decode_retry_ack(value: dict[str, object], ticket_id: str) -> None:
+    if set(value) != {"accepted", "ticket_id"}:
+        raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
+    if value["accepted"] is not True or value["ticket_id"] != ticket_id:
+        raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
 
 
 def decode_plan(value: dict[str, object]) -> ExecutionPlan:

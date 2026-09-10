@@ -287,6 +287,13 @@ class RetryCandidate:
 
 
 @dataclasses.dataclass(frozen=True)
+class RetryCommand:
+    """One process-local operator mutation submitted to the service owner."""
+
+    ticket_id: str
+
+
+@dataclasses.dataclass(frozen=True)
 class WorkerProcessIdentity:
     execution_id: str
     pid: int
@@ -891,6 +898,10 @@ class ServiceEngine:
         self._retry_ticket_id = None
         self._automatic_resume_ticket_id = None
         self._stop_event: threading.Event | None = None
+        self._operator_command_lock = threading.Lock()
+        self._operator_command: RetryCommand | None = None
+        self._operator_active = False
+        self._service_wake = threading.Event()
         self._foreground_abort_requested = False
         self._worker_identity_handler: (
             Callable[[WorkerProcessIdentity], None] | None
@@ -934,6 +945,60 @@ class ServiceEngine:
     def ipc_socket_path(self) -> Path:
         """Return the project-specific daemon IPC socket path."""
         return self._locator.socket_path
+
+    def wake(self) -> None:
+        """Wake the owner loop for an internal command or shutdown request."""
+        self._service_wake.set()
+
+    def retry_candidates_view(self) -> tuple[dict[str, str], ...]:
+        """Return the daemon-owned semantic retry candidates for local prompting."""
+        return tuple(
+            {
+                "id": candidate.ticket_id,
+                "title": candidate.title,
+                "reason": candidate.reason,
+                "kind": candidate.kind,
+            }
+            for candidate in self._interactive_retry_candidates()
+        )
+
+    def submit_retry(self, ticket_id: str) -> dict[str, object]:
+        """Admit one retry command without executing it on the IPC thread."""
+        if self.service_snapshot().worker_running or self._state.get("phase") in {
+            "agent_pending",
+            "agent_running",
+        }:
+            raise DevlegateError("daemon worker is already running")
+        candidate_ids = {
+            candidate.ticket_id for candidate in self._interactive_retry_candidates()
+        }
+        if ticket_id not in candidate_ids:
+            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+        with self._operator_command_lock:
+            if self._operator_active or self._operator_command is not None:
+                raise DevlegateError(
+                    "daemon runtime command already pending or running"
+                )
+            self._operator_command = RetryCommand(ticket_id)
+        self.wake()
+        return {"accepted": True, "ticket_id": ticket_id}
+
+    def _take_operator_command(self) -> RetryCommand | None:
+        with self._operator_command_lock:
+            if self._operator_command is None or self._operator_active:
+                return None
+            command = self._operator_command
+            self._operator_command = None
+            self._operator_active = True
+            return command
+
+    def _release_operator_command(self) -> None:
+        with self._operator_command_lock:
+            self._operator_active = False
+
+    def _operator_command_pending(self) -> bool:
+        with self._operator_command_lock:
+            return self._operator_command is not None
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
@@ -3967,6 +4032,13 @@ export default tool({
         lock_handle: object | None = None,
     ) -> int:
         self._foreground_abort_requested = False
+        if stop_event is not None and not once:
+            threading.Thread(
+                target=self._wake_when_stopped,
+                args=(stop_event,),
+                name="devlegate-stop-wake",
+                daemon=True,
+            ).start()
         authority = (
             nullcontext(lock_handle) if lock_handle is not None else self._lock()
         )
@@ -3980,28 +4052,49 @@ export default tool({
                 ):
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
+                operator_command = None
+                if self._state.get("phase") != "merge_pending":
+                    operator_command = self._take_operator_command()
                 workflow_blocked = False
                 self._iteration_diagnostic = None
                 try:
-                    status = (
-                        self.run_once()
-                        if "run_once" in self.__dict__
-                        else self._run_once()
-                    )
+                    if operator_command is not None:
+                        status = self._retry_owned(
+                            operator_command.ticket_id, stop_event
+                        )
+                    else:
+                        status = (
+                            self.run_once()
+                            if "run_once" in self.__dict__
+                            else self._run_once()
+                        )
                 except ShutdownInterrupted:
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 except WorkflowBlockedError as error:
-                    workflow_blocked = True
-                    message = str(error)
-                    self._publish_service_snapshot(
-                        lifecycle="blocked",
-                        worker_running=False,
-                        blocked_reason=message,
+                    if operator_command is not None:
+                        self._iteration_diagnostic = (
+                            f"retry {operator_command.ticket_id} rejected: {error}"
+                        )
+                        status = 1
+                    else:
+                        workflow_blocked = True
+                        message = str(error)
+                        self._publish_service_snapshot(
+                            lifecycle="blocked",
+                            worker_running=False,
+                            blocked_reason=message,
+                        )
+                        fingerprint = hashlib.sha256(message.encode()).hexdigest()
+                        _log(f"workflow blocked: {message}")
+                        self._workflow_blocker_fingerprint = fingerprint
+                        status = 1
+                except DevlegateError as error:
+                    if operator_command is None:
+                        raise
+                    self._iteration_diagnostic = (
+                        f"retry {operator_command.ticket_id} rejected: {error}"
                     )
-                    fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                    _log(f"workflow blocked: {message}")
-                    self._workflow_blocker_fingerprint = fingerprint
                     status = 1
                 except (OSError, subprocess.CalledProcessError) as error:
                     detail = getattr(error, "stderr", None) or str(error)
@@ -4014,6 +4107,9 @@ export default tool({
                     ):
                         _log("workflow is valid again")
                         self._workflow_blocker_fingerprint = None
+                finally:
+                    if operator_command is not None:
+                        self._release_operator_command()
                 if status and not workflow_blocked:
                     diagnostic = self._iteration_diagnostic
                     if diagnostic is None:
@@ -4030,14 +4126,31 @@ export default tool({
                     if not self.service_snapshot().worker_running:
                         self._publish_service_snapshot(
                             lifecycle="blocked" if workflow_blocked else "ready"
-                        )
+                    )
                     return status
                 if stop_event is not None:
-                    if stop_event.wait(int(self.poll_interval)):
+                    if self._wait_for_service_event(
+                        stop_event, int(self.poll_interval)
+                    ):
                         self._publish_service_snapshot(lifecycle="ready")
                         return 0
                 else:
-                    time.sleep(int(self.poll_interval))
+                    self._service_wake.wait(int(self.poll_interval))
+                    self._service_wake.clear()
+
+    def _wake_when_stopped(self, stop_event: threading.Event) -> None:
+        stop_event.wait()
+        self.wake()
+
+    def _wait_for_service_event(
+        self, stop_event: threading.Event, timeout: int
+    ) -> bool:
+        """Wait for shutdown or an operator command without polling busy-work."""
+        self._service_wake.clear()
+        if stop_event.is_set() or self._operator_command_pending():
+            return stop_event.is_set()
+        self._service_wake.wait(timeout)
+        return stop_event.is_set()
 
     def _status_snapshot_hook(self, _point: str) -> None:
         """Testing hook for deterministic snapshot-race simulations."""
@@ -4515,7 +4628,16 @@ export default tool({
         return self.status_view()
 
     def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
-        snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
+        for _attempt in range(3):
+            try:
+                snapshot = self._collect_status_attempt(allow_workflow_blocked=False)
+                break
+            except SnapshotChanged:
+                continue
+        else:
+            raise DevlegateError(
+                "project state changed while retry candidates were being collected"
+            )
         candidates: list[tuple[str, str, str]] = []
         for failure in snapshot.failed_executions:
             if failure.retryable:
@@ -4599,17 +4721,6 @@ export default tool({
         """Authorize exactly one fresh execution after current-state validation."""
         if stop_event is not None and stop_event.is_set():
             return 0
-        if ticket_id is not None and self._state.get("phase") == "agent_running":
-            with self._lock():
-                if self._state.get("execution_stage") in {
-                    "worker-launch",
-                    "worker-running",
-                    "post-worker",
-                }:
-                    self._reconcile_stranded_execution()
-                else:
-                    self._recover_interrupted_execution(ticket_id)
-                return self._retry_locked(ticket_id, stop_event)
         if ticket_id is None:
             try:
                 interactive = os.isatty(sys.stdin.fileno()) and os.isatty(
@@ -4643,7 +4754,24 @@ export default tool({
                 raise DevlegateError("invalid retry selection") from error
             return self._retry_interactive_candidate(candidates[index - 1], stop_event)
         with self._lock():
-            return self._retry_locked(ticket_id, stop_event)
+            return self._retry_owned(ticket_id, stop_event)
+
+    def _retry_owned(
+        self, ticket_id: str, stop_event: threading.Event | None = None
+    ) -> int:
+        """Execute retry semantics under an authority lock held by the caller."""
+        if stop_event is not None and stop_event.is_set():
+            return 0
+        if self._state.get("phase") == "agent_running":
+            if self._state.get("execution_stage") in {
+                "worker-launch",
+                "worker-running",
+                "post-worker",
+            }:
+                self._reconcile_stranded_execution()
+            else:
+                self._recover_interrupted_execution(ticket_id)
+        return self._retry_locked(ticket_id, stop_event)
 
     def _retry_locked(
         self, ticket_id: str, stop_event: threading.Event | None = None

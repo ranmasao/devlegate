@@ -598,6 +598,139 @@ def test_blocked_dependency_status_uses_daemon_semantics(
     assert "by D-1 [review]" in output
 
 
+def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    accepted = []
+
+    def submit(ticket_id):
+        accepted.append(ticket_id)
+        return {"accepted": True, "ticket_id": ticket_id}
+
+    monkeypatch.setattr(cli_daemon, "submit_retry", submit)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("CLI constructed mutable engine"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "retry", "T-1", "--env", str(_short_runtime_config(git_fixture))],
+    )
+
+    assert main() == 0
+    assert accepted == ["T-1"]
+    assert "retry accepted: T-1" in capsys.readouterr().out
+
+
+def test_retry_refuses_connectable_socket_without_authority(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    locator = RuntimeLocator.from_env(config)
+    locator.socket_path.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(locator.socket_path))
+    listener.listen(1)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct retry fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "retry", "T-1", "--env", str(config)],
+    )
+    try:
+        assert main() == 1
+        assert "daemon is not running" in capsys.readouterr().err
+        listener.settimeout(0.2)
+        with pytest.raises(socket.timeout):
+            listener.accept()
+    finally:
+        listener.close()
+        locator.socket_path.unlink(missing_ok=True)
+
+
+def test_retry_fails_closed_when_authority_exists_but_socket_is_unavailable(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    engine = ServiceEngine(config)
+    authority = engine._lock()
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("direct retry fallback used"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "retry", "T-1", "--env", str(config)],
+    )
+    try:
+        assert main() == 1
+        assert "daemon IPC unavailable" in capsys.readouterr().err
+    finally:
+        authority.close()
+
+
+def test_retry_interactive_candidates_are_rendered_and_selected_locally(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    submitted = []
+    monkeypatch.setattr(
+        cli_daemon,
+        "retry_candidates_view",
+        lambda: (
+            {"id": "T-1", "title": "Ticket", "reason": "failed", "kind": "failed"},
+        ),
+    )
+    monkeypatch.setattr(
+        cli_daemon,
+        "submit_retry",
+        lambda ticket_id: submitted.append(ticket_id)
+        or {"accepted": True, "ticket_id": ticket_id},
+    )
+    monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "retry", "--env", str(_short_runtime_config(git_fixture))],
+    )
+
+    assert main() == 0
+    assert submitted == ["T-1"]
+    assert "Retry candidates:" in capsys.readouterr().out
+
+
+def test_retry_interactive_cancel_submits_no_mutation(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    submitted = []
+    monkeypatch.setattr(
+        cli_daemon,
+        "retry_candidates_view",
+        lambda: (
+            {"id": "T-1", "title": "Ticket", "reason": "failed", "kind": "failed"},
+        ),
+    )
+    monkeypatch.setattr(cli_daemon, "submit_retry", submitted.append)
+    monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "0")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "retry", "--env", str(_short_runtime_config(git_fixture))],
+    )
+
+    assert main() == 0
+    assert submitted == []
+    capsys.readouterr()
+
+
 def test_daemon_application_error_is_authoritative(
     cli_daemon, git_fixture, monkeypatch, capsys
 ):
@@ -903,7 +1036,6 @@ def test_all_operational_cli_commands_use_service_engine(
         ["status", "--json", "--env", str(git_fixture["config"])],
         ["plan", "--json", "--env", str(git_fixture["config"])],
         ["run", "--once", "--env", str(git_fixture["config"])],
-        ["retry", "T-1", "--env", str(git_fixture["config"])],
     ):
         monkeypatch.setattr(sys, "argv", ["devlegate", *argv])
         assert main() == 0
@@ -916,8 +1048,6 @@ def test_all_operational_cli_commands_use_service_engine(
         "plan",
         ("init", git_fixture["config"], False),
         ("run", True),
-        ("init", git_fixture["config"], False),
-        ("retry", "T-1"),
     ]
 
 
@@ -984,7 +1114,9 @@ def test_cli_status_and_plan_render_fake_application_without_runtime(
     assert json.loads(capsys.readouterr().out)["action"] == "none"
 
 
-def test_operational_cli_dispatches_retry_through_application(git_fixture, monkeypatch):
+def test_retry_refuses_without_daemon_without_constructing_application(
+    git_fixture, monkeypatch
+):
     calls = []
 
     class FakeApplication:
@@ -999,8 +1131,8 @@ def test_operational_cli_dispatches_retry_through_application(git_fixture, monke
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "retry", "T-1", "--env", str(git_fixture["config"])]
     )
-    assert main() == 3
-    assert calls == [("init", git_fixture["config"], False), ("retry", "T-1")]
+    assert main() == 1
+    assert calls == []
 
 
 def test_status_reports_nested_code_and_control_observations(git_fixture):

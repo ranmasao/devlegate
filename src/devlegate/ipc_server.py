@@ -1,4 +1,4 @@
-"""Small Unix-domain IPC server for the daemon's read-only service views."""
+"""Small Unix-domain IPC server for daemon views and command submission."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ _PEER_CREDENTIALS = struct.Struct("3i")
 
 
 def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]:
-    """Dispatch only the read-only E1 methods through the service API."""
+    """Dispatch read-only methods through the service API."""
     if request.method == "ping":
         return {"service": "devlegate", "protocol_version": 1}
     if request.method == "status":
@@ -38,7 +38,25 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     if request.method == "plan":
         view = engine.plan_view()
         return view.as_dict()
+    if request.method == "retry-candidates":
+        return {"candidates": list(engine.retry_candidates_view())}
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
+
+
+def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
+    """Validate and submit a mutation without executing it on the IPC thread."""
+    if request.method != "retry":
+        raise IPCProtocolError(
+            "unknown_method", f"unsupported method: {request.method}"
+        )
+    if set(request.payload) != {"ticket_id"}:
+        raise IPCProtocolError("invalid_request", "retry payload fields are invalid")
+    ticket_id = request.payload["ticket_id"]
+    if not isinstance(ticket_id, str) or not ticket_id:
+        raise IPCProtocolError(
+            "invalid_request", "retry ticket_id must be non-empty text"
+        )
+    return engine.submit_retry(ticket_id)
 
 
 class UnixIPCServer:
@@ -229,7 +247,10 @@ class UnixIPCServer:
                     if payload is None:
                         return
                     request = parse_request(payload)
-                    result = dispatch_read_only(self.engine, request)
+                    if request.method == "retry":
+                        result = dispatch_mutation(self.engine, request)
+                    else:
+                        result = dispatch_read_only(self.engine, request)
                     response = encode_success_response(request.request_id, result)
                 except IPCProtocolError as error:
                     response = encode_error_response(
@@ -254,7 +275,10 @@ class UnixIPCServer:
                 if fatal:
                     return
         finally:
-            stream.close()
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 def _peer_credentials_are_current_user(connection: socket.socket) -> bool:
@@ -270,4 +294,4 @@ def _peer_credentials_are_current_user(connection: socket.socket) -> bool:
     return uid == os.geteuid()
 
 
-__all__ = ["UnixIPCServer", "dispatch_read_only"]
+__all__ = ["UnixIPCServer", "dispatch_mutation", "dispatch_read_only"]

@@ -13,7 +13,7 @@ from test_control_plane import control_fixture, git, invoke, persist_agent_runni
 import devlegate.cli as cli
 import devlegate.daemon as daemon
 import devlegate.runtime as runtime
-from devlegate.cli import Devlegate, DevlegateError
+from devlegate.cli import DevlegateError
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
@@ -1042,15 +1042,20 @@ def test_foreground_operator_abort_stops_after_one_iteration(
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
+    state = Path("/tmp") / f"c-f2-{tmp_path.name}"
+    config.write_text(config.read_text().replace(str(tmp_path / "state"), str(state)))
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-    persist_agent_running(devlegate, state)
     marker = tmp_path / "retry-processes.json"
+    attempt = tmp_path / "attempted"
     worker = tmp_path / "worker.py"
     worker.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, subprocess, sys, time\n"
+        f"attempt = pathlib.Path({str(attempt)!r})\n"
+        "if not attempt.exists():\n"
+        "    attempt.touch()\n"
+        "    raise SystemExit(1)\n"
         "child = subprocess.Popen([sys.executable, '-c', "
         "'import time; time.sleep(60)'])\n"
         "pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).write_text(\n"
@@ -1062,11 +1067,25 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
     config.write_text(
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
     )
+    assert ServiceEngine(config).run_once() == 1
     environment = {
         **os.environ,
         "DEVLEGATE_TEST_MARKER": str(marker),
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
+    daemon_process = subprocess.Popen(
+        [sys.executable, "-m", "devlegate", "daemon", "--env", str(config)],
+        cwd=working,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    socket_path = ServiceEngine(config).ipc_socket_path
+    for _ in range(500):
+        if socket_path.exists():
+            break
+        time.sleep(0.01)
     process = subprocess.Popen(
         [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
         cwd=working,
@@ -1083,10 +1102,26 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
         if not marker.exists():
             process.send_signal(signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=10)
-            pytest.fail(f"retry worker did not start: {stdout}\n{stderr}")
+            daemon_status = daemon_process.poll()
+            if daemon_process.poll() is None:
+                daemon_process.kill()
+            try:
+                daemon_stdout, daemon_stderr = daemon_process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                daemon_stdout, daemon_stderr = "", "daemon cleanup timed out"
+            pytest.fail(
+                f"retry worker did not start: {stdout}\n{stderr}\n"
+                f"daemon status: {daemon_status}\n"
+                f"daemon output: {daemon_stdout}\n{daemon_stderr}"
+            )
     finally:
-        process.send_signal(signal.SIGTERM)
-        stdout, stderr = process.communicate(timeout=10)
+        if process.poll() is None:
+            stdout, stderr = process.communicate(timeout=10)
+        else:
+            stdout, stderr = process.communicate(timeout=10)
+        if daemon_process.poll() is None:
+            daemon_process.send_signal(signal.SIGTERM)
+        daemon_stdout, daemon_stderr = daemon_process.communicate(timeout=10)
     assert process.returncode == 0, (stdout, stderr)
     processes = json.loads(marker.read_text())
     for process_id in (processes["worker"], processes["child"]):
@@ -1107,15 +1142,20 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
+    state = Path("/tmp") / f"c-f2-{tmp_path.name}"
+    config.write_text(config.read_text().replace(str(tmp_path / "state"), str(state)))
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-    persist_agent_running(devlegate, state)
     marker = tmp_path / "retry-processes.jsonl"
+    attempt = tmp_path / "attempted"
     worker = tmp_path / "worker.py"
     worker.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, subprocess, sys, time\n"
+        f"attempt = pathlib.Path({str(attempt)!r})\n"
+        "if not attempt.exists():\n"
+        "    attempt.touch()\n"
+        "    raise SystemExit(1)\n"
         "child = subprocess.Popen([sys.executable, '-c', "
         "'import time; time.sleep(60)'])\n"
         "with pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).open('a') as file:\n"
@@ -1127,11 +1167,25 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
     config.write_text(
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
     )
+    assert ServiceEngine(config).run_once() == 1
     environment = {
         **os.environ,
         "DEVLEGATE_TEST_MARKER": str(marker),
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
+    daemon_process = subprocess.Popen(
+        [sys.executable, "-m", "devlegate", "daemon", "--env", str(config)],
+        cwd=working,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    socket_path = ServiceEngine(config).ipc_socket_path
+    for _ in range(500):
+        if socket_path.exists():
+            break
+        time.sleep(0.01)
     first = subprocess.Popen(
         [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
         cwd=working,
@@ -1146,8 +1200,7 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
                 break
             time.sleep(0.01)
         assert marker.exists()
-        first.kill()
-        first.wait(timeout=10)
+        first.communicate(timeout=10)
         processes = [json.loads(line) for line in marker.read_text().splitlines()]
         assert len(processes) == 1
         assert os.kill(processes[0]["worker"], 0) is None
@@ -1170,12 +1223,14 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
         )
         stdout, stderr = second.communicate(timeout=10)
         assert second.returncode == 1, (stdout, stderr)
-        assert "worker is still alive" in stderr
+        assert "daemon worker is already running" in stderr
         assert len(marker.read_text().splitlines()) == 1
     finally:
         if first.poll() is None:
-            first.kill()
-            first.wait(timeout=10)
+            first.communicate(timeout=10)
+        if daemon_process.poll() is None:
+            daemon_process.kill()
+            daemon_process.wait(timeout=10)
         if marker.exists():
             processes = [json.loads(line) for line in marker.read_text().splitlines()]
             if processes:

@@ -36,7 +36,8 @@ def run_daemon(engine: ServiceEngine) -> int:
     try:
         server.start()
         return run_foreground(
-            engine, lambda intent: engine.serve(intent, lock_handle=authority)
+            engine,
+            lambda intent: engine.serve(intent, lock_handle=authority),
         )
     finally:
         server.stop()
@@ -44,15 +45,21 @@ def run_daemon(engine: ServiceEngine) -> int:
 
 
 def run_foreground(
-    engine: ServiceEngine, operation: Callable[[ShutdownIntent], int]
+    engine: ServiceEngine,
+    operation: Callable[[ShutdownIntent], int],
+    *,
+    wake: Callable[[], None] | None = None,
 ) -> int:
     """Run one worker-owning foreground operation under signal ownership."""
     stop_intent = ShutdownIntent()
+    wake = wake or getattr(engine, "wake", None)
 
     def request_stop(signum: int, _frame: object) -> None:
         stop_intent.request(
             "operator_abort" if signum == signal.SIGINT else "service_shutdown"
         )
+        if wake is not None:
+            wake()
 
     previous: dict[int, Callable[[int, object], object]] = {}
     try:

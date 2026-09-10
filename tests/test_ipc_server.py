@@ -6,6 +6,7 @@ import stat
 import struct
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import devlegate.daemon as daemon
 import devlegate.ipc_server as ipc_server
 from devlegate.ipc_protocol import (
     MAX_PAYLOAD_BYTES,
+    IPCProtocolError,
     encode_frame,
     encode_request,
     parse_response,
@@ -25,9 +27,10 @@ from devlegate.ipc_protocol import (
 from devlegate.ipc_server import (
     UNIX_SOCKET_PATH_MAX_BYTES,
     UnixIPCServer,
+    dispatch_mutation,
     dispatch_read_only,
 )
-from devlegate.runtime import DevlegateError
+from devlegate.runtime import DevlegateError, RetryCandidate
 from devlegate.service import ServiceEngine
 
 
@@ -511,7 +514,130 @@ def test_dispatch_uses_service_views_without_persistence_access():
     assert dispatch_read_only(FakeEngine(), _request("plan")) == {"view": True}
 
 
-def _request(method):
+def test_retry_submission_runs_on_service_owner_thread(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine._interactive_retry_candidates = lambda: (
+        RetryCandidate("T-1", "Ticket", "failed", "failed"),
+    )
+    submitted_thread = []
+    executed_thread = []
+    executed = threading.Event()
+    stop_event = threading.Event()
+
+    original_submit = engine.submit_retry
+
+    def submit(ticket_id):
+        submitted_thread.append(threading.get_ident())
+        return original_submit(ticket_id)
+
+    def execute(ticket_id, _stop_event=None):
+        assert ticket_id == "T-1"
+        executed_thread.append(threading.get_ident())
+        executed.set()
+        return 0
+
+    monkeypatch.setattr(engine, "submit_retry", submit)
+    monkeypatch.setattr(engine, "_retry_owned", execute)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        response = request(
+            engine.ipc_socket_path,
+            "retry",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert response.ok
+        assert response.result == {"accepted": True, "ticket_id": "T-1"}
+        assert executed.wait(2)
+        assert submitted_thread[0] != executed_thread[0]
+        assert executed_thread[0] == owner.ident
+    finally:
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=2)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
+
+
+def test_read_only_ipc_remains_available_while_owner_retry_is_active(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine._interactive_retry_candidates = lambda: (
+        RetryCandidate("T-1", "Ticket", "failed", "failed"),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    stop_event = threading.Event()
+
+    class View:
+        def as_dict(self):
+            return {"phase": "worker"}
+
+    monkeypatch.setattr(engine, "status_view", lambda: View())
+
+    def execute(_ticket_id, _stop_event=None):
+        started.set()
+        release.wait(2)
+        return 0
+
+    monkeypatch.setattr(engine, "_retry_owned", execute)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        retry_response = request(
+            engine.ipc_socket_path,
+            "retry",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert retry_response.ok
+        assert started.wait(2)
+        status_response = request(engine.ipc_socket_path, "status", "status")
+        assert status_response.ok
+        assert status_response.result == {"phase": "worker"}
+    finally:
+        release.set()
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=2)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"ticket_id": ""}, {"ticket_id": None}, {"ticket_id": "T-1", "extra": 1}],
+)
+def test_retry_mutation_payload_is_strict(payload):
+    class FakeEngine:
+        def submit_retry(self, _ticket_id):
+            pytest.fail("invalid retry payload was queued")
+
+    with pytest.raises(IPCProtocolError):
+        dispatch_mutation(FakeEngine(), _request("retry", payload))
+
+
+def _request(method, payload=None):
     from devlegate.ipc_protocol import IPCRequest
 
-    return IPCRequest(1, "id", method, {})
+    return IPCRequest(1, "id", method, payload or {})

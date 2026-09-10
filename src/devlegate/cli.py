@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -10,7 +11,14 @@ from devlegate import __version__
 from devlegate import runtime as _runtime
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
 from devlegate.daemon import run_daemon, run_foreground
-from devlegate.ipc_client import IPCClientError, decode_plan, decode_status, request
+from devlegate.ipc_client import (
+    IPCClientError,
+    decode_plan,
+    decode_retry_ack,
+    decode_retry_candidates,
+    decode_status,
+    request,
+)
 from devlegate.runtime import (
     DevlegateError,
     ExecutionPlan,
@@ -82,6 +90,70 @@ def _read_only_view(env_file: Path, method: str) -> StatusSnapshot | ExecutionPl
             raise DevlegateError(str(decode_error)) from decode_error
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
+
+
+def _interactive_terminal() -> bool:
+    try:
+        return os.isatty(sys.stdin.fileno()) and os.isatty(sys.stdout.fileno())
+    except (OSError, ValueError):
+        return False
+
+
+def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    if ticket_id is None and not _interactive_terminal():
+        raise DevlegateError(
+            "interactive retry requires a terminal; specify a ticket ID:\n"
+            "devlegate retry <ticket-id>"
+        )
+    if ticket_id is not None and not ticket_id:
+        raise DevlegateError("retry ticket ID must be non-empty")
+    try:
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "daemon is not running for this checkout; start `devlegate daemon`"
+            )
+        if ticket_id is None:
+            candidates = decode_retry_candidates(
+                request(locator.socket_path, "retry-candidates")
+            )
+            if not candidates:
+                raise DevlegateError(
+                    "no current executions are retryable or recoverable"
+                )
+            print("Retry candidates:")
+            for index, candidate in enumerate(candidates, 1):
+                print(f"  {index}) {candidate['id']}  {candidate['title']}")
+                print(f"     {candidate['reason']}")
+            print("  0) Cancel")
+            answer = input("Select number (Enter = cancel): ").strip()
+            if not answer or answer == "0":
+                return 0
+            try:
+                index = int(answer)
+                if not 1 <= index <= len(candidates):
+                    raise ValueError
+            except ValueError as error:
+                raise DevlegateError("invalid retry selection") from error
+            ticket_id = candidates[index - 1]["id"]
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "daemon authority disappeared; retry was not submitted"
+            )
+        result = request(
+            locator.socket_path,
+            "retry",
+            {"ticket_id": ticket_id},
+            mutable=True,
+        )
+        decode_retry_ack(result, ticket_id)
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    print(f"retry accepted: {ticket_id}")
+    return 0
 
 
 def _render_status_text(snapshot: StatusSnapshot) -> str:
@@ -417,10 +489,7 @@ def main() -> int:
         if args.command == "check":
             return devlegate.check()
         if args.command == "retry":
-            engine = _service_engine(env_file)
-            return run_foreground(
-                engine, lambda intent: engine.retry(args.ticket_id, intent)
-            )
+            return _retry_daemon(env_file, args.ticket_id)
         if args.command == "reconcile":
             engine = _service_engine(env_file)
             return engine.reconcile_update_base(args.ticket_id, args.onto)

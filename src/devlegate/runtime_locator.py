@@ -122,3 +122,17 @@ class RuntimeLocator:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
                 handle.close()
+
+    def daemon_authority_present(self) -> bool:
+        """Observe exclusive daemon authority without retaining a lock."""
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+")
+        try:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
+        finally:
+            handle.close()

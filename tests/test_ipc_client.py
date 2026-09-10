@@ -79,6 +79,28 @@ def test_request_surfaces_application_error(tmp_path):
     thread.join(timeout=2)
 
 
+def test_mutable_transport_failure_is_uncertain_and_not_replayed(tmp_path):
+    path = tmp_path / "ipc.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+
+    def close_after_request():
+        connection, _address = listener.accept()
+        connection.recv(4096)
+        connection.close()
+
+    thread = threading.Thread(target=close_after_request)
+    thread.start()
+    try:
+        with pytest.raises(IPCClientError) as raised:
+            request(path, "retry", {"ticket_id": "T-1"}, mutable=True)
+        assert raised.value.uncertain
+    finally:
+        listener.close()
+        thread.join(timeout=2)
+
+
 def representative_observation(branch="main"):
     return GitObservation(
         branch,
