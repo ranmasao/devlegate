@@ -964,16 +964,42 @@ class ServiceEngine:
 
     def submit_retry(self, ticket_id: str) -> dict[str, object]:
         """Admit one retry command without executing it on the IPC thread."""
-        if self.service_snapshot().worker_running or self._state.get("phase") in {
-            "agent_pending",
-            "agent_running",
-        }:
+        if self.service_snapshot().worker_running:
             raise DevlegateError("daemon worker is already running")
-        candidate_ids = {
-            candidate.ticket_id for candidate in self._interactive_retry_candidates()
-        }
-        if ticket_id not in candidate_ids:
-            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+        if self._state.get("phase") == "agent_running":
+            execution_ticket = self._state.get("execution_ticket_id")
+            if execution_ticket != ticket_id:
+                raise DevlegateError(
+                    f"ticket {ticket_id} does not match the persisted interrupted "
+                    "execution"
+                )
+            identity = _worker_identity_from_value(
+                self._state.get("worker_identity"),
+                self._state.get("execution_id"),
+            )
+            if (
+                identity is not None
+                and observe_worker_identity(identity) != "absent"
+            ):
+                raise DevlegateError("daemon worker is already running")
+            stage = self._state.get("execution_stage")
+            if stage not in {
+                None,
+                "pre-checkpoint",
+                "worker-launch",
+                "worker-running",
+                "post-worker",
+            }:
+                raise DevlegateError(
+                    "persisted execution is not currently retryable"
+                )
+        else:
+            candidate_ids = {
+                candidate.ticket_id
+                for candidate in self._interactive_retry_candidates()
+            }
+            if ticket_id not in candidate_ids:
+                raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         with self._operator_command_lock:
             if self._operator_active or self._operator_command is not None:
                 raise DevlegateError(
@@ -5174,7 +5200,8 @@ export default tool({
                 "persisted execution reached an ambiguous post-worker stage; "
                 "manual operator handling is required"
             )
-        self._assert_previous_worker_is_safe()
+        if state.get("execution_stage") != "pre-checkpoint":
+            self._assert_previous_worker_is_safe()
         ticket_store = self._ticket_store()
         ticket = ticket_store.by_id.get(ticket_id)
         if (

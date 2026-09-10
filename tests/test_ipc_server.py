@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 
 import pytest
-from test_control_plane import control_fixture, invoke
+from test_control_plane import control_fixture, invoke, persist_agent_running
 
+import devlegate.cli as cli
 import devlegate.daemon as daemon
 import devlegate.ipc_server as ipc_server
 from devlegate.ipc_protocol import (
@@ -624,6 +625,77 @@ def test_read_only_ipc_remains_available_while_owner_retry_is_active(
     assert not owner.is_alive()
 
 
+@pytest.mark.parametrize("interactive", [False, True])
+def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
+    tmp_path, monkeypatch, short_state_dir, capsys, interactive
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    persist_agent_running(engine, engine.state_dir)
+    engine._save_state(
+        "agent_running",
+        execution_stage="pre-checkpoint",
+        worker_identity=None,
+    )
+    candidate_response = []
+    recovered = threading.Event()
+    original_retry_owned = engine._retry_owned
+
+    def retry_owned(ticket_id, stop_event=None):
+        result = original_retry_owned(ticket_id, stop_event)
+        candidate_response.append(ticket_id)
+        recovered.set()
+        return result
+
+    monkeypatch.setattr(engine, "_retry_owned", retry_owned)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    stop_event = threading.Event()
+    owner = None
+    try:
+        candidates = request(
+            engine.ipc_socket_path,
+            "candidates",
+            "retry-candidates",
+        )
+        assert candidates.ok
+        assert candidates.result["candidates"][0]["id"] == "T-1"
+        assert candidates.result["candidates"][0]["kind"] == "interrupted"
+        if interactive:
+            monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
+            monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+            argv = ["devlegate", "retry", "--env", str(engine.env_file)]
+        else:
+            argv = ["devlegate", "retry", "T-1", "--env", str(engine.env_file)]
+        monkeypatch.setattr(sys, "argv", argv)
+        assert cli.main() == 0
+        assert "retry accepted: T-1" in capsys.readouterr().out
+        busy = request(
+            engine.ipc_socket_path,
+            "retry-again",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert not busy.ok
+        assert "already pending or running" in busy.error["message"]
+        owner = threading.Thread(
+            target=engine.serve,
+            args=(stop_event,),
+            kwargs={"lock_handle": authority},
+        )
+        owner.start()
+        assert recovered.wait(5)
+        assert candidate_response == ["T-1"]
+    finally:
+        stop_event.set()
+        engine.wake()
+        if owner is not None:
+            owner.join(timeout=3)
+        server.stop()
+        authority.close()
+    assert owner is None or not owner.is_alive()
+
+
 @pytest.mark.parametrize(
     "payload",
     [{}, {"ticket_id": ""}, {"ticket_id": None}, {"ticket_id": "T-1", "extra": 1}],
@@ -635,6 +707,42 @@ def test_retry_mutation_payload_is_strict(payload):
 
     with pytest.raises(IPCProtocolError):
         dispatch_mutation(FakeEngine(), _request("retry", payload))
+
+
+def test_matching_live_worker_rejects_retry_without_queueing(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    persist_agent_running(engine, engine.state_dir)
+    identity = engine._state["worker_identity"]
+    engine._save_state(
+        "agent_running",
+        execution_stage="worker-running",
+        worker_identity=identity,
+    )
+    monkeypatch.setattr(
+        "devlegate.runtime.observe_worker_identity", lambda _: "matching-live"
+    )
+
+    with pytest.raises(DevlegateError, match="worker is already running"):
+        engine.submit_retry("T-1")
+    assert not engine._operator_command_pending()
+
+
+def test_wrong_ticket_is_rejected_for_recoverable_execution(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    persist_agent_running(engine, engine.state_dir)
+    engine._save_state(
+        "agent_running",
+        execution_stage="pre-checkpoint",
+        worker_identity=None,
+    )
+
+    with pytest.raises(DevlegateError, match="does not match"):
+        engine.submit_retry("T-2")
+    assert not engine._operator_command_pending()
 
 
 def _request(method, payload=None):
