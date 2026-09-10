@@ -152,7 +152,7 @@ def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, cap
         lambda *_args: WorkerRunResult(1, None, None, None),
     )
 
-    assert engine.run(once=True) == 1
+    assert daemon.run_service(engine, once=True) == 1
     output = capsys.readouterr().out
     assert "worker failed: worker exited with status 1" in output
     assert "run failed with status 1" not in output
@@ -495,7 +495,7 @@ def test_recoverable_stage_error_keeps_once_semantics(tmp_path, monkeypatch):
     )
 
     with pytest.raises(DevlegateError, match="one-shot failure"):
-        engine.run(once=True)
+        daemon.run_service(engine, once=True)
 
 
 def test_unrelated_devlegate_error_still_escapes_service(tmp_path, monkeypatch):
@@ -997,7 +997,7 @@ def test_daemon_holds_project_lock_while_service_is_active(tmp_path, monkeypatch
     second = ServiceEngine(config)
     before = dict(second._state)
     with pytest.raises(DevlegateError, match="another devlegate instance"):
-        second.run(once=True)
+        daemon.run_service(second, once=True)
     assert second.status().phase == "idle"
     assert second.plan().action == "run-worker"
     assert second._state == before
@@ -1088,7 +1088,7 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
 
 
 @pytest.mark.parametrize("once", [False, True])
-def test_foreground_operator_abort_stops_after_one_iteration(
+def test_compatibility_run_operator_abort_stops_after_one_iteration(
     tmp_path, monkeypatch, once
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -1102,6 +1102,7 @@ def test_foreground_operator_abort_stops_after_one_iteration(
         return WorkerRunResult(-2, None, None, None, "operator_abort")
 
     monkeypatch.setattr(engine, "_run_worker", worker)
+    # Compatibility seam only; production CLI uses run_service/serve.
     assert engine.run(once=once) == 130
     assert calls == [True]
     assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"

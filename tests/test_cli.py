@@ -4,16 +4,16 @@ import io
 import json
 import os
 import shutil
-import signal
 import socket
 import sqlite3
 import subprocess
 import sys
-import time
+import threading
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 import pytest
+from service_harness import LiveService
 
 from devlegate import __version__
 from devlegate.application import Application
@@ -29,6 +29,7 @@ from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
 from devlegate.service import ServiceEngine
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
 def git(cwd, *args):
@@ -123,6 +124,7 @@ def git_fixture(tmp_path, request):
 
 @pytest.fixture
 def cli_daemon(git_fixture, monkeypatch):
+    """IPC server only; routing and views, not owner-side mutation coverage."""
     monkeypatch.chdir(git_fixture["working"])
     config = _short_runtime_config(git_fixture)
     engine = ServiceEngine(config)
@@ -1075,24 +1077,27 @@ def test_service_engine_is_the_only_runtime_authority():
     assert Application is ServiceEngine
 
 
-def test_service_engine_reuses_one_owner_across_polling_iterations(
+def test_service_engine_serve_reuses_one_owner_across_polling_iterations(
     git_fixture, monkeypatch
 ):
+    # Engine-level owner-loop invariant; production topology is covered below.
     monkeypatch.chdir(git_fixture["working"])
     engine = ServiceEngine(git_fixture["config"])
     runtime_store = engine._runtime_store
     calls = []
+    stop_event = threading.Event()
 
     def run_once():
         calls.append((id(engine), id(engine._runtime_store)))
         if len(calls) == 2:
+            stop_event.set()
             raise KeyboardInterrupt
         return 0
 
     monkeypatch.setattr(engine, "run_once", run_once)
-    monkeypatch.setattr("devlegate.runtime.time.sleep", lambda _seconds: None)
+    engine.poll_interval = "0"
     with pytest.raises(KeyboardInterrupt):
-        engine.run(once=False)
+        engine.serve(stop_event)
 
     assert calls == [(id(engine), id(runtime_store))] * 2
 
@@ -1164,43 +1169,165 @@ def test_run_hosts_real_ipc_status_and_plan_until_stopped(git_fixture, monkeypat
     git_fixture["config"].write_text(
         git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
     )
-    environment = {
-        **os.environ,
-        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
-    }
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "devlegate",
-            "run",
-            "--env",
-            str(git_fixture["config"]),
-        ],
-        cwd=git_fixture["working"],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    socket_path = ServiceEngine(git_fixture["config"]).ipc_socket_path
-    try:
-        deadline = time.monotonic() + 10
-        while not socket_path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert socket_path.is_socket()
-        status = invoke(git_fixture, "status", "--json")
-        plan = invoke(git_fixture, "plan", "--json")
+    with LiveService(git_fixture["working"], git_fixture["config"]) as service:
+        status = service.cli("status", "--json")
+        plan = service.cli("plan", "--json")
         assert status.returncode == 0, status.stderr
         assert plan.returncode == 0, plan.stderr
         assert json.loads(status.stdout)["execution"]["phase"] == "idle"
         assert "action" in json.loads(plan.stdout)
-        assert process.poll() is None
-    finally:
-        if process.poll() is None:
-            process.send_signal(signal.SIGTERM)
-        process.wait(timeout=10)
-    assert not socket_path.exists()
+        assert service.process is not None
+        assert service.process.poll() is None
+
+
+def _worker_script(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "(workspace / 'process-worker.txt').write_text('completed\\n')\n"
+        "attempts = os.environ.get('DEVLEGATE_TEST_ATTEMPTS')\n"
+        "if attempts:\n"
+        "    pathlib.Path(attempts).open('a').write('attempt\\n')\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'process worker', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    path.chmod(0o755)
+
+
+def _service_engine_with_control(git_fixture, config):
+    engine = ServiceEngine(config)
+    engine.control_worktree.parent.mkdir(parents=True, exist_ok=True)
+    git(
+        engine.repo,
+        "worktree",
+        "move",
+        git_fixture["control"],
+        engine.control_worktree,
+    )
+    with redirect_stdout(io.StringIO()):
+        assert engine.control_init() == 0
+    return engine
+
+
+def _add_service_ticket(engine):
+    ticket_path = engine.control_worktree / "kanban/todo/T-1.md"
+    ticket_path.write_text(ticket("Control ticket", "work"))
+    git(
+        engine.control_worktree,
+        "add",
+        str(ticket_path.relative_to(engine.control_worktree)),
+    )
+    git(engine.control_worktree, "commit", "-m", "add service test ticket")
+    git(
+        engine.control_worktree,
+        "push",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+
+
+def test_real_service_process_executes_retry_from_real_cli(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "process-worker.py"
+    attempts = git_fixture["tmp"] / "attempts.txt"
+    _worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _short_runtime_config(git_fixture)
+    config.write_text(
+        config.read_text()
+        .replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+        .replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    monkeypatch.setattr(
+        engine,
+        "_run_worker",
+        lambda *_args: WorkerRunResult(1, None, None, None),
+    )
+    assert engine.run_once() == 1
+
+    with LiveService(git_fixture["working"], config) as service:
+        result = service.cli("retry", "T-1")
+        assert result.returncode == 0, result.stderr
+        assert "retry accepted: T-1" in result.stdout
+
+        def completed():
+            status = service.cli("status", "--json")
+            if status.returncode != 0:
+                return False
+            payload = json.loads(status.stdout)
+            return any(item["id"] == "T-1" for item in payload["tickets"]["review"])
+
+        service.wait_for(completed)
+        status = json.loads(service.cli("status", "--json").stdout)
+        assert status["tickets"]["review"] == [
+            {"id": "T-1", "title": "Control ticket"}
+        ]
+        assert attempts.read_text().splitlines() == ["attempt"]
+
+
+def test_real_service_process_executes_reconciliation_from_real_cli(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _short_runtime_config(git_fixture)
+    config.write_text(config.read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1"))
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker work\n")
+        (git_fixture["working"] / "product-change.txt").write_text("product B\n")
+        git(git_fixture["working"], "add", "product-change.txt")
+        git(git_fixture["working"], "commit", "-m", "advance product")
+        git(git_fixture["working"], "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.run_once() == 1
+    target = engine._state["reconciliation"]["observed_product"]
+    execution = next((engine.state_dir / "worktrees").glob("*/work/T-1"))
+    git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
+
+    with LiveService(git_fixture["working"], config) as service:
+        result = service.cli(
+            "reconcile", "update-base", "T-1", "--onto", target
+        )
+        assert result.returncode == 0, result.stderr
+        assert "reconciliation accepted: T-1" in result.stdout
+
+        def resolved():
+            status = service.cli("status", "--json")
+            if status.returncode != 0:
+                return False
+            reconciliation = json.loads(status.stdout).get("reconciliation")
+            return (
+                isinstance(reconciliation, dict)
+                and reconciliation.get("status") == "resolved"
+            )
+
+        service.wait_for(resolved)
+        payload = json.loads(service.cli("status", "--json").stdout)
+        assert payload["reconciliation"]["effective_base"] == target
+        assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
+        assert (execution / "implementation.txt").read_text() == "worker work\n"
+    database = next(engine.state_dir.glob("*.sqlite3"))
+    connection = sqlite3.connect(database)
+    persisted = json.loads(
+        connection.execute(
+            "SELECT payload FROM runtime_state WHERE id = 1"
+        ).fetchone()[0]
+    )
+    connection.close()
+    assert persisted["resume_required"]["status"] == "required"
 
 
 def test_all_operational_cli_commands_use_service_engine(

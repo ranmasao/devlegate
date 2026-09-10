@@ -62,6 +62,7 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
     engine, _state = make_engine(tmp_path, monkeypatch)
     worker_entered = threading.Event()
     worker_release = threading.Event()
+    stop_event = threading.Event()
     result = []
 
     def worker(_workspace, _prompt):
@@ -70,10 +71,13 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
         assert durable["phase"] == "agent_running"
         assert durable["execution_start_head"]
         assert worker_release.wait(10)
+        stop_event.set()
         return WorkerRunResult(1, None, None, None)
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    thread = threading.Thread(target=lambda: result.append(engine.run(once=True)))
+    thread = threading.Thread(
+        target=lambda: result.append(engine.serve(stop_event))
+    )
     thread.start()
     assert worker_entered.wait(10)
 
@@ -87,7 +91,7 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
     worker_release.set()
     thread.join(10)
     assert not thread.is_alive()
-    assert result == [1]
+    assert result == [0]
     assert engine.service_snapshot().worker_running is False
 
 

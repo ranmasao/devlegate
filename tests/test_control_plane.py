@@ -1437,7 +1437,7 @@ def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, caps
     assert f"control updated: {old_head} -> {new_head}" in output
 
 
-def test_product_drift_enters_reconciliation_and_update_base_resumes(
+def test_engine_reconciliation_and_update_base_resumes(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1512,7 +1512,7 @@ def test_product_drift_enters_reconciliation_and_update_base_resumes(
     ).is_file()
 
 
-def test_reconcile_update_base_conflict_preserves_original_checkpoint(
+def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1583,7 +1583,7 @@ def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     ).stdout.strip()
 
 
-def test_dirty_product_can_become_valid_update_base_target(
+def test_engine_dirty_product_can_become_valid_update_base_target(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1618,7 +1618,9 @@ def test_dirty_product_can_become_valid_update_base_target(
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
 
 
-def test_still_dirty_product_blocks_update_base_without_rewrite(tmp_path, monkeypatch):
+def test_engine_still_dirty_product_blocks_update_base_without_rewrite(
+    tmp_path, monkeypatch
+):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -1672,7 +1674,7 @@ def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
     ).stdout.strip()
 
 
-def test_detached_product_can_be_restored_for_update_base(
+def test_engine_detached_product_can_be_restored_for_update_base(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1707,7 +1709,7 @@ def test_detached_product_can_be_restored_for_update_base(
     ]
 
 
-def test_still_detached_product_blocks_update_base_without_rewrite(
+def test_engine_still_detached_product_blocks_update_base_without_rewrite(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
