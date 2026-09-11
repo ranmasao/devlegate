@@ -45,6 +45,22 @@ def state_payload(state_dir):
     return json.loads(payload)
 
 
+def test_accepted_integration_state_requires_idle_and_exact_identity():
+    complete = {
+        "ticket_id": "T-1",
+        "checkpoint": "a" * 40,
+        "control_head": "b" * 40,
+    }
+    with pytest.raises(DevlegateError, match="invalid accepted integration state"):
+        runtime.ServiceEngine._validate_state_invariant(
+            {"phase": "idle", "accepted_integration": {"ticket_id": "T-1"}}
+        )
+    with pytest.raises(DevlegateError, match="only valid while idle"):
+        runtime.ServiceEngine._validate_state_invariant(
+            {"phase": "agent_running", "accepted_integration": complete}
+        )
+
+
 def persist_agent_running(
     devlegate,
     state,

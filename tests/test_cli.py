@@ -1244,6 +1244,7 @@ def _wait_process_death(service):
     assert service.process is not None
     service.process.wait(timeout=20)
     service._collect_output()
+    service._abruptly_killed = True
     assert service.process.returncode == -signal.SIGKILL
 
 
@@ -1528,7 +1529,9 @@ def _prepare_accepted_integration(git_fixture, monkeypatch):
         "origin",
         "HEAD:refs/heads/devlegate/control",
     )
-    return config, engine, attempts
+    return config, engine, attempts, git(
+        engine.control_worktree, "rev-parse", "HEAD"
+    ).stdout.strip()
 
 
 @pytest.mark.parametrize(
@@ -1544,7 +1547,7 @@ def test_real_service_accepted_integration_restart_is_idempotent(
     git_fixture, monkeypatch, point
 ):
     monkeypatch.chdir(git_fixture["working"])
-    config, engine, attempts = _prepare_accepted_integration(
+    config, engine, attempts, control_head = _prepare_accepted_integration(
         git_fixture, monkeypatch
     )
     monkeypatch.setenv("H1_CRASH_POINT", point)
@@ -1557,6 +1560,7 @@ def test_real_service_accepted_integration_restart_is_idempotent(
         _wait_process_death(service)
         crashed = _disk_state(config)
         assert crashed["accepted_integration"]["ticket_id"] == "T-1"
+        assert crashed["accepted_integration"]["control_head"] == control_head
         monkeypatch.delenv("H1_CRASH_POINT")
         service.restart()
 
@@ -1580,6 +1584,197 @@ def test_real_service_accepted_integration_restart_is_idempotent(
         )
         assert attempts.read_text().splitlines() == ["attempt"]
         assert not (engine.control_worktree / "kanban/accepted/T-1.md").exists()
+    finally:
+        service.stop()
+
+
+def test_real_service_foreign_local_control_descendant_stays_blocked(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_before_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_before_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        remote_before = git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0]
+        foreign = engine.control_worktree / "foreign-control.txt"
+        foreign.write_text("unrelated\n")
+        git(engine.control_worktree, "add", "foreign-control.txt")
+        git(engine.control_worktree, "commit", "-m", "foreign control change")
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: service.cli("status", "--json").stdout != ""
+        )
+        assert service.process is not None and service.process.poll() is None
+        assert git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0] == remote_before
+        assert foreign.is_file()
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_remote_exact_control_descendant_is_recognized(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_control_push_after_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_control_push_after_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        publisher_control = git_fixture["publisher_control"]
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "later-control.txt").write_text("later\n")
+        git(publisher_control, "add", "later-control.txt")
+        git(publisher_control, "commit", "-m", "later control change")
+        git(
+            publisher_control,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_remote_interleaving_before_control_commit_blocks(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_before_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_before_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        publisher_control = git_fixture["publisher_control"]
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "interleaving.txt").write_text("interleaving\n")
+        git(publisher_control, "add", "interleaving.txt")
+        git(publisher_control, "commit", "-m", "interleaving control change")
+        accepted = publisher_control / "kanban/accepted/T-1.md"
+        accepted.rename(publisher_control / "kanban/done/T-1.md")
+        git(publisher_control, "add", "-A")
+        git(publisher_control, "commit", "-m", "Devlegate integrate T-1")
+        git(
+            publisher_control,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
+        remote_before = git(
+            publisher_control,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0]
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
+        assert service.process.poll() is None
+        assert git(
+            publisher_control,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0] == remote_before
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_divergent_control_histories_stay_blocked(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_control_commit_after_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_control_commit_after_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        publisher_control = git_fixture["publisher_control"]
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "divergent.txt").write_text("divergent\n")
+        git(publisher_control, "add", "divergent.txt")
+        git(publisher_control, "commit", "-m", "divergent control change")
+        git(
+            publisher_control,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
+        remote_before = git(
+            publisher_control,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0]
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
+        assert service.process.poll() is None
+        assert git(
+            publisher_control,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0] == remote_before
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         service.stop()
 

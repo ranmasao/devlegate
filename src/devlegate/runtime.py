@@ -80,6 +80,14 @@ class SnapshotChanged(Exception):
 
 
 _UNSET = object()
+
+
+def _is_git_identity(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(character in "0123456789abcdef" for character in value.lower())
+    )
 @dataclasses.dataclass(frozen=True)
 class GitObservation:
     branch: str | None
@@ -1908,12 +1916,17 @@ class ServiceEngine:
             raise DevlegateError("invalid idle state: worker identity is still active")
         accepted_integration = state.get("accepted_integration")
         if accepted_integration is not None:
+            if phase != "idle":
+                raise DevlegateError(
+                    "accepted integration state is only valid while idle"
+                )
             if not isinstance(accepted_integration, dict) or set(
                 accepted_integration
-            ) != {"ticket_id", "checkpoint"} or not all(
-                isinstance(accepted_integration.get(field), str)
-                and bool(accepted_integration[field])
-                for field in ("ticket_id", "checkpoint")
+            ) != {"ticket_id", "checkpoint", "control_head"} or not (
+                isinstance(accepted_integration.get("ticket_id"), str)
+                and bool(accepted_integration["ticket_id"])
+                and _is_git_identity(accepted_integration.get("checkpoint"))
+                and _is_git_identity(accepted_integration.get("control_head"))
             ):
                 raise DevlegateError("invalid accepted integration state")
         if phase == "idle":
@@ -2160,19 +2173,20 @@ class ServiceEngine:
             )
             if ancestor.returncode:
                 pending_integration = self._state.get("accepted_integration")
-                local_ahead = self._git_runtime(
-                    self.control_worktree,
-                    "merge-base",
-                    "--is-ancestor",
-                    remote_head,
-                    local_head,
-                    check=False,
-                )
-                if (
-                    pending_integration is not None
-                    and local_ahead.returncode == 0
-                ):
-                    return local_head, remote_head
+                if isinstance(pending_integration, dict):
+                    classification, _commit = (
+                        self._observe_accepted_control_integration(
+                            str(pending_integration["ticket_id"]),
+                            str(pending_integration["control_head"]),
+                            local_head,
+                            remote_head,
+                        )
+                    )
+                    if classification == "local_exact_unpublished":
+                        return local_head, remote_head
+                    raise WorkflowBlockedError(
+                        "accepted integration control lineage is ambiguous"
+                    )
                 raise WorkflowBlockedError(
                     "control branch cannot be fast-forwarded; histories diverged"
                 )
@@ -2220,6 +2234,11 @@ class ServiceEngine:
                 f"current checkout branch '{actual_branch}' does not match "
                 f"expected branch '{self.current_branch}'"
             )
+        if (
+            self._state.get("phase") == "idle"
+            and self._state.get("accepted_integration") is not None
+        ):
+            return self._recover_accepted_integration()
         if self._state.get("phase") == "agent_running":
             if self._stop_requested():
                 return 0
@@ -2627,6 +2646,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration ticket is no longer observable"
                 )
+            pending_control_head = accepted_integration.get("control_head")
+            if not isinstance(pending_control_head, str):
+                raise DevlegateError("invalid accepted integration control identity")
             checkpoint = self._accepted_checkpoint(str(pending_ticket))
             if checkpoint != accepted_integration.get("checkpoint"):
                 raise WorkflowBlockedError(
@@ -2654,12 +2676,14 @@ class ServiceEngine:
             return 0
         if execution_plan.action == "integrate":
             assert execution_plan.ticket_id is not None
+            assert execution_plan.control is not None
             checkpoint = self._accepted_checkpoint(execution_plan.ticket_id)
             self._save_state(
                 "idle",
                 accepted_integration={
                     "ticket_id": execution_plan.ticket_id,
                     "checkpoint": checkpoint,
+                    "control_head": execution_plan.control.local_head,
                 },
             )
             try:
@@ -3137,6 +3161,43 @@ class ServiceEngine:
             return 0
         return 1 if report.result.conclusion == "failed" else 0
 
+    def _recover_accepted_integration(self) -> int:
+        pending = self._state.get("accepted_integration")
+        if not isinstance(pending, dict):
+            raise DevlegateError("invalid accepted integration state")
+        ticket_id = pending.get("ticket_id")
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise DevlegateError("invalid accepted integration ticket identity")
+        control_head, _control_remote_head = self._sync_control()
+        product_fetch = self._git_runtime(
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
+        )
+        if product_fetch.returncode:
+            raise WorkflowBlockedError(
+                "cannot freshly observe product remote for accepted integration"
+            )
+        code = self._git_observation(self.repo, self.remote_branch)
+        control = self._git_observation(self.control_worktree, self.control_branch)
+        self._integrate_accepted(ticket_id, code, control)
+        todo_fingerprint, _todo_count = _todo_fingerprint(
+            self.control_worktree, self.todo_path
+        )
+        self._save_state(
+            "idle",
+            handled_remote_head=code.remote_head or "",
+            handled_control_head=control_head,
+            handled_todo_fingerprint=todo_fingerprint,
+            accepted_integration=None,
+        )
+        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        _log(f"accepted ticket {ticket_id} integrated")
+        return 0
+
     def _finalize_execution_lifecycle(
         self,
         report: ExecutionReport,
@@ -3487,77 +3548,59 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "product checkout cannot be fast-forwarded safely"
                 )
-        return self._complete_accepted(ticket_id, control.local_head)
+        pending = self._state.get("accepted_integration")
+        expected_head = (
+            pending.get("control_head")
+            if isinstance(pending, dict)
+            else control.local_head
+        )
+        if not isinstance(expected_head, str) or not _is_git_identity(expected_head):
+            raise WorkflowBlockedError(
+                "accepted integration control identity is invalid"
+            )
+        return self._complete_accepted(ticket_id, expected_head)
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
-        if current != expected_head:
+        if not _is_git_identity(expected_head):
             raise WorkflowBlockedError(
-                "control HEAD changed during accepted integration"
+                "accepted integration control identity is invalid"
             )
         store = load_ticket_store(self.control_worktree, self._workflow_paths())
         ticket = store.by_id.get(ticket_id)
         if ticket is None:
             raise WorkflowBlockedError("accepted ticket disappeared during integration")
         if ticket.state == "done":
-            integration = _git(
-                self.control_worktree,
-                "log",
-                "--format=%H",
-                "-n",
-                "20",
-                "--grep",
-                f"^Devlegate integrate {ticket_id}$",
-                check=False,
+            classification, commit = self._observe_accepted_control_integration(
+                ticket_id, expected_head, current, None
             )
-            commits = (
-                integration.stdout.splitlines() if integration.returncode == 0 else []
-            )
-            exact = next(
-                (
-                    commit
-                    for commit in commits
-                    if self._accepted_integration_commit_is_exact(commit, ticket_id)
-                ),
-                None,
-            )
-            if exact is None:
-                raise WorkflowBlockedError(
-                    "completed accepted integration lacks exact control evidence"
-                )
-            remote = _git(
-                self.control_worktree,
-                "ls-remote",
-                self.remote_name,
-                f"refs/heads/{self.control_branch}",
-                check=False,
-            )
-            remote_head = remote.stdout.split()[0] if remote.stdout.split() else None
-            if remote.returncode or remote_head is None:
-                raise WorkflowBlockedError("accepted integration remote is unavailable")
-            contains = _git(
-                self.control_worktree,
-                "merge-base",
-                "--is-ancestor",
-                exact,
-                remote_head,
-                check=False,
-            )
-            if contains.returncode:
+            if classification == "local_exact_unpublished" and commit is not None:
                 push = _git(
                     self.control_worktree,
                     "push",
                     self.remote_name,
-                    f"HEAD:refs/heads/{self.control_branch}",
+                    f"{commit}:refs/heads/{self.control_branch}",
                     check=False,
                 )
                 if push.returncode:
                     raise DevlegateError(
-                        push.stderr.strip() or "cannot republish accepted integration"
+                        push.stderr.strip() or "cannot publish accepted integration"
                     )
-            return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+                classification, commit = self._observe_accepted_control_integration(
+                    ticket_id, expected_head, current, None
+                )
+            if classification not in {"remote_exact_published"}:
+                raise WorkflowBlockedError(
+                    "accepted integration control lineage is ambiguous"
+                )
+            assert commit is not None
+            return current
         if ticket.state != "accepted":
             raise WorkflowBlockedError("accepted ticket changed during integration")
+        if current != expected_head:
+            raise WorkflowBlockedError(
+                "control HEAD changed during accepted integration"
+            )
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
         ticket.path.rename(target)
         _git(self.control_worktree, "add", "-A")
@@ -3572,26 +3615,82 @@ class ServiceEngine:
             raise DevlegateError(
                 commit.stderr.strip() or "cannot create control transition"
             )
+        commit_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if not self._accepted_integration_commit_is_exact(
+            commit_head, ticket_id, expected_head
+        ):
+            raise WorkflowBlockedError(
+                "created accepted integration commit is not exact"
+            )
         push = _git(
             self.control_worktree,
             "push",
             self.remote_name,
-            f"HEAD:refs/heads/{self.control_branch}",
+            f"{commit_head}:refs/heads/{self.control_branch}",
             check=False,
         )
         if push.returncode:
             raise DevlegateError(
                 push.stderr.strip() or "cannot publish control transition"
             )
-        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        return commit_head
+
+    def _observe_accepted_control_integration(
+        self,
+        ticket_id: str,
+        expected_parent: str,
+        local_head: str,
+        remote_head: str | None,
+    ) -> tuple[str, str | None]:
+        if not _is_git_identity(expected_parent) or not _is_git_identity(local_head):
+            return "ambiguous", None
+        if remote_head is None:
+            remote = _git(
+                self.control_worktree,
+                "ls-remote",
+                self.remote_name,
+                f"refs/heads/{self.control_branch}",
+                check=False,
+            )
+            if remote.returncode or not remote.stdout.split():
+                return "ambiguous", None
+            remote_head = remote.stdout.split()[0]
+        if not _is_git_identity(remote_head):
+            return "ambiguous", None
+        if remote_head == expected_parent:
+            if local_head == expected_parent:
+                return "not_applied", None
+            if self._accepted_integration_commit_is_exact(
+                local_head, ticket_id, expected_parent
+            ):
+                return "local_exact_unpublished", local_head
+            return "ambiguous", None
+        lineage = _git(
+            self.control_worktree,
+            "rev-list",
+            "--reverse",
+            f"{expected_parent}..{remote_head}",
+            check=False,
+        )
+        if lineage.returncode:
+            return "ambiguous", None
+        descendants = lineage.stdout.splitlines()
+        if not descendants:
+            return "ambiguous", None
+        candidate = descendants[0]
+        if self._accepted_integration_commit_is_exact(
+            candidate, ticket_id, expected_parent
+        ):
+            return "remote_exact_published", candidate
+        return "ambiguous", None
 
     def _accepted_integration_commit_is_exact(
-        self, commit: str, ticket_id: str
+        self, commit: str, ticket_id: str, expected_parent: str
     ) -> bool:
         parent = _git(
             self.control_worktree, "rev-parse", f"{commit}^", check=False
         )
-        if parent.returncode:
+        if parent.returncode or parent.stdout.strip() != expected_parent:
             return False
         names = _git(
             self.control_worktree,
@@ -3608,6 +3707,18 @@ class ServiceEngine:
             f"A\t{self.done_path}/{ticket_id}.md",
         }
         if names.returncode or set(names.stdout.splitlines()) != expected:
+            return False
+        subject = _git(
+            self.control_worktree,
+            "log",
+            "-1",
+            "--format=%s",
+            commit,
+            check=False,
+        )
+        if subject.returncode or subject.stdout.strip() != (
+            f"Devlegate integrate {ticket_id}"
+        ):
             return False
         before = _git(
             self.control_worktree,
@@ -4455,6 +4566,9 @@ export default tool({
             "pending"
         )
 
+    def _has_pending_accepted_integration(self) -> bool:
+        return isinstance(self._state.get("accepted_integration"), dict)
+
     def _run_polling(
         self,
         *,
@@ -4531,7 +4645,10 @@ export default tool({
                         status = 1
                 except DevlegateError as error:
                     if operator_command is None:
-                        if not once and self._has_pending_reconciliation():
+                        if not once and (
+                            self._has_pending_reconciliation()
+                            or self._has_pending_accepted_integration()
+                        ):
                             workflow_blocked = True
                             message = str(error)
                             self._publish_service_snapshot(
