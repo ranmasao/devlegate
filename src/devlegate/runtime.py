@@ -1906,6 +1906,16 @@ class ServiceEngine:
             raise DevlegateError("invalid execution interruption kind")
         if phase == "idle" and identity is not None:
             raise DevlegateError("invalid idle state: worker identity is still active")
+        accepted_integration = state.get("accepted_integration")
+        if accepted_integration is not None:
+            if not isinstance(accepted_integration, dict) or set(
+                accepted_integration
+            ) != {"ticket_id", "checkpoint"} or not all(
+                isinstance(accepted_integration.get(field), str)
+                and bool(accepted_integration[field])
+                for field in ("ticket_id", "checkpoint")
+            ):
+                raise DevlegateError("invalid accepted integration state")
         if phase == "idle":
             return
         if phase == "merge_pending":
@@ -2149,6 +2159,20 @@ class ServiceEngine:
                 check=False,
             )
             if ancestor.returncode:
+                pending_integration = self._state.get("accepted_integration")
+                local_ahead = self._git_runtime(
+                    self.control_worktree,
+                    "merge-base",
+                    "--is-ancestor",
+                    remote_head,
+                    local_head,
+                    check=False,
+                )
+                if (
+                    pending_integration is not None
+                    and local_ahead.returncode == 0
+                ):
+                    return local_head, remote_head
                 raise WorkflowBlockedError(
                     "control branch cannot be fast-forwarded; histories diverged"
                 )
@@ -2594,8 +2618,50 @@ class ServiceEngine:
             )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
+        accepted_integration = self._state.get("accepted_integration")
+        if accepted_integration is not None:
+            if not isinstance(accepted_integration, dict):
+                raise DevlegateError("invalid accepted integration state")
+            pending_ticket = accepted_integration.get("ticket_id")
+            if pending_ticket not in self._ticket_store().by_id:
+                raise WorkflowBlockedError(
+                    "accepted integration ticket is no longer observable"
+                )
+            checkpoint = self._accepted_checkpoint(str(pending_ticket))
+            if checkpoint != accepted_integration.get("checkpoint"):
+                raise WorkflowBlockedError(
+                    "accepted integration checkpoint changed during recovery"
+                )
+            if execution_plan.code is None or execution_plan.control is None:
+                raise WorkflowBlockedError(
+                    "accepted integration lacks fresh Git observations"
+                )
+            control_head = self._integrate_accepted(
+                str(pending_ticket), execution_plan.code, execution_plan.control
+            )
+            todo_fingerprint, _todo_count = _todo_fingerprint(
+                self.control_worktree, self.todo_path
+            )
+            self._save_state(
+                "idle",
+                handled_remote_head=remote_head,
+                handled_control_head=control_head,
+                handled_todo_fingerprint=todo_fingerprint,
+                accepted_integration=None,
+            )
+            self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+            _log(f"accepted ticket {pending_ticket} integrated")
+            return 0
         if execution_plan.action == "integrate":
             assert execution_plan.ticket_id is not None
+            checkpoint = self._accepted_checkpoint(execution_plan.ticket_id)
+            self._save_state(
+                "idle",
+                accepted_integration={
+                    "ticket_id": execution_plan.ticket_id,
+                    "checkpoint": checkpoint,
+                },
+            )
             try:
                 control_head = self._integrate_accepted(
                     execution_plan.ticket_id,
@@ -2612,6 +2678,7 @@ class ServiceEngine:
                 handled_remote_head=remote_head,
                 handled_control_head=control_head,
                 handled_todo_fingerprint=todo_fingerprint,
+                accepted_integration=None,
             )
             self._publish_service_snapshot(lifecycle="ready", worker_running=False)
             _log(f"accepted ticket {execution_plan.ticket_id} integrated")
@@ -3430,7 +3497,66 @@ class ServiceEngine:
             )
         store = load_ticket_store(self.control_worktree, self._workflow_paths())
         ticket = store.by_id.get(ticket_id)
-        if ticket is None or ticket.state != "accepted":
+        if ticket is None:
+            raise WorkflowBlockedError("accepted ticket disappeared during integration")
+        if ticket.state == "done":
+            integration = _git(
+                self.control_worktree,
+                "log",
+                "--format=%H",
+                "-n",
+                "20",
+                "--grep",
+                f"^Devlegate integrate {ticket_id}$",
+                check=False,
+            )
+            commits = (
+                integration.stdout.splitlines() if integration.returncode == 0 else []
+            )
+            exact = next(
+                (
+                    commit
+                    for commit in commits
+                    if self._accepted_integration_commit_is_exact(commit, ticket_id)
+                ),
+                None,
+            )
+            if exact is None:
+                raise WorkflowBlockedError(
+                    "completed accepted integration lacks exact control evidence"
+                )
+            remote = _git(
+                self.control_worktree,
+                "ls-remote",
+                self.remote_name,
+                f"refs/heads/{self.control_branch}",
+                check=False,
+            )
+            remote_head = remote.stdout.split()[0] if remote.stdout.split() else None
+            if remote.returncode or remote_head is None:
+                raise WorkflowBlockedError("accepted integration remote is unavailable")
+            contains = _git(
+                self.control_worktree,
+                "merge-base",
+                "--is-ancestor",
+                exact,
+                remote_head,
+                check=False,
+            )
+            if contains.returncode:
+                push = _git(
+                    self.control_worktree,
+                    "push",
+                    self.remote_name,
+                    f"HEAD:refs/heads/{self.control_branch}",
+                    check=False,
+                )
+                if push.returncode:
+                    raise DevlegateError(
+                        push.stderr.strip() or "cannot republish accepted integration"
+                    )
+            return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        if ticket.state != "accepted":
             raise WorkflowBlockedError("accepted ticket changed during integration")
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
         ticket.path.rename(target)
@@ -3458,6 +3584,48 @@ class ServiceEngine:
                 push.stderr.strip() or "cannot publish control transition"
             )
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+
+    def _accepted_integration_commit_is_exact(
+        self, commit: str, ticket_id: str
+    ) -> bool:
+        parent = _git(
+            self.control_worktree, "rev-parse", f"{commit}^", check=False
+        )
+        if parent.returncode:
+            return False
+        names = _git(
+            self.control_worktree,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-r",
+            commit,
+            check=False,
+        )
+        expected = {
+            f"D\t{self.accepted_path}/{ticket_id}.md",
+            f"A\t{self.done_path}/{ticket_id}.md",
+        }
+        if names.returncode or set(names.stdout.splitlines()) != expected:
+            return False
+        before = _git(
+            self.control_worktree,
+            "rev-parse",
+            f"{parent.stdout.strip()}:{self.accepted_path}/{ticket_id}.md",
+            check=False,
+        )
+        after = _git(
+            self.control_worktree,
+            "rev-parse",
+            f"{commit}:{self.done_path}/{ticket_id}.md",
+            check=False,
+        )
+        return (
+            before.returncode == 0
+            and after.returncode == 0
+            and before.stdout.strip() == after.stdout.strip()
+        )
 
     @staticmethod
     def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
@@ -4275,6 +4443,12 @@ export default tool({
             "lifecycle",
         }
 
+    def _has_blocked_execution_stage(self) -> bool:
+        """Return whether recovery needs operator-visible fail-closed blocking."""
+        return self._state.get("phase") == "agent_running" and self._state.get(
+            "execution_stage"
+        ) in {"worker-launch", "worker-running"}
+
     def _has_pending_reconciliation(self) -> bool:
         reconciliation = self._state.get("reconciliation")
         return isinstance(reconciliation, dict) and reconciliation.get("status") == (
@@ -4369,7 +4543,17 @@ export default tool({
                             _log(f"workflow blocked: {message}")
                             self._workflow_blocker_fingerprint = fingerprint
                             status = 1
-                        elif not once and self._has_recoverable_execution_stage():
+                        elif not once and (
+                            self._has_recoverable_execution_stage()
+                            or self._has_blocked_execution_stage()
+                        ):
+                            if self._has_blocked_execution_stage():
+                                workflow_blocked = True
+                                self._publish_service_snapshot(
+                                    lifecycle="blocked",
+                                    worker_running=False,
+                                    blocked_reason=str(error),
+                                )
                             self._iteration_diagnostic = (
                                 f"execution failed: {error}"
                             )

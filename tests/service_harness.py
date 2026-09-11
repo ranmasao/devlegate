@@ -2,6 +2,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable
@@ -13,7 +14,12 @@ from devlegate.runtime_locator import RuntimeLocator, read_env
 class LiveService:
     """Small production-process harness for one foreground Devlegate service."""
 
-    def __init__(self, cwd: Path, env_file: Path) -> None:
+    def __init__(
+        self,
+        cwd: Path,
+        env_file: Path,
+        command: tuple[str, ...] | None = None,
+    ) -> None:
         self.cwd = cwd
         self.env_file = env_file
         self.locator = RuntimeLocator.from_config(
@@ -22,27 +28,46 @@ class LiveService:
         self.process: subprocess.Popen[str] | None = None
         self.stdout = ""
         self.stderr = ""
+        self.command = command
+        self._output_dir: tempfile.TemporaryDirectory[str] | None = None
+        self._stdout_file = None
+        self._stderr_file = None
+        self._abruptly_killed = False
 
     def start(self) -> "LiveService":
+        if self._output_dir is not None:
+            for stream in (self._stdout_file, self._stderr_file):
+                if stream is not None:
+                    stream.close()
+            self._output_dir.cleanup()
         environment = {
             **os.environ,
             "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
         }
+        command = self.command or (
+            sys.executable,
+            "-m",
+            "devlegate",
+            "run",
+            "--env",
+            str(self.env_file),
+        )
+        self._output_dir = tempfile.TemporaryDirectory(prefix="devlegate-service-")
+        self._stdout_file = open(
+            Path(self._output_dir.name) / "stdout", "w+", encoding="utf-8"
+        )
+        self._stderr_file = open(
+            Path(self._output_dir.name) / "stderr", "w+", encoding="utf-8"
+        )
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "devlegate",
-                "run",
-                "--env",
-                str(self.env_file),
-            ],
+            list(command),
             cwd=self.cwd,
             env=environment,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._stdout_file,
+            stderr=self._stderr_file,
         )
+        self._abruptly_killed = False
         return self
 
     def wait_ready(self, timeout: float = 10) -> None:
@@ -97,10 +122,39 @@ class LiveService:
     ) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                self._collect_output()
+                raise AssertionError(
+                    f"service exited while waiting (return code "
+                    f"{self.process.returncode})\nstdout:\n{self.stdout}\n"
+                    f"stderr:\n{self.stderr}"
+                )
             if predicate():
                 return
             time.sleep(0.05)
-        raise AssertionError("service condition did not become true before timeout")
+        self._collect_output()
+        raise AssertionError(
+            "service condition did not become true before timeout\n"
+            f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
+        )
+
+    def kill(self, timeout: float = 10) -> None:
+        """Abruptly kill the service while preserving its durable artifacts."""
+        if self.process is None or self.process.poll() is not None:
+            return
+        self.process.kill()
+        self._abruptly_killed = True
+        try:
+            self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError("service did not die after SIGKILL") from error
+        self._collect_output()
+
+    def restart(self, timeout: float = 10) -> "LiveService":
+        self.kill(timeout=timeout)
+        self.start()
+        self.wait_ready(timeout=timeout)
+        return self
 
     def stop(self) -> None:
         if self.process is None:
@@ -108,15 +162,19 @@ class LiveService:
         if self.process.poll() is None:
             self.process.send_signal(signal.SIGTERM)
         try:
-            self.stdout, self.stderr = self.process.communicate(timeout=10)
+            self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self.process.kill()
-            self.stdout, self.stderr = self.process.communicate(timeout=5)
+            self.process.wait(timeout=5)
+            self._collect_output()
             raise AssertionError(
                 f"service teardown timed out\nstdout:\n{self.stdout}\n"
                 f"stderr:\n{self.stderr}"
             )
-        assert self.process.returncode == 0, (
+        self._collect_output()
+        assert self.process.returncode == 0 or (
+            self._abruptly_killed and self.process.returncode == -signal.SIGKILL
+        ), (
             f"service exited with {self.process.returncode}\n"
             f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
         )
@@ -126,7 +184,15 @@ class LiveService:
     def _collect_output(self) -> None:
         if self.process is None or self.process.poll() is None:
             return
-        self.stdout, self.stderr = self.process.communicate(timeout=2)
+        for stream, target in (
+            (self._stdout_file, "stdout"),
+            (self._stderr_file, "stderr"),
+        ):
+            if stream is None:
+                continue
+            stream.flush()
+            stream.seek(0)
+            setattr(self, target, stream.read())
 
     def __enter__(self) -> "LiveService":
         self.start()
@@ -136,9 +202,17 @@ class LiveService:
             if self.process is not None and self.process.poll() is None:
                 self.process.kill()
             if self.process is not None:
-                self.stdout, self.stderr = self.process.communicate(timeout=5)
+                self.process.wait(timeout=5)
+                self._collect_output()
             raise
         return self
 
     def __exit__(self, _type, _value, _traceback) -> None:
-        self.stop()
+        try:
+            self.stop()
+        finally:
+            for stream in (self._stdout_file, self._stderr_file):
+                if stream is not None:
+                    stream.close()
+            if self._output_dir is not None:
+                self._output_dir.cleanup()

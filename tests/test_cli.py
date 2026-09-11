@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -1229,6 +1230,526 @@ def _add_service_ticket(engine):
     )
 
 
+def _h1_driver(config, point=None):
+    command = (
+        sys.executable,
+        str(Path(__file__).with_name("h1_driver.py")),
+        "--env",
+        str(config),
+    )
+    return command
+
+
+def _wait_process_death(service):
+    assert service.process is not None
+    service.process.wait(timeout=20)
+    service._collect_output()
+    assert service.process.returncode == -signal.SIGKILL
+
+
+def _disk_state(config):
+    return ServiceEngine(config)._runtime_store.load()
+
+
+def _h1_config(git_fixture):
+    config = _short_runtime_config(git_fixture)
+    config.write_text(config.read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1"))
+    return config
+
+
+def _advance_product(git_fixture):
+    publisher = git_fixture["publisher"]
+    (publisher / "downtime.txt").write_text("advanced\n")
+    git(publisher, "add", "downtime.txt")
+    git(publisher, "commit", "-m", "advance product")
+    git(publisher, "push", "origin", "HEAD:main")
+    return git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip(), git(
+        publisher, "rev-parse", "HEAD"
+    ).stdout.strip()
+
+
+def test_real_service_sigkill_restarts_without_mutation(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _h1_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    try:
+        service.wait_for(lambda: "handled_remote_head" in _disk_state(config))
+        before = _disk_state(config)
+        service.kill()
+        service.restart()
+        status = service.cli("status", "--json")
+        plan = service.cli("plan", "--json")
+        assert status.returncode == 0, status.stderr
+        assert plan.returncode == 0, plan.stderr
+        assert _disk_state(config) == before
+    finally:
+        service.stop()
+
+
+@pytest.mark.parametrize("point", ["merge_pending", "merge_after_effect"])
+def test_real_service_merge_pending_restart_is_observe_first(
+    git_fixture, monkeypatch, point
+):
+    monkeypatch.chdir(git_fixture["working"])
+    _advance_product(git_fixture)
+    config = _h1_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    monkeypatch.setenv("H1_CRASH_POINT", point)
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, point)
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        crashed = _disk_state(config)
+        assert crashed["phase"] == "merge_pending"
+        assert crashed["remote_head"]
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(lambda: _disk_state(config)["phase"] == "idle")
+        assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == (
+            crashed["remote_head"]
+        )
+    finally:
+        service.stop()
+
+
+def _h1_execution_service(git_fixture, monkeypatch, point):
+    worker = git_fixture["tmp"] / f"h1-worker-{point}.py"
+    attempts = git_fixture["tmp"] / f"h1-attempts-{point}.txt"
+    _worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    monkeypatch.setenv("H1_CRASH_POINT", point)
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, point)
+    )
+    service.start()
+    service.wait_ready()
+    return service, config, engine, attempts
+
+
+def _long_worker_script(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, time\n"
+        "attempts = os.environ.get('DEVLEGATE_TEST_ATTEMPTS')\n"
+        "if attempts:\n"
+        "    with pathlib.Path(attempts).open('a') as handle:\n"
+        "        handle.write('attempt\\n')\n"
+        "        handle.flush()\n"
+        "pathlib.Path(os.environ['DEVLEGATE_TEST_WORKER_PID']).write_text(str(os.getpid()))\n"
+        "while True:\n"
+        "    time.sleep(1)\n"
+    )
+    path.chmod(0o755)
+
+
+def _kill_worker_identity(identity):
+    if isinstance(identity, dict) and isinstance(identity.get("pgid"), int):
+        try:
+            os.killpg(identity["pgid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_real_service_worker_launch_restart_stays_fail_closed(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts = _h1_execution_service(
+        git_fixture, monkeypatch, "worker-launch"
+    )
+    try:
+        _wait_process_death(service)
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-launch"
+        )
+        status = service.cli("status", "--json")
+        plan = service.cli("plan", "--json")
+        assert status.returncode == 1
+        assert json.loads(status.stdout)["execution"]["phase"] == "agent_running"
+        assert "ambiguous outcome" in json.loads(plan.stdout)["reason"]
+        assert not attempts.exists()
+    finally:
+        service.stop()
+
+
+def test_real_service_matching_live_worker_restart_does_not_duplicate(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "h1-live-worker.py"
+    pid_file = git_fixture["tmp"] / "h1-live-worker.pid"
+    attempts = git_fixture["tmp"] / "h1-live-attempts.txt"
+    _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid_file))
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    identity = None
+    try:
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+        )
+        identity = _disk_state(config)["worker_identity"]
+        service.kill()
+        service.restart()
+        service.wait_for(lambda: service.cli("status", "--json").returncode == 1)
+        assert _disk_state(config)["worker_identity"] == identity
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        _kill_worker_identity(identity)
+        service.stop()
+
+
+def test_real_service_absent_worker_uses_process_loss_resume(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "h1-absent-worker.py"
+    pid_file = git_fixture["tmp"] / "h1-absent-worker.pid"
+    attempts = git_fixture["tmp"] / "h1-absent-attempts.txt"
+    _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid_file))
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    old_identity = None
+    new_identity = None
+    try:
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+        )
+        old_identity = _disk_state(config)["worker_identity"]
+        service.kill()
+        _kill_worker_identity(old_identity)
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and isinstance(_disk_state(config).get("worker_identity"), dict)
+            and _disk_state(config).get("execution_id")
+            != old_identity.get("execution_id")
+        )
+        new_identity = _disk_state(config)["worker_identity"]
+        assert new_identity["execution_id"] != old_identity["execution_id"]
+        service.wait_for(
+            lambda: attempts.read_text().splitlines() == ["attempt", "attempt"],
+            timeout=30,
+        )
+    finally:
+        _kill_worker_identity(old_identity)
+        _kill_worker_identity(new_identity)
+        service.stop()
+
+
+def test_real_service_post_worker_loss_requires_resume(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, engine, attempts = _h1_execution_service(
+        git_fixture, monkeypatch, "post-worker"
+    )
+    try:
+        _wait_process_death(service)
+        crashed = _disk_state(config)
+        old_id = crashed["execution_id"]
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+
+        def resumed():
+            state = _disk_state(config)
+            return state["phase"] == "idle" and (
+                engine.control_worktree / "kanban/review/T-1.md"
+            ).is_file()
+
+        service.wait_for(resumed)
+        assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+        reports = list((engine.control_worktree / "executions/T-1").glob("*.json"))
+        assert len(reports) == 1
+        assert json.loads(reports[0].read_text())["execution_id"] != old_id
+    finally:
+        service.stop()
+
+
+def _prepare_accepted_integration(git_fixture, monkeypatch):
+    worker = git_fixture["tmp"] / "h1-accepted-worker.py"
+    attempts = git_fixture["tmp"] / "h1-accepted-attempts.txt"
+    _worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    try:
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
+        )
+    finally:
+        service.stop()
+    review = engine.control_worktree / "kanban/review/T-1.md"
+    accepted = engine.control_worktree / "kanban/accepted/T-1.md"
+    review.rename(accepted)
+    git(engine.control_worktree, "add", "-A")
+    git(engine.control_worktree, "commit", "-m", "accept T-1")
+    git(
+        engine.control_worktree,
+        "push",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+    return config, engine, attempts
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        "integration_before_effect",
+        "integration_product_after_effect",
+        "integration_control_commit_after_effect",
+        "integration_control_push_after_effect",
+    ],
+)
+def test_real_service_accepted_integration_restart_is_idempotent(
+    git_fixture, monkeypatch, point
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", point)
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, point)
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        crashed = _disk_state(config)
+        assert crashed["accepted_integration"]["ticket_id"] == "T-1"
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+
+        def completed():
+            local = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            remote = git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()
+            return (
+                _disk_state(config)["phase"] == "idle"
+                and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+                and remote
+                and remote[0] == local
+            )
+
+        service.wait_for(
+            completed
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+        assert not (engine.control_worktree / "kanban/accepted/T-1.md").exists()
+    finally:
+        service.stop()
+
+
+def test_real_service_receipt_restart_is_not_a_persistent_command_queue(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "h1-receipt-worker.py"
+    attempts = git_fixture["tmp"] / "h1-receipt-attempts.txt"
+    _worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    monkeypatch.setenv("H1_CRASH_POINT", "receipt_after_save")
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    monkeypatch.setattr(
+        engine,
+        "_run_worker",
+        lambda *_args: WorkerRunResult(1, None, None, None),
+    )
+    assert engine.run_once() == 1
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        try:
+            service.cli("retry", "T-1", timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        _wait_process_death(service)
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: isinstance(_disk_state(config).get("mutable_receipts"), dict)
+        )
+        assert not attempts.exists()
+        result = service.cli("retry", "T-1")
+        assert result.returncode == 0, result.stderr
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_reconcile_receipt_restart_is_not_a_queue(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _h1_config(git_fixture)
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (git_fixture["working"] / "product-change.txt").write_text("product B\n")
+        git(git_fixture["working"], "add", "product-change.txt")
+        git(git_fixture["working"], "commit", "-m", "advance product")
+        git(git_fixture["working"], "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.run_once() == 1
+    target = engine._state["reconciliation"]["observed_product"]
+    git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
+    monkeypatch.setenv("H1_CRASH_POINT", "receipt_after_save")
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        try:
+            service.cli("reconcile", "update-base", "T-1", "--onto", target, timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        _wait_process_death(service)
+        before = _disk_state(config)["reconciliation"]
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        assert _disk_state(config)["reconciliation"] == before
+        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
+        assert result.returncode == 0, result.stderr
+        service.wait_for(
+            lambda: _disk_state(config)["reconciliation"]["status"] == "resolved"
+        )
+    finally:
+        service.stop()
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        "agent_pending",
+        "checkpointing",
+        "checkpoint_after_effect",
+        "post-checkpoint",
+        "publishing",
+        "publication_after_effect",
+        "post-publication",
+        "lifecycle",
+        "lifecycle_after_effect",
+    ],
+)
+def test_real_service_transaction_stage_restart_preserves_execution(
+    git_fixture, monkeypatch, point
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, engine, attempts = _h1_execution_service(
+        git_fixture, monkeypatch, point
+    )
+    try:
+        _wait_process_death(service)
+        crashed = _disk_state(config)
+        execution_id = crashed.get("execution_id")
+        assert isinstance(execution_id, str)
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+
+        def completed():
+            state = _disk_state(config)
+            return state["phase"] == "idle" and (
+                engine.control_worktree / "kanban/review/T-1.md"
+            ).is_file()
+
+        service.wait_for(completed)
+        reports = list((engine.control_worktree / "executions/T-1").glob("*.json"))
+        assert len(reports) == 1
+        assert json.loads(reports[0].read_text())["execution_id"] == execution_id
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_product_movement_during_downtime_blocks_stale_publish(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, engine, attempts = _h1_execution_service(
+        git_fixture, monkeypatch, "post-checkpoint"
+    )
+    try:
+        _wait_process_death(service)
+        _advance_product(git_fixture)
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "post-checkpoint"
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+        execution = engine.execution_worktree_root / "work" / "T-1"
+        assert not git(
+            execution,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/work/T-1",
+        ).stdout.strip()
+    finally:
+        service.stop()
+
+
 def test_real_service_process_executes_retry_from_real_cli(
     git_fixture, monkeypatch
 ):
@@ -1298,6 +1819,10 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
 
     with LiveService(git_fixture["working"], config) as service:
+        pending_before = _disk_state(config)["reconciliation"]
+        service.kill()
+        service.restart()
+        assert _disk_state(config)["reconciliation"] == pending_before
         result = service.cli(
             "reconcile", "update-base", "T-1", "--onto", target
         )
@@ -1315,7 +1840,12 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
             )
 
         service.wait_for(resolved)
-        payload = json.loads(service.cli("status", "--json").stdout)
+        (git_fixture["working"] / "operator-downtime.txt").write_text("hold\n")
+        service.kill()
+        service.restart()
+        status = service.cli("status", "--json")
+        assert status.stdout
+        payload = json.loads(status.stdout)
         assert payload["reconciliation"]["effective_base"] == target
         assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
         assert (execution / "implementation.txt").read_text() == "worker work\n"
