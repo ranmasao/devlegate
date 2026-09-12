@@ -9,6 +9,7 @@ import stat
 import struct
 import sys
 import threading
+import time
 from pathlib import Path
 
 from devlegate.ipc_protocol import (
@@ -81,7 +82,7 @@ def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
 
 
 class UnixIPCServer:
-    """Serve one request at a time over a project-local Unix socket."""
+    """Serve independently framed client connections over a project-local socket."""
 
     def __init__(self, engine: object, socket_path: Path) -> None:
         self.engine = engine
@@ -90,7 +91,7 @@ class UnixIPCServer:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._connection_lock = threading.Lock()
-        self._active_connection: socket.socket | None = None
+        self._active_connections: dict[int, tuple[socket.socket, threading.Thread]] = {}
         self._bound_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
@@ -126,15 +127,22 @@ class UnixIPCServer:
         if listener is not None:
             listener.close()
         with self._connection_lock:
-            connection = self._active_connection
-        if connection is not None:
+            active = tuple(self._active_connections.values())
+        for connection, _thread in active:
             try:
                 connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                connection.close()
             except OSError:
                 pass
         thread = self._thread
         if thread is not None:
             thread.join(timeout=2)
+        deadline = time.monotonic() + 2
+        for _connection, handler in active:
+            handler.join(timeout=max(0, deadline - time.monotonic()))
         self._listener = None
         self._thread = None
         self._remove_owned_socket()
@@ -248,14 +256,26 @@ class UnixIPCServer:
             if not _peer_credentials_are_current_user(connection):
                 connection.close()
                 continue
+            handler = threading.Thread(
+                target=self._handle_connection,
+                args=(connection,),
+                name="devlegate-ipc-client",
+                daemon=True,
+            )
             with self._connection_lock:
-                self._active_connection = connection
-            try:
-                self._serve_connection(connection)
-            finally:
-                with self._connection_lock:
-                    self._active_connection = None
-                connection.close()
+                if self._stop.is_set():
+                    connection.close()
+                    continue
+                self._active_connections[id(connection)] = (connection, handler)
+                handler.start()
+
+    def _handle_connection(self, connection: socket.socket) -> None:
+        try:
+            self._serve_connection(connection)
+        finally:
+            with self._connection_lock:
+                self._active_connections.pop(id(connection), None)
+            connection.close()
 
     def _serve_connection(self, connection: socket.socket) -> None:
         stream = connection.makefile("rwb")

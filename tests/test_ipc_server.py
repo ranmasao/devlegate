@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,115 @@ def test_client_disconnect_does_not_stop_server(running_server):
 
     response = request(_server.path, "2", "ping")
     assert response.ok
+
+
+def test_idle_connection_does_not_block_unrelated_client(running_server):
+    _engine, _state, server = running_server
+    idle = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    idle.settimeout(2)
+    idle.connect(str(server.path))
+    try:
+        assert request(server.path, "other", "ping").ok
+    finally:
+        idle.close()
+
+
+def test_incomplete_frame_does_not_block_unrelated_client(running_server):
+    _engine, _state, server = running_server
+    partial = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    partial.settimeout(2)
+    partial.connect(str(server.path))
+    partial.sendall(b"\x00")
+    try:
+        assert request(server.path, "other", "status").ok
+    finally:
+        partial.close()
+
+
+def test_many_read_only_clients_overlap_without_mutating_runtime(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    entered = threading.Event()
+    release = threading.Event()
+    count_lock = threading.Lock()
+    status_count = 0
+    original_status = engine.status_view
+
+    def status_view():
+        nonlocal status_count
+        with count_lock:
+            status_count += 1
+            if status_count == 3:
+                entered.set()
+        assert release.wait(3)
+        return original_status()
+
+    monkeypatch.setattr(engine, "status_view", status_view)
+    before = engine._state_file.read_bytes()
+    before_product = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    before_control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    start = threading.Event()
+
+    def call(method, request_id):
+        assert start.wait(2)
+        return request(engine.ipc_socket_path, request_id, method)
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = [
+                pool.submit(call, "status", f"status-{index}")
+                for index in range(3)
+            ]
+            futures.append(pool.submit(call, "plan", "plan-1"))
+            futures.append(pool.submit(call, "ping", "ping-1"))
+            start.set()
+            assert entered.wait(2)
+            release.set()
+            responses = [future.result(timeout=5) for future in futures]
+        assert all(response.ok for response in responses)
+        assert engine._state_file.read_bytes() == before
+        assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == before_product
+        assert (
+            git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            == before_control
+        )
+    finally:
+        release.set()
+        server.stop()
+
+
+def test_shutdown_closes_multiple_active_connection_handlers(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    clients = []
+    try:
+        for _index in range(3):
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(str(server.path))
+            client.sendall(b"\x00")
+            clients.append(client)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if len(server._active_connections) == len(clients):
+                break
+            time.sleep(0.01)
+        assert len(server._active_connections) == len(clients)
+        handlers = tuple(
+            handler for _connection, handler in server._active_connections.values()
+        )
+        server.stop()
+        assert not server._active_connections
+        assert all(not handler.is_alive() for handler in handlers)
+    finally:
+        for client in clients:
+            client.close()
+        server.stop()
 
 
 def test_distinct_projects_share_state_dir_without_socket_collision(
@@ -644,6 +754,68 @@ def test_read_only_ipc_remains_available_while_owner_retry_is_active(
         server.stop()
         authority.close()
     assert not owner.is_alive()
+
+
+def test_shutdown_rejects_operator_command_waiting_for_owner_admission(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine._interactive_retry_candidates = lambda: (
+        RetryCandidate("T-1", "Ticket", "failed", "failed"),
+    )
+    admission_started = threading.Event()
+    release_admission = threading.Event()
+    stop_event = threading.Event()
+    original_validate = engine._validate_operator_admission
+
+    def validate(command):
+        admission_started.set()
+        assert release_admission.wait(3)
+        original_validate(command)
+
+    monkeypatch.setattr(engine, "_validate_operator_admission", validate)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    result = {}
+
+    def submit():
+        result["response"] = request(
+            engine.ipc_socket_path,
+            "shutdown-race",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+
+    client = threading.Thread(target=submit)
+    client.start()
+    try:
+        assert admission_started.wait(2)
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=2)
+        assert not owner.is_alive()
+        release_admission.set()
+        client.join(timeout=3)
+        assert not client.is_alive()
+        response = result["response"]
+        assert not response.ok
+        assert response.error["code"] == "application_error"
+        assert "shutting down" in response.error["message"]
+    finally:
+        release_admission.set()
+        stop_event.set()
+        engine.wake()
+        client.join(timeout=2)
+        owner.join(timeout=2)
+        server.stop()
+        authority.close()
 
 
 def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(

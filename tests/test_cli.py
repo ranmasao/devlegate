@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from devlegate.cli import (
     main,
 )
 from devlegate.ipc_client import IPCClientError
+from devlegate.ipc_client import request as ipc_request
 from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
@@ -1337,6 +1339,220 @@ def _h1_execution_service(git_fixture, monkeypatch, point):
     service.start()
     service.wait_ready()
     return service, config, engine, attempts
+
+
+def _retryable_service(git_fixture, monkeypatch):
+    worker = git_fixture["tmp"] / "h2-retry-worker.py"
+    attempts = git_fixture["tmp"] / "h2-retry-attempts.txt"
+    _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    monkeypatch.setattr(
+        engine,
+        "_run_worker",
+        lambda *_args: WorkerRunResult(1, None, None, None),
+    )
+    assert engine.run_once() == 1
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    return service, config, engine, attempts
+
+
+def _parallel_service_requests(service, methods):
+    start = threading.Event()
+
+    def call(method, _index):
+        assert start.wait(3)
+        return ipc_request(service.locator.socket_path, method, timeout=10)
+
+    with ThreadPoolExecutor(max_workers=len(methods)) as pool:
+        futures = [
+            pool.submit(call, method, index) for index, method in enumerate(methods)
+        ]
+        start.set()
+        return [future.result(timeout=15) for future in futures]
+
+
+def test_real_service_many_observers_succeed_while_worker_runs(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "h2-live-worker.py"
+    attempts = git_fixture["tmp"] / "h2-live-attempts.txt"
+    _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    identity = None
+    try:
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and attempts.exists()
+        )
+        identity = _disk_state(config)["worker_identity"]
+        responses = _parallel_service_requests(
+            service, ["status", "status", "plan", "status", "plan"]
+        )
+        statuses = [
+            response
+            for response, method in zip(
+                responses, ["status", "status", "plan", "status", "plan"]
+            )
+            if method == "status"
+        ]
+        plans = [
+            response
+            for response, method in zip(
+                responses, ["status", "status", "plan", "status", "plan"]
+            )
+            if method == "plan"
+        ]
+        assert all(
+            status["execution"]["phase"] in {"idle", "agent_running"}
+            for status in statuses
+        )
+        assert all(isinstance(plan["action"], str) for plan in plans)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        _kill_worker_identity(identity)
+        service.stop()
+
+
+def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    try:
+        result = service.cli("retry", "T-1", timeout=10)
+        assert result.returncode == 0, result.stderr
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and attempts.exists()
+        )
+        responses = _parallel_service_requests(service, ["status", "plan", "status"])
+        assert all(isinstance(response, dict) for response in responses)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        _kill_worker_identity(_disk_state(config).get("worker_identity"))
+        service.stop()
+
+
+def test_real_service_same_request_id_retries_concurrently_once(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    try:
+        barrier = threading.Barrier(2)
+
+        def submit():
+            barrier.wait(timeout=3)
+            return ipc_request(
+                service.locator.socket_path,
+                "retry",
+                {"ticket_id": "T-1"},
+                mutable=True,
+                request_id="same-request",
+                timeout=10,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [pool.submit(submit) for _index in range(2)]
+            replies = [future.result(timeout=15) for future in results]
+        assert replies == [
+            {"accepted": True, "ticket_id": "T-1"},
+            {"accepted": True, "ticket_id": "T-1"},
+        ]
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and attempts.exists()
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+        assert set(_disk_state(config)["mutable_receipts"]) == {"same-request"}
+    finally:
+        _kill_worker_identity(_disk_state(config).get("worker_identity"))
+        service.stop()
+
+
+def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    try:
+        barrier = threading.Barrier(2)
+
+        def submit(request_id):
+            barrier.wait(timeout=3)
+            try:
+                return ipc_request(
+                    service.locator.socket_path,
+                    "retry",
+                    {"ticket_id": "T-1"},
+                    mutable=True,
+                    request_id=request_id,
+                    timeout=10,
+                )
+            except IPCClientError as error:
+                return error
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(submit, request_id) for request_id in ("q1", "q2")]
+            replies = [future.result(timeout=15) for future in futures]
+        assert sum(isinstance(reply, dict) for reply in replies) == 1
+        errors = [reply for reply in replies if isinstance(reply, IPCClientError)]
+        assert len(errors) == 1
+        assert "already pending or running" in str(errors[0])
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and attempts.exists()
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+        assert len(_disk_state(config)["mutable_receipts"]) == 1
+    finally:
+        _kill_worker_identity(_disk_state(config).get("worker_identity"))
+        service.stop()
+
+
+def test_real_service_stale_status_cannot_authorize_second_retry(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    try:
+        stale = json.loads(service.cli("status", "--json").stdout)
+        assert stale["execution"]["phase"] == "idle"
+        first = service.cli("retry", "T-1", timeout=10)
+        assert first.returncode == 0, first.stderr
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and attempts.exists()
+        )
+        with pytest.raises(IPCClientError, match="already (?:running|pending)"):
+            ipc_request(
+                service.locator.socket_path,
+                "retry",
+                {"ticket_id": "T-1"},
+                mutable=True,
+                request_id="stale-retry",
+                timeout=10,
+            )
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        _kill_worker_identity(_disk_state(config).get("worker_identity"))
+        service.stop()
 
 
 def _long_worker_script(path):

@@ -943,6 +943,7 @@ class ServiceEngine:
         self._operator_active = False
         self._operator_active_command: OperatorCommand | None = None
         self._service_wake = threading.Event()
+        self._service_shutdown = threading.Event()
         self._foreground_abort_requested = False
         self._worker_identity_handler: (
             Callable[[WorkerProcessIdentity], None] | None
@@ -952,6 +953,7 @@ class ServiceEngine:
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
+        self._published_status_snapshot: StatusSnapshot | None = None
         self._published_snapshot = ServiceSnapshot(
             lifecycle="initialized",
             phase=str(self._state["phase"]),
@@ -1037,6 +1039,12 @@ class ServiceEngine:
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
+            if self._service_shutdown.is_set() or (
+                self._stop_event is not None and self._stop_event.is_set()
+            ):
+                raise DevlegateError(
+                    "daemon is shutting down; runtime command was not admitted"
+                )
             receipt = self._mutable_receipt(request_id)
             if receipt is not None:
                 if (
@@ -1233,6 +1241,17 @@ class ServiceEngine:
             self._operator_active = False
             self._operator_active_command = None
 
+    def _reject_pending_operator_command_on_shutdown(self) -> None:
+        with self._operator_command_lock:
+            command = self._operator_command
+            if command is None:
+                return
+            self._operator_command = None
+            command.admission_error = DevlegateError(
+                "daemon is shutting down; runtime command was not admitted"
+            )
+            command.admission_event.set()
+
     def _operator_command_pending(self) -> bool:
         with self._operator_command_lock:
             return bool(
@@ -1319,6 +1338,8 @@ class ServiceEngine:
             accepted=snapshot.accepted,
             blocked_reason=blocked_reason,
         )
+        with self._snapshot_lock:
+            self._published_status_snapshot = snapshot
 
     def _publish_ticket_projection(
         self,
@@ -4577,6 +4598,7 @@ export default tool({
         lock_handle: object | None = None,
     ) -> int:
         self._foreground_abort_requested = False
+        self._service_shutdown.clear()
         if stop_event is not None and not once:
             threading.Thread(
                 target=self._wake_when_stopped,
@@ -4589,12 +4611,19 @@ export default tool({
         )
         with self._stop_context(stop_event), authority:
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
+            if not once and not (stop_event is not None and stop_event.is_set()):
+                try:
+                    self.status_view()
+                except DevlegateError:
+                    pass
             while True:
                 if (
                     stop_event is not None
                     and stop_event.is_set()
                     and self._state.get("phase") != "merge_pending"
                 ):
+                    self._service_shutdown.set()
+                    self._reject_pending_operator_command_on_shutdown()
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 operator_command = None
@@ -4622,6 +4651,7 @@ export default tool({
                             else self._run_once()
                         )
                 except ShutdownInterrupted:
+                    self._service_shutdown.set()
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 except WorkflowBlockedError as error:
@@ -4719,6 +4749,8 @@ export default tool({
                     if self._wait_for_service_event(
                         stop_event, int(self.poll_interval)
                     ):
+                        self._service_shutdown.set()
+                        self._reject_pending_operator_command_on_shutdown()
                         self._publish_service_snapshot(lifecycle="ready")
                         return 0
                 else:
@@ -5204,9 +5236,13 @@ export default tool({
             except SnapshotChanged:
                 continue
         else:
-            raise DevlegateError(
-                "project state changed while status snapshot was being collected"
-            )
+            with self._snapshot_lock:
+                snapshot = self._published_status_snapshot
+            if snapshot is None:
+                raise DevlegateError(
+                    "project state changed while status snapshot was being collected"
+                )
+            return snapshot
         self._publish_status_snapshot(snapshot)
         return snapshot
 
@@ -5989,9 +6025,13 @@ export default tool({
             except SnapshotChanged:
                 continue
         else:
-            raise DevlegateError(
-                "project state changed while execution plan was being collected"
-            )
+            with self._snapshot_lock:
+                snapshot = self._published_status_snapshot
+            if snapshot is None:
+                raise DevlegateError(
+                    "project state changed while execution plan was being collected"
+                )
+            return snapshot.plan
         blocked_reason = (
             snapshot.plan.reason if snapshot.plan.action == "blocked" else None
         )
