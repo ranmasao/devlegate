@@ -1363,7 +1363,7 @@ def _retryable_service(git_fixture, monkeypatch):
     service = LiveService(git_fixture["working"], config)
     service.start()
     service.wait_ready()
-    return service, config, engine, attempts
+    return service, config, engine, attempts, pid_file
 
 
 def _parallel_service_requests(service, methods):
@@ -1404,7 +1404,12 @@ def test_real_service_many_observers_succeed_while_worker_runs(
     try:
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists(),
+            and _worker_body_started(
+                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                _disk_state(config).get("worker_identity"),
+                attempts,
+                1,
+            ),
             timeout=30,
         )
         identity = _disk_state(config)["worker_identity"]
@@ -1438,13 +1443,20 @@ def test_real_service_many_observers_succeed_while_worker_runs(
 
 def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
-    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    service, config, _engine, attempts, _pid_file = _retryable_service(
+        git_fixture, monkeypatch
+    )
     try:
         result = service.cli("retry", "T-1", timeout=10)
         assert result.returncode == 0, result.stderr
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists(),
+            and _worker_body_started(
+                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                _disk_state(config).get("worker_identity"),
+                attempts,
+                1,
+            ),
             timeout=30,
         )
         responses = _parallel_service_requests(service, ["status", "plan", "status"])
@@ -1459,7 +1471,9 @@ def test_real_service_same_request_id_retries_concurrently_once(
     git_fixture, monkeypatch
 ):
     monkeypatch.chdir(git_fixture["working"])
-    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    service, config, _engine, attempts, _pid_file = _retryable_service(
+        git_fixture, monkeypatch
+    )
     try:
         barrier = threading.Barrier(2)
 
@@ -1483,7 +1497,12 @@ def test_real_service_same_request_id_retries_concurrently_once(
         ]
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists(),
+            and _worker_body_started(
+                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                _disk_state(config).get("worker_identity"),
+                attempts,
+                1,
+            ),
             timeout=30,
         )
         assert attempts.read_text().splitlines() == ["attempt"]
@@ -1497,7 +1516,9 @@ def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
     git_fixture, monkeypatch
 ):
     monkeypatch.chdir(git_fixture["working"])
-    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    service, config, _engine, attempts, _pid_file = _retryable_service(
+        git_fixture, monkeypatch
+    )
     try:
         barrier = threading.Barrier(2)
 
@@ -1524,7 +1545,12 @@ def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
         assert "already pending or running" in str(errors[0])
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists(),
+            and _worker_body_started(
+                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                _disk_state(config).get("worker_identity"),
+                attempts,
+                1,
+            ),
             timeout=30,
         )
         assert attempts.read_text().splitlines() == ["attempt"]
@@ -1538,7 +1564,9 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
     git_fixture, monkeypatch
 ):
     monkeypatch.chdir(git_fixture["working"])
-    service, config, _engine, attempts = _retryable_service(git_fixture, monkeypatch)
+    service, config, _engine, attempts, _pid_file = _retryable_service(
+        git_fixture, monkeypatch
+    )
     try:
         stale = json.loads(service.cli("status", "--json").stdout)
         assert stale["execution"]["phase"] == "idle"
@@ -1546,7 +1574,12 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
         assert first.returncode == 0, first.stderr
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists(),
+            and _worker_body_started(
+                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                _disk_state(config).get("worker_identity"),
+                attempts,
+                1,
+            ),
             timeout=30,
         )
         with pytest.raises(IPCClientError, match="already (?:running|pending)"):
@@ -1578,6 +1611,24 @@ def _long_worker_script(path):
         "    time.sleep(1)\n"
     )
     path.chmod(0o755)
+
+
+def _worker_body_started(pid_file, identity, attempts, expected_count):
+    if (
+        not isinstance(identity, dict)
+        or not pid_file.is_file()
+        or not attempts.is_file()
+    ):
+        return False
+    try:
+        marker_pid = int(pid_file.read_text().strip())
+        attempt_lines = attempts.read_text().splitlines()
+    except (OSError, ValueError):
+        return False
+    return (
+        marker_pid == identity["pid"]
+        and attempt_lines == ["attempt"] * expected_count
+    )
 
 
 def _kill_worker_identity(identity):
@@ -1635,6 +1686,9 @@ def test_real_service_matching_live_worker_restart_does_not_duplicate(
     try:
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and _worker_body_started(
+                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            )
         )
         identity = _disk_state(config)["worker_identity"]
         service.kill()
@@ -1671,10 +1725,14 @@ def test_real_service_absent_worker_uses_process_loss_resume(
     try:
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and _worker_body_started(
+                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            )
         )
         old_identity = _disk_state(config)["worker_identity"]
         service.kill()
         _kill_worker_identity(old_identity)
+        pid_file.unlink(missing_ok=True)
         service.restart()
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
@@ -1685,8 +1743,8 @@ def test_real_service_absent_worker_uses_process_loss_resume(
         new_identity = _disk_state(config)["worker_identity"]
         assert new_identity["execution_id"] != old_identity["execution_id"]
         service.wait_for(
-            lambda: attempts.read_text().splitlines() == ["attempt", "attempt"],
-            timeout=30,
+            lambda: _worker_body_started(pid_file, new_identity, attempts, 2),
+            timeout=15,
         )
     finally:
         _kill_worker_identity(old_identity)
