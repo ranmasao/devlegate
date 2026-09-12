@@ -46,12 +46,7 @@ _git = _runtime._git
 
 
 def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine:
-    """Construct the service, retaining only the old import-test seam."""
-    from devlegate import application
-
-    compatibility_type = application.Application
-    if compatibility_type is not _runtime.ServiceEngine:
-        return compatibility_type(env_file, read_only=read_only)
+    """Construct the canonical service engine."""
     return ServiceEngine(env_file, read_only=read_only)
 
 

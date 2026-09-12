@@ -145,8 +145,8 @@ not obsolete merely because the names are historical.
 | --- | --- | --- | --- |
 | `ServiceEngine` | `cli.main()` constructs it for `run` and `daemon` through `_service_engine`; `daemon.run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
-| `Application` | `cli._service_engine()` imports `devlegate.application` and checks `application.Application`; the alias currently resolves to `ServiceEngine` but the branch permits an intentional compatibility implementation | KEEP - supported compatibility alias/seam | `src/devlegate/application.py`, `src/devlegate/cli.py:48-55` |
-| `DevlegateApplication` | Exported as an importable name from `devlegate.application`; no current in-repository caller | KEEP - compatibility surface, reachability externally unclear | Explicit alias declaration; absence from local callers does not disprove supported imports |
+| `Application` | No production references remain after I4; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
+| `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
 | `devlegate run` | Constructs the canonical `_service_engine()` and calls `run_service(..., once=args.once)` | KEEP - canonical foreground runtime command | `src/devlegate/cli.py:525-526` |
 | `devlegate daemon` | Constructs the same canonical `_service_engine()` and calls `run_daemon()`; `run_daemon()` delegates to `run_service()` | KEEP - reachable command/compatibility spelling | `src/devlegate/cli.py:523-524`, `src/devlegate/daemon.py:56-58` |
 | `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
@@ -161,8 +161,8 @@ python -m devlegate / console script
      -> init/render/check/control -> Devlegate(read_only=True)
      -> status/plan -> IPC, or guarded read-only ServiceEngine fallback
      -> retry/reconcile -> IPC client only
-     -> run -> _service_engine() -> run_service() -> UnixIPCServer + ServiceEngine.serve()
-     -> daemon -> _service_engine() -> run_daemon() -> run_service()
+     -> run -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
+     -> daemon -> ServiceEngine -> run_daemon() -> run_service()
 ```
 
 `h1_driver.py` is test-only and constructs `ServiceEngine` so it can inject
@@ -188,24 +188,24 @@ execute mutable work instead of submitting it. `ServiceEngine.retry()` and
 they are owner-side algorithms and useful lower-layer regression seams. No
 production mutable bypass was found.
 
-The following tests exercise intentional or historical seams and must not be
-removed during I3:
+The following tests exercise current bootstrap, semantic, or IPC seams and
+remain valid after I4:
 
-- `test_service_engine_is_the_only_runtime_authority` checks the current
-  `Application`/`Devlegate` identity aliases.
-- `test_operational_cli_dispatches_run_through_application` and
-  `test_operational_cli_constructs_service_engine_directly` check two supported
-  construction seams.
-- `test_all_operational_cli_commands_use_service_engine` checks the current
-  CLI construction contract with a fake engine.
-- `test_application_import_does_not_import_cli` checks import direction, not
-  runtime ownership.
+- `test_operational_cli_constructs_service_engine_directly` checks the canonical
+  runtime construction contract.
+- `test_daemon_command_constructs_one_service_engine` checks the compatibility
+  `daemon` host construction contract.
+- `test_service_engine_status_and_plan_return_immutable_views` checks the
+  canonical engine view contract.
+- `test_cli_status_and_plan_render_fake_engine_without_runtime` checks cheap
+  rendering without claiming production topology.
 - Historical helper imports and private methods in `test_control_plane.py`,
   `test_daemon.py`, and `test_worker_protocol.py` are direct semantic seams.
 
 These tests are not production topology proof. The production reachability
-audit above now resolves `Application`, `Devlegate`, `ServiceEngine`, `run`,
-and `daemon`; it does not turn direct tests into topology proof.
+audit above now resolves `Devlegate`, `ServiceEngine`, `run`, and `daemon`.
+Application injection is retired; direct tests still do not become topology
+proof.
 
 ## Cleanup Candidates
 
@@ -232,29 +232,36 @@ No tests were removed. Candidates are recorded only for later decisions.
 
 ### I3 CANDIDATE - Obsolete Architecture/Path
 
-None. The audit found no production-unreachable architecture path or test whose
-protected contract is proven retired. In particular, `Devlegate` is still
-needed for bootstrap, `Application` is still consulted by production
-construction, and both `run` and `daemon` remain reachable.
+None carried forward. I3 established reachability; I4 has now intentionally
+retired the unsupported Application injection seam and its compatibility
+residue.
 
 ### I4 CANDIDATE - Redundant Or Compatibility-Only
 
-- `test_operational_cli_dispatches_run_through_application` and
-  `test_operational_cli_constructs_service_engine_directly`: apparent duplicate
-  CLI construction contracts; retain until the supported compatibility seam is
-  chosen.
-- `test_all_operational_cli_commands_use_service_engine`: overlaps the two
-  construction tests but covers command-family dispatch in one table; possible
-  consolidation only after deciding the seam contract.
-- `test_service_engine_is_the_only_runtime_authority`: compatibility identity
-  assertion; retain while `Application` and `Devlegate` aliases are reachable.
-- `test_cli_status_and_plan_render_fake_application_without_runtime` and the
-  `cli_daemon` CLI routing tests: lower-layer rendering/routing coverage that
-  must not be counted as production topology; possible I4 review only if the
-  same formatting and fail-closed cases remain covered.
-- `DevlegateApplication` has no local caller, but its explicit importable alias
-  is not removable without an external API decision; defer as UNCLEAR rather
-  than treating absence of repository references as proof of death.
+None remaining from the I2 candidate groups. The fake-engine rendering and
+`cli_daemon` routing tests were retained because they protect distinct cheap
+formatting, error-translation, and IPC-boundary behavior.
+
+### I4 Removed Tests And Replacements
+
+| Removed test | Removed contract | Surviving proof/reason |
+| --- | --- | --- |
+| `test_operational_cli_dispatches_run_through_application` | Historical Application substitution during `run` | `test_operational_cli_constructs_service_engine_directly` proves the canonical construction; real-service tests prove runtime behavior |
+| `test_all_operational_cli_commands_use_service_engine` | Broad fake-engine construction table that overlapped dedicated command tests | Dedicated daemon construction, canonical run construction, bootstrap tests, and IPC-only CLI tests cover the actual contracts |
+| `test_service_engine_is_the_only_runtime_authority` | Application/Devlegate/ServiceEngine alias identity assertion | Direct `ServiceEngine` construction and owner-thread/real-service authority tests prove behavior rather than retired alias identity |
+| `test_application_import_does_not_import_cli` | Import-direction check for the deleted `devlegate.application` module | No supported module remains; package entrypoint/import tests and canonical source imports cover current import direction |
+
+Tests retargeted rather than removed:
+
+- `test_application_status_and_plan_return_immutable_views` is now
+  `test_service_engine_status_and_plan_return_immutable_views` and uses the
+  canonical engine.
+- `test_cli_status_and_plan_render_fake_application_without_runtime` is now
+  `test_cli_status_and_plan_render_fake_engine_without_runtime`; it retains
+  unique rendering coverage without the retired Application seam.
+- `test_retry_refuses_without_daemon_without_constructing_application` is now
+  `test_retry_refuses_without_daemon_without_constructing_engine`; it still
+  proves retry refuses before any engine construction.
 
 ### GAP - Missing Proof
 
@@ -271,12 +278,6 @@ construction, and both `run` and `daemon` remain reachable.
 
 ### UNCLEAR
 
-- Whether `DevlegateApplication` is a supported external import or an
-  unneeded leftover alias. No package-level export or documentation reference
-  was found, but the module deliberately declares it as a compatibility name.
-- Whether the `Application` injection branch is required for external
-  subclassing/customization or only for historical tests. It is currently
-  production-reachable and therefore is not an I3 removal.
 - Whether the exact abnormal CLI-exit scenario is a release-blocking invariant
   or adequately implied by the existing normal CLI subprocess tests and
   service-host lifecycle tests.

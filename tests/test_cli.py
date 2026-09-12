@@ -18,7 +18,6 @@ import pytest
 from service_harness import LiveService
 
 from devlegate import __version__
-from devlegate.application import Application
 from devlegate.cli import (
     Devlegate,
     DevlegateError,
@@ -1043,9 +1042,11 @@ def test_subdirectory_requires_repository_root_with_daemon(
     assert "run devlegate from repository root" in capsys.readouterr().err
 
 
-def test_application_status_and_plan_return_immutable_views(git_fixture, monkeypatch):
+def test_service_engine_status_and_plan_return_immutable_views(
+    git_fixture, monkeypatch
+):
     monkeypatch.chdir(git_fixture["working"])
-    application = Application(git_fixture["config"], read_only=True)
+    application = ServiceEngine(git_fixture["config"], read_only=True)
 
     status = application.status()
     plan = application.plan()
@@ -1056,28 +1057,6 @@ def test_application_status_and_plan_return_immutable_views(git_fixture, monkeyp
         status.phase = "changed"
     with pytest.raises(dataclasses.FrozenInstanceError):
         plan.action = "changed"
-
-
-def test_application_import_does_not_import_cli():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import devlegate.application; "
-            "assert 'devlegate.cli' not in sys.modules",
-        ],
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_service_engine_is_the_only_runtime_authority():
-    from devlegate.runtime import Devlegate as RuntimeDevlegate
-
-    assert RuntimeDevlegate is ServiceEngine
-    assert Application is ServiceEngine
 
 
 def test_service_engine_serve_reuses_one_owner_across_polling_iterations(
@@ -1103,27 +1082,6 @@ def test_service_engine_serve_reuses_one_owner_across_polling_iterations(
         engine.serve(stop_event)
 
     assert calls == [(id(engine), id(runtime_store))] * 2
-
-
-def test_operational_cli_dispatches_run_through_application(git_fixture, monkeypatch):
-    calls = []
-
-    class FakeApplication:
-        def __init__(self, env_file, *, read_only=False):
-            calls.append(("init", env_file, read_only))
-
-        def serve(self, _stop_event, *, once=False):
-            calls.append(("serve", once))
-            return 7
-
-    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
-    monkeypatch.setattr(
-        sys, "argv", ["devlegate", "run", "--once", "--env", str(git_fixture["config"])]
-    )
-    monkeypatch.chdir(git_fixture["working"])
-
-    assert main() == 7
-    assert calls == [("init", git_fixture["config"], False), ("serve", True)]
 
 
 def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeypatch):
@@ -2405,59 +2363,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     assert persisted["resume_required"]["status"] == "required"
 
 
-def test_all_operational_cli_commands_use_service_engine(
-    git_fixture, monkeypatch, capsys
-):
-    calls = []
-
-    class View:
-        plan = type("Plan", (), {"action": "none"})()
-
-        def as_dict(self):
-            return {"action": "none"}
-
-    class FakeServiceEngine:
-        def __init__(self, env_file, *, read_only=False):
-            calls.append(("init", env_file, read_only))
-
-        def status(self):
-            calls.append("status")
-            return View()
-
-        def plan(self):
-            calls.append("plan")
-            return View()
-
-        def serve(self, _stop_event, *, once=False):
-            calls.append(("serve", once))
-            return 0
-
-        def retry(self, ticket_id=None, _stop_event=None):
-            calls.append(("retry", ticket_id))
-            return 0
-
-    monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
-    monkeypatch.chdir(git_fixture["working"])
-    for argv in (
-        ["status", "--json", "--env", str(git_fixture["config"])],
-        ["plan", "--json", "--env", str(git_fixture["config"])],
-        ["run", "--once", "--env", str(git_fixture["config"])],
-    ):
-        monkeypatch.setattr(sys, "argv", ["devlegate", *argv])
-        assert main() == 0
-        capsys.readouterr()
-
-    assert calls == [
-        ("init", git_fixture["config"], True),
-        "status",
-        ("init", git_fixture["config"], True),
-        "plan",
-        ("init", git_fixture["config"], False),
-        ("serve", True),
-    ]
-
-
-def test_cli_status_and_plan_render_fake_application_without_runtime(
+def test_cli_status_and_plan_render_fake_engine_without_runtime(
     git_fixture, monkeypatch, capsys
 ):
     observation = GitObservation(
@@ -2479,7 +2385,7 @@ def test_cli_status_and_plan_render_fake_application_without_runtime(
         plan,
     )
 
-    class FakeApplication:
+    class FakeServiceEngine:
         def __init__(self, env_file, *, read_only=False):
             assert read_only
 
@@ -2489,7 +2395,7 @@ def test_cli_status_and_plan_render_fake_application_without_runtime(
         def plan(self):
             return plan
 
-    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
+    monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "status", "--env", str(git_fixture["config"])]
@@ -2520,12 +2426,12 @@ def test_cli_status_and_plan_render_fake_application_without_runtime(
     assert json.loads(capsys.readouterr().out)["action"] == "none"
 
 
-def test_retry_refuses_without_daemon_without_constructing_application(
+def test_retry_refuses_without_daemon_without_constructing_engine(
     git_fixture, monkeypatch
 ):
     calls = []
 
-    class FakeApplication:
+    class FakeServiceEngine:
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
@@ -2533,7 +2439,7 @@ def test_retry_refuses_without_daemon_without_constructing_application(
             calls.append(("retry", ticket_id))
             return 3
 
-    monkeypatch.setattr("devlegate.application.Application", FakeApplication)
+    monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "retry", "T-1", "--env", str(git_fixture["config"])]
     )
