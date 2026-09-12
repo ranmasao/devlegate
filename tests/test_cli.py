@@ -1634,6 +1634,73 @@ def test_real_service_foreign_local_control_descendant_stays_blocked(
         service.stop()
 
 
+def test_real_service_exact_local_integration_with_foreign_descendant_stays_blocked(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_control_commit_after_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_control_commit_after_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        local_c = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        remote_r = git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0]
+        assert local_c != control_head
+        assert git(
+            engine.control_worktree, "rev-parse", f"{local_c}^"
+        ).stdout.strip() == control_head
+        assert remote_r == control_head
+
+        foreign = engine.control_worktree / "foreign-after-integration.txt"
+        foreign.write_text("unrelated\n")
+        git(engine.control_worktree, "add", foreign.name)
+        git(engine.control_worktree, "commit", "-m", "foreign after integration")
+        local_x = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        assert local_x != local_c
+        assert git(
+            engine.control_worktree, "rev-parse", f"{local_x}^"
+        ).stdout.strip() == local_c
+        assert git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0] == control_head
+
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
+        assert service.process is not None and service.process.poll() is None
+        json.loads(service.cli("status", "--json").stdout)
+        assert (
+            git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            == local_x
+        )
+        assert git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0] == control_head
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
 def test_real_service_remote_exact_control_descendant_is_recognized(
     git_fixture, monkeypatch
 ):
