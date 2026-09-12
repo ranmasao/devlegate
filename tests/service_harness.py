@@ -117,6 +117,28 @@ class LiveService:
             timeout=timeout,
         )
 
+    def start_cli(self, *args: str) -> subprocess.Popen[str]:
+        """Start a real CLI client without coupling its lifetime to the service."""
+        environment = {
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+        }
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "devlegate",
+                *args,
+                "--env",
+                str(self.env_file),
+            ],
+            cwd=self.cwd,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
     def wait_for(
         self, predicate: Callable[[], bool], timeout: float = 15
     ) -> None:

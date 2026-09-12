@@ -1425,6 +1425,46 @@ def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypa
         service.stop()
 
 
+def test_real_service_admitted_retry_outlives_cli_process(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    service, config, _engine, attempts, pid_file = _retryable_service(
+        git_fixture, monkeypatch
+    )
+    service_pid = service.process.pid
+    cli_process = None
+    try:
+        cli_process = service.start_cli("retry", "T-1")
+        stdout, stderr = cli_process.communicate(timeout=15)
+        assert cli_process.returncode == 0, stderr
+        assert "retry accepted: T-1" in stdout
+
+        def worker_active_after_cli_exit():
+            state = _disk_state(config)
+            return state.get("execution_stage") == "worker-running" and (
+                _worker_body_started(
+                    pid_file, state.get("worker_identity"), attempts, 1
+                )
+            )
+
+        service.wait_for(worker_active_after_cli_exit, timeout=30)
+        assert cli_process.poll() == 0
+        assert service.process is not None
+        assert service.process.pid == service_pid
+        assert service.process.poll() is None
+        status = service.cli("status", "--json")
+        assert status.returncode in {0, 1}, status.stderr
+        assert json.loads(status.stdout)["execution"]["phase"] == "agent_running"
+        identity = _disk_state(config)["worker_identity"]
+        os.kill(identity["pid"], 0)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        if cli_process is not None and cli_process.poll() is None:
+            cli_process.kill()
+            cli_process.wait(timeout=5)
+        _kill_worker_identity(_disk_state(config).get("worker_identity"))
+        service.stop()
+
+
 def test_real_service_same_request_id_retries_concurrently_once(
     git_fixture, monkeypatch
 ):
@@ -2294,6 +2334,54 @@ def test_real_service_process_executes_retry_from_real_cli(
             {"id": "T-1", "title": "Control ticket"}
         ]
         assert attempts.read_text().splitlines() == ["attempt"]
+
+
+def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "uncertain-worker.py"
+    attempts = git_fixture["tmp"] / "uncertain-attempts.txt"
+    _worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    monkeypatch.setenv("H1_CRASH_POINT", "receipt_after_save")
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    monkeypatch.setattr(
+        engine,
+        "_run_worker",
+        lambda *_args: WorkerRunResult(1, None, None, None),
+    )
+    assert engine.run_once() == 1
+    service = LiveService(
+        git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        result = service.cli("retry", "T-1", timeout=20)
+        assert result.returncode != 0
+        assert "retry request outcome is uncertain" in result.stderr
+        assert "inspect status before retrying" in result.stderr
+        _wait_process_death(service)
+        assert service.process.returncode == -signal.SIGKILL
+        crashed = _disk_state(config)
+        receipts = crashed.get("mutable_receipts")
+        assert isinstance(receipts, dict)
+        assert any(
+            receipt.get("method") == "retry"
+            and receipt.get("ticket_id") == "T-1"
+            and receipt.get("accepted") is True
+            for receipt in receipts.values()
+            if isinstance(receipt, dict)
+        )
+        service.locator.socket_path.unlink(missing_ok=True)
+    finally:
+        service.stop()
 
 
 def test_real_service_process_executes_reconciliation_from_real_cli(

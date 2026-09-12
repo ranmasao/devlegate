@@ -64,6 +64,8 @@ The counts are grouping counts, not test-case counts.
 | Matching/stale state is not mutation authority | Direct admission and validation tests in `test_control_plane.py` | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
 | Mutable request IDs are idempotent and collision-safe | Direct receipt/state tests | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | Real same-ID and receipt-restart tests | KEEP; failure modes differ by boundary |
 | Concurrent mutation is serialized and cannot duplicate work | Direct admission/retry semantics | Owner-thread and concurrent IPC tests | Real concurrent retry tests and observer-during-retry tests | KEEP cross-layer |
+| Acknowledged CLI lifetime does not own service lifetime | Owner admission semantics | Owner-thread admission tests | `test_real_service_admitted_retry_outlives_cli_process` | KEEP; normal client exit after ACK is the release invariant |
+| Lost mutable response after durable admission is uncertain | Client replay semantics and receipt persistence | Fake-peer uncertain delivery and receipt tests | `test_real_service_crash_during_mutable_response_reports_uncertain_delivery` | KEEP; real crash timing is proven |
 | Worker result/state transitions are durable and fail closed | `test_control_plane.py`, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and H1 process-loss tests | KEEP |
 | Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_server.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
 | Socket ownership and cleanup are safe | Locator and server component tests | Real Unix socket tests, endpoint replacement and shutdown families | `LiveService` readiness/stop/restart | KEEP; topology adds process lifetime |
@@ -209,7 +211,9 @@ proof.
 
 ## Cleanup Candidates
 
-No tests were removed. Candidates are recorded only for later decisions.
+I4 removed four compatibility-only tests and retargeted three tests to the
+canonical engine seam. No further cleanup candidates remain from the audited
+I4 groups.
 
 ### KEEP - Unique Proof
 
@@ -265,22 +269,30 @@ Tests retargeted rather than removed:
 
 ### GAP - Missing Proof
 
-- No separate full-production test proves a CLI process exits while a long,
-  actively mutating service remains alive after the CLI exits. Existing real
-  CLI tests prove request completion and service survival during work, while
-  `LiveService` itself proves service lifetime; the exact CLI-abnormal-exit
-  claim is not isolated. This is a nontrivial follow-up, not an I2 addition.
-- No full-production test independently proves a service process crash while a
-  client is blocked on a mutable response and the client reports uncertain
-  delivery. `test_ipc_client.py` proves the client transport rule with a fake
-  peer, and H1 receipt tests prove persisted admission recovery, but not this
-  combined failure timing.
+None remaining for the audited 0.5 service-boundary claims.
+
+The former GAP 1 is resolved by
+`test_real_service_admitted_retry_outlives_cli_process`: a real CLI receives
+the admission ACK and exits, then the same live service and the same genuinely
+started long-running worker remain active. This proves normal acknowledged
+client lifetime separation, not arbitrary client crash timing.
+
+The former GAP 2 is resolved by
+`test_real_service_crash_during_mutable_response_reports_uncertain_delivery`:
+`H1_CRASH_POINT=receipt_after_save` proves the owner saved an accepted retry
+receipt before SIGKILL, and the real CLI's same-ID replay reports uncertain
+delivery and directs the user to inspect status before retrying.
 
 ### UNCLEAR
 
-- Whether the exact abnormal CLI-exit scenario is a release-blocking invariant
-  or adequately implied by the existing normal CLI subprocess tests and
-  service-host lifecycle tests.
+None remaining for the audited 0.5 service-boundary claims.
+
+Decision: an abnormal CLI SIGKILL after admission is not a separate release
+invariant. The required invariant is that acknowledged client lifetime does
+not own service lifetime, proven by the normal CLI exit test. Loss before a
+mutable acknowledgement is the uncertain-delivery boundary, proven by the
+real service crash test. A third exact-instruction CLI kill would not establish
+a distinct 0.5 semantic contract.
 
 ## Audit Rules For I3/I4
 
