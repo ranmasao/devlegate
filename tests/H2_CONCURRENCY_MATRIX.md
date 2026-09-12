@@ -6,7 +6,7 @@ slow client does not hold the accept loop or unrelated clients.
 
 Read-only requests observe stable live state when possible. If active work keeps
 changing the project faster than the optimistic observation can complete, status
-and plan may return the last immutable owner-published projection. Each response
+and plan may return the last immutable published projection. Each response
 is internally coherent, but different clients may observe different generations.
 
 Mutable requests remain intentions only at the IPC boundary. The single
