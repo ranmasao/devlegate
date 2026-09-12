@@ -1400,7 +1400,8 @@ def test_real_service_many_observers_succeed_while_worker_runs(
     try:
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists()
+            and attempts.exists(),
+            timeout=30,
         )
         identity = _disk_state(config)["worker_identity"]
         responses = _parallel_service_requests(
@@ -1439,7 +1440,8 @@ def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypa
         assert result.returncode == 0, result.stderr
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists()
+            and attempts.exists(),
+            timeout=30,
         )
         responses = _parallel_service_requests(service, ["status", "plan", "status"])
         assert all(isinstance(response, dict) for response in responses)
@@ -1477,7 +1479,8 @@ def test_real_service_same_request_id_retries_concurrently_once(
         ]
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists()
+            and attempts.exists(),
+            timeout=30,
         )
         assert attempts.read_text().splitlines() == ["attempt"]
         assert set(_disk_state(config)["mutable_receipts"]) == {"same-request"}
@@ -1517,7 +1520,8 @@ def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
         assert "already pending or running" in str(errors[0])
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists()
+            and attempts.exists(),
+            timeout=30,
         )
         assert attempts.read_text().splitlines() == ["attempt"]
         assert len(_disk_state(config)["mutable_receipts"]) == 1
@@ -1538,7 +1542,8 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
         assert first.returncode == 0, first.stderr
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and attempts.exists()
+            and attempts.exists(),
+            timeout=30,
         )
         with pytest.raises(IPCClientError, match="already (?:running|pending)"):
             ipc_request(
