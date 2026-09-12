@@ -1343,8 +1343,10 @@ def _h1_execution_service(git_fixture, monkeypatch, point):
 
 def _retryable_service(git_fixture, monkeypatch):
     worker = git_fixture["tmp"] / "h2-retry-worker.py"
+    pid_file = git_fixture["tmp"] / "h2-retry-worker.pid"
     attempts = git_fixture["tmp"] / "h2-retry-attempts.txt"
     _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid_file))
     monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
     config = _h1_config(git_fixture)
     config.write_text(
@@ -1384,8 +1386,10 @@ def test_real_service_many_observers_succeed_while_worker_runs(
 ):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "h2-live-worker.py"
+    pid_file = git_fixture["tmp"] / "h2-live-worker.pid"
     attempts = git_fixture["tmp"] / "h2-live-attempts.txt"
     _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid_file))
     monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
     config = _h1_config(git_fixture)
     config.write_text(
