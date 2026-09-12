@@ -138,8 +138,58 @@ topology and is currently truthful.
 
 ## Compatibility And Direct Seams
 
+The I3 reachability audit traced these seams through production code. They are
+not obsolete merely because the names are historical.
+
+| Symbol/path | Reachability | Classification | Evidence |
+| --- | --- | --- | --- |
+| `ServiceEngine` | `cli.main()` constructs it for `run` and `daemon` through `_service_engine`; `daemon.run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
+| `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
+| `Application` | `cli._service_engine()` imports `devlegate.application` and checks `application.Application`; the alias currently resolves to `ServiceEngine` but the branch permits an intentional compatibility implementation | KEEP - supported compatibility alias/seam | `src/devlegate/application.py`, `src/devlegate/cli.py:48-55` |
+| `DevlegateApplication` | Exported as an importable name from `devlegate.application`; no current in-repository caller | KEEP - compatibility surface, reachability externally unclear | Explicit alias declaration; absence from local callers does not disprove supported imports |
+| `devlegate run` | Constructs the canonical `_service_engine()` and calls `run_service(..., once=args.once)` | KEEP - canonical foreground runtime command | `src/devlegate/cli.py:525-526` |
+| `devlegate daemon` | Constructs the same canonical `_service_engine()` and calls `run_daemon()`; `run_daemon()` delegates to `run_service()` | KEEP - reachable command/compatibility spelling | `src/devlegate/cli.py:523-524`, `src/devlegate/daemon.py:56-58` |
+| `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
+| `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
+| `ServiceEngine.retry()` / `reconcile_update_base()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py:5339-5425`; owner command handling at `src/devlegate/runtime.py:4642-4649` |
+
+### Construction Map
+
+```text
+python -m devlegate / console script
+  -> cli.main()
+     -> init/render/check/control -> Devlegate(read_only=True)
+     -> status/plan -> IPC, or guarded read-only ServiceEngine fallback
+     -> retry/reconcile -> IPC client only
+     -> run -> _service_engine() -> run_service() -> UnixIPCServer + ServiceEngine.serve()
+     -> daemon -> _service_engine() -> run_daemon() -> run_service()
+```
+
+`h1_driver.py` is test-only and constructs `ServiceEngine` so it can inject
+deterministic crash points before calling the real `run_service()` host. It is
+not a production construction path. Test fixtures construct engines directly
+for semantic or IPC proof and are likewise not production paths.
+
+### Mutation Authority Audit
+
+The production mutable path is:
+
+```text
+CLI retry/reconcile -> Unix IPC -> dispatch_mutation
+  -> ServiceEngine.submit_* -> owner command admission
+  -> ServiceEngine owner loop -> _retry_owned/_reconcile_update_base_owned
+  -> _save_state and other runtime mutations
+```
+
+`RuntimeStore` writes occur inside `ServiceEngine` methods. No source path was
+found where the CLI client writes runtime state directly or where IPC handlers
+execute mutable work instead of submitting it. `ServiceEngine.retry()` and
+`reconcile_update_base()` remain direct engine semantics and are not obsolete:
+they are owner-side algorithms and useful lower-layer regression seams. No
+production mutable bypass was found.
+
 The following tests exercise intentional or historical seams and must not be
-removed during I2:
+removed during I3:
 
 - `test_service_engine_is_the_only_runtime_authority` checks the current
   `Application`/`Devlegate` identity aliases.
@@ -153,8 +203,9 @@ removed during I2:
 - Historical helper imports and private methods in `test_control_plane.py`,
   `test_daemon.py`, and `test_worker_protocol.py` are direct semantic seams.
 
-These tests are not production topology proof. Whether the aliases and seams
-remain production-reachable is a separate production-code audit.
+These tests are not production topology proof. The production reachability
+audit above now resolves `Application`, `Devlegate`, `ServiceEngine`, `run`,
+and `daemon`; it does not turn direct tests into topology proof.
 
 ## Cleanup Candidates
 
@@ -181,9 +232,10 @@ No tests were removed. Candidates are recorded only for later decisions.
 
 ### I3 CANDIDATE - Obsolete Architecture/Path
 
-None proven by this audit. The direct aliases and private seams may be old, but
-their production reachability was not established or disproved by test-layer
-inspection. Removal belongs to an explicit I3 reachability decision.
+None. The audit found no production-unreachable architecture path or test whose
+protected contract is proven retired. In particular, `Devlegate` is still
+needed for bootstrap, `Application` is still consulted by production
+construction, and both `run` and `daemon` remain reachable.
 
 ### I4 CANDIDATE - Redundant Or Compatibility-Only
 
@@ -200,6 +252,9 @@ inspection. Removal belongs to an explicit I3 reachability decision.
   `cli_daemon` CLI routing tests: lower-layer rendering/routing coverage that
   must not be counted as production topology; possible I4 review only if the
   same formatting and fail-closed cases remain covered.
+- `DevlegateApplication` has no local caller, but its explicit importable alias
+  is not removable without an external API decision; defer as UNCLEAR rather
+  than treating absence of repository references as proof of death.
 
 ### GAP - Missing Proof
 
@@ -216,9 +271,12 @@ inspection. Removal belongs to an explicit I3 reachability decision.
 
 ### UNCLEAR
 
-- Whether `Application` and `Devlegate` are supported public compatibility
-  names or only transitional aliases. This design decision controls I3 versus
-  I4 treatment of the alias tests.
+- Whether `DevlegateApplication` is a supported external import or an
+  unneeded leftover alias. No package-level export or documentation reference
+  was found, but the module deliberately declares it as a compatibility name.
+- Whether the `Application` injection branch is required for external
+  subclassing/customization or only for historical tests. It is currently
+  production-reachable and therefore is not an I3 removal.
 - Whether the exact abnormal CLI-exit scenario is a release-blocking invariant
   or adequately implied by the existing normal CLI subprocess tests and
   service-host lifecycle tests.
