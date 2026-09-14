@@ -14,6 +14,11 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **J4 - Remove stale old-runtime documentation: CLOSED.**
   - **J5 - Release-facing documentation and badges: CLOSED.**
 - **K - Final audit: CURRENT.**
+  - **K1 - Full invariant audit 0.5: CLOSED.**
+  - **K2 - Verify absence of bypass mutable paths: CURRENT.**
+  - **K3 - Foreground dogfood on rslab2: PLANNED.**
+  - **K4 - Full clean test run + exact-head CI: PLANNED.**
+  - **K5 - Confirm no known blockers before rename: PLANNED.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**
 
 The current 0.5 work is focused on making the supported service architecture,

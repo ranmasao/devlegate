@@ -3524,8 +3524,8 @@ class ServiceEngine:
                 )
         else:
             raise WorkflowBlockedError(
-                "product history diverged from accepted checkpoint; v0.4 does not "
-                "rebase or merge"
+                "product history diverged from accepted checkpoint; rebase or merge "
+                "is not performed"
             )
         reobserved = _git(
             self.repo, "ls-remote", self.remote_name, product_ref, check=False
