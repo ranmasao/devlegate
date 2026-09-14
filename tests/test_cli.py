@@ -237,10 +237,13 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 0
+    output = capsys.readouterr().out
     assert (
         "{init,render,run,daemon,retry,reconcile,check,status,plan,control}"
-        in capsys.readouterr().out
+        in output
     )
+    assert "run                 run the foreground workflow service" in output
+    assert "control             manage workflow history" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
 
 
@@ -308,6 +311,89 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
 
     assert error.value.code == 0
     assert expected in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "argv, snippets",
+    [
+        (
+            ["init", "--help"],
+            [
+                "Create missing project-local agent workflow files.",
+                "how to handle existing generated files",
+            ],
+        ),
+        (
+            ["render", "--help"],
+            [
+                "Render project-local agent workflow files",
+                "check freshness without writing files",
+            ],
+        ),
+        (
+            ["run", "--help"],
+            ["Run the foreground service", "one synchronization and execution pass"],
+        ),
+        (
+            ["daemon", "--help"],
+            ["without detaching or daemonizing", "configuration file to use"],
+        ),
+        (
+            ["check", "--help"],
+            [
+                "Validate project setup without running a worker.",
+                "configuration file to use",
+            ],
+        ),
+        (
+            ["status", "--help"],
+            ["Show the current workflow status.", "emit machine-readable JSON"],
+        ),
+        (
+            ["plan", "--help"],
+            ["Show what Devlegate plans to do next.", "emit machine-readable JSON"],
+        ),
+        (
+            ["retry", "--help"],
+            ["Retry a failed or recoverable ticket execution.", "ticket to retry"],
+        ),
+        (
+            ["control", "--help"],
+            ["Manage the separate Git history that stores workflow data."],
+        ),
+        (
+            ["control", "init", "--help"],
+            [
+                "Initialize or attach the separate workflow Git history.",
+                "configuration file to use",
+            ],
+        ),
+        (
+            ["reconcile", "--help"],
+            ["Handle a pending product-base change for an execution."],
+        ),
+        (
+            ["reconcile", "update-base", "--help"],
+            [
+                "Update a ticket execution after the product base changes.",
+                "ticket execution to update",
+                "product branch to use as the new base",
+            ],
+        ),
+    ],
+)
+def test_public_help_surfaces_are_successful_and_useful(
+    argv, snippets, monkeypatch, capsys
+):
+    monkeypatch.setattr("sys.argv", ["devlegate", *argv])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    output = capsys.readouterr().out
+    assert error.value.code == 0
+    assert f"usage: devlegate {' '.join(argv[:-1])}".rstrip() in output
+    assert all(snippet in output for snippet in snippets)
 
 
 def test_version_remains_unchanged(monkeypatch, capsys):
@@ -693,7 +779,9 @@ def test_reconcile_refuses_without_daemon_without_constructing_engine(
     )
 
     assert main() == 1
-    assert "daemon is not running" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "service is not running" in stderr
+    assert "start `devlegate run`" in stderr
 
 
 def test_reconcile_refuses_connectable_socket_without_authority(
@@ -726,7 +814,9 @@ def test_reconcile_refuses_connectable_socket_without_authority(
     )
     try:
         assert main() == 1
-        assert "daemon is not running" in capsys.readouterr().err
+        stderr = capsys.readouterr().err
+        assert "service is not running" in stderr
+        assert "start `devlegate run`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()
@@ -762,7 +852,7 @@ def test_reconcile_fails_closed_when_authority_exists_without_socket(
     )
     try:
         assert main() == 1
-        assert "daemon IPC unavailable" in capsys.readouterr().err
+        assert "service IPC unavailable" in capsys.readouterr().err
     finally:
         authority.close()
 
@@ -788,7 +878,9 @@ def test_retry_refuses_connectable_socket_without_authority(
     )
     try:
         assert main() == 1
-        assert "daemon is not running" in capsys.readouterr().err
+        stderr = capsys.readouterr().err
+        assert "service is not running" in stderr
+        assert "start `devlegate run`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()
@@ -815,7 +907,7 @@ def test_retry_fails_closed_when_authority_exists_but_socket_is_unavailable(
     )
     try:
         assert main() == 1
-        assert "daemon IPC unavailable" in capsys.readouterr().err
+        assert "service IPC unavailable" in capsys.readouterr().err
     finally:
         authority.close()
 
@@ -903,7 +995,7 @@ def test_daemon_protocol_error_is_not_bypassed(
     monkeypatch.setattr(
         "devlegate.cli.request",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            IPCClientError("daemon IPC protocol error: malformed response")
+            IPCClientError("service IPC protocol error: malformed response")
         ),
     )
     monkeypatch.setattr(
@@ -918,7 +1010,10 @@ def test_daemon_protocol_error_is_not_bypassed(
     )
 
     assert main() == 1
-    assert "daemon authority exists" in capsys.readouterr().err
+    assert (
+        "service is running but its IPC endpoint is unavailable"
+        in capsys.readouterr().err
+    )
 
 
 def test_authority_guard_blocks_exclusive_lock_and_shared_guard_blocks_daemon(
@@ -969,7 +1064,10 @@ def test_ipc_unavailable_with_authority_fails_closed(
         )
 
         assert main() == 1
-        assert "daemon authority exists" in capsys.readouterr().err
+        assert (
+            "service is running but its IPC endpoint is unavailable"
+            in capsys.readouterr().err
+        )
     finally:
         if listener is not None:
             listener.close()

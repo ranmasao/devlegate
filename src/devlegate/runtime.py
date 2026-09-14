@@ -1043,7 +1043,7 @@ class ServiceEngine:
                 self._stop_event is not None and self._stop_event.is_set()
             ):
                 raise DevlegateError(
-                    "daemon is shutting down; runtime command was not admitted"
+                    "service is shutting down; runtime command was not admitted"
                 )
             receipt = self._mutable_receipt(request_id)
             if receipt is not None:
@@ -1069,7 +1069,7 @@ class ServiceEngine:
                     command = existing
                 else:
                     raise DevlegateError(
-                        "daemon runtime command already pending or running"
+                        "service runtime command already pending or running"
                     )
             else:
                 command = OperatorCommand(
@@ -1097,7 +1097,7 @@ class ServiceEngine:
     def _validate_retry_admission(self, ticket_id: str) -> None:
         """Perform preliminary admission; the owner repeats this before ACK."""
         if self.service_snapshot().worker_running:
-            raise DevlegateError("daemon worker is already running")
+            raise DevlegateError("service worker is already running")
         if self._state.get("phase") == "agent_running":
             execution_ticket = self._state.get("execution_ticket_id")
             if execution_ticket != ticket_id:
@@ -1113,7 +1113,7 @@ class ServiceEngine:
                 identity is not None
                 and observe_worker_identity(identity) != "absent"
             ):
-                raise DevlegateError("daemon worker is already running")
+                raise DevlegateError("service worker is already running")
             stage = self._state.get("execution_stage")
             if stage not in {
                 None,
@@ -1167,7 +1167,7 @@ class ServiceEngine:
         if command.admission_error is not None:
             raise command.admission_error
         if command.admission_result is None:
-            raise DevlegateError("daemon did not produce an operator admission result")
+            raise DevlegateError("service did not produce an operator admission result")
         return command.admission_result
 
     def _mutable_receipt(self, request_id: str) -> dict[str, object] | None:
@@ -1248,7 +1248,7 @@ class ServiceEngine:
                 return
             self._operator_command = None
             command.admission_error = DevlegateError(
-                "daemon is shutting down; runtime command was not admitted"
+                "service is shutting down; runtime command was not admitted"
             )
             command.admission_event.set()
 

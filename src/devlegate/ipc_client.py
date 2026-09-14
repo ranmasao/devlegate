@@ -102,7 +102,7 @@ def _request_once(
                     _uncertain_message(method),
                     uncertain=True,
                 ) from error
-            raise IPCClientError(f"daemon IPC unavailable: {error}") from error
+            raise IPCClientError(f"service IPC unavailable: {error}") from error
     finally:
         connection.close()
     if payload is None:
@@ -111,7 +111,7 @@ def _request_once(
                 _uncertain_message(method),
                 uncertain=True,
             )
-        raise IPCClientError("daemon IPC returned no response")
+        raise IPCClientError("service IPC returned no response")
     try:
         response = parse_response(payload)
     except IPCProtocolError as error:
@@ -120,18 +120,18 @@ def _request_once(
                 _uncertain_message(method),
                 uncertain=True,
             ) from error
-        raise IPCClientError(f"daemon IPC protocol error: {error}") from error
+        raise IPCClientError(f"service IPC protocol error: {error}") from error
     if response.request_id != request_id:
         if mutable:
             raise IPCClientError(
                 _uncertain_message(method),
                 uncertain=True,
             )
-        raise IPCClientError("daemon IPC response id does not match request")
+        raise IPCClientError("service IPC response id does not match request")
     if not response.ok:
         error = response.error or {}
         raise IPCClientError(
-            f"daemon error: {error.get('message', 'unknown application error')}",
+            f"service error: {error.get('message', 'unknown application error')}",
             application=True,
         )
     if response.result is None:
@@ -140,7 +140,7 @@ def _request_once(
                 _uncertain_message(method),
                 uncertain=True,
             )
-        raise IPCClientError("daemon IPC response has no result")
+        raise IPCClientError("service IPC response has no result")
     return response.result
 
 
@@ -166,15 +166,15 @@ def decode_retry_candidates(value: dict[str, object]) -> tuple[dict[str, str], .
         return tuple(result)
     except (KeyError, TypeError, ValueError) as error:
         raise IPCClientError(
-            f"daemon IPC returned invalid retry candidates: {error}"
+            f"service IPC returned invalid retry candidates: {error}"
         ) from error
 
 
 def decode_retry_ack(value: dict[str, object], ticket_id: str) -> None:
     if set(value) != {"accepted", "ticket_id"}:
-        raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
+        raise IPCClientError("service IPC returned invalid retry acknowledgement")
     if value["accepted"] is not True or value["ticket_id"] != ticket_id:
-        raise IPCClientError("daemon IPC returned invalid retry acknowledgement")
+        raise IPCClientError("service IPC returned invalid retry acknowledgement")
 
 
 def decode_reconcile_ack(
@@ -182,7 +182,7 @@ def decode_reconcile_ack(
 ) -> None:
     if set(value) != {"accepted", "ticket_id", "onto"}:
         raise IPCClientError(
-            "daemon IPC returned invalid reconciliation acknowledgement"
+            "service IPC returned invalid reconciliation acknowledgement"
         )
     if (
         value["accepted"] is not True
@@ -190,7 +190,7 @@ def decode_reconcile_ack(
         or value["onto"] != onto
     ):
         raise IPCClientError(
-            "daemon IPC returned invalid reconciliation acknowledgement"
+            "service IPC returned invalid reconciliation acknowledgement"
         )
 
 
@@ -215,7 +215,7 @@ def decode_plan(value: dict[str, object]) -> ExecutionPlan:
             control=_optional_observation(observation.get("control"), "plan control"),
         )
     except (KeyError, TypeError, ValueError) as error:
-        raise IPCClientError(f"daemon IPC returned invalid plan: {error}") from error
+        raise IPCClientError(f"service IPC returned invalid plan: {error}") from error
 
 
 def decode_status(value: dict[str, object]) -> StatusSnapshot:
@@ -248,7 +248,7 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
             ),
         )
     except (KeyError, TypeError, ValueError) as error:
-        raise IPCClientError(f"daemon IPC returned invalid status: {error}") from error
+        raise IPCClientError(f"service IPC returned invalid status: {error}") from error
 
 
 def _mapping(value: object, label: str) -> dict[str, object]:

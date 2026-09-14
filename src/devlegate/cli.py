@@ -110,7 +110,7 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
     try:
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "daemon is not running for this checkout; start `devlegate daemon`"
+                "service is not running for this checkout; start `devlegate run`"
             )
         if ticket_id is None:
             candidates = decode_retry_candidates(
@@ -137,7 +137,7 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
             ticket_id = candidates[index - 1]["id"]
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "daemon authority disappeared; retry was not submitted"
+                "service stopped before retry was submitted"
             )
         result = request(
             locator.socket_path,
@@ -157,7 +157,7 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "daemon is not running for this checkout; start `devlegate run`"
+                "service is not running for this checkout; start `devlegate run`"
             )
         result = request(
             locator.socket_path,
@@ -396,7 +396,7 @@ class Devlegate(ServiceEngine):
 def build_parser() -> argparse.ArgumentParser:
     parser = DevlegateArgumentParser(
         prog="devlegate",
-        description="Workflow orchestrator for software-development repositories.",
+        description="Run ticket-driven coding workflows in a Git repository.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -407,53 +407,155 @@ def build_parser() -> argparse.ArgumentParser:
         parser_class=DevlegateArgumentParser,
     )
     init_parser = commands.add_parser(
-        "init", help="initialize project-local protocol templates"
+        "init",
+        help="initialize project-local agent workflow files",
+        description="Create missing project-local agent workflow files.",
     )
-    init_parser.add_argument("--env", metavar="FILE", type=Path)
     init_parser.add_argument(
-        "--conflicts", choices=("abort", "backup", "replace"), default="abort"
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
+    init_parser.add_argument(
+        "--conflicts",
+        choices=("abort", "backup", "replace"),
+        default="abort",
+        help="how to handle existing generated files: abort, backup, or replace",
     )
     render_parser = commands.add_parser(
-        "render", help="render project-local agent protocol artifacts"
+        "render",
+        help="render project-local agent workflow files",
+        description="Render project-local agent workflow files from their templates.",
     )
-    render_parser.add_argument("--check", action="store_true")
-    render_parser.add_argument("--env", metavar="FILE", type=Path)
+    render_parser.add_argument(
+        "--check", action="store_true", help="check freshness without writing files"
+    )
+    render_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     run_parser = commands.add_parser(
-        "run", help="run the foreground workflow service"
+        "run",
+        help="run the foreground workflow service",
+        description="Run the foreground service that executes ticket workflows.",
     )
-    run_parser.add_argument("--once", action="store_true")
-    run_parser.add_argument("--env", metavar="FILE", type=Path)
+    run_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="run one synchronization and execution pass, then exit",
+    )
+    run_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     daemon_parser = commands.add_parser(
-        "daemon", help="run the foreground workflow service"
+        "daemon",
+        help="run the foreground service without detaching",
+        description="Run the foreground service without detaching or daemonizing.",
     )
-    daemon_parser.add_argument("--env", metavar="FILE", type=Path)
-    check_parser = commands.add_parser("check", help="validate setup readiness")
-    check_parser.add_argument("--env", metavar="FILE", type=Path)
+    daemon_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
+    check_parser = commands.add_parser(
+        "check",
+        help="validate setup readiness",
+        description="Validate project setup without running a worker.",
+    )
+    check_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     for name in ("status", "plan"):
-        command_parser = commands.add_parser(name)
-        command_parser.add_argument("--json", action="store_true")
-        command_parser.add_argument("--env", metavar="FILE", type=Path)
+        command_parser = commands.add_parser(
+            name,
+            help=(
+                "show current workflow status"
+                if name == "status"
+                else "show the next workflow plan"
+            ),
+            description=(
+                "Show the current workflow status."
+                if name == "status"
+                else "Show what Devlegate plans to do next."
+            ),
+        )
+        command_parser.add_argument(
+            "--json", action="store_true", help="emit machine-readable JSON"
+        )
+        command_parser.add_argument(
+            "--env",
+            metavar="FILE",
+            type=Path,
+            help="configuration file to use instead of $PWD/.env",
+        )
     retry_parser = commands.add_parser(
-        "retry", help="explicitly retry a current failed execution"
+        "retry",
+        help="retry a failed or recoverable execution",
+        description="Retry a failed or recoverable ticket execution.",
     )
-    retry_parser.add_argument("ticket_id", nargs="?")
-    retry_parser.add_argument("--env", metavar="FILE", type=Path)
+    retry_parser.add_argument(
+        "ticket_id",
+        nargs="?",
+        help="ticket to retry; omit it to choose from current candidates",
+    )
+    retry_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     reconcile_parser = commands.add_parser(
-        "reconcile", help="resolve a pending product-base reconciliation"
+        "reconcile",
+        help="handle pending product-base changes",
+        description="Handle a pending product-base change for an execution.",
     )
     reconcile_commands = reconcile_parser.add_subparsers(
         dest="reconcile_command", parser_class=DevlegateArgumentParser
     )
-    update_base_parser = reconcile_commands.add_parser("update-base")
-    update_base_parser.add_argument("ticket_id")
-    update_base_parser.add_argument("--onto", required=True)
-    update_base_parser.add_argument("--env", metavar="FILE", type=Path)
-    control_parser = commands.add_parser("control", help="manage control-plane state")
+    update_base_parser = reconcile_commands.add_parser(
+        "update-base",
+        help="update an execution to a new product base",
+        description="Update a ticket execution after the product base changes.",
+    )
+    update_base_parser.add_argument("ticket_id", help="ticket execution to update")
+    update_base_parser.add_argument(
+        "--onto", required=True, help="product branch to use as the new base"
+    )
+    update_base_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
+    control_parser = commands.add_parser(
+        "control",
+        help="manage workflow history",
+        description="Manage the separate Git history that stores workflow data.",
+    )
     control_commands = control_parser.add_subparsers(
         dest="control_command", parser_class=DevlegateArgumentParser
     )
-    init_parser = control_commands.add_parser("init")
-    init_parser.add_argument("--env", metavar="FILE", type=Path)
+    init_parser = control_commands.add_parser(
+        "init",
+        help="initialize workflow history",
+        description="Initialize or attach the separate workflow Git history.",
+    )
+    init_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     return parser
 
 

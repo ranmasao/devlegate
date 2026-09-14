@@ -122,7 +122,7 @@ class RuntimeLocator:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise RuntimeAuthorityPresent(
-                    "daemon authority exists but IPC is unavailable"
+                    "service is running but its IPC endpoint is unavailable"
                 ) from error
             yield handle
         finally:
