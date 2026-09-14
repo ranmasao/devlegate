@@ -37,6 +37,41 @@ def test_valid_ticket_and_independent_ticket_parse(tmp_path):
     assert store.selected().id == "ED-17"
 
 
+def test_flow_dependency_sequence_parses_and_selects(tmp_path):
+    done = tmp_path / "kanban/done"
+    todo = tmp_path / "kanban/todo"
+    done.mkdir(parents=True)
+    todo.mkdir(parents=True)
+    (done / "ED-10.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "ED-10"\n---\n'
+        "Implement it.\n"
+    )
+    (todo / "ED-17.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "ED-17"\n'
+        '"depends_on": ["ED-10"]\n---\nImplement it.\n'
+    )
+
+    store = load_ticket_store(tmp_path, PATHS)
+
+    assert store.by_id["ED-17"].depends_on == ("ED-10",)
+    assert store.selected().id == "ED-17"
+
+
+def test_flow_empty_dependency_sequence_is_rejected_by_ticket_schema(tmp_path):
+    directory = tmp_path / "kanban/todo"
+    directory.mkdir(parents=True)
+    (directory / "ED-17.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "ED-17"\n'
+        '"depends_on": []\n---\nImplement it.\n'
+    )
+
+    with pytest.raises(
+        TicketError,
+        match=r'metadata "depends_on" must be a non-empty sequence',
+    ):
+        load_ticket_store(tmp_path, PATHS)
+
+
 def test_missing_or_invalid_frontmatter_fails(tmp_path):
     directory = tmp_path / "kanban/todo"
     directory.mkdir(parents=True)
@@ -127,7 +162,6 @@ def test_required_and_shaped_metadata_is_strict(tmp_path, metadata, message):
         {"unknown": "x"},
         {"type": "wrong"},
         {"title": ""},
-        {"depends_on": []},
         {"depends_on": ["ED-17", "ED-17"]},
         {"depends_on": ["bad id"]},
     ],
