@@ -1,8 +1,8 @@
 # Test Boundaries
 
-This document is the test-proof map for Devlegate 0.5.0. It is the source of
-truth for later I3/I4 cleanup. It describes what a test proves, not merely the
-behavioral scenario in its name.
+This document is the maintained test-proof map for the current Devlegate 0.5
+architecture. It describes what a test proves, not merely the behavioral
+scenario in its name.
 
 ## Proof Model
 
@@ -26,7 +26,7 @@ that is observation, not a production client bypass.
 | Pure/component | codecs, parsers, stores, helpers, private deterministic functions | Local input/output, validation, serialization, persistence mechanics | Service ownership, CLI/service process separation |
 | Engine semantic | `ServiceEngine`/`Devlegate` constructed directly; direct methods or `serve()` in a test thread | State-machine decisions, admission rules, recovery algorithms, Git/state invariants, worker-result handling | Independent CLI process lifetime or OS crash topology |
 | IPC/owner handoff | Real Unix socket and `UnixIPCServer`; for mutable claims, a real `ServiceEngine.serve()` owner thread | Framing, connection isolation, dispatch, owner-thread serialization, receipt behavior | Independent service process, SIGKILL/restart, CLI survival |
-| Production topology | `LiveService` starts `python -m devlegate run`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Daemon authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
+| Production topology | `LiveService` starts `python -m devlegate run`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
 
 ## Suite Map
 
@@ -36,21 +36,21 @@ The counts are grouping counts, not test-case counts.
 
 | Test family/file | Layer | What it proves | Boundary caution |
 | --- | --- | --- | --- |
-| `test_agent_protocol.py` | Pure/component | Init, render, manifest safety, deterministic bootstrap file handling | CLI bootstrap is not daemon coverage |
+| `test_agent_protocol.py` | Pure/component | Init, render, manifest safety, deterministic bootstrap file handling | CLI bootstrap is not production service coverage |
 | `test_ipc_protocol.py` | Pure/component | Frame limits, chunking, codecs, request/response shape validation | No socket server or owner loop |
 | `test_ipc_client.py` | Pure/component plus small IPC transport doubles | Client response decoding, request IDs, uncertain mutable delivery and replay identity, view round trips | `serve_once` is a fake socket peer; it is not `ServiceEngine` owner proof |
 | `test_runtime_store.py` | Pure/component | SQLite schema, revisions, malformed data, atomic failed commit behavior | Direct database tests do not prove client access policy |
 | `test_tickets.py`, `test_project_context.py`, `test_worker_prompt.py`, `test_execution_result.py`, `test_execution_workspace_submodules.py`, `test_helpers.py`, `test_terminal.py` | Pure/component | Ticket/context parsing, worker protocol data, report/workspace/terminal/helper behavior | Real files/Git are semantic realism, not process topology |
-| `test_git_state.py`, `test_snapshot.py` | Engine semantic/component | Git observation, synchronization/recovery decisions and stable snapshot retries | No daemon or independent CLI path |
+| `test_git_state.py`, `test_snapshot.py` | Engine semantic/component | Git observation, synchronization/recovery decisions and stable snapshot retries | No service or independent CLI path |
 | `test_control_plane.py` direct `Devlegate` tests | Engine semantic | Control-plane validation, workspace binding, checkpoints, lifecycle/publication rules, accepted integration state, reconciliation semantics | `invoke()` setup is a subprocess bootstrap helper; most assertions exercise direct engine methods |
 | `test_service_snapshot.py` | Engine semantic | Immutable published projections, read-only snapshot behavior, worker lifecycle projection | The long-worker test uses a fake `_run_worker`; it proves engine publication ordering, not OS worker behavior |
-| `test_daemon.py` | Engine/host component | Signal intent, foreground polling, shutdown behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production daemon startup |
+| `test_daemon.py` | Engine/host component | Signal intent, foreground polling, shutdown behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production service startup |
 | `test_worker_protocol.py` | Worker/process component | Worker subprocess command boundary, process groups, prompt/egress protocol, typed results, identity cleanup | Some tests use real child processes, but this is the worker boundary, not the production service/CLI topology; patched `Popen` cases are component tests |
 | `test_ipc_server.py` fake dispatch tests | IPC/component | Request validation and read-only dispatch against a minimal fake engine | `dispatch_*` with `FakeEngine` cannot prove mutation serialization or real engine semantics |
 | `test_ipc_server.py` `running_server` tests | IPC transport | Real Unix socket framing, malformed/disconnected/idle client isolation, endpoint permissions, cleanup, multiple endpoints | Most use a server without an owner loop; mutable authority claims require the owner-thread families below |
 | `test_ipc_server.py` owner-thread tests | IPC/owner handoff | `test_retry_submission_runs_on_service_owner_thread`, read-only availability during owner retry, shutdown admission race, retry/reconcile receipt semantics | In-process owner thread proves handoff and serialization, not independent process lifetime |
 | `test_cli.py` parser/render/bootstrap tests | Pure/component/bootstrap | Argument parsing, formatting, command routing, `init`, `render`, `check`, repository-root and readiness rules | In-process `main()` and `invoke()` do not prove CLI/service separation |
-| `test_cli.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses daemon IPC, authority/socket fail-closed behavior, read-only projection selection | `cli_daemon` is an in-process socket server; it is not production topology |
+| `test_cli.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses service IPC, authority/socket fail-closed behavior, read-only projection selection | `cli_daemon` is an in-process socket server; it is not production topology |
 | `test_cli.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, H1/H2 behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
 | `test_daemon.py` fake-host tests | Host component | Signal installation and return-code policy for `run_daemon`/`run_service` | Fake `ServiceEngine` is intentionally not service topology |
 
@@ -59,8 +59,8 @@ The counts are grouping counts, not test-case counts.
 | Invariant | Semantic proof | IPC/owner proof | Subprocess proof | Status |
 | --- | --- | --- | --- | --- |
 | Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in `test_control_plane.py`, `test_daemon.py`, and `test_cli.py` | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and H1 receipt tests | KEEP; intentional defense in depth |
-| CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-daemon failure | `test_ipc_server.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
-| Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, application view tests | IPC view/decoder and many-client tests | `test_run_hosts_real_ipc_status_and_plan_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
+| CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-service failure | `test_ipc_server.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
+| Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, service view tests | IPC view/decoder and many-client tests | `test_run_hosts_real_ipc_status_and_plan_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
 | Matching/stale state is not mutation authority | Direct admission and validation tests in `test_control_plane.py` | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
 | Mutable request IDs are idempotent and collision-safe | Direct receipt/state tests | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | Real same-ID and receipt-restart tests | KEEP; failure modes differ by boundary |
 | Concurrent mutation is serialized and cannot duplicate work | Direct admission/retry semantics | Owner-thread and concurrent IPC tests | Real concurrent retry tests and observer-during-retry tests | KEEP cross-layer |
@@ -123,13 +123,12 @@ CLI lifetime.
 
 ## Bootstrap Versus Runtime Service
 
-Bootstrap commands intentionally work before a daemon exists. The following
-families are bootstrap/component evidence, not daemon-service evidence:
+Bootstrap commands intentionally work before a service exists. The following
+families are bootstrap/component evidence, not service-topology evidence:
 
 - `test_help_and_parser_expose_phase1_commands`
 - `test_init_*`, `test_render_*`, and `test_check_*` in `test_cli.py`
 - control initialization and preflight tests in `test_control_plane.py`
-- `test_application_import_does_not_import_cli`
 
 `invoke()` starts a short-lived CLI subprocess, which is useful for command
 boundary and filesystem effects. Unless it starts `run`/`daemon` and uses a
