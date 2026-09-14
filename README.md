@@ -107,3 +107,10 @@ integrated into product history.
 ```
 
 Coverage is diagnostic; there is no percentage gate.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [Pre-install guide](preinst_readme.md)
