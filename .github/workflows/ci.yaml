@@ -68,7 +68,7 @@ jobs:
         run: ./dev lint
 
   publish-coverage:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/v0.5.0-state-control-separation'
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     needs: check
     runs-on: ubuntu-latest
     permissions:

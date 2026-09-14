@@ -12,8 +12,8 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **J2 - CLI/help consistency: CLOSED.**
   - **J3 - Architecture, roadmap, and changelog: CLOSED.**
   - **J4 - Remove stale old-runtime documentation: CLOSED.**
-  - **J5 - Release-facing documentation and badges: CURRENT.**
-- **K - Final audit: PLANNED.**
+  - **J5 - Release-facing documentation and badges: CLOSED.**
+- **K - Final audit: CURRENT.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**
 
 The current 0.5 work is focused on making the supported service architecture,
