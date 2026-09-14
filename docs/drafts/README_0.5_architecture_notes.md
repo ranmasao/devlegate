@@ -1,11 +1,11 @@
 # Temporary 0.5 documentation notes
 
-This file is a non-canonical working draft retained during J3.
-It preserves material that has not yet received a canonical home and is
-reserved for J5 release-facing documentation cleanup.
+This file is a non-canonical working draft retained after J3 for J5.
+It preserves CI/coverage publication details that have not yet received
+their final release-facing documentation home.
 
-Do not treat this file as current public documentation. J3/J4/J5 should decide
-whether this material belongs in release or CI documentation.
+Do not treat this file as current public documentation.
+J5 should decide whether this material belongs in release or CI documentation.
 
 ## Deferred CI And Coverage Details
 

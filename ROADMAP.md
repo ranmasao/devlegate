@@ -10,8 +10,8 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
 - **J - Documentation cleanup: CURRENT.**
   - **J1 - README and product landing page: CLOSED.**
   - **J2 - CLI/help consistency: CLOSED.**
-  - **J3 - Architecture, roadmap, and changelog: CURRENT.**
-  - **J4 - Remove stale old-runtime documentation: PLANNED.**
+  - **J3 - Architecture, roadmap, and changelog: CLOSED.**
+  - **J4 - Remove stale old-runtime documentation: CURRENT.**
   - **J5 - Release-facing documentation and badges: PLANNED.**
 - **K - Final audit: PLANNED.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**
