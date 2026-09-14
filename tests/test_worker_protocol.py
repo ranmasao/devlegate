@@ -99,9 +99,8 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
     marker = tmp_path / "processes.json"
     script = (
-        "import json, os, pathlib, subprocess, sys, time; "
-        "child = subprocess.Popen([sys.executable, '-c', "
-        "'import time; time.sleep(60)']); "
+        "import json, os, pathlib, subprocess, sys; "
+        "child = subprocess.Popen(['sleep', '60']); "
         "pathlib.Path(sys.argv[1]).write_text(json.dumps({'worker': os.getpid(), "
         "'session': os.getsid(0), 'group': os.getpgrp(), 'child': child.pid})); "
         "child.wait()"
@@ -235,11 +234,6 @@ def test_worker_identity_persistence_failure_terminates_spawned_group():
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_stubborn_worker_group_is_force_killed(tmp_path):
-    script = (
-        "import signal, time; "
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
-    )
-
     class Request:
         kind = None
 
@@ -249,7 +243,7 @@ def test_stubborn_worker_group_is_force_killed(tmp_path):
 
     started = time.monotonic()
     result = _run_opencode(
-        [sys.executable, "-c", script], "prompt", stop_request=request
+        ["sh", "-c", "trap '' TERM; sleep 60"], "prompt", stop_request=request
     )
     timer.cancel()
     elapsed = time.monotonic() - started
