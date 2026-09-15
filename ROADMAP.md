@@ -29,7 +29,7 @@ without changing runtime behavior.
 ## Completed Foundations
 
 The current branch already includes the major 0.5 foundations: separate product,
-control, and execution Git surfaces; a foreground service owner; local IPC
+control, and execution Git surfaces; a persistent service owner; local IPC
 clients; SQLite operational state; explicit retry and reconciliation; process-loss
 and shutdown handling; restricted NanoYAML flow sequences; and CI coverage
 reporting.

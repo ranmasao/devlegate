@@ -1,4 +1,4 @@
-"""Foreground daemon host and process-local signal handling."""
+"""Persistent service host and process-local signal handling."""
 
 import os
 import signal

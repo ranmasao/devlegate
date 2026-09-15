@@ -894,7 +894,7 @@ def _status_fingerprint(status: str) -> str:
 
 
 class ServiceEngine:
-    """Own foreground workflow orchestration and mutable runtime operations."""
+    """Own persistent workflow orchestration and mutable runtime operations."""
 
     def __init__(self, env_file: Path, *, read_only: bool = False) -> None:
         if not env_file.is_file():

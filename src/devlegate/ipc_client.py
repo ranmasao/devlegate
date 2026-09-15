@@ -1,4 +1,4 @@
-"""Bounded Unix IPC client for read-only views and daemon commands."""
+"""Bounded Unix IPC client for read-only views and service commands."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from devlegate.runtime import (
 
 
 class IPCClientError(Exception):
-    """A transport, protocol, or daemon application response error."""
+    """A transport, protocol, or service application response error."""
 
     def __init__(
         self,

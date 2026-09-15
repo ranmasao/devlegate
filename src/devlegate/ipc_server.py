@@ -1,4 +1,4 @@
-"""Small Unix-domain IPC server for daemon views and command submission."""
+"""Small Unix-domain IPC server for service views and command submission."""
 
 from __future__ import annotations
 

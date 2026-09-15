@@ -1,4 +1,4 @@
-"""Durable local operational state for the foreground runtime."""
+"""Durable local operational state for the persistent runtime."""
 
 from __future__ import annotations
 
