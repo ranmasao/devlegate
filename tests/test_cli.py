@@ -235,6 +235,12 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert parser.parse_args(["--once"]).once
     assert parser.parse_args(["--foreground"]).foreground
     assert parser.parse_args(["control", "init"]).command == "control"
+    control_reconcile = parser.parse_args(
+        ["reconcile", "control", "--from", "a" * 40, "--to", "b" * 40]
+    )
+    assert control_reconcile.reconcile_command == "control"
+    assert control_reconcile.from_head == "a" * 40
+    assert control_reconcile.to_head == "b" * 40
     assert parser.parse_args(["status", "--json"]).json
     monkeypatch.setattr("sys.argv", ["devlegate", "--help"])
     with pytest.raises(SystemExit) as error:

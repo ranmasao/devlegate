@@ -18,6 +18,7 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **K2 - Verify absence of bypass mutable paths: CLOSED.**
   - **K3 - rslab2 dogfood: CLOSED.**
   - **K3.5 - Persistent background service UX: CLOSED.**
+  - **K3.6 - Explicit control-lineage reconciliation: CLOSED.**
   - **K4 - Full clean test + exact-head CI: CURRENT.**
   - **K5 - Pre-rename blocker review: PLANNED.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**

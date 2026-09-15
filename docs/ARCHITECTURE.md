@@ -67,6 +67,21 @@ closed rather than reading or writing around the service. `retry` and
 `reconcile update-base` are mutable operations and go through the service;
 they do not construct a separate mutable CLI runtime.
 
+## External Control Writers
+
+Managed agents should prefer deterministic ticket and control operations with an
+expected-old-head or CAS-style publication when that interface is available.
+Direct Git writers remain supported external actors, including humans, GitHub
+or API clients, and third-party automation. They should use ordinary non-force
+updates and treat a non-fast-forward rejection as a signal to re-observe the
+published history. Force updates are strongly discouraged; an external rewrite
+requires explicit operator-authorized control-lineage reconciliation afterward.
+
+`devlegate reconcile control --from <local-head> --to <remote-head>` is not
+ordinary synchronization. It adopts only the exact, freshly verified divergent
+pair named by the operator, preserves the displaced local head under a local
+evidence ref, and never chooses remote history automatically.
+
 Mutable requests carry an identity and are acknowledged only when the service
 admits that request. An unavailable endpoint during a mutable request is not
 treated as proof that the operation did not happen.

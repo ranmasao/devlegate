@@ -132,7 +132,7 @@ class RuntimeLocator:
                 handle.close()
 
     def daemon_authority_present(self) -> bool:
-        """Observe exclusive daemon authority without retaining a lock."""
+        """Observe exclusive service authority without retaining a lock."""
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.lock_path.open("a+")
         try:

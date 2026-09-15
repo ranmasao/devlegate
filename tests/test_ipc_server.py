@@ -131,6 +131,26 @@ def test_stop_dispatch_invokes_host_shutdown_callback(running_server):
     assert called == [True]
 
 
+def test_control_reconciliation_dispatch_preserves_both_identities(running_server):
+    engine, _state, _server = running_server
+    from_head = "a" * 40
+    to_head = "b" * 40
+    observed = []
+    engine.submit_reconcile_control = lambda actual_from, actual_to, request_id: (
+        observed.append((actual_from, actual_to, request_id))
+        or {"accepted": True, "from": actual_from, "to": actual_to}
+    )
+    response = dispatch_mutation(
+        engine,
+        _request(
+            "reconcile-control",
+            {"from": from_head, "to": to_head},
+        ),
+    )
+    assert response == {"accepted": True, "from": from_head, "to": to_head}
+    assert observed == [(from_head, to_head, "id")]
+
+
 def test_malformed_request_does_not_crash_server(running_server):
     _engine, _state, _server = running_server
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

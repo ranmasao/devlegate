@@ -332,6 +332,12 @@ def _reconcile_request_fingerprint(ticket_id: str, onto: str) -> str:
     )
 
 
+def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
+    return _mutation_fingerprint(
+        "reconcile-control", {"from": from_head, "to": to_head}
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class WorkerProcessIdentity:
     execution_id: str
@@ -1001,7 +1007,7 @@ class ServiceEngine:
         self._service_wake.set()
 
     def retry_candidates_view(self) -> tuple[dict[str, str], ...]:
-        """Return the daemon-owned semantic retry candidates for local prompting."""
+        """Return the service-owned semantic retry candidates for local prompting."""
         return tuple(
             {
                 "id": candidate.ticket_id,
@@ -1033,6 +1039,18 @@ class ServiceEngine:
             onto=onto,
             request_id=request_id,
             fingerprint=_reconcile_request_fingerprint(ticket_id, onto),
+        )
+
+    def submit_reconcile_control(
+        self, from_head: str, to_head: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit an explicit externally rewritten control-lineage acknowledgement."""
+        return self._submit_operator_command(
+            method="reconcile-control",
+            ticket_id=from_head,
+            onto=to_head,
+            request_id=request_id,
+            fingerprint=_control_reconcile_request_fingerprint(from_head, to_head),
         )
 
     def _submit_operator_command(
@@ -1149,6 +1167,99 @@ class ServiceEngine:
                 "requested ticket does not match pending reconciliation"
             )
 
+    def _validate_control_reconcile_admission(
+        self, from_head: str, to_head: str
+    ) -> None:
+        if self.service_snapshot().worker_running or self._state.get("phase") != "idle":
+            raise DevlegateError(
+                "control reconciliation requires an idle service with no live execution"
+            )
+        if self._state.get("accepted_integration") is not None:
+            raise DevlegateError(
+                "control reconciliation is unsafe while accepted integration is pending"
+            )
+        reconciliation = self._state.get("reconciliation")
+        if isinstance(reconciliation, dict) and reconciliation.get("status") == (
+            "pending"
+        ):
+            raise DevlegateError(
+                "control reconciliation is unsafe while product-base reconciliation "
+                "is pending"
+            )
+        self._validate_control_worktree()
+        observation = self._git_observation(self.control_worktree, self.control_branch)
+        if not observation.working_tree_clean:
+            raise DevlegateError("control working tree is dirty")
+
+        local = _git(self.control_worktree, "rev-parse", "--verify", "HEAD^{commit}")
+        if local.stdout.strip() != from_head:
+            raise DevlegateError(
+                f"control local HEAD changed; expected {from_head}, "
+                f"found {local.stdout.strip()}"
+            )
+        fetch = _git(
+            self.control_worktree,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.control_branch,
+            check=False,
+        )
+        if fetch.returncode:
+            raise DevlegateError(
+                f"cannot freshly fetch control branch: {fetch.stderr.strip()}"
+            )
+        remote_ref = f"{self.remote_name}/{self.control_branch}"
+        remote = _git(
+            self.control_worktree,
+            "rev-parse",
+            "--verify",
+            f"{remote_ref}^{{commit}}",
+            check=False,
+        )
+        if remote.returncode:
+            raise DevlegateError(f"control remote branch not found: {remote_ref}")
+        observed_remote = remote.stdout.strip()
+        if observed_remote != to_head:
+            raise DevlegateError(
+                f"control remote HEAD changed; expected {to_head}, "
+                f"found {observed_remote}"
+            )
+        local_ancestor = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            from_head,
+            to_head,
+            check=False,
+        )
+        remote_ancestor = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            to_head,
+            from_head,
+            check=False,
+        )
+        if local_ancestor.returncode == 0 or remote_ancestor.returncode == 0:
+            raise DevlegateError(
+                "control reconciliation is unnecessary; histories are not divergent"
+            )
+
+    def _validate_control_reconcile_identities(
+        self, from_head: str, to_head: str
+    ) -> None:
+        for name, head in (("local", from_head), ("remote", to_head)):
+            result = _git(
+                self.control_worktree,
+                "rev-parse",
+                "--verify",
+                f"{head}^{{commit}}",
+                check=False,
+            )
+            if result.returncode or result.stdout.strip() != head:
+                raise DevlegateError(f"control {name} identity is not an exact commit")
+
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
         if command.method == "retry":
             self._validate_retry_admission(command.ticket_id)
@@ -1156,6 +1267,10 @@ class ServiceEngine:
         if command.method == "reconcile-update-base":
             assert command.onto is not None
             self._validate_reconcile_admission(command.ticket_id, command.onto)
+            return
+        if command.method == "reconcile-control":
+            assert command.onto is not None
+            self._validate_control_reconcile_admission(command.ticket_id, command.onto)
             return
         raise DevlegateError(f"unsupported operator command: {command.method}")
 
@@ -1165,6 +1280,9 @@ class ServiceEngine:
     ) -> dict[str, object]:
         if method == "retry":
             return {"accepted": True, "ticket_id": ticket_id}
+        if method == "reconcile-control":
+            assert onto is not None
+            return {"accepted": True, "from": ticket_id, "to": onto}
         assert method == "reconcile-update-base"
         assert onto is not None
         return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
@@ -4646,11 +4764,18 @@ export default tool({
                                 operator_command.ticket_id, stop_event
                             )
                         else:
-                            assert operator_command.method == "reconcile-update-base"
                             assert operator_command.onto is not None
-                            status = self._reconcile_update_base_owned(
-                                operator_command.ticket_id, operator_command.onto
-                            )
+                            if operator_command.method == "reconcile-control":
+                                status = self._reconcile_control_owned(
+                                    operator_command.ticket_id, operator_command.onto
+                                )
+                            else:
+                                assert operator_command.method == (
+                                    "reconcile-update-base"
+                                )
+                                status = self._reconcile_update_base_owned(
+                                    operator_command.ticket_id, operator_command.onto
+                                )
                     else:
                         status = (
                             self.run_once()
@@ -4677,7 +4802,8 @@ export default tool({
                             blocked_reason=message,
                         )
                         fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                        _log(f"workflow blocked: {message}")
+                        if self._workflow_blocker_fingerprint != fingerprint:
+                            _log(f"workflow blocked: {message}")
                         self._workflow_blocker_fingerprint = fingerprint
                         status = 1
                 except DevlegateError as error:
@@ -4694,7 +4820,8 @@ export default tool({
                                 blocked_reason=message,
                             )
                             fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                            _log(f"workflow blocked: {message}")
+                            if self._workflow_blocker_fingerprint != fingerprint:
+                                _log(f"workflow blocked: {message}")
                             self._workflow_blocker_fingerprint = fingerprint
                             status = 1
                         elif not once and (
@@ -5428,6 +5555,59 @@ export default tool({
     def reconcile_update_base(self, ticket_id: str, onto: str) -> int:
         """Transplant one preserved worker checkpoint onto an explicit base."""
         return self._reconcile_update_base_owned(ticket_id, onto, _take_lock=True)
+
+    def reconcile_control(self, from_head: str, to_head: str) -> int:
+        """Adopt an explicitly authorized divergent control history."""
+        return self._reconcile_control_owned(from_head, to_head, _take_lock=True)
+
+    def _reconcile_control_owned(
+        self, from_head: str, to_head: str, *, _take_lock: bool = False
+    ) -> int:
+        """Replace only the local control lineage after repeated exact proof."""
+        authority = self._lock() if _take_lock else nullcontext()
+        with authority:
+            self._validate_control_reconcile_admission(from_head, to_head)
+            evidence = (
+                "refs/devlegate/recovery/control/"
+                f"{from_head}-{to_head}"
+            )
+            existing = _git(
+                self.repo, "rev-parse", "--verify", evidence, check=False
+            )
+            if existing.returncode == 0:
+                if existing.stdout.strip() != from_head:
+                    raise DevlegateError(
+                        "control recovery evidence ref already points to another commit"
+                    )
+            else:
+                created = _git(
+                    self.repo,
+                    "update-ref",
+                    evidence,
+                    from_head,
+                    "0" * 40,
+                    check=False,
+                )
+                if created.returncode:
+                    raise DevlegateError(
+                        "control recovery evidence ref could not be created"
+                    )
+
+            # Repeat the complete observation after preserving evidence and immediately
+            # before changing the checked-out control branch.
+            self._validate_control_reconcile_admission(from_head, to_head)
+            moved = _git(
+                self.control_worktree, "reset", "--hard", to_head, check=False
+            )
+            if moved.returncode:
+                raise DevlegateError(
+                    f"control lineage adoption failed: {moved.stderr.strip()}"
+                )
+            self._validate_control_worktree()
+            self._ticket_store()
+            _log(f"control rewrite reconciliation accepted: {from_head} -> {to_head}")
+            _log(f"preserved displaced control head under {evidence}")
+            return 0
 
     def _reconcile_update_base_owned(
         self, ticket_id: str, onto: str, *, _take_lock: bool = False

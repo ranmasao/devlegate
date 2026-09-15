@@ -18,6 +18,7 @@ from devlegate.ipc_client import (
     IPCClientError,
     decode_plan,
     decode_reconcile_ack,
+    decode_reconcile_control_ack,
     decode_retry_ack,
     decode_retry_candidates,
     decode_status,
@@ -174,6 +175,28 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
     print(f"reconciliation accepted: {ticket_id}")
+    return 0
+
+
+def _reconcile_control(env_file: Path, from_head: str, to_head: str) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "service is not running for this checkout; start `devlegate`"
+            )
+        result = request(
+            locator.socket_path,
+            "reconcile-control",
+            {"from": from_head, "to": to_head},
+            mutable=True,
+        )
+        decode_reconcile_control_ack(result, from_head, to_head)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    print(f"control reconciliation accepted: {from_head} -> {to_head}")
     return 0
 
 
@@ -676,6 +699,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    control_reconcile_parser = reconcile_commands.add_parser(
+        "control",
+        help="adopt an explicitly authorized divergent control history",
+        description="Adopt an exact externally rewritten control history.",
+    )
+    control_reconcile_parser.add_argument(
+        "--from", dest="from_head", required=True, help="expected local control HEAD"
+    )
+    control_reconcile_parser.add_argument(
+        "--to",
+        dest="to_head",
+        required=True,
+        help="expected fetched remote control HEAD",
+    )
+    control_reconcile_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     control_parser = commands.add_parser(
         "control",
         help="manage workflow history",
@@ -728,7 +771,10 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"
         )
-    if args.command == "reconcile" and args.reconcile_command != "update-base":
+    if args.command == "reconcile" and args.reconcile_command not in {
+        "update-base",
+        "control",
+    }:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"
         )
@@ -780,6 +826,8 @@ def main() -> int:
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id)
         if args.command == "reconcile":
+            if args.reconcile_command == "control":
+                return _reconcile_control(env_file, args.from_head, args.to_head)
             return _reconcile_daemon(env_file, args.ticket_id, args.onto)
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())

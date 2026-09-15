@@ -168,6 +168,35 @@ def control_fixture(tmp_path):
     return working, config, tmp_path / "state"
 
 
+def divergent_control_heads(working, config, tmp_path):
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((config.parent / "state" / "worktrees").glob("*/control"))
+    base = git(control, "rev-parse", "HEAD").stdout.strip()
+    (control / "local-only.txt").write_text("local\n")
+    git(control, "add", "local-only.txt")
+    git(control, "commit", "-m", "local control rewrite")
+    from_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    architect = tmp_path / "architect"
+    git(working, "worktree", "add", "--detach", architect, base)
+    git(architect, "config", "user.email", "test@example.com")
+    git(architect, "config", "user.name", "Test User")
+    (architect / "remote-only.txt").write_text("remote\n")
+    git(architect, "add", "remote-only.txt")
+    git(architect, "commit", "-m", "external control rewrite")
+    to_head = git(architect, "rev-parse", "HEAD").stdout.strip()
+    git(
+        architect,
+        "push",
+        "--force",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+    git(working, "worktree", "remove", "--force", architect)
+    return control, from_head, to_head
+
+
 def fresh_control_fixture(tmp_path):
     bare = tmp_path / "remote.git"
     seed = tmp_path / "seed"
@@ -340,6 +369,60 @@ def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     assert result.returncode == 1
     assert "control working tree is dirty" in result.stdout
     assert git(working, "rev-parse", "HEAD").stdout.strip() == before
+
+
+def test_explicit_control_reconciliation_adopts_exact_divergent_history(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    control, from_head, to_head = divergent_control_heads(working, config, tmp_path)
+    monkeypatch.chdir(working)
+    devlegate = runtime.ServiceEngine(config)
+    product_before = git(working, "rev-parse", "HEAD").stdout.strip()
+    remote_before = git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/control"
+    ).stdout.split()[0]
+
+    assert devlegate.reconcile_control(from_head, to_head) == 0
+
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == to_head
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_before
+    remote_after = git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/control"
+    ).stdout.split()[0]
+    assert remote_after == remote_before == to_head
+    evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
+    assert git(working, "rev-parse", "--verify", evidence).stdout.strip() == from_head
+    assert devlegate._ticket_store()
+    assert state.exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["wrong-from", "wrong-to", "ordinary-fast-forward", "dirty", "running"],
+)
+def test_control_reconciliation_refuses_unsafe_or_unnecessary_cases(
+    tmp_path, monkeypatch, case
+):
+    working, config, _state = control_fixture(tmp_path)
+    control, from_head, to_head = divergent_control_heads(working, config, tmp_path)
+    monkeypatch.chdir(working)
+    devlegate = runtime.ServiceEngine(config)
+    before = git(control, "rev-parse", "HEAD").stdout.strip()
+    if case == "wrong-from":
+        from_head = "0" * 40
+    elif case == "wrong-to":
+        to_head = "f" * 40
+    elif case == "ordinary-fast-forward":
+        to_head = from_head
+        git(control, "push", "--force", "origin", f"{from_head}:devlegate/control")
+    elif case == "dirty":
+        (control / "uncommitted.txt").write_text("dirty\n")
+    elif case == "running":
+        devlegate._state["phase"] = "agent_running"
+    with pytest.raises(DevlegateError):
+        devlegate.reconcile_control(from_head, to_head)
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == before
 
 
 def test_runtime_rejects_foreign_control_checkout(tmp_path):

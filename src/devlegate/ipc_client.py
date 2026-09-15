@@ -194,6 +194,19 @@ def decode_reconcile_ack(
         )
 
 
+def decode_reconcile_control_ack(
+    response: dict[str, object], from_head: str, to_head: str
+) -> None:
+    if response != {
+        "accepted": True,
+        "from": from_head,
+        "to": to_head,
+    }:
+        raise IPCClientError(
+            "service IPC returned invalid control reconciliation acknowledgement"
+        )
+
+
 def decode_plan(value: dict[str, object]) -> ExecutionPlan:
     try:
         ticket = _optional_mapping(value["ticket"], "plan ticket")

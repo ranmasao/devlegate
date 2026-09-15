@@ -89,6 +89,25 @@ def dispatch_mutation(
         return engine.submit_reconcile_update_base(
             ticket_id, onto, request_id=request.request_id
         )
+    if request.method == "reconcile-control":
+        if set(request.payload) != {"from", "to"}:
+            raise IPCProtocolError(
+                "invalid_request",
+                "control reconciliation payload fields are invalid",
+            )
+        from_head = request.payload["from"]
+        to_head = request.payload["to"]
+        if not isinstance(from_head, str) or not from_head:
+            raise IPCProtocolError(
+                "invalid_request", "control reconciliation from must be non-empty text"
+            )
+        if not isinstance(to_head, str) or not to_head:
+            raise IPCProtocolError(
+                "invalid_request", "control reconciliation to must be non-empty text"
+            )
+        return engine.submit_reconcile_control(
+            from_head, to_head, request_id=request.request_id
+        )
     raise IPCProtocolError(
         "unknown_method", f"unsupported method: {request.method}"
     )
@@ -308,7 +327,12 @@ class UnixIPCServer:
                     if payload is None:
                         return
                     request = parse_request(payload)
-                    if request.method in {"stop", "retry", "reconcile-update-base"}:
+                    if request.method in {
+                        "stop",
+                        "retry",
+                        "reconcile-update-base",
+                        "reconcile-control",
+                    }:
                         result = dispatch_mutation(
                             self.engine, request, shutdown=self.shutdown
                         )
