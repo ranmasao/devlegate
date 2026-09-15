@@ -1246,20 +1246,6 @@ class ServiceEngine:
                 "control reconciliation is unnecessary; histories are not divergent"
             )
 
-    def _validate_control_reconcile_identities(
-        self, from_head: str, to_head: str
-    ) -> None:
-        for name, head in (("local", from_head), ("remote", to_head)):
-            result = _git(
-                self.control_worktree,
-                "rev-parse",
-                "--verify",
-                f"{head}^{{commit}}",
-                check=False,
-            )
-            if result.returncode or result.stdout.strip() != head:
-                raise DevlegateError(f"control {name} identity is not an exact commit")
-
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
         if command.method == "retry":
             self._validate_retry_admission(command.ticket_id)
@@ -5567,6 +5553,8 @@ export default tool({
         authority = self._lock() if _take_lock else nullcontext()
         with authority:
             self._validate_control_reconcile_admission(from_head, to_head)
+            # Re-observe immediately before preserving evidence or changing the branch.
+            self._validate_control_reconcile_admission(from_head, to_head)
             evidence = (
                 "refs/devlegate/recovery/control/"
                 f"{from_head}-{to_head}"
@@ -5593,9 +5581,6 @@ export default tool({
                         "control recovery evidence ref could not be created"
                     )
 
-            # Repeat the complete observation after preserving evidence and immediately
-            # before changing the checked-out control branch.
-            self._validate_control_reconcile_admission(from_head, to_head)
             moved = _git(
                 self.control_worktree, "reset", "--hard", to_head, check=False
             )

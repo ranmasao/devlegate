@@ -397,6 +397,58 @@ def test_explicit_control_reconciliation_adopts_exact_divergent_history(
     assert state.exists()
 
 
+def test_control_reconciliation_remote_change_is_side_effect_free(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    control, from_head, to_head = divergent_control_heads(working, config, tmp_path)
+    monkeypatch.chdir(working)
+    devlegate = runtime.ServiceEngine(config)
+    product_before = git(working, "rev-parse", "HEAD").stdout.strip()
+    state_before = {
+        path.relative_to(state): path.read_bytes()
+        for path in state.rglob("*")
+        if path.is_file() and path.parent.name != "locks"
+    }
+    evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
+    original_validate = devlegate._validate_control_reconcile_admission
+    calls = 0
+
+    def validate(from_value, to_value):
+        nonlocal calls
+        calls += 1
+        original_validate(from_value, to_value)
+        if calls == 1:
+            git(
+                control,
+                "push",
+                "--force",
+                "origin",
+                f"{from_head}:refs/heads/devlegate/control",
+            )
+
+    monkeypatch.setattr(devlegate, "_validate_control_reconcile_admission", validate)
+    with pytest.raises(DevlegateError, match="remote HEAD changed"):
+        devlegate.reconcile_control(from_head, to_head)
+
+    assert calls == 2
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == from_head
+    missing_evidence = subprocess.run(
+        ["git", "rev-parse", "--verify", evidence],
+        cwd=working,
+        text=True,
+        capture_output=True,
+    )
+    assert missing_evidence.returncode != 0
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_before
+    state_after = {
+        path.relative_to(state): path.read_bytes()
+        for path in state.rglob("*")
+        if path.is_file() and path.parent.name != "locks"
+    }
+    assert state_after == state_before
+
+
 @pytest.mark.parametrize(
     "case",
     ["wrong-from", "wrong-to", "ordinary-fast-forward", "dirty", "running"],
