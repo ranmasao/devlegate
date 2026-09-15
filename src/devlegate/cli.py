@@ -3,14 +3,17 @@
 import argparse
 import json
 import os
+import select
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import NoReturn
 
 from devlegate import __version__
 from devlegate import runtime as _runtime
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
-from devlegate.daemon import run_daemon, run_service
+from devlegate.daemon import run_service
 from devlegate.ipc_client import (
     IPCClientError,
     decode_plan,
@@ -110,7 +113,7 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
     try:
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate run`"
+                "service is not running for this checkout; start `devlegate`"
             )
         if ticket_id is None:
             candidates = decode_retry_candidates(
@@ -157,7 +160,7 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate run`"
+                "service is not running for this checkout; start `devlegate`"
             )
         result = request(
             locator.socket_path,
@@ -172,6 +175,140 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
         raise DevlegateError(str(error)) from error
     print(f"reconciliation accepted: {ticket_id}")
     return 0
+
+
+def _stop_service(env_file: Path) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    if not locator.daemon_authority_present():
+        raise DevlegateError("service is not running")
+    try:
+        response = request(locator.socket_path, "stop", mutable=True)
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    if set(response) != {"accepted"} or response["accepted"] is not True:
+        raise DevlegateError("service IPC returned invalid stop acknowledgement")
+    print("service stop accepted")
+    return 0
+
+
+def _healthy_service(env_file: Path) -> bool:
+    locator = RuntimeLocator.from_env(env_file)
+    if not locator.daemon_authority_present():
+        return False
+    try:
+        response = request(locator.socket_path, "ping")
+    except IPCClientError as error:
+        raise DevlegateError(
+            "service authority exists but its IPC endpoint is unavailable"
+        ) from error
+    if response != {"service": "devlegate", "protocol_version": 1}:
+        raise DevlegateError("service authority exists but its IPC health is invalid")
+    return True
+
+
+def _startup_fd() -> int | None:
+    value = os.environ.get("DEVLEGATE_STARTUP_FD")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _notify_startup_failure(error: BaseException) -> None:
+    fd = _startup_fd()
+    if fd is None:
+        return
+    try:
+        os.write(fd, f"FAILED {error}\n".encode("utf-8"))
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _start_background(env_file: Path) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    except OSError as error:
+        raise DevlegateError(
+            f"cannot prepare service log {log_path}: {error}"
+        ) from error
+
+    read_fd, write_fd = os.pipe()
+    environment = {
+        **os.environ,
+        "DEVLEGATE_STARTUP_FD": str(write_fd),
+    }
+    command = [
+        sys.executable,
+        "-m",
+        "devlegate",
+        "--foreground",
+        "--env",
+        str(env_file),
+    ]
+    child: subprocess.Popen[bytes] | None = None
+    try:
+        with log_path.open("a", encoding="utf-8") as log:
+            child = subprocess.Popen(
+                command,
+                cwd=locator.repo,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=(write_fd,),
+            )
+    except OSError as error:
+        os.close(read_fd)
+        raise DevlegateError(f"cannot start background service: {error}") from error
+    finally:
+        os.close(write_fd)
+
+    assert child is not None
+    deadline = time.monotonic() + 10
+    message = b""
+    try:
+        while time.monotonic() < deadline:
+            remaining = max(0, deadline - time.monotonic())
+            readable, _writeable, _exceptional = select.select(
+                [read_fd], [], [], remaining
+            )
+            if readable:
+                message += os.read(read_fd, 4096)
+                if b"\n" in message:
+                    break
+            if child.poll() is not None:
+                break
+        line = message.splitlines()[0].decode("utf-8", "replace") if message else ""
+        if line == "READY" and child.poll() is None:
+            print(f"service started; log: {log_path}")
+            return 0
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=5)
+        detail = line.removeprefix("FAILED ") or "service exited before readiness"
+        raise DevlegateError(f"service startup failed: {detail}; log: {log_path}")
+    finally:
+        os.close(read_fd)
 
 
 def _render_status_text(snapshot: StatusSnapshot) -> str:
@@ -401,9 +538,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
+    service_options = parser.add_mutually_exclusive_group()
+    service_options.add_argument(
+        "--foreground",
+        action="store_true",
+        help="run the persistent service attached to this terminal",
+    )
+    service_options.add_argument(
+        "--once",
+        action="store_true",
+        help="run one service pass in the foreground, then exit",
+    )
+    parser.add_argument(
+        "--env",
+        dest="service_env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file for the persistent service modes",
+    )
     commands = parser.add_subparsers(
         dest="command",
-        metavar="{init,render,run,daemon,retry,reconcile,check,status,plan,control}",
+        metavar="{init,render,retry,reconcile,check,status,plan,stop,control}",
         parser_class=DevlegateArgumentParser,
     )
     init_parser = commands.add_parser(
@@ -437,28 +592,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
-    run_parser = commands.add_parser(
-        "run",
-        help="run the foreground workflow service",
-        description="Run the foreground service that executes ticket workflows.",
+    stop_parser = commands.add_parser(
+        "stop",
+        help="orderly stop the persistent workflow service",
+        description="Request an orderly shutdown of the persistent service.",
     )
-    run_parser.add_argument(
-        "--once",
-        action="store_true",
-        help="run one synchronization and execution pass, then exit",
-    )
-    run_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
-    daemon_parser = commands.add_parser(
-        "daemon",
-        help="run the foreground service without detaching",
-        description="Run the foreground service without detaching or daemonizing.",
-    )
-    daemon_parser.add_argument(
+    stop_parser.add_argument(
         "--env",
         metavar="FILE",
         type=Path,
@@ -562,8 +701,29 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args(sys.argv[1:])
+    startup_fd = _startup_fd()
     if args.command is None:
-        parser.error("a command is required")
+        env_file = args.service_env or Path.cwd() / ".env"
+        try:
+            if _healthy_service(env_file):
+                print("Devlegate service is already running.")
+                return 0
+            if args.foreground:
+                return run_service(
+                    _service_engine(env_file), startup_fd=startup_fd
+                )
+            if args.once:
+                return run_service(
+                    _service_engine(env_file), once=True, startup_fd=startup_fd
+                )
+            return _start_background(env_file)
+        except KeyboardInterrupt:
+            _notify_startup_failure(KeyboardInterrupt())
+            return 130
+        except DevlegateError as error:
+            _notify_startup_failure(error)
+            print(f"devlegate: {error}", file=sys.stderr)
+            return 1
     if args.command == "control" and args.control_command != "init":
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"
@@ -572,7 +732,9 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"
         )
-    env_file = args.env or Path.cwd() / ".env"
+    if args.foreground or args.once:
+        parser.error("service options are only valid without a command")
+    env_file = args.env or args.service_env or Path.cwd() / ".env"
     try:
         project_env = Path.cwd() / ".env"
         if args.command == "init":
@@ -613,17 +775,17 @@ def main() -> int:
             return 0
         if args.command == "check":
             return devlegate.check()
+        if args.command == "stop":
+            return _stop_service(env_file)
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id)
         if args.command == "reconcile":
             return _reconcile_daemon(env_file, args.ticket_id, args.onto)
-        if args.command == "daemon":
-            return run_daemon(_service_engine(env_file))
-        engine = _service_engine(env_file)
-        return run_service(engine, once=args.once)
     except KeyboardInterrupt:
+        _notify_startup_failure(KeyboardInterrupt())
         return 130
     except DevlegateError as error:
+        _notify_startup_failure(error)
         if args.command == "check":
             print(f"Devlegate {__version__} preflight")
             print(f"FAIL  configuration: {error}\n\nNot ready.")

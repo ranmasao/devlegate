@@ -10,6 +10,7 @@ import struct
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.ipc_protocol import (
@@ -44,8 +45,20 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 
-def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
+def dispatch_mutation(
+    engine: object,
+    request: IPCRequest,
+    *,
+    shutdown: Callable[[], None] | None = None,
+) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
+    if request.method == "stop":
+        if request.payload:
+            raise IPCProtocolError("invalid_request", "stop payload fields are invalid")
+        if shutdown is None:
+            raise IPCProtocolError("unknown_method", "unsupported method: stop")
+        shutdown()
+        return {"accepted": True}
     if request.method == "retry":
         if set(request.payload) != {"ticket_id"}:
             raise IPCProtocolError(
@@ -84,9 +97,16 @@ def dispatch_mutation(engine: object, request: IPCRequest) -> dict[str, object]:
 class UnixIPCServer:
     """Serve independently framed client connections over a project-local socket."""
 
-    def __init__(self, engine: object, socket_path: Path) -> None:
+    def __init__(
+        self,
+        engine: object,
+        socket_path: Path,
+        *,
+        shutdown: Callable[[], None] | None = None,
+    ) -> None:
         self.engine = engine
         self.path = socket_path
+        self.shutdown = shutdown
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -288,8 +308,10 @@ class UnixIPCServer:
                     if payload is None:
                         return
                     request = parse_request(payload)
-                    if request.method in {"retry", "reconcile-update-base"}:
-                        result = dispatch_mutation(self.engine, request)
+                    if request.method in {"stop", "retry", "reconcile-update-base"}:
+                        result = dispatch_mutation(
+                            self.engine, request, shutdown=self.shutdown
+                        )
                     else:
                         result = dispatch_read_only(self.engine, request)
                     response = encode_success_response(request.request_id, result)

@@ -48,7 +48,7 @@ class LiveService:
             sys.executable,
             "-m",
             "devlegate",
-            "run",
+            "--foreground",
             "--env",
             str(self.env_file),
         )

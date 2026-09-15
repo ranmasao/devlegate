@@ -514,7 +514,14 @@ def _git(
 
 
 def _log(message: str) -> None:
-    print(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}")
+    print(
+        f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}",
+        flush=True,
+    )
+    try:
+        os.fsync(sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
 
 
 @contextmanager

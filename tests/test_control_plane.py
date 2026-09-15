@@ -258,7 +258,7 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     ] == "none"
     assert invoke(working, "check", config=config).returncode == 0
     assert invoke(working, "status", "--json", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 0
+    assert invoke(working, "--once", config=config).returncode == 0
 
 
 def test_control_init_does_not_treat_remote_observation_failure_as_absence(tmp_path):
@@ -336,7 +336,7 @@ def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     control = next((state / "worktrees").glob("*/control"))
     (control / "uncommitted.txt").write_text("dirty\n")
     before = git(working, "rev-parse", "HEAD").stdout.strip()
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
     assert result.returncode == 1
     assert "control working tree is dirty" in result.stdout
     assert git(working, "rev-parse", "HEAD").stdout.strip() == before
@@ -370,7 +370,7 @@ def test_check_is_read_only_and_missing_control_does_not_create_state(tmp_path):
     assert "control worktree is missing" in status_payload["plan"]["reason"]
 
 
-def test_run_validates_control_before_product_fast_forward(tmp_path):
+def test_once_validates_control_before_product_fast_forward(tmp_path):
     working, config, _state = control_fixture(tmp_path)
     publisher = tmp_path / "seed"
     git(publisher, "switch", "main")
@@ -380,7 +380,7 @@ def test_run_validates_control_before_product_fast_forward(tmp_path):
     git(publisher, "push", "origin", "main")
     before = git(working, "rev-parse", "HEAD").stdout.strip()
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     assert git(working, "rev-parse", "HEAD").stdout.strip() == before
@@ -428,11 +428,11 @@ def test_worker_gate_clears_bound_state_and_bound_state_requires_control_head(
     assert devlegate._state["control_head"] == control_head
 
 
-def test_run_worker_completes_one_lifecycle_attempt(tmp_path):
+def test_once_worker_completes_one_lifecycle_attempt(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     payload = state_payload(state)
@@ -645,7 +645,7 @@ def test_control_init_rejects_wrong_or_unregistered_existing_path(tmp_path):
     assert "registered Git worktree" in unregistered.stderr
 
 
-def test_run_prepares_exact_product_execution_workspace_without_cross_plane_changes(
+def test_once_prepares_exact_product_execution_workspace_without_cross_plane_changes(
     tmp_path,
 ):
     working, config, state = control_fixture(tmp_path)
@@ -654,7 +654,7 @@ def test_run_prepares_exact_product_execution_workspace_without_cross_plane_chan
     operator_head = git(working, "rev-parse", "HEAD").stdout.strip()
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     execution = (
@@ -2573,7 +2573,7 @@ def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
@@ -2582,7 +2582,7 @@ def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     git(execution, "commit", "-m", "checkpoint")
     git(working, "worktree", "remove", execution)
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 0
     assert not execution.exists()
@@ -2591,12 +2591,12 @@ def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
 def test_dirty_execution_worktree_is_preserved(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     marker = execution / "uncommitted.txt"
     marker.write_text("unique worker work\n")
 
-    assert invoke(working, "run", "--once", config=config).returncode == 0
+    assert invoke(working, "--once", config=config).returncode == 0
     assert marker.read_text() == "unique worker work\n"
 
 
@@ -2608,7 +2608,7 @@ def test_execution_path_conflict_fails_closed(tmp_path):
     expected.mkdir(parents=True)
     (expected / "do-not-delete").write_text("foreign\n")
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     assert "not a registered execution worktree" in result.stderr
@@ -2642,7 +2642,7 @@ def test_worktree_porcelain_parser_rejects_ambiguous_records():
 def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
     shutil.rmtree(execution)
@@ -2662,7 +2662,7 @@ def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path)
 def test_product_advance_does_not_rebind_execution_base(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
@@ -2678,7 +2678,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     git(product, "commit", "-m", "product update")
     git(product, "push", "origin", "main")
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     payload = state_payload(state)
@@ -2690,7 +2690,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
 def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     original_base = state_payload(state)["execution_base_head"]
     control = next((state / "worktrees").glob("*/control"))
@@ -2700,7 +2700,7 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     git(control, "push", "origin", "devlegate/control")
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     payload = state_payload(state)
@@ -2716,7 +2716,7 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     original = state_payload(state)
     control = next((state / "worktrees").glob("*/control"))
     (control / "authority-race.md").write_text("changed\n")
@@ -2745,7 +2745,7 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
         execution_path=str(execution_path),
     )
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     payload = state_payload(state)
@@ -2757,7 +2757,7 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
 def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
@@ -2770,7 +2770,7 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     git(product, "add", "product-update.txt")
     git(product, "commit", "-m", "product update")
     git(product, "push", "origin", "main")
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     shutil.rmtree(execution)
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
@@ -2790,7 +2790,7 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
         execution_path=str(execution),
     )
 
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     assert not execution.exists()
     assert state_payload(state)["reconciliation"]["status"] == "pending"
 
@@ -2798,8 +2798,8 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
 def test_unchanged_prepared_generation_is_quiet(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    first = invoke(working, "run", "--once", config=config)
-    second = invoke(working, "run", "--once", config=config)
+    first = invoke(working, "--once", config=config)
+    second = invoke(working, "--once", config=config)
 
     assert first.returncode == 1
     assert second.returncode == 0
@@ -2812,7 +2812,7 @@ def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
     unrelated = tmp_path / "unrelated"
     git(working, "worktree", "add", "--detach", unrelated, "HEAD")
 
-    result = invoke(working, "run", "--once", config=config)
+    result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
     assert next((state / "worktrees").glob("*/work/T-1"), None) is not None
@@ -2821,7 +2821,7 @@ def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
 def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(execution, "checkout", "--detach")
     monkeypatch.chdir(working)
@@ -2842,7 +2842,7 @@ def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch
 def test_expected_execution_worktree_on_wrong_branch_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(execution, "switch", "-c", "wrong-execution")
     manager = ExecutionWorkspaceManager(
@@ -2856,7 +2856,7 @@ def test_expected_execution_worktree_on_wrong_branch_fails_closed(tmp_path):
 def test_execution_branch_attached_to_unexpected_worktree_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     branch = git(execution, "rev-parse", "HEAD").stdout.strip()
     git(working, "worktree", "remove", execution)
@@ -2922,7 +2922,7 @@ def test_managed_execution_work_root_symlink_fails_closed(tmp_path):
 def test_selected_stale_registration_repair_preserves_unrelated_registration(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     unrelated = tmp_path / "unrelated"
     git(working, "worktree", "add", "--detach", unrelated, "HEAD")
@@ -2939,7 +2939,7 @@ def test_selected_stale_registration_repair_preserves_unrelated_registration(tmp
 def test_branch_exists_worktree_missing_resumes_from_branch(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
     shutil.rmtree(execution)
@@ -2958,7 +2958,7 @@ def test_existing_branch_and_worktree_are_rediscovered_after_finalization_bounda
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
     base = git(execution, "rev-parse", "HEAD").stdout.strip()
     manager = ExecutionWorkspaceManager(
@@ -3048,7 +3048,7 @@ def test_first_creation_remains_bound_to_planned_product_head_if_product_moves(
 def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert invoke(working, "run", "--once", config=config).returncode == 1
+    assert invoke(working, "--once", config=config).returncode == 1
     before = state_payload(state)
     execution = next((state / "worktrees").glob("*/work/T-1"))
     git(working, "worktree", "remove", execution)

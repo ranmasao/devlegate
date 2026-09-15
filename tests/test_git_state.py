@@ -31,7 +31,7 @@ def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
 
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
 
     assert result.returncode == 1
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == git(
@@ -39,7 +39,7 @@ def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
     ).stdout.strip()
     assert "invalid ticket" in result.stdout
     assert state_payload(git_fixture)["phase"] != "merge_pending"
-    second = invoke(git_fixture, "run", "--once")
+    second = invoke(git_fixture, "--once")
     assert "resumed after completed merge" not in second.stdout
 
 
@@ -49,8 +49,8 @@ def test_invalid_workflow_repeated_run_has_no_stale_merge_recovery(git_fixture):
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
 
-    first = invoke(git_fixture, "run", "--once")
-    second = invoke(git_fixture, "run", "--once")
+    first = invoke(git_fixture, "--once")
+    second = invoke(git_fixture, "--once")
 
     assert first.returncode == second.returncode == 1
     assert "resumed after completed merge" not in second.stdout
@@ -62,7 +62,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
     publish_control(
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
-    assert invoke(git_fixture, "run", "--once").returncode == 1
+    assert invoke(git_fixture, "--once").returncode == 1
     publish_control(
         git_fixture,
         "repair workflow",
@@ -70,7 +70,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
         sync=False,
     )
 
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
 
     assert result.returncode == 1
     assert "execution failed" in result.stdout

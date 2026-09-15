@@ -85,7 +85,9 @@ def test_polling_exits_cleanly_after_shutdown_interrupted_git(tmp_path, monkeypa
     assert engine.service_snapshot().lifecycle == "ready"
 
 
-def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):
+def test_foreground_service_command_constructs_one_service_engine(
+    tmp_path, monkeypatch
+):
     working, config, _state = control_fixture(tmp_path)
     calls = []
 
@@ -93,16 +95,16 @@ def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
 
-    def host(engine):
+    def host(engine, **_kwargs):
         calls.append(("host", engine))
         return 0
 
     monkeypatch.setattr(cli, "ServiceEngine", FakeServiceEngine)
-    monkeypatch.setattr(cli, "run_daemon", host)
+    monkeypatch.setattr(cli, "run_service", host)
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "daemon", "--env", str(config)],
+        ["devlegate", "--foreground", "--env", str(config)],
     )
     monkeypatch.chdir(working)
 
@@ -120,7 +122,7 @@ def test_daemon_command_constructs_one_service_engine(tmp_path, monkeypatch):
         (signal.SIGTERM, "service_shutdown", 0),
     ],
 )
-@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
+@pytest.mark.parametrize("host", [daemon.run_service])
 def test_daemon_host_signal_handler_only_sets_stop_intent(
     monkeypatch, signum, expected_kind, expected_status, host
 ):
@@ -186,7 +188,7 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )
-@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
+@pytest.mark.parametrize("host", [daemon.run_service])
 def test_daemon_host_operator_abort_precedes_service_shutdown(
     monkeypatch, signals, host
 ):
@@ -209,7 +211,7 @@ def test_daemon_host_operator_abort_precedes_service_shutdown(
     assert host(FakeServiceEngine()) == 130
 
 
-def test_daemon_cli_remains_foreground_until_host_returns(tmp_path, monkeypatch):
+def test_foreground_cli_remains_attached_until_host_returns(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
     entered = threading.Event()
     release = threading.Event()
@@ -219,17 +221,17 @@ def test_daemon_cli_remains_foreground_until_host_returns(tmp_path, monkeypatch)
         def __init__(self, _env_file, *, read_only=False):
             assert not read_only
 
-    def host(_engine):
+    def host(_engine, **_kwargs):
         entered.set()
         assert release.wait(10)
         return 0
 
     monkeypatch.setattr(cli, "ServiceEngine", FakeServiceEngine)
-    monkeypatch.setattr(cli, "run_daemon", host)
+    monkeypatch.setattr(cli, "run_service", host)
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "daemon", "--env", str(config)],
+        ["devlegate", "--foreground", "--env", str(config)],
     )
     monkeypatch.chdir(working)
     thread = threading.Thread(target=lambda: result.append(cli.main()), daemon=True)
@@ -1088,7 +1090,7 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
 
 
 @pytest.mark.parametrize("once", [False, True])
-def test_compatibility_run_operator_abort_stops_after_one_iteration(
+def test_once_operator_abort_stops_after_one_iteration(
     tmp_path, monkeypatch, once
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -1147,7 +1149,7 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "daemon", "--env", str(config)],
+        [sys.executable, "-m", "devlegate", "--foreground", "--env", str(config)],
         cwd=working,
         env=environment,
         text=True,
@@ -1247,7 +1249,7 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "daemon", "--env", str(config)],
+        [sys.executable, "-m", "devlegate", "--foreground", "--env", str(config)],
         cwd=working,
         env=environment,
         text=True,

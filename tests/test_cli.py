@@ -1,4 +1,5 @@
 import dataclasses
+import fcntl
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
@@ -230,7 +232,8 @@ def ticket(title="Ticket", body="work", depends=None):
 
 def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     parser = build_parser()
-    assert parser.parse_args(["run", "--once"]).once
+    assert parser.parse_args(["--once"]).once
+    assert parser.parse_args(["--foreground"]).foreground
     assert parser.parse_args(["control", "init"]).command == "control"
     assert parser.parse_args(["status", "--json"]).json
     monkeypatch.setattr("sys.argv", ["devlegate", "--help"])
@@ -239,12 +242,21 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert error.value.code == 0
     output = capsys.readouterr().out
     assert (
-        "{init,render,run,daemon,retry,reconcile,check,status,plan,control}"
+        "{init,render,retry,reconcile,check,status,plan,stop,control}"
         in output
     )
-    assert "run                 run the foreground workflow service" in output
+    assert "stop                orderly stop the persistent workflow service" in output
     assert "control             manage workflow history" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
+
+
+@pytest.mark.parametrize("command", ["run", "daemon"])
+def test_removed_service_commands_are_unknown(command, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", command])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert f"unknown command '{command}'" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("command", ["ruun", "рун"])
@@ -259,31 +271,29 @@ def test_unknown_top_level_command_is_concise(command, monkeypatch, capsys):
     assert f"unknown command '{command}'" in stderr
     assert "devlegate --help" in stderr
     assert "usage:" not in stderr
-    assert "{init,render,run,retry,check,status,plan,control}" not in stderr
+    assert "{init,render,retry,check,status,plan,stop,control}" not in stderr
 
 
 def test_invalid_subcommand_argument_is_concise(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["devlegate", "run", "--definitely-invalid"])
+    monkeypatch.setattr("sys.argv", ["devlegate", "stop", "--definitely-invalid"])
 
     with pytest.raises(SystemExit) as error:
         main()
 
     stderr = capsys.readouterr().err
     assert error.value.code == 2
-    assert "devlegate run: unrecognized argument: --definitely-invalid" in stderr
-    assert "devlegate run --help" in stderr
+    assert "devlegate stop: unrecognized argument: --definitely-invalid" in stderr
+    assert "devlegate stop --help" in stderr
     assert "usage:" not in stderr
 
 
 def test_missing_commands_are_concise(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["devlegate"])
+    monkeypatch.setattr("sys.argv", ["devlegate", "--foreground", "--once"])
     with pytest.raises(SystemExit) as error:
         main()
     stderr = capsys.readouterr().err
     assert error.value.code == 2
-    assert "devlegate: a command is required" in stderr
-    assert "devlegate --help" in stderr
-    assert "usage:" not in stderr
+    assert "argument --once: not allowed with argument --foreground" in stderr
 
     monkeypatch.setattr("sys.argv", ["devlegate", "control"])
     with pytest.raises(SystemExit) as error:
@@ -299,7 +309,7 @@ def test_missing_commands_are_concise(monkeypatch, capsys):
     "argv, expected",
     [
         (["devlegate", "--help"], "usage: devlegate"),
-        (["devlegate", "run", "--help"], "usage: devlegate run"),
+        (["devlegate", "stop", "--help"], "usage: devlegate stop"),
         (["devlegate", "control", "--help"], "usage: devlegate control"),
     ],
 )
@@ -331,12 +341,8 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
             ],
         ),
         (
-            ["run", "--help"],
-            ["Run the foreground service", "one synchronization and execution pass"],
-        ),
-        (
-            ["daemon", "--help"],
-            ["without detaching or daemonizing", "configuration file to use"],
+            ["stop", "--help"],
+            ["Request an orderly shutdown", "configuration file to use"],
         ),
         (
             ["check", "--help"],
@@ -450,9 +456,84 @@ def test_fresh_init_requires_external_adoption_before_control_check(
 
 
 def test_removed_top_level_forms_are_rejected(git_fixture):
-    for args in ((), ("--once",), ("--check",)):
+    for args in (("run",), ("daemon",), ("--check",)):
         result = invoke(git_fixture, *args)
         assert result.returncode == 2
+
+
+def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    git_fixture["config"].write_text(
+        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    started = invoke(git_fixture)
+    assert started.returncode == 0, started.stderr
+    assert "service started; log:" in started.stdout
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    assert locator.daemon_authority_present()
+    assert locator.socket_path.exists()
+
+    status = invoke(git_fixture, "status", "--json")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout)["execution"]["phase"] == "idle"
+
+    stopped = invoke(git_fixture, "stop")
+    assert stopped.returncode == 0, stopped.stderr
+    for _attempt in range(100):
+        if not locator.daemon_authority_present():
+            break
+        time.sleep(0.02)
+    assert not locator.daemon_authority_present()
+    assert not locator.socket_path.exists()
+    log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+    deadline = time.monotonic() + 5
+    log = ""
+    while time.monotonic() < deadline:
+        log = log_path.read_text()
+        if (
+            "shutdown explicitly requested through devlegate stop" in log
+            and "orderly shutdown complete (stop_command)" in log
+        ):
+            break
+        time.sleep(0.02)
+    assert "shutdown explicitly requested through devlegate stop" in log
+    assert "orderly shutdown complete (stop_command)" in log
+
+
+@pytest.mark.parametrize("start_args", [(), ("--foreground",), ("--once",)])
+def test_service_start_forms_are_idempotent_for_healthy_owner(
+    git_fixture, monkeypatch, start_args
+):
+    monkeypatch.chdir(git_fixture["working"])
+    git_fixture["config"].write_text(
+        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    assert invoke(git_fixture).returncode == 0
+    try:
+        repeated = invoke(git_fixture, *start_args)
+        assert repeated.returncode == 0, repeated.stderr
+        assert repeated.stdout.strip() == "Devlegate service is already running."
+    finally:
+        assert invoke(git_fixture, "stop").returncode == 0
+
+
+def test_service_start_fails_closed_when_authority_has_no_healthy_ipc(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    locator.lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with locator.lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = invoke(git_fixture, "--foreground")
+    assert result.returncode == 1
+    assert "authority exists but its IPC endpoint is unavailable" in result.stderr
+
+
+def test_stop_without_service_is_conclusive(git_fixture):
+    result = invoke(git_fixture, "stop")
+    assert result.returncode == 1
+    assert result.stderr.strip() == "devlegate: service is not running"
 
 
 def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixture):
@@ -781,7 +862,7 @@ def test_reconcile_refuses_without_daemon_without_constructing_engine(
     assert main() == 1
     stderr = capsys.readouterr().err
     assert "service is not running" in stderr
-    assert "start `devlegate run`" in stderr
+    assert "start `devlegate`" in stderr
 
 
 def test_reconcile_refuses_connectable_socket_without_authority(
@@ -816,7 +897,7 @@ def test_reconcile_refuses_connectable_socket_without_authority(
         assert main() == 1
         stderr = capsys.readouterr().err
         assert "service is not running" in stderr
-        assert "start `devlegate run`" in stderr
+        assert "start `devlegate`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()
@@ -880,7 +961,7 @@ def test_retry_refuses_connectable_socket_without_authority(
         assert main() == 1
         stderr = capsys.readouterr().err
         assert "service is not running" in stderr
-        assert "start `devlegate run`" in stderr
+        assert "start `devlegate`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()
@@ -1182,6 +1263,26 @@ def test_service_engine_serve_reuses_one_owner_across_polling_iterations(
     assert calls == [(id(engine), id(runtime_store))] * 2
 
 
+def test_persistent_service_survives_successful_iteration_until_stop(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    engine = ServiceEngine(git_fixture["config"])
+    stop_event = threading.Event()
+    calls = []
+
+    def run_once():
+        calls.append(True)
+        if len(calls) == 3:
+            stop_event.set()
+        return 0
+
+    monkeypatch.setattr(engine, "run_once", run_once)
+    engine.poll_interval = "0"
+    assert engine.serve(stop_event) == 0
+    assert len(calls) == 3
+
+
 def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeypatch):
     calls = []
 
@@ -1195,7 +1296,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
 
     monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "run", "--once", "--env", str(git_fixture["config"])]
+        sys, "argv", ["devlegate", "--once", "--env", str(git_fixture["config"])]
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -1203,10 +1304,11 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     assert calls == [("init", git_fixture["config"], False), ("serve", True)]
 
 
-def test_run_uses_shared_foreground_service_host(git_fixture, monkeypatch):
+def test_once_uses_shared_foreground_service_host(git_fixture, monkeypatch):
     calls = []
 
-    def host(engine, *, once=False):
+    def host(engine, *, once=False, startup_fd=None):
+        assert startup_fd is None
         calls.append((engine, once))
         return 0
 
@@ -1214,7 +1316,7 @@ def test_run_uses_shared_foreground_service_host(git_fixture, monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "run", "--once", "--env", str(git_fixture["config"])],
+        ["devlegate", "--once", "--env", str(git_fixture["config"])],
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -1223,7 +1325,9 @@ def test_run_uses_shared_foreground_service_host(git_fixture, monkeypatch):
     assert calls[0][1] is True
 
 
-def test_run_hosts_real_ipc_status_and_plan_until_stopped(git_fixture, monkeypatch):
+def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(
+    git_fixture, monkeypatch
+):
     monkeypatch.chdir(git_fixture["working"])
     git_fixture["config"].write_text(
         git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
@@ -2647,7 +2751,7 @@ def test_missing_control_blocks_without_product_mutation(git_fixture):
     control = git_fixture["control"]
     git(git_fixture["working"], "worktree", "remove", "--force", control)
     before = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
     assert result.returncode == 1
     assert "control worktree is missing" in result.stdout
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == before
@@ -2662,7 +2766,7 @@ def test_product_workflow_copy_fails_closed(git_fixture):
 
 def test_run_once_persists_idle_and_control_head(git_fixture):
     publish_control(git_fixture, "ticket", {"kanban/todo/T-1.md": ticket()})
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
     assert result.returncode == 1
     assert "execution failed" in result.stdout
     database = next(git_fixture["state"].glob("*.sqlite3"))
@@ -2787,7 +2891,7 @@ def test_control_divergence_is_observed_and_blocked(git_fixture):
     git(git_fixture["control"], "add", ".")
     git(git_fixture["control"], "commit", "-m", "local control change")
     publish_control(git_fixture, "remote", {"remote.txt": "remote\n"}, sync=False)
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
     assert result.returncode == 1
     assert "control branch cannot be fast-forwarded" in result.stdout
 
@@ -2829,7 +2933,7 @@ def test_non_fast_forward_code_update_is_refused(git_fixture):
     git(git_fixture["publisher"], "add", ".")
     git(git_fixture["publisher"], "commit", "-m", "remote")
     git(git_fixture["publisher"], "push", "origin", "main")
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
     assert result.returncode == 1
     assert "cannot fast-forward" in result.stdout
 

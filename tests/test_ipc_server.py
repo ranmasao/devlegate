@@ -86,13 +86,13 @@ def test_daemon_owns_socket_under_state_dir_and_removes_it(
     engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     observed = []
 
-    def host(_engine, _operation):
+    def host(_engine, _operation, **_kwargs):
         assert engine.ipc_socket_path.is_socket()
         observed.append(True)
         return 0
 
     monkeypatch.setattr(daemon, "run_foreground", host)
-    assert daemon.run_daemon(engine) == 0
+    assert daemon.run_service(engine) == 0
     assert observed == [True]
     assert not engine.ipc_socket_path.exists()
 
@@ -119,6 +119,16 @@ def test_unknown_method_returns_structured_error(running_server):
         "code": "unknown_method",
         "message": "unsupported method: unknown",
     }
+
+
+def test_stop_dispatch_invokes_host_shutdown_callback(running_server):
+    engine, _state, server = running_server
+    called = []
+    response = dispatch_mutation(
+        engine, _request("stop"), shutdown=lambda: called.append(True)
+    )
+    assert response == {"accepted": True}
+    assert called == [True]
 
 
 def test_malformed_request_does_not_crash_server(running_server):
@@ -339,7 +349,7 @@ def test_excessively_long_socket_path_fails_as_devlegate_error(
         server.start()
 
 
-@pytest.mark.parametrize("host", [daemon.run_daemon, daemon.run_service])
+@pytest.mark.parametrize("host", [daemon.run_service])
 def test_same_project_second_service_host_cannot_disturb_first_socket(
     tmp_path, monkeypatch, short_state_dir, host
 ):
@@ -385,12 +395,12 @@ def test_stale_socket_is_replaced_after_runtime_authority_is_acquired(
     stale.bind(str(engine.ipc_socket_path))
     stale.close()
 
-    def host(_engine, _operation):
+    def host(_engine, _operation, **_kwargs):
         assert request(engine.ipc_socket_path, "1", "ping").ok
         return 0
 
     monkeypatch.setattr(daemon, "run_foreground", host)
-    assert daemon.run_daemon(engine) == 0
+    assert daemon.run_service(engine) == 0
     assert not engine.ipc_socket_path.exists()
 
 

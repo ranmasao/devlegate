@@ -7,7 +7,7 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
 
 - **I - Test cleanup: CLOSED.** Test proof boundaries and service-lifetime
   coverage were completed.
-- **J - Documentation cleanup: CURRENT.**
+- **J - Documentation cleanup: CLOSED.**
   - **J1 - README and product landing page: CLOSED.**
   - **J2 - CLI/help consistency: CLOSED.**
   - **J3 - Architecture, roadmap, and changelog: CLOSED.**
@@ -15,10 +15,11 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **J5 - Release-facing documentation and badges: CLOSED.**
 - **K - Final audit: CURRENT.**
   - **K1 - Full invariant audit 0.5: CLOSED.**
-  - **K2 - Verify absence of bypass mutable paths: CURRENT.**
-  - **K3 - Foreground dogfood on rslab2: PLANNED.**
-  - **K4 - Full clean test run + exact-head CI: PLANNED.**
-  - **K5 - Confirm no known blockers before rename: PLANNED.**
+  - **K2 - Verify absence of bypass mutable paths: CLOSED.**
+  - **K3 - rslab2 dogfood: CLOSED.**
+  - **K3.5 - Persistent background service UX: CLOSED.**
+  - **K4 - Full clean test + exact-head CI: CURRENT.**
+  - **K5 - Pre-rename blocker review: PLANNED.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**
 
 The current 0.5 work is focused on making the supported service architecture,
@@ -39,4 +40,3 @@ These are known future areas, not dated commitments:
 
 - General parallel worker execution.
 - Warm worker processes or a warm worker pool.
-- System-service and background-process integration supplied by Devlegate.

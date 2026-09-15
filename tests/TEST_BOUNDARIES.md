@@ -26,7 +26,7 @@ that is observation, not a production client bypass.
 | Pure/component | codecs, parsers, stores, helpers, private deterministic functions | Local input/output, validation, serialization, persistence mechanics | Service ownership, CLI/service process separation |
 | Engine semantic | `ServiceEngine`/`Devlegate` constructed directly; direct methods or `serve()` in a test thread | State-machine decisions, admission rules, recovery algorithms, Git/state invariants, worker-result handling | Independent CLI process lifetime or OS crash topology |
 | IPC/owner handoff | Real Unix socket and `UnixIPCServer`; for mutable claims, a real `ServiceEngine.serve()` owner thread | Framing, connection isolation, dispatch, owner-thread serialization, receipt behavior | Independent service process, SIGKILL/restart, CLI survival |
-| Production topology | `LiveService` starts `python -m devlegate run`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
+| Production topology | `LiveService` starts `python -m devlegate --foreground`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
 
 ## Suite Map
 
@@ -52,7 +52,7 @@ The counts are grouping counts, not test-case counts.
 | `test_cli.py` parser/render/bootstrap tests | Pure/component/bootstrap | Argument parsing, formatting, command routing, `init`, `render`, `check`, repository-root and readiness rules | In-process `main()` and `invoke()` do not prove CLI/service separation |
 | `test_cli.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses service IPC, authority/socket fail-closed behavior, read-only projection selection | `cli_daemon` is an in-process socket server; it is not production topology |
 | `test_cli.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, H1/H2 behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
-| `test_daemon.py` fake-host tests | Host component | Signal installation and return-code policy for `run_daemon`/`run_service` | Fake `ServiceEngine` is intentionally not service topology |
+| `test_daemon.py` fake-host tests | Host component | Signal installation and return-code policy for `run_service` | Fake `ServiceEngine` is intentionally not service topology |
 
 ## Production Invariants
 
@@ -78,7 +78,7 @@ failure modes and fail faster.
 ## H1 Recovery Evidence
 
 H1's process boundary is real only in `test_cli.py` tests using `LiveService`.
-`LiveService` launches an independent `python -m devlegate run` process, waits
+`LiveService` launches an independent `python -m devlegate --foreground` process, waits
 through the actual authority socket with `ping`, invokes the normal CLI path in
 separate subprocesses, captures output, and can SIGKILL/restart the service.
 `h1_driver.py` constructs the real `ServiceEngine` in that service process and
@@ -131,9 +131,9 @@ families are bootstrap/component evidence, not service-topology evidence:
 - control initialization and preflight tests in `test_control_plane.py`
 
 `invoke()` starts a short-lived CLI subprocess, which is useful for command
-boundary and filesystem effects. Unless it starts `run`/`daemon` and uses a
+boundary and filesystem effects. Unless it starts a persistent service and uses a
 separate client against a live owner, it does not prove service topology.
-`test_run_hosts_real_ipc_status_and_plan_until_stopped` is the explicit runtime
+`test_foreground_hosts_real_ipc_status_and_plan_until_stopped` is the explicit runtime
 exception. `test_real_service_*` is the convention for full production service
 topology and is currently truthful.
 
@@ -144,12 +144,12 @@ not obsolete merely because the names are historical.
 
 | Symbol/path | Reachability | Classification | Evidence |
 | --- | --- | --- | --- |
-| `ServiceEngine` | `cli.main()` constructs it for `run` and `daemon` through `_service_engine`; `daemon.run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
+| `ServiceEngine` | `cli.main()` constructs it for persistent service modes through `_service_engine`; `run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
 | `Application` | No production references remain after I4; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
 | `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
-| `devlegate run` | Constructs the canonical `_service_engine()` and calls `run_service(..., once=args.once)` | KEEP - canonical foreground runtime command | `src/devlegate/cli.py:525-526` |
-| `devlegate daemon` | Constructs the same canonical `_service_engine()` and calls `run_daemon()`; `run_daemon()` delegates to `run_service()` | KEEP - reachable command/compatibility spelling | `src/devlegate/cli.py:523-524`, `src/devlegate/daemon.py:56-58` |
+| `devlegate`, `devlegate --foreground`, `devlegate --once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
+| `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
 | `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
 | `ServiceEngine.retry()` / `reconcile_update_base()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py:5339-5425`; owner command handling at `src/devlegate/runtime.py:4642-4649` |
@@ -162,8 +162,9 @@ python -m devlegate / console script
      -> init/render/check/control -> Devlegate(read_only=True)
      -> status/plan -> IPC, or guarded read-only ServiceEngine fallback
      -> retry/reconcile -> IPC client only
-     -> run -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
-     -> daemon -> ServiceEngine -> run_daemon() -> run_service()
+      -> devlegate -> background launcher -> devlegate --foreground
+      -> --foreground/--once -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
+      -> stop -> authenticated Unix IPC -> service shutdown intent
 ```
 
 `h1_driver.py` is test-only and constructs `ServiceEngine` so it can inject
@@ -194,8 +195,8 @@ remain valid after I4:
 
 - `test_operational_cli_constructs_service_engine_directly` checks the canonical
   runtime construction contract.
-- `test_daemon_command_constructs_one_service_engine` checks the compatibility
-  `daemon` host construction contract.
+- `test_foreground_service_command_constructs_one_service_engine` checks the
+  foreground host construction contract.
 - `test_service_engine_status_and_plan_return_immutable_views` checks the
   canonical engine view contract.
 - `test_cli_status_and_plan_render_fake_engine_without_runtime` checks cheap
@@ -204,7 +205,8 @@ remain valid after I4:
   `test_daemon.py`, and `test_worker_protocol.py` are direct semantic seams.
 
 These tests are not production topology proof. The production reachability
-audit above now resolves `Devlegate`, `ServiceEngine`, `run`, and `daemon`.
+audit above now resolves `Devlegate`, `ServiceEngine`, and the persistent
+service host.
 Application injection is retired; direct tests still do not become topology
 proof.
 
@@ -249,8 +251,8 @@ formatting, error-translation, and IPC-boundary behavior.
 
 | Removed test | Removed contract | Surviving proof/reason |
 | --- | --- | --- |
-| `test_operational_cli_dispatches_run_through_application` | Historical Application substitution during `run` | `test_operational_cli_constructs_service_engine_directly` proves the canonical construction; real-service tests prove runtime behavior |
-| `test_all_operational_cli_commands_use_service_engine` | Broad fake-engine construction table that overlapped dedicated command tests | Dedicated daemon construction, canonical run construction, bootstrap tests, and IPC-only CLI tests cover the actual contracts |
+| `test_operational_cli_dispatches_run_through_application` | Historical Application substitution during service startup | `test_operational_cli_constructs_service_engine_directly` proves the canonical construction; real-service tests prove runtime behavior |
+| `test_all_operational_cli_commands_use_service_engine` | Broad fake-engine construction table that overlapped dedicated command tests | Dedicated foreground construction, canonical once construction, bootstrap tests, and IPC-only CLI tests cover the actual contracts |
 | `test_service_engine_is_the_only_runtime_authority` | Application/Devlegate/ServiceEngine alias identity assertion | Direct `ServiceEngine` construction and owner-thread/real-service authority tests prove behavior rather than retired alias identity |
 | `test_application_import_does_not_import_cli` | Import-direction check for the deleted `devlegate.application` module | No supported module remains; package entrypoint/import tests and canonical source imports cover current import direction |
 
