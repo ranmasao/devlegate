@@ -2406,6 +2406,9 @@ def test_real_service_reconcile_receipt_restart_is_not_a_queue(
     target = engine._state["reconciliation"]["observed_product"]
     git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
     monkeypatch.setenv("H1_CRASH_POINT", "receipt_after_save")
+    release_marker = git_fixture["tmp"] / "reconcile-operator-released"
+    release_marker.unlink(missing_ok=True)
+    monkeypatch.setenv("H1_OPERATOR_RELEASE_MARKER", str(release_marker))
     service = LiveService(
         git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
     )
@@ -2426,6 +2429,7 @@ def test_real_service_reconcile_receipt_restart_is_not_a_queue(
         service.wait_for(
             lambda: _disk_state(config)["reconciliation"]["status"] == "resolved"
         )
+        service.wait_for(lambda: release_marker.exists())
     finally:
         service.stop()
 

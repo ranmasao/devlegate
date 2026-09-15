@@ -17,6 +17,8 @@ def main() -> int:
     point = os.environ.get("H1_CRASH_POINT")
     marker_value = os.environ.get("H1_CRASH_MARKER")
     marker = Path(marker_value) if marker_value else None
+    release_marker_value = os.environ.get("H1_OPERATOR_RELEASE_MARKER")
+    release_marker = Path(release_marker_value) if release_marker_value else None
 
     def crash() -> None:
         if marker is not None:
@@ -33,6 +35,15 @@ def main() -> int:
             crash()
 
     engine._save_state = save
+
+    if release_marker is not None:
+        original_release = engine._release_operator_command
+
+        def release() -> None:
+            original_release()
+            release_marker.touch()
+
+        engine._release_operator_command = release
 
     if point == "merge_after_effect":
         original_git = engine._git_runtime
