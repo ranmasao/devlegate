@@ -340,6 +340,69 @@ def test_missing_commands_are_concise(monkeypatch, capsys):
     assert "devlegate control --help" in stderr
     assert "usage:" not in stderr
 
+    monkeypatch.setattr("sys.argv", ["devlegate", "reconcile"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "devlegate reconcile: a reconcile command is required" in stderr
+    assert "usage:" not in stderr
+
+
+def test_reconcile_resume_routes_to_daemon_helper(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    accepted = []
+
+    def resume(_env_file, ticket_id):
+        accepted.append(ticket_id)
+        return 0
+
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr("devlegate.cli._reconcile_resume_daemon", resume)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "reconcile",
+            "resume",
+            "LAB-111",
+            "--env",
+            str(config),
+        ],
+    )
+    assert main() == 0
+    assert accepted == ["LAB-111"]
+    assert capsys.readouterr().out == ""
+
+
+def test_nested_command_help_uses_command_sections():
+    parser = build_parser()
+    top_level = parser.format_help()
+    assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in top_level
+    assert (
+        "{init,render,retry,reconcile,check,status,plan,stop,control}"
+        not in top_level
+    )
+    for argv, commands in (
+        (["control"], ("init",)),
+        (["reconcile"], ("update-base", "resume", "control")),
+    ):
+        target = parser
+        for name in argv:
+            target = target._subparsers._group_actions[0].choices[name]
+        output = target.format_help()
+        assert "Commands:" in output
+        assert "positional arguments:\n  {" not in output
+        for command in commands:
+            assert command in output
+        if argv == ["reconcile"]:
+            resume = target._subparsers._group_actions[0].choices["resume"]
+            leaf = resume.format_help()
+            assert "ticket_id" in leaf
+            assert "usage: devlegate reconcile resume" in leaf
+
 
 @pytest.mark.parametrize(
     "argv, expected",

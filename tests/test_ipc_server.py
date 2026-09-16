@@ -35,6 +35,7 @@ from devlegate.ipc_server import (
 )
 from devlegate.runtime import (
     DevlegateError,
+    OperatorCommand,
     RetryCandidate,
     _reconcile_resume_request_fingerprint,
 )
@@ -124,6 +125,216 @@ def test_unknown_method_returns_structured_error(running_server):
         "code": "unknown_method",
         "message": "unsupported method: unknown",
     }
+
+
+def test_reconcile_resume_routes_over_live_unix_socket(running_server):
+    engine, _state, server = running_server
+    calls = []
+
+    def submit(ticket_id, *, request_id):
+        calls.append((ticket_id, request_id))
+        return {"accepted": True, "ticket_id": ticket_id}
+
+    engine.submit_reconcile_resume = submit
+    response = request(
+        server.path,
+        "resume-id",
+        "reconcile-resume",
+        {"ticket_id": "LAB-111"},
+    )
+
+    assert response.ok
+    assert response.result == {"accepted": True, "ticket_id": "LAB-111"}
+    assert calls == [("LAB-111", "resume-id")]
+
+
+@pytest.mark.parametrize("retained_report", [True, False])
+def test_reconcile_resume_runs_full_live_owner_path(
+    tmp_path, monkeypatch, short_state_dir, retained_report
+):
+    working, config, _state = control_fixture(tmp_path)
+    config.write_text(config.read_text().replace(str(_state), str(short_state_dir)))
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+
+    def initial_worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (working / "dirty-product.txt").write_text("operator\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_run_worker", initial_worker)
+    assert engine.run_once() == 1
+    reconciliation = dict(engine._state["reconciliation"])
+    checkpoint = reconciliation["worker_checkpoint"]
+    execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
+    (working / "dirty-product.txt").unlink()
+    if not retained_report:
+        reconciliation.pop("execution_report")
+        engine._save_state("idle", reconciliation=reconciliation)
+
+    resumed = threading.Event()
+    original_resume = engine._reconcile_resume_owned
+
+    def resume(ticket_id, **kwargs):
+        result = original_resume(ticket_id, **kwargs)
+        resumed.set()
+        return result
+
+    monkeypatch.setattr(engine, "_reconcile_resume_owned", resume)
+    if retained_report:
+        monkeypatch.setattr(
+            engine,
+            "_run_worker",
+            lambda *_args: pytest.fail("retained resume launched a worker"),
+        )
+    else:
+        def resumed_worker(workspace, prompt):
+            assert "Continue the existing implementation" in prompt
+            assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == checkpoint
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "validated", (), ()), None
+            )
+
+        monkeypatch.setattr(engine, "_run_worker", resumed_worker)
+
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    stop_event = threading.Event()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        response = request(
+            server.path,
+            "resume-live",
+            "reconcile-resume",
+            {"ticket_id": "T-1"},
+        )
+        assert response.ok
+        assert response.result == {"accepted": True, "ticket_id": "T-1"}
+        assert resumed.wait(5)
+        assert owner.is_alive()
+        assert engine._state["reconciliation"]["status"] == "resolved"
+        assert engine._state["reconciliation"]["resolution"] == "resume"
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+        assert (
+            git(
+                execution,
+                "ls-remote",
+                "origin",
+                f"refs/heads/{reconciliation['execution_branch']}",
+            ).stdout.split()[0]
+            == checkpoint
+        )
+        assert (execution / "implementation.txt").read_text() == "worker\n"
+        if retained_report:
+            assert (
+                next((short_state_dir / "worktrees").glob("*/control"))
+                / "kanban/review/T-1.md"
+            ).is_file()
+        else:
+            assert engine._state["resume_required"]["status"] == "required"
+    finally:
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=5)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
+
+
+def test_unknown_owner_command_fails_closed(running_server):
+    engine, _state, _server = running_server
+    command = OperatorCommand("unknown", "unknown", "fingerprint", "T-1")
+
+    with pytest.raises(DevlegateError, match="unsupported operator command: unknown"):
+        engine._dispatch_operator_command(command, None)
+
+
+def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
+    tmp_path, monkeypatch, short_state_dir
+):
+    working, config, _state = control_fixture(tmp_path)
+    config.write_text(config.read_text().replace(str(_state), str(short_state_dir)))
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+
+    def worker(workspace, _prompt):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (working / "dirty-product.txt").write_text("operator\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_run_worker", worker)
+    assert engine.run_once() == 1
+    reconciliation = dict(engine._state["reconciliation"])
+    checkpoint = reconciliation["worker_checkpoint"]
+    execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
+    (working / "dirty-product.txt").unlink()
+    command = OperatorCommand(
+        "resume-crash",
+        "reconcile-resume",
+        _reconcile_resume_request_fingerprint("T-1"),
+        "T-1",
+    )
+    engine._record_operator_admission(command)
+
+    restarted = ServiceEngine(config)
+    assert restarted._state["reconciliation"]["status"] == "resolving"
+    assert restarted.plan_view().action == "blocked"
+    assert "recovery in progress" in restarted.plan_view().reason
+    monkeypatch.setattr(
+        restarted,
+        "_run_worker",
+        lambda *_args: pytest.fail("ordinary worker launched before recovery"),
+    )
+    recovered = threading.Event()
+    original_resume = restarted._reconcile_resume_owned
+
+    def resume(ticket_id, **kwargs):
+        result = original_resume(ticket_id, **kwargs)
+        recovered.set()
+        return result
+
+    monkeypatch.setattr(restarted, "_reconcile_resume_owned", resume)
+    authority = restarted._lock()
+    stop_event = threading.Event()
+    owner = threading.Thread(
+        target=restarted.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        assert recovered.wait(5)
+        assert owner.is_alive()
+        assert restarted._state["reconciliation"]["status"] == "resolved"
+        assert restarted._state["reconciliation"]["resolution"] == "resume"
+        assert restarted._state["mutable_receipts"]["resume-crash"]["accepted"]
+        assert (
+            git(
+                execution,
+                "ls-remote",
+                "origin",
+                f"refs/heads/{reconciliation['execution_branch']}",
+            ).stdout.split()[0]
+            == checkpoint
+        )
+    finally:
+        stop_event.set()
+        restarted.wake()
+        owner.join(timeout=5)
+        authority.close()
+    assert not owner.is_alive()
 
 
 def test_stop_dispatch_invokes_host_shutdown_callback(running_server):

@@ -1278,14 +1278,20 @@ class ServiceEngine:
             self._validate_retry_admission(command.ticket_id)
             return
         if command.method == "reconcile-update-base":
-            assert command.onto is not None
+            if command.onto is None:
+                raise DevlegateError(
+                    "reconcile-update-base requires a product base target"
+                )
             self._validate_reconcile_admission(command.ticket_id, command.onto)
             return
         if command.method == "reconcile-resume":
             self._validate_reconcile_resume_admission(command.ticket_id)
             return
         if command.method == "reconcile-control":
-            assert command.onto is not None
+            if command.onto is None:
+                raise DevlegateError(
+                    "reconcile-control requires both control revisions"
+                )
             self._validate_control_reconcile_admission(command.ticket_id, command.onto)
             return
         raise DevlegateError(f"unsupported operator command: {command.method}")
@@ -1297,13 +1303,20 @@ class ServiceEngine:
         if method == "retry":
             return {"accepted": True, "ticket_id": ticket_id}
         if method == "reconcile-control":
-            assert onto is not None
+            if onto is None:
+                raise DevlegateError(
+                    "reconcile-control requires both control revisions"
+                )
             return {"accepted": True, "from": ticket_id, "to": onto}
         if method == "reconcile-resume":
             return {"accepted": True, "ticket_id": ticket_id}
-        assert method == "reconcile-update-base"
-        assert onto is not None
-        return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
+        if method == "reconcile-update-base":
+            if onto is None:
+                raise DevlegateError(
+                    "reconcile-update-base requires a product base target"
+                )
+            return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
+        raise DevlegateError(f"unsupported operator command: {method}")
 
     @staticmethod
     def _admission_result(command: OperatorCommand) -> dict[str, object]:
@@ -4821,6 +4834,27 @@ export default tool({
     def _has_pending_accepted_integration(self) -> bool:
         return isinstance(self._state.get("accepted_integration"), dict)
 
+    def _dispatch_operator_command(
+        self, command: OperatorCommand, stop_event: threading.Event | None
+    ) -> int:
+        if command.method == "retry":
+            return self._retry_owned(command.ticket_id, stop_event)
+        if command.method == "reconcile-resume":
+            return self._reconcile_resume_owned(command.ticket_id)
+        if command.method == "reconcile-update-base":
+            if command.onto is None:
+                raise DevlegateError(
+                    "reconcile-update-base requires a product base target"
+                )
+            return self._reconcile_update_base_owned(command.ticket_id, command.onto)
+        if command.method == "reconcile-control":
+            if command.onto is None:
+                raise DevlegateError(
+                    "reconcile-control requires both control revisions"
+                )
+            return self._reconcile_control_owned(command.ticket_id, command.onto)
+        raise DevlegateError(f"unsupported operator command: {command.method}")
+
     def _run_polling(
         self,
         *,
@@ -4865,27 +4899,9 @@ export default tool({
                 try:
                     if operator_command is not None:
                         self._admit_operator_command(operator_command)
-                        if operator_command.method == "retry":
-                            status = self._retry_owned(
-                                operator_command.ticket_id, stop_event
-                            )
-                        else:
-                            assert operator_command.onto is not None
-                            if operator_command.method == "reconcile-control":
-                                status = self._reconcile_control_owned(
-                                    operator_command.ticket_id, operator_command.onto
-                                )
-                            elif operator_command.method == "reconcile-resume":
-                                status = self._reconcile_resume_owned(
-                                    operator_command.ticket_id
-                                )
-                            else:
-                                assert operator_command.method == (
-                                    "reconcile-update-base"
-                                )
-                                status = self._reconcile_update_base_owned(
-                                    operator_command.ticket_id, operator_command.onto
-                                )
+                        status = self._dispatch_operator_command(
+                            operator_command, stop_event
+                        )
                     else:
                         status = (
                             self.run_once()
@@ -5342,17 +5358,24 @@ export default tool({
             )
         identity = {"code": code, "control": control}
         reconciliation = state.get("reconciliation")
-        if (
-            isinstance(reconciliation, dict)
-            and reconciliation.get("status") == "pending"
-        ):
-            reason = (
-                "reconciliation required: "
-                f"ticket {reconciliation['ticket_id']}; "
-                f"original base {reconciliation['original_base']}; "
-                f"observed product {reconciliation['observed_product']}; "
-                f"worker checkpoint {reconciliation['worker_checkpoint']}"
-            )
+        if isinstance(reconciliation, dict) and reconciliation.get("status") in {
+            "pending",
+            "resolving",
+        }:
+            if reconciliation.get("status") == "resolving":
+                reason = (
+                    "reconciliation recovery in progress: "
+                    f"ticket {reconciliation['ticket_id']}; "
+                    f"resolution {reconciliation.get('resolution', 'unknown')}"
+                )
+            else:
+                reason = (
+                    "reconciliation required: "
+                    f"ticket {reconciliation['ticket_id']}; "
+                    f"original base {reconciliation['original_base']}; "
+                    f"observed product {reconciliation['observed_product']}; "
+                    f"worker checkpoint {reconciliation['worker_checkpoint']}"
+                )
             return ExecutionPlan("blocked", reason, **identity)
         if dirty:
             reason = "code or control working tree is dirty"

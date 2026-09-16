@@ -573,6 +573,11 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
             return "usage: devlegate [--env FILE]\n  devlegate COMMAND ...\n"
         return super().format_usage()
 
+    def add_subparsers(self, **kwargs):
+        kwargs.setdefault("title", "Commands")
+        kwargs.setdefault("metavar", "COMMAND")
+        return super().add_subparsers(**kwargs)
+
     def format_help(self) -> str:
         if self.prog == "devlegate":
             lines = [
@@ -930,10 +935,7 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"
         )
-    if args.command == "reconcile" and args.reconcile_command not in {
-        "update-base",
-        "control",
-    }:
+    if args.command == "reconcile" and args.reconcile_command is None:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"
         )

@@ -124,6 +124,21 @@ def dispatch_mutation(
     )
 
 
+def dispatch_request(
+    engine: object,
+    request: IPCRequest,
+    *,
+    shutdown: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    """Dispatch a request without duplicating method ownership knowledge."""
+    try:
+        return dispatch_mutation(engine, request, shutdown=shutdown)
+    except IPCProtocolError as error:
+        if error.code != "unknown_method":
+            raise
+        return dispatch_read_only(engine, request)
+
+
 class UnixIPCServer:
     """Serve independently framed client connections over a project-local socket."""
 
@@ -338,17 +353,9 @@ class UnixIPCServer:
                     if payload is None:
                         return
                     request = parse_request(payload)
-                    if request.method in {
-                        "stop",
-                        "retry",
-                        "reconcile-update-base",
-                        "reconcile-control",
-                    }:
-                        result = dispatch_mutation(
-                            self.engine, request, shutdown=self.shutdown
-                        )
-                    else:
-                        result = dispatch_read_only(self.engine, request)
+                    result = dispatch_request(
+                        self.engine, request, shutdown=self.shutdown
+                    )
                     response = encode_success_response(request.request_id, result)
                 except IPCProtocolError as error:
                     response = encode_error_response(
@@ -392,4 +399,9 @@ def _peer_credentials_are_current_user(connection: socket.socket) -> bool:
     return uid == os.geteuid()
 
 
-__all__ = ["UnixIPCServer", "dispatch_mutation", "dispatch_read_only"]
+__all__ = [
+    "UnixIPCServer",
+    "dispatch_mutation",
+    "dispatch_read_only",
+    "dispatch_request",
+]
