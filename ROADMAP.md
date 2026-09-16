@@ -13,16 +13,26 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **J3 - Architecture, roadmap, and changelog: CLOSED.**
   - **J4 - Remove stale old-runtime documentation: CLOSED.**
   - **J5 - Release-facing documentation and badges: CLOSED.**
-- **K - Final audit: CURRENT.**
+- **K - Final audit: CLOSED.**
   - **K1 - Full invariant audit 0.5: CLOSED.**
   - **K2 - Verify absence of bypass mutable paths: CLOSED.**
   - **K3 - rslab2 dogfood: CLOSED.**
   - **K3.5 - Persistent background service UX: CLOSED.**
   - **K3.6 - Explicit control-lineage reconciliation: CLOSED.**
   - **K3.7 - Service identity and CLI UX polish: CLOSED.**
-  - **K4 - Full clean test + exact-head CI: PLANNED.**
-  - **K5 - Pre-rename blocker review: PLANNED.**
-- **L - Total rename from Devlegate to Devlegate: PLANNED.**
+  - **K4 - Full clean test + exact-head CI: CLOSED.**
+  - **K5 - Pre-rename blocker review: CLOSED.** K5 found no known blockers at
+    audit time.
+  - **K6 - Same-base execution recovery: CLOSED.** Added after subsequent
+    dogfooding exposed a same-base reconciliation gap. Same-base retained
+    progress now recovers without changing the product base, while execution
+    publication requires proven monotonic topology and the exact expected
+    remote generation.
+- **L - Total rename from Devlegate to Devlegate: PLANNED / NEXT, NOT STARTED.**
+
+The completed pre-Phase-L baseline is commit
+`b6f17bdef8102f5e7de3d936e649f5c1c55ad6ee`. Phase L is the next phase and has not
+started.
 
 The current 0.5 work is focused on making the supported service architecture,
 public commands, release notes, and project documentation easy to understand
