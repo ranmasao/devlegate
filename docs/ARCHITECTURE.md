@@ -63,8 +63,8 @@ service is active. When no service authority exists, those commands can take a
 guarded read-only observation directly.
 
 If service authority exists but IPC cannot safely be used, the client fails
-closed rather than reading or writing around the service. `retry` and
-`reconcile update-base` are mutable operations and go through the service;
+closed rather than reading or writing around the service. `retry`, `reconcile
+resume`, and `reconcile update-base` are mutable operations and go through the service;
 they do not construct a separate mutable CLI runtime.
 
 ## External Control Writers

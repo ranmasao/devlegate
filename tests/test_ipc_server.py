@@ -10,6 +10,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
@@ -32,7 +33,11 @@ from devlegate.ipc_server import (
     dispatch_mutation,
     dispatch_read_only,
 )
-from devlegate.runtime import DevlegateError, RetryCandidate
+from devlegate.runtime import (
+    DevlegateError,
+    RetryCandidate,
+    _reconcile_resume_request_fingerprint,
+)
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
@@ -1196,6 +1201,61 @@ def test_reconcile_mutation_payload_is_strict(payload):
 
     with pytest.raises(IPCProtocolError):
         dispatch_mutation(FakeEngine(), _request("reconcile-update-base", payload))
+
+
+def test_reconcile_resume_mutation_is_strict_and_owner_routed():
+    calls = []
+
+    class FakeEngine:
+        def submit_reconcile_resume(self, ticket_id, *, request_id):
+            calls.append((ticket_id, request_id))
+            return {"accepted": True, "ticket_id": ticket_id}
+
+    result = dispatch_mutation(
+        FakeEngine(), _request("reconcile-resume", {"ticket_id": "T-1"})
+    )
+    assert result == {"accepted": True, "ticket_id": "T-1"}
+    assert calls == [("T-1", "id")]
+    with pytest.raises(IPCProtocolError):
+        dispatch_mutation(
+            FakeEngine(),
+            _request("reconcile-resume", {"ticket_id": "T-1", "onto": "B"}),
+        )
+
+
+def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    engine._state["reconciliation"] = {
+        "status": "pending",
+        "ticket_id": "T-1",
+        "execution_id": "execution-1",
+        "original_base": "a" * 40,
+        "observed_product": "b" * 40,
+        "worker_checkpoint": "c" * 40,
+        "product_remote_head": "a" * 40,
+        "control_head": "d" * 40,
+        "execution_branch": "devlegate/work/T-1",
+        "execution_path": "/tmp/execution",
+        "evidence_ref": "refs/devlegate/reconciliation/T-1/execution-1",
+    }
+    command = SimpleNamespace(
+        request_id="resume-request",
+        method="reconcile-resume",
+        fingerprint=_reconcile_resume_request_fingerprint("T-1"),
+        ticket_id="T-1",
+        onto=None,
+    )
+    engine._record_operator_admission(command)
+    restarted = ServiceEngine(engine.env_file)
+    assert restarted._state["mutable_receipts"]["resume-request"]["accepted"] is True
+    assert restarted._state["reconciliation"]["status"] == "resolving"
+    assert restarted._state["reconciliation"]["resolution"] == "resume"
+    assert restarted.submit_reconcile_resume(
+        "T-1", request_id="resume-request"
+    ) == {"accepted": True, "ticket_id": "T-1"}
+    assert restarted._state["reconciliation"]["status"] == "resolving"
 
 
 def _request(method, payload=None):

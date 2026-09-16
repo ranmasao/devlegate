@@ -422,6 +422,13 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
                 "product branch to use as the new base",
             ],
         ),
+        (
+            ["reconcile", "resume", "--help"],
+            [
+                "Resume retained execution progress without changing the product base.",
+                "ticket execution to resume",
+            ],
+        ),
     ],
 )
 def test_public_help_surfaces_are_successful_and_useful(

@@ -194,6 +194,11 @@ def decode_reconcile_ack(
         )
 
 
+def decode_reconcile_resume_ack(value: dict[str, object], ticket_id: str) -> None:
+    if value != {"accepted": True, "ticket_id": ticket_id}:
+        raise IPCClientError(
+            "service IPC returned invalid reconciliation resume acknowledgement"
+        )
 def decode_reconcile_control_ack(
     response: dict[str, object], from_head: str, to_head: str
 ) -> None:

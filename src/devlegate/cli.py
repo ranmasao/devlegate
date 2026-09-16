@@ -19,6 +19,7 @@ from devlegate.ipc_client import (
     decode_plan,
     decode_reconcile_ack,
     decode_reconcile_control_ack,
+    decode_reconcile_resume_ack,
     decode_retry_ack,
     decode_retry_candidates,
     decode_status,
@@ -175,6 +176,28 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
     print(f"reconciliation accepted: {ticket_id}")
+    return 0
+
+
+def _reconcile_resume_daemon(env_file: Path, ticket_id: str) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "service is not running for this checkout; start `devlegate`"
+            )
+        result = request(
+            locator.socket_path,
+            "reconcile-resume",
+            {"ticket_id": ticket_id},
+            mutable=True,
+        )
+        decode_reconcile_resume_ack(result, ticket_id)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    print(f"reconciliation resume accepted: {ticket_id}")
     return 0
 
 
@@ -793,6 +816,20 @@ def build_parser() -> argparse.ArgumentParser:
     update_base_parser.add_argument(
         "--onto", required=True, help="product branch to use as the new base"
     )
+    resume_parser = reconcile_commands.add_parser(
+        "resume",
+        help="resume retained execution progress on the same product base",
+        description=(
+            "Resume retained execution progress without changing the product base."
+        ),
+    )
+    resume_parser.add_argument("ticket_id", help="ticket execution to resume")
+    resume_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
     update_base_parser.add_argument(
         "--env",
         metavar="FILE",
@@ -950,6 +987,8 @@ def main() -> int:
         if args.command == "reconcile":
             if args.reconcile_command == "control":
                 return _reconcile_control(env_file, args.from_head, args.to_head)
+            if args.reconcile_command == "resume":
+                return _reconcile_resume_daemon(env_file, args.ticket_id)
             return _reconcile_daemon(env_file, args.ticket_id, args.onto)
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())

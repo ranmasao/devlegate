@@ -89,6 +89,17 @@ def dispatch_mutation(
         return engine.submit_reconcile_update_base(
             ticket_id, onto, request_id=request.request_id
         )
+    if request.method == "reconcile-resume":
+        if set(request.payload) != {"ticket_id"}:
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation resume payload fields are invalid"
+            )
+        ticket_id = request.payload["ticket_id"]
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation ticket_id must be non-empty text"
+            )
+        return engine.submit_reconcile_resume(ticket_id, request_id=request.request_id)
     if request.method == "reconcile-control":
         if set(request.payload) != {"from", "to"}:
             raise IPCProtocolError(

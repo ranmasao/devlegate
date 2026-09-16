@@ -74,6 +74,9 @@ it is not a replacement for Git history.
 - Review is a separate step from product integration.
 - Product history and workflow history remain separate.
 - Ambiguous failures stop for inspection or explicit retry.
+- `devlegate reconcile resume <ticket>` recovers retained execution progress when
+  the admitted product base is unchanged; `reconcile update-base` remains the
+  separate product-base transplant operation.
 
 ## Current 0.5 Limitations
 
