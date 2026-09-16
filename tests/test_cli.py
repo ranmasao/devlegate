@@ -514,6 +514,7 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
     assert "shutdown explicitly requested through devlegate stop" in log
     assert "orderly shutdown complete (stop_command)" in log
     assert log.count("---< D E V L E G A T E >---") == 1
+    assert "mode    : background" in log
     assert "version :" in log
     assert "repo    :" in log
     assert "product :" in log

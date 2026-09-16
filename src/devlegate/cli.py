@@ -833,7 +833,10 @@ def main() -> int:
                 engine,
                 once=args.command == "once",
                 startup_fd=startup_fd,
-                startup_report=lambda: _startup_report(engine, args.command),
+                startup_report=lambda: _startup_report(
+                    engine,
+                    "background" if startup_fd is not None else args.command,
+                ),
             )
         except KeyboardInterrupt:
             _notify_startup_failure(KeyboardInterrupt())
