@@ -59,7 +59,7 @@ jobs:
           PY
 
       - name: Upload coverage badge payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-badge
           path: coverage-badge.json
@@ -76,7 +76,7 @@ jobs:
 
     steps:
       - name: Download coverage badge payload
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-badge
           path: coverage-artifact
