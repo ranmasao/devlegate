@@ -38,9 +38,9 @@ Mutable operations are admitted and serialized by the service owner. The
 service owns ticket movement, worker execution, checkpoint commits, publication,
 reports, and accepted product integration.
 
-Bare `devlegate` starts the persistent service in the background. `devlegate
---foreground` hosts the same service in the current terminal, and `devlegate
---once` performs one synchronization and execution pass. `devlegate stop`
+Bare `devlegate` ensures the persistent service is running in the background.
+`devlegate foreground` hosts the same service in the current terminal, and
+`devlegate once` performs one synchronization and execution pass. `devlegate stop`
 requests orderly shutdown through the service IPC endpoint. The service is
 managed directly by Devlegate and does not require an external service manager.
 

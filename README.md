@@ -60,8 +60,9 @@ The current implementation has these practical limits:
 - Workflow execution is serial; general parallel worker execution is not
   implemented yet.
 - Active workflow execution is hosted by one persistent Devlegate service.
-- Bare `devlegate` starts the service in the background; use `devlegate
-  --foreground` to run the service attached to the current terminal.
+- Bare `devlegate` ensures the service is running in the background; use
+  `devlegate foreground` to run it attached to the current terminal or
+  `devlegate once` for one service pass.
 - There is no warm worker pool; worker sessions are ephemeral.
 - Full YAML compatibility is not provided.
 
@@ -89,10 +90,10 @@ devlegate retry
 
 `init` creates missing project-owned setup files without starting execution.
 `control init` prepares the separate workflow history. `check` validates the
-project before work starts. Bare `devlegate` starts the persistent service;
-use `--foreground` to run the service attached to the current terminal or
-`--once` for one synchronization and execution pass. Use `devlegate stop` for
-orderly shutdown.
+project before work starts. Bare `devlegate` ensures the persistent background
+service is running; `devlegate foreground` attaches it to the current terminal
+and `devlegate once` performs one synchronization and execution pass. Use
+`devlegate stop` for orderly shutdown.
 
 ## Workflow
 

@@ -192,6 +192,11 @@ def plain_project_fixture(tmp_path):
 
 
 def invoke(fixture, *args, env_file=None):
+    args = list(args)
+    if "--foreground" in args:
+        args[args.index("--foreground")] = "foreground"
+    elif "--once" in args:
+        args[args.index("--once")] = "once"
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     return subprocess.run(
         [
@@ -232,8 +237,8 @@ def ticket(title="Ticket", body="work", depends=None):
 
 def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     parser = build_parser()
-    assert parser.parse_args(["--once"]).once
-    assert parser.parse_args(["--foreground"]).foreground
+    assert parser.parse_args(["once"]).command == "once"
+    assert parser.parse_args(["foreground"]).command == "foreground"
     assert parser.parse_args(["control", "init"]).command == "control"
     control_reconcile = parser.parse_args(
         ["reconcile", "control", "--from", "a" * 40, "--to", "b" * 40]
@@ -247,12 +252,11 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         main()
     assert error.value.code == 0
     output = capsys.readouterr().out
-    assert (
-        "{init,render,retry,reconcile,check,status,plan,stop,control}"
-        in output
-    )
-    assert "stop                orderly stop the persistent workflow service" in output
-    assert "control             manage workflow history" in output
+    assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in output
+    assert "{init,render,retry,reconcile,check,status,plan,stop,control}" not in output
+    assert "ensure the persistent background service is running" in output
+    assert "stop" in output and "orderly stop the persistent workflow service" in output
+    assert "control" in output and "manage workflow history" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
 
 
@@ -294,12 +298,12 @@ def test_invalid_subcommand_argument_is_concise(monkeypatch, capsys):
 
 
 def test_missing_commands_are_concise(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["devlegate", "--foreground", "--once"])
+    monkeypatch.setattr("sys.argv", ["devlegate", "foreground", "once"])
     with pytest.raises(SystemExit) as error:
         main()
     stderr = capsys.readouterr().err
     assert error.value.code == 2
-    assert "argument --once: not allowed with argument --foreground" in stderr
+    assert "devlegate foreground: unrecognized argument: once" in stderr
 
     monkeypatch.setattr("sys.argv", ["devlegate", "control"])
     with pytest.raises(SystemExit) as error:
@@ -408,14 +412,19 @@ def test_public_help_surfaces_are_successful_and_useful(
     assert all(snippet in output for snippet in snippets)
 
 
-def test_version_remains_unchanged(monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["devlegate", "--version"])
+def test_version_command(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "version"])
 
+    assert main() == 0
+    assert capsys.readouterr().out.strip() == f"devlegate {__version__}"
+
+
+@pytest.mark.parametrize("old", ["--version", "--foreground", "--once"])
+def test_removed_service_and_version_flags_are_rejected(old, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", old])
     with pytest.raises(SystemExit) as error:
         main()
-
-    assert error.value.code == 0
-    assert capsys.readouterr().out.strip() == f"devlegate {__version__}"
+    assert error.value.code == 2
 
 
 def test_check_rejects_missing_project_context(git_fixture):
@@ -504,6 +513,13 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
         time.sleep(0.02)
     assert "shutdown explicitly requested through devlegate stop" in log
     assert "orderly shutdown complete (stop_command)" in log
+    assert log.count("---< D E V L E G A T E >---") == 1
+    assert "version :" in log
+    assert "repo    :" in log
+    assert "product :" in log
+    assert "control :" in log
+    assert "mode    :" in log
+    assert "pid     :" in log
 
 
 @pytest.mark.parametrize("start_args", [(), ("--foreground",), ("--once",)])
@@ -521,6 +537,19 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
         assert repeated.stdout.strip() == "Devlegate service is already running."
     finally:
         assert invoke(git_fixture, "stop").returncode == 0
+
+
+def test_once_emits_one_startup_identity_block(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    result = invoke(git_fixture, "once")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("---< D E V L E G A T E >---") == 1
+    assert "mode    : once" in result.stdout
+    assert "version :" in result.stdout
+    assert "repo    :" in result.stdout
+    assert "product :" in result.stdout
+    assert "control :" in result.stdout
+    assert "pid     :" in result.stdout
 
 
 def test_service_start_fails_closed_when_authority_has_no_healthy_ipc(
@@ -1295,6 +1324,10 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     class FakeServiceEngine:
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
+            self.repo = git_fixture["working"]
+            self.control_worktree = git_fixture["tmp"] / "missing-control"
+            self.control_branch = "devlegate/control"
+            self._state_key = "test-instance"
 
         def serve(self, _stop_event, *, once=False):
             calls.append(("serve", once))
@@ -1302,7 +1335,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
 
     monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "--once", "--env", str(git_fixture["config"])]
+        sys, "argv", ["devlegate", "once", "--env", str(git_fixture["config"])]
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -1313,7 +1346,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
 def test_once_uses_shared_foreground_service_host(git_fixture, monkeypatch):
     calls = []
 
-    def host(engine, *, once=False, startup_fd=None):
+    def host(engine, *, once=False, startup_fd=None, startup_report=None):
         assert startup_fd is None
         calls.append((engine, once))
         return 0
@@ -1322,7 +1355,7 @@ def test_once_uses_shared_foreground_service_host(git_fixture, monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "--once", "--env", str(git_fixture["config"])],
+        ["devlegate", "once", "--env", str(git_fixture["config"])],
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -1347,6 +1380,8 @@ def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(
         assert "action" in json.loads(plan.stdout)
         assert service.process is not None
         assert service.process.poll() is None
+    assert service.stdout.count("---< D E V L E G A T E >---") == 1
+    assert "mode    : foreground" in service.stdout
 
 
 def _worker_script(path):

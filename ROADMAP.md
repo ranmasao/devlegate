@@ -19,7 +19,8 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
   - **K3 - rslab2 dogfood: CLOSED.**
   - **K3.5 - Persistent background service UX: CLOSED.**
   - **K3.6 - Explicit control-lineage reconciliation: CLOSED.**
-  - **K4 - Full clean test + exact-head CI: CURRENT.**
+  - **K3.7 - Service identity and CLI UX polish: CLOSED.**
+  - **K4 - Full clean test + exact-head CI: PLANNED.**
   - **K5 - Pre-rename blocker review: PLANNED.**
 - **L - Total rename from Devlegate to Devlegate: PLANNED.**
 

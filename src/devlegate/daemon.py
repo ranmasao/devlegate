@@ -46,7 +46,11 @@ def _notify_startup(fd: int | None, message: str) -> None:
 
 
 def run_service(
-    engine: ServiceEngine, *, once: bool = False, startup_fd: int | None = None
+    engine: ServiceEngine,
+    *,
+    once: bool = False,
+    startup_fd: int | None = None,
+    startup_report: Callable[[], None] | None = None,
 ) -> int:
     """Host one service engine with its runtime authority and IPC endpoint."""
     stop_intent = ShutdownIntent()
@@ -56,6 +60,8 @@ def run_service(
             if once
             else (lambda intent: engine.serve(intent))
         )
+        if startup_report is not None:
+            startup_report()
         return run_foreground(
             engine, operation, intent=stop_intent
         )
@@ -73,6 +79,8 @@ def run_service(
     ready = False
     try:
         server.start()
+        if startup_report is not None:
+            startup_report()
         _notify_startup(startup_fd, "READY")
         startup_fd = None
         ready = True

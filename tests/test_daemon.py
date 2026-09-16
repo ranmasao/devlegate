@@ -104,7 +104,7 @@ def test_foreground_service_command_constructs_one_service_engine(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "--foreground", "--env", str(config)],
+        ["devlegate", "foreground", "--env", str(config)],
     )
     monkeypatch.chdir(working)
 
@@ -233,7 +233,7 @@ def test_foreground_cli_remains_attached_until_host_returns(tmp_path, monkeypatc
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "--foreground", "--env", str(config)],
+        ["devlegate", "foreground", "--env", str(config)],
     )
     monkeypatch.chdir(working)
     thread = threading.Thread(target=lambda: result.append(cli.main()), daemon=True)
@@ -1151,7 +1151,7 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "--foreground", "--env", str(config)],
+        [sys.executable, "-m", "devlegate", "foreground", "--env", str(config)],
         cwd=working,
         env=environment,
         text=True,
@@ -1251,7 +1251,7 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "--foreground", "--env", str(config)],
+        [sys.executable, "-m", "devlegate", "foreground", "--env", str(config)],
         cwd=working,
         env=environment,
         text=True,

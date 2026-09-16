@@ -26,7 +26,7 @@ that is observation, not a production client bypass.
 | Pure/component | codecs, parsers, stores, helpers, private deterministic functions | Local input/output, validation, serialization, persistence mechanics | Service ownership, CLI/service process separation |
 | Engine semantic | `ServiceEngine`/`Devlegate` constructed directly; direct methods or `serve()` in a test thread | State-machine decisions, admission rules, recovery algorithms, Git/state invariants, worker-result handling | Independent CLI process lifetime or OS crash topology |
 | IPC/owner handoff | Real Unix socket and `UnixIPCServer`; for mutable claims, a real `ServiceEngine.serve()` owner thread | Framing, connection isolation, dispatch, owner-thread serialization, receipt behavior | Independent service process, SIGKILL/restart, CLI survival |
-| Production topology | `LiveService` starts `python -m devlegate --foreground`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
+| Production topology | `LiveService` starts `python -m devlegate foreground`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
 
 ## Suite Map
 
@@ -78,7 +78,7 @@ failure modes and fail faster.
 ## H1 Recovery Evidence
 
 H1's process boundary is real only in `test_cli.py` tests using `LiveService`.
-`LiveService` launches an independent `python -m devlegate --foreground` process, waits
+`LiveService` launches an independent `python -m devlegate foreground` process, waits
 through the actual authority socket with `ping`, invokes the normal CLI path in
 separate subprocesses, captures output, and can SIGKILL/restart the service.
 `h1_driver.py` constructs the real `ServiceEngine` in that service process and
@@ -148,7 +148,7 @@ not obsolete merely because the names are historical.
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
 | `Application` | No production references remain after I4; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
 | `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
-| `devlegate`, `devlegate --foreground`, `devlegate --once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
+| `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
 | `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
@@ -162,8 +162,8 @@ python -m devlegate / console script
      -> init/render/check/control -> Devlegate(read_only=True)
      -> status/plan -> IPC, or guarded read-only ServiceEngine fallback
      -> retry/reconcile -> IPC client only
-      -> devlegate -> background launcher -> devlegate --foreground
-      -> --foreground/--once -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
+      -> devlegate -> background launcher -> devlegate foreground
+      -> foreground/once -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
       -> stop -> authenticated Unix IPC -> service shutdown intent
 ```
 

@@ -232,6 +232,11 @@ def fresh_control_fixture(tmp_path):
 
 
 def invoke(working, *args, config):
+    args = list(args)
+    if "--foreground" in args:
+        args[args.index("--foreground")] = "foreground"
+    elif "--once" in args:
+        args[args.index("--once")] = "once"
     return subprocess.run(
         [sys.executable, "-m", "devlegate", *args, "--env", config],
         cwd=working,

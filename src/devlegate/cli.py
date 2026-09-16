@@ -278,7 +278,7 @@ def _start_background(env_file: Path) -> int:
         sys.executable,
         "-m",
         "devlegate",
-        "--foreground",
+        "foreground",
         "--env",
         str(env_file),
     ]
@@ -477,8 +477,57 @@ def _render_plan_text(plan: ExecutionPlan) -> str:
     return "\n".join(lines)
 
 
+def _short_git_identity(repo: Path) -> tuple[str, str]:
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD", check=False)
+    head = _git(repo, "rev-parse", "HEAD", check=False)
+    return branch.stdout.strip() or "<detached>", head.stdout.strip()[:12]
+
+
+def _startup_report(engine: ServiceEngine, mode: str) -> None:
+    product_branch, product_head = _short_git_identity(engine.repo)
+    control_repo = getattr(engine, "control_worktree", None)
+    if isinstance(control_repo, Path) and control_repo.is_dir():
+        control_branch, control_head = _short_git_identity(control_repo)
+        control = f"{control_branch} @ {control_head}"
+    else:
+        control = f"{engine.control_branch} @ <unavailable>"
+    print(
+        "=========================================================================",
+        flush=True,
+    )
+    print("           D | L", flush=True)
+    print("---< D E V L E G A T E >---", flush=True)
+    print("          S.P.Q.R.", flush=True)
+    print("", flush=True)
+    print(f"version : {__version__}", flush=True)
+    print(f"repo    : {engine.repo}", flush=True)
+    print(f"product : {product_branch} @ {product_head}", flush=True)
+    print(f"control : {control}", flush=True)
+    print(f"mode    : {mode}", flush=True)
+    print(f"pid     : {os.getpid()}", flush=True)
+    print(f"instance: {engine._state_key[:12]}", flush=True)
+    print(
+        "=========================================================================",
+        flush=True,
+    )
+
+
 class DevlegateArgumentParser(argparse.ArgumentParser):
     """Present syntax errors concisely while retaining argparse parsing."""
+
+    def format_usage(self) -> str:
+        if self.prog == "devlegate":
+            return "usage: devlegate [--env FILE]\n  devlegate COMMAND ...\n"
+        return super().format_usage()
+
+    def format_help(self) -> str:
+        result = super().format_help()
+        if self.prog == "devlegate":
+            _first_line, separator, remainder = result.partition("\n")
+            result = "usage: devlegate [--env FILE]\n  devlegate COMMAND ..."
+            if separator:
+                result += "\n" + remainder
+        return result
 
     def parse_known_args(self, args=None, namespace=None):
         if self.prog == "devlegate":
@@ -556,33 +605,40 @@ class Devlegate(ServiceEngine):
 def build_parser() -> argparse.ArgumentParser:
     parser = DevlegateArgumentParser(
         prog="devlegate",
-        description="Run ticket-driven coding workflows in a Git repository.",
-    )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
-    service_options = parser.add_mutually_exclusive_group()
-    service_options.add_argument(
-        "--foreground",
-        action="store_true",
-        help="run the persistent service attached to this terminal",
-    )
-    service_options.add_argument(
-        "--once",
-        action="store_true",
-        help="run one service pass in the foreground, then exit",
+        description=(
+            "Run ticket-driven coding workflows in a Git repository. With no "
+            "command, ensure the persistent background service is running."
+        ),
     )
     parser.add_argument(
         "--env",
         dest="service_env",
         metavar="FILE",
         type=Path,
-        help="configuration file for the persistent service modes",
+        help="configuration file for bare background startup",
     )
     commands = parser.add_subparsers(
         dest="command",
-        metavar="{init,render,retry,reconcile,check,status,plan,stop,control}",
+        title="commands",
+        metavar="COMMAND",
         parser_class=DevlegateArgumentParser,
+    )
+    foreground_parser = commands.add_parser(
+        "foreground",
+        help="run the persistent service attached to this terminal",
+        description="Run the persistent service attached to this terminal.",
+    )
+    foreground_parser.add_argument("--env", metavar="FILE", type=Path)
+    once_parser = commands.add_parser(
+        "once",
+        help="run one service pass attached to this terminal",
+        description="Run one service pass attached to this terminal, then exit.",
+    )
+    once_parser.add_argument("--env", metavar="FILE", type=Path)
+    commands.add_parser(
+        "version",
+        help="show program version",
+        description="Show the concise program and version identity.",
     )
     init_parser = commands.add_parser(
         "init",
@@ -751,15 +807,34 @@ def main() -> int:
             if _healthy_service(env_file):
                 print("Devlegate service is already running.")
                 return 0
-            if args.foreground:
-                return run_service(
-                    _service_engine(env_file), startup_fd=startup_fd
-                )
-            if args.once:
-                return run_service(
-                    _service_engine(env_file), once=True, startup_fd=startup_fd
-                )
             return _start_background(env_file)
+        except KeyboardInterrupt:
+            _notify_startup_failure(KeyboardInterrupt())
+            return 130
+        except DevlegateError as error:
+            _notify_startup_failure(error)
+            print(f"devlegate: {error}", file=sys.stderr)
+            return 1
+    if args.command == "version":
+        if args.service_env is not None:
+            parser.error("--env is only valid for bare background startup")
+        print(f"devlegate {__version__}")
+        return 0
+    if args.command in {"foreground", "once"}:
+        if args.service_env is not None:
+            parser.error("--env is only valid for bare background startup")
+        env_file = args.env or Path.cwd() / ".env"
+        try:
+            if _healthy_service(env_file):
+                print("Devlegate service is already running.")
+                return 0
+            engine = _service_engine(env_file)
+            return run_service(
+                engine,
+                once=args.command == "once",
+                startup_fd=startup_fd,
+                startup_report=lambda: _startup_report(engine, args.command),
+            )
         except KeyboardInterrupt:
             _notify_startup_failure(KeyboardInterrupt())
             return 130
@@ -778,9 +853,9 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"
         )
-    if args.foreground or args.once:
-        parser.error("service options are only valid without a command")
-    env_file = args.env or args.service_env or Path.cwd() / ".env"
+    if args.service_env is not None:
+        parser.error("--env before a command is only valid for bare background startup")
+    env_file = args.env or Path.cwd() / ".env"
     try:
         project_env = Path.cwd() / ".env"
         if args.command == "init":
