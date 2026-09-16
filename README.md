@@ -14,12 +14,28 @@ State · Provenance · Quality · Recovery
 Devlegate runs coding work from explicit tickets. The coding agent writes the
 implementation; Devlegate manages the workflow around it.
 
+The four design promises behind SPQR are:
+
+- **State** - explicit workflow and runtime state instead of hidden agent context.
+- **Provenance** - preserve where work, decisions, and repository history came from.
+- **Quality** - make validation, review, and acceptance explicit parts of the workflow.
+- **Recovery** - stop safely on ambiguity and recover from known durable evidence.
+
 It selects work, prepares an isolated worktree, launches a worker, preserves
 the result, sends completed work to review, and integrates only accepted
 changes. Product code and workflow history stay separate, and Git remains the
 source of truth for both.
 
 ## Why Devlegate
+
+Devlegate's main difference from a conventional agentic loop is that it treats
+the coding agent as a nondeterministic worker inside a deterministic workflow
+harness, removing as much repository, state, publication, and recovery
+responsibility from the agent as practical. The harness owns or constrains work
+selection, repository synchronization, isolated workspace preparation, durable
+state transitions, checkpoint and publication mechanics, review handoff,
+integration, and fail-closed recovery. The agent remains primarily responsible
+for producing the implementation, where nondeterminism is useful.
 
 Coding agents are good at making changes, but a useful development workflow
 also needs repository synchronization, work selection, workspace preparation,
