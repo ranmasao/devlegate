@@ -515,18 +515,62 @@ def _startup_report(engine: ServiceEngine, mode: str) -> None:
 class DevlegateArgumentParser(argparse.ArgumentParser):
     """Present syntax errors concisely while retaining argparse parsing."""
 
+    _top_level_groups = (
+        (
+            "Service",
+            (
+                ("foreground", "run the persistent service attached to this terminal"),
+                ("once", "run one service pass, then exit"),
+                ("stop", "stop the persistent service"),
+                ("status", "show current workflow status"),
+                ("plan", "show the next workflow plan"),
+            ),
+        ),
+        (
+            "Project",
+            (
+                ("init", "initialize project-local workflow files"),
+                ("render", "render project-local workflow files"),
+                ("check", "validate setup readiness"),
+                ("control", "manage workflow history"),
+            ),
+        ),
+        (
+            "Recovery",
+            (
+                ("retry", "retry a failed or recoverable execution"),
+                ("reconcile", "perform explicit reconciliation"),
+            ),
+        ),
+        ("Other", (("version", "show program version"),)),
+    )
+
     def format_usage(self) -> str:
         if self.prog == "devlegate":
             return "usage: devlegate [--env FILE]\n  devlegate COMMAND ...\n"
         return super().format_usage()
 
     def format_help(self) -> str:
-        result = super().format_help()
         if self.prog == "devlegate":
-            _first_line, separator, remainder = result.partition("\n")
-            result = "usage: devlegate [--env FILE]\n  devlegate COMMAND ..."
-            if separator:
-                result += "\n" + remainder
+            lines = [
+                "usage: devlegate [--env FILE]",
+                "  devlegate COMMAND ...",
+                "",
+                "Run ticket-driven coding workflows in a Git repository. With no "
+                "command,",
+                "ensure the persistent background service is running.",
+                "",
+                "Options:",
+                "  --env FILE       configuration file for bare background startup",
+            ]
+            for title, commands in self._top_level_groups:
+                lines.extend(["", f"{title}:"])
+                lines.extend(
+                    f"  {name:<15}{description}" for name, description in commands
+                )
+            lines.append("")
+            return "\n".join(lines)
+        result = super().format_help()
         return result
 
     def parse_known_args(self, args=None, namespace=None):

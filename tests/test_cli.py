@@ -255,8 +255,34 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in output
     assert "{init,render,retry,reconcile,check,status,plan,stop,control}" not in output
     assert "ensure the persistent background service is running" in output
-    assert "stop" in output and "orderly stop the persistent workflow service" in output
+    assert "Service:" in output
+    assert "Project:" in output
+    assert "Recovery:" in output
+    assert "Other:" in output
+    assert "stop" in output and "stop the persistent service" in output
     assert "control" in output and "manage workflow history" in output
+    for command in (
+        "foreground",
+        "once",
+        "stop",
+        "status",
+        "plan",
+        "init",
+        "render",
+        "check",
+        "control",
+        "retry",
+        "reconcile",
+        "version",
+    ):
+        assert (
+            sum(line.startswith(f"  {command}") for line in output.splitlines()) == 1
+        )
+    assert (
+        "  foreground     run the persistent service attached to this terminal"
+        in output
+    )
+    assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
 
 

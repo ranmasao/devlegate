@@ -1,5 +1,13 @@
 # Devlegate
 
+```text
+           D | L
+---< D E V L E G A T E >---
+          S.P.Q.R.
+
+State · Provenance · Quality · Recovery
+```
+
 [![CI](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml/badge.svg)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ranmasao/devlegate/badges/coverage.json)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 
