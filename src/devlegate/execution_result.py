@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Devlegate-owned interpretation and durable reports for worker executions."""
 
 from __future__ import annotations

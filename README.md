@@ -146,3 +146,10 @@ Coverage is diagnostic; there is no percentage gate.
 - [Changelog](CHANGELOG.md)
 - [Pre-install guide](preinst_readme.md)
 - [Release packaging](docs/RELEASE_PACKAGING.md)
+
+## Licensing
+
+- Devlegate core: EUPL-1.2 ([LICENSE](LICENSE))
+- Default copyable templates, prompts, and skills: CC0-1.0
+  ([LICENSING.md](LICENSING.md))
+- NanoYAML: separate upstream license ([NOTICE](NOTICE))

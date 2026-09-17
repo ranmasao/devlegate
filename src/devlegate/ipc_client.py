@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Bounded Unix IPC client for read-only views and service commands."""
 
 from __future__ import annotations

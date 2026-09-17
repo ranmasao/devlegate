@@ -7,6 +7,7 @@ name = "devlegate"
 version = "0.4.0"
 description = "Local deterministic orchestrator for agent-driven software development."
 readme = "README.md"
+license = {text = "EUPL-1.2"}
 requires-python = ">=3.12"
 dependencies = []
 

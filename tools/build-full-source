@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 set -Eeuo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 exec python3 "$ROOT/tools/build_full_source.py" "$@"

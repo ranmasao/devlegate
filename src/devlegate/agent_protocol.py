@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Deterministic rendering of project-local Architect and Reviewer skills."""
 
 from __future__ import annotations
@@ -431,3 +434,4 @@ __all__ = [
     "render_project",
     "seed_project_env",
 ]
+ # Copyright (c) 2026 Daniil Romanov
