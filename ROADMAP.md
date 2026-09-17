@@ -1,54 +1,82 @@
 # Roadmap
 
 This roadmap describes the current development direction for Devlegate. It is
-not release history; see [CHANGELOG.md](CHANGELOG.md) for that.
+not release history; see [CHANGELOG.md](CHANGELOG.md) for that. The categories
+below are directional and undated unless explicitly stated otherwise.
 
-## 0.5 Documentation And Finalization
+## Current Baseline
 
-- **I - Test cleanup: CLOSED.** Test proof boundaries and service-lifetime
-  coverage were completed.
-- **J - Documentation cleanup: CLOSED.**
-  - **J1 - README and product landing page: CLOSED.**
-  - **J2 - CLI/help consistency: CLOSED.**
-  - **J3 - Architecture, roadmap, and changelog: CLOSED.**
-  - **J4 - Remove stale old-runtime documentation: CLOSED.**
-  - **J5 - Release-facing documentation and badges: CLOSED.**
-- **K - Final audit: CLOSED.**
-  - **K1 - Full invariant audit 0.5: CLOSED.**
-  - **K2 - Verify absence of bypass mutable paths: CLOSED.**
-  - **K3 - rslab2 dogfood: CLOSED.**
-  - **K3.5 - Persistent background service UX: CLOSED.**
-  - **K3.6 - Explicit control-lineage reconciliation: CLOSED.**
-  - **K3.7 - Service identity and CLI UX polish: CLOSED.**
-  - **K4 - Full clean test + exact-head CI: CLOSED.**
-  - **K5 - Pre-rename blocker review: CLOSED.** K5 found no known blockers at
-    audit time.
-  - **K6 - Same-base execution recovery: CLOSED.** Added after subsequent
-    dogfooding exposed a same-base reconciliation gap. Same-base retained
-    progress now recovers without changing the product base, while execution
-    publication requires proven monotonic topology and the exact expected
-    remote generation.
-- **L - Total rename from Devlegate to Devlegate: PLANNED / NEXT, NOT STARTED.**
+Devlegate currently separates product history, workflow control history, and
+per-ticket execution workspaces into distinct Git surfaces. A persistent
+service owns mutable workflow operations and communicates with local clients
+over Unix IPC, while SQLite stores operational runtime state outside canonical
+Git history. Explicit retry and reconciliation operations, execution lineage
+validation, process-loss and shutdown handling, and fail-closed recovery form
+the current safety model. Restricted NanoYAML flow sequences support applicable
+configuration and control data. CI, deterministic full-source packaging, and
+current dogfooding support provide the development and distribution baseline.
+The licensing baseline is EUPL-1.2 for Devlegate core, CC0-1.0 for copyable
+default templates, and the separate upstream MIT license for NanoYAML.
 
-The completed pre-Phase-L baseline is commit
-`b6f17bdef8102f5e7de3d936e649f5c1c55ad6ee`. Phase L is the next phase and has not
-started.
+## Near-Term Engineering
 
-The current 0.5 work is focused on making the supported service architecture,
-public commands, release notes, and project documentation easy to understand
-without changing runtime behavior.
+- Continue operational hardening discovered through dogfooding and recovery
+  exercises.
+- Clarify stable public control, client, and worker protocol boundaries before
+  adding new integrations.
+- Improve worker execution isolation and terminal behavior where real workloads
+  require stronger boundaries or PTY semantics.
+- Extend packaging and distribution checks beyond the current source-release
+  infrastructure as concrete use cases emerge.
 
-## Completed Foundations
+## Worker Isolation And Execution
 
-The current branch already includes the major 0.5 foundations: separate product,
-control, and execution Git surfaces; a persistent service owner; local IPC
-clients; SQLite operational state; explicit retry and reconciliation; process-loss
-and shutdown handling; restricted NanoYAML flow sequences; and CI coverage
-reporting.
+Future worker execution work should preserve the control plane as the sole
+mutable workflow authority while isolating agent processes from it. Areas to
+evaluate include controlled filesystem and worktree exposure, process and
+resource lifecycle limits, container or equivalent sandbox boundaries, explicit
+PTY allocation for terminal-oriented tools, and predictable cleanup and
+recovery after worker failure. These are architectural concerns, not a
+commitment to a particular sandbox implementation.
 
-## Deferred Areas
+## Parallelism And Worker Lifecycle
 
-These are known future areas, not dated commitments:
+General parallel worker execution remains deferred. Future designs may need
+bounded concurrency, explicit worker ownership and lifecycle policy, and clear
+tradeoffs between reusable warm processes and clean-session guarantees. Any
+warm worker process or worker pool must prevent cross-task state leakage and
+remain compatible with deterministic scheduling, lineage, cleanup, and
+recovery.
 
-- General parallel worker execution.
-- Warm worker processes or a warm worker pool.
+## Integrations
+
+Potential future integration surfaces include GitHub, GitLab, and external CI
+automation such as Jenkins or equivalent systems. These should communicate
+through stable Devlegate control and protocol boundaries rather than becoming
+privileged bypass paths. They are future integration targets, not current
+product commitments.
+
+## Packaging And Distribution
+
+Deterministic full-source release packaging already exists and includes the
+materialized source dependencies required by that artifact. A possible future
+standalone distribution could bundle application bytecode or a Python runtime,
+but no bundling technology has been selected. Such work would require an
+explicit inventory of third-party runtime licenses and generated notices, plus
+reproducible artifact construction where practical. It is separate from the
+current source-only release infrastructure.
+
+## Longer-Term / Exploratory
+
+Longer-term exploration may include richer scheduling and policy mechanisms,
+plugin or adapter API surfaces, warm-worker architecture, broader external
+integrations, and additional deployment or distribution forms. These topics
+are deferred and exploratory; they are not assigned to a release or promised
+as a specific implementation.
+
+## Separate Projects
+
+Transactional Git is a separate research and development project, not a
+Devlegate roadmap deliverable. Devlegate may consume an interface from that
+project in the future if one becomes useful and stable, but Transactional Git
+is not part of Devlegate's implementation scope.
