@@ -145,3 +145,4 @@ Coverage is diagnostic; there is no percentage gate.
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 - [Pre-install guide](preinst_readme.md)
+- [Release packaging](docs/RELEASE_PACKAGING.md)

@@ -1,0 +1,97 @@
+name: Release full-source asset
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag to package
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  full-source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Check out trusted release tooling
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+          submodules: false
+
+      - name: Validate release and fetch selected source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'Invalid release tag: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          rm -rf source
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
+          git -C source fetch --quiet --force --tags origin
+          test "$(git -C source cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          git -C source rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" >/dev/null
+
+      - name: Detect source gitlinks
+        id: source-shape
+        run: |
+          set -Eeuo pipefail
+          if git -C source ls-tree -r "refs/tags/$RELEASE_TAG" | grep -q '^160000 '; then
+            echo 'has_gitlinks=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_gitlinks=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and smoke-test full-source archive
+        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/full-source"
+          python3 tools/build_full_source.py \
+            --repo "$GITHUB_WORKSPACE/source" \
+            --ref "refs/tags/$RELEASE_TAG" \
+            --version "$RELEASE_TAG" \
+            --output-dir "$RUNNER_TEMP/full-source"
+          cd "$RUNNER_TEMP/full-source"
+          sha256sum -c "devlegate-$RELEASE_TAG-full-source.tar.gz.sha256"
+          python3 - "$RELEASE_TAG" "devlegate-$RELEASE_TAG-full-source.tar.gz" <<'PY'
+          import sys
+          import tarfile
+          from pathlib import PurePosixPath
+
+          tag, archive = sys.argv[1:]
+          top = f"devlegate-{tag}/"
+          with tarfile.open(archive, "r:gz") as source:
+              names = source.getnames()
+              if not names or names[0] != top.rstrip("/"):
+                  raise SystemExit("invalid archive root")
+              if f"{top}SOURCE-MANIFEST" not in names:
+                  raise SystemExit("missing SOURCE-MANIFEST")
+              if any(".git" in PurePosixPath(name).parts for name in names):
+                  raise SystemExit("archive contains Git metadata")
+              if not any(name.startswith(f"{top}src/nanoyaml/") for name in names):
+                  raise SystemExit("materialized NanoYAML source is missing")
+          PY
+
+      - name: Upload full-source assets
+        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/full-source/devlegate-$RELEASE_TAG-full-source.tar.gz" \
+            "$RUNNER_TEMP/full-source/devlegate-$RELEASE_TAG-full-source.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

@@ -1,0 +1,143 @@
+import hashlib
+import subprocess
+import tarfile
+from pathlib import Path, PurePosixPath
+
+ROOT = Path(__file__).parents[1]
+BUILDER = ROOT / "tools" / "build_full_source.py"
+
+
+def git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, check=True, text=True, capture_output=True
+    )
+    return result.stdout.strip()
+
+
+def init_repo(path: Path) -> None:
+    path.mkdir()
+    git(path.parent, "init", "-b", "main", path)
+    git(path, "config", "user.name", "Test User")
+    git(path, "config", "user.email", "test@example.com")
+
+
+def commit_all(repo: Path, message: str) -> str:
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", message)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def build(repo: Path, version: str, output: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "python3",
+            str(BUILDER),
+            "--repo",
+            str(repo),
+            "--ref",
+            "HEAD",
+            "--version",
+            version,
+            "--output-dir",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def archive_files(archive: Path) -> list[str]:
+    with tarfile.open(archive, "r:gz") as tar:
+        return tar.getnames()
+
+
+def test_submodule_archive_is_reproducible_and_self_contained(tmp_path: Path) -> None:
+    nano = tmp_path / "nano"
+    init_repo(nano)
+    (nano / "__init__.py").write_text("VALUE = 'pinned'\n")
+    nano_commit = commit_all(nano, "nano")
+
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / "README.md").write_text("fixture\n")
+    git(
+        project,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(nano),
+        "src/nanoyaml",
+    )
+    project_commit = commit_all(project, "project")
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    assert build(project, "v1.2.3", first).returncode == 0
+    assert build(project, "v1.2.3", second).returncode == 0
+    archive = first / "devlegate-v1.2.3-full-source.tar.gz"
+    archive_again = second / archive.name
+    assert hashlib.sha256(archive.read_bytes()).digest() == hashlib.sha256(
+        archive_again.read_bytes()
+    ).digest()
+    assert archive_files(archive)[0] == "devlegate-v1.2.3"
+    names = archive_files(archive)
+    assert "devlegate-v1.2.3/src/nanoyaml/__init__.py" in names
+    assert all(".git" not in PurePosixPath(name).parts for name in names)
+
+    with tarfile.open(archive, "r:gz") as tar:
+        manifest = tar.extractfile("devlegate-v1.2.3/SOURCE-MANIFEST").read().decode()
+    assert f"devlegate-commit: {project_commit}" in manifest
+    assert f"    commit: {nano_commit}" in manifest
+    assert (first / f"{archive.name}.sha256").read_text() == (
+        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n"
+    )
+
+
+def test_vendored_tree_is_packaged_without_submodule_manifest(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / "src/nanoyaml").mkdir(parents=True)
+    (project / "src/nanoyaml/__init__.py").write_text("VALUE = 'vendored'\n")
+    commit_all(project, "vendored")
+    output = tmp_path / "output"
+    assert build(project, "v2.0.0", output).returncode == 0
+    archive = output / "devlegate-v2.0.0-full-source.tar.gz"
+    with tarfile.open(archive, "r:gz") as tar:
+        manifest = tar.extractfile("devlegate-v2.0.0/SOURCE-MANIFEST").read().decode()
+        assert "  - none\n" in manifest
+        assert tar.extractfile(
+            "devlegate-v2.0.0/src/nanoyaml/__init__.py"
+        ).read() == b"VALUE = 'vendored'\n"
+
+
+def test_unavailable_gitlink_fails_closed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / ".gitmodules").write_text(
+        '[submodule "nanoyaml"]\n\tpath = src/nanoyaml\n\turl = /does/not/exist\n'
+    )
+    git(project, "add", ".gitmodules")
+    fake_sha = "1" * 40
+    git(
+        project,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{fake_sha},src/nanoyaml",
+    )
+    git(project, "commit", "-m", "broken gitlink")
+    result = build(project, "v1.0.0", tmp_path / "output")
+    assert result.returncode != 0
+    assert "cannot initialize source submodules" in result.stderr
+
+
+def test_invalid_version_is_rejected(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / "README.md").write_text("fixture\n")
+    commit_all(project, "project")
+    result = build(project, "release-1", tmp_path / "output")
+    assert result.returncode != 0
+    assert "version must match vX.Y.Z" in result.stderr

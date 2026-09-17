@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+exec python3 "$ROOT/tools/build_full_source.py" "$@"

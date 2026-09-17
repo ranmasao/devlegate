@@ -58,7 +58,7 @@ test() {
 
 lint() {
   require_venv
-  "$PYTHON" -m ruff check "$@"
+  "$PYTHON" -m ruff check src tests tools "$@"
 }
 
 check() {
