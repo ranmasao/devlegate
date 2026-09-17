@@ -171,6 +171,91 @@ def test_arbitrary_submodule_is_validated_without_nanoyaml_assumption(
     assert f"    commit: {dependency_commit}" in manifest
 
 
+def test_nested_submodules_are_recorded_and_materialized(tmp_path: Path) -> None:
+    dependency_b = tmp_path / "dependency-b"
+    init_repo(dependency_b)
+    (dependency_b / "b.py").write_text("VALUE = 'b'\n")
+    dependency_b_commit = commit_all(dependency_b, "dependency B")
+
+    dependency_a = tmp_path / "dependency-a"
+    init_repo(dependency_a)
+    git(
+        dependency_a,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(dependency_b),
+        "nested/b",
+    )
+    dependency_a_commit = commit_all(dependency_a, "dependency A")
+
+    project = tmp_path / "project"
+    init_repo(project)
+    git(
+        project,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(dependency_a),
+        "vendor/a",
+    )
+    commit_all(project, "nested project")
+    output = tmp_path / "output"
+    assert build(project, "v4.0.0", output).returncode == 0
+    archive = output / "devlegate-4.0.0-full-source.tar.gz"
+    result = validate(archive, project, "v4.0.0", tmp_path / "extracted")
+    assert result.returncode == 0, result.stderr
+    root = tmp_path / "extracted/devlegate-4.0.0"
+    manifest = (root / "SOURCE-MANIFEST").read_text()
+    assert f"path: vendor/a\n    commit: {dependency_a_commit}" in manifest
+    assert f"path: vendor/a/nested/b\n    commit: {dependency_b_commit}" in manifest
+    assert (root / "vendor/a/.gitmodules").is_file()
+    assert (root / "vendor/a/nested/b/b.py").is_file()
+
+
+def test_incomplete_materialization_is_rejected_after_valid_sidecar(
+    tmp_path: Path,
+) -> None:
+    dependency = tmp_path / "dependency"
+    init_repo(dependency)
+    (dependency / "module.py").write_text("VALUE = 'dependency'\n")
+    commit_all(dependency, "dependency")
+
+    project = tmp_path / "project"
+    init_repo(project)
+    git(
+        project,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(dependency),
+        "vendor/dependency",
+    )
+    commit_all(project, "project")
+    output = tmp_path / "output"
+    assert build(project, "v5.0.0", output).returncode == 0
+    valid = output / "devlegate-5.0.0-full-source.tar.gz"
+    tampered = output / "devlegate-5.0.0-tampered.tar.gz"
+    missing = "devlegate-5.0.0/vendor/dependency/module.py"
+    with tarfile.open(valid, "r:gz") as source, tarfile.open(
+        tampered, "w:gz"
+    ) as target:
+        for member in source.getmembers():
+            if member.name == missing:
+                continue
+            content = source.extractfile(member) if member.isfile() else None
+            target.addfile(member, content)
+    tampered.with_name(f"{tampered.name}.sha256").write_text(
+        f"{hashlib.sha256(tampered.read_bytes()).hexdigest()}  {tampered.name}\n"
+    )
+    result = validate(tampered, project, "v5.0.0", tmp_path / "tampered-extracted")
+    assert result.returncode != 0
+    assert "missing materialized source entry" in result.stderr
+
+
 def test_unavailable_gitlink_fails_closed(tmp_path: Path) -> None:
     project = tmp_path / "project"
     init_repo(project)
