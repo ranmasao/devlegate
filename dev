@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 set -Eeuo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -17,6 +20,7 @@ Commands:
   test [args...]    Run pytest
   lint [args...]    Run Ruff check
   check             Run tests and lint
+  coverage          Run pytest with statement/branch coverage
   run [args...]     Run the installed devlegate CLI
   clean             Remove named caches and build artifacts
   purge             Clean, then remove .venv and named development artifacts
@@ -57,7 +61,7 @@ test() {
 
 lint() {
   require_venv
-  "$PYTHON" -m ruff check "$@"
+  "$PYTHON" -m ruff check src tests tools "$@"
 }
 
 check() {
@@ -68,7 +72,20 @@ check() {
 }
 
 remove_path() {
-  [[ -e "$1" ]] && rm -rf -- "$1"
+  if [[ -e "$1" ]]; then
+    rm -rf -- "$1"
+  fi
+}
+
+clean_coverage() {
+  remove_path "$ROOT/.coverage"
+  for coverage_file in "$ROOT"/.coverage.*; do
+    if [[ -e "$coverage_file" ]]; then
+      rm -f -- "$coverage_file"
+    fi
+  done
+  remove_path "$ROOT/coverage.json"
+  remove_path "$ROOT/htmlcov"
 }
 
 clean() {
@@ -80,13 +97,12 @@ clean() {
   remove_path "$ROOT/tests/__pycache__"
   remove_path "$ROOT/devlegate.egg-info"
   remove_path "$ROOT/src/devlegate.egg-info"
+  clean_coverage
 }
 
 purge() {
   clean
   remove_path "$ROOT/.venv"
-  remove_path "$ROOT/.coverage"
-  remove_path "$ROOT/htmlcov"
   remove_path "$ROOT/.tox"
   remove_path "$ROOT/.nox"
   remove_path "$ROOT/.mypy_cache"
@@ -104,6 +120,14 @@ case "$command" in
   test) test "$@" ;;
   lint) lint "$@" ;;
   check) check "$@" ;;
+  coverage)
+    require_venv
+    clean_coverage
+    "$PYTHON" -m coverage run -m pytest "$@"
+    "$PYTHON" -m coverage combine
+    "$PYTHON" -m coverage report -m
+    "$PYTHON" -m coverage json -o "$ROOT/coverage.json"
+    ;;
   run)
     require_devlegate
     exec "$DEVLEGATE" "$@"

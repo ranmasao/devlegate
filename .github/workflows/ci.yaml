@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - badges
   pull_request:
 
 permissions:
@@ -14,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -23,5 +27,71 @@ jobs:
       - name: Set up development environment
         run: ./dev setup
 
-      - name: Run checks
-        run: ./dev check
+      - name: Run tests with coverage
+        run: ./dev coverage
+
+      - name: Generate coverage badge payload
+        run: |
+          .venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("coverage.json").read_text())
+          percentage = report["totals"]["percent_covered"]
+          if percentage >= 90:
+              color = "brightgreen"
+          elif percentage >= 80:
+              color = "green"
+          elif percentage >= 70:
+              color = "yellowgreen"
+          elif percentage >= 60:
+              color = "yellow"
+          elif percentage >= 50:
+              color = "orange"
+          else:
+              color = "red"
+          Path("coverage-badge.json").write_text(json.dumps({
+              "schemaVersion": 1,
+              "label": "coverage",
+              "message": f"{percentage:.0f}%",
+              "color": color,
+          }) + "\n")
+          PY
+
+      - name: Upload coverage badge payload
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-badge
+          path: coverage-badge.json
+
+      - name: Run Ruff
+        run: ./dev lint
+
+  publish-coverage:
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download coverage badge payload
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-badge
+          path: coverage-artifact
+
+      - name: Publish badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          mkdir badge-work
+          cp coverage-artifact/coverage-badge.json badge-work/coverage.json
+          git -C badge-work init
+          git -C badge-work config user.name github-actions[bot]
+          git -C badge-work config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C badge-work add -f coverage.json
+          git -C badge-work commit -m "Update coverage badge"
+          git -C badge-work push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" HEAD:refs/heads/badges

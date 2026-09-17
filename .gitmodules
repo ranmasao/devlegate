@@ -1,0 +1,3 @@
+[submodule "nanoyaml"]
+	path = src/nanoyaml
+	url = ../nanoyaml.git

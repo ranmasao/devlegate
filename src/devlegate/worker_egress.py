@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Typed, untrusted semantic egress from one worker process."""
 
 from dataclasses import dataclass
@@ -20,6 +23,8 @@ class WorkerClaim:
 class OpenCodeRunResult:
     process_returncode: int
     transport_error: str | None = None
+    interruption_kind: str | None = None
+    worker_group_retired: bool = True
 
     @property
     def transport_ok(self) -> bool:
@@ -32,6 +37,8 @@ class WorkerRunResult:
     transport_error: str | None
     claim: WorkerClaim | None
     egress_error: str | None
+    interruption_kind: str | None = None
+    worker_group_retired: bool = True
 
     @property
     def transport_ok(self) -> bool:

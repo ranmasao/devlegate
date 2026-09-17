@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 from pathlib import Path
 
 import pytest
@@ -33,6 +36,16 @@ def test_routes_common_to_both_roles_without_embedding_documents(tmp_path):
     assert "README contents" not in (tmp_path / ".devlegate/project.md").read_text()
 
 
+def test_project_context_accepts_blank_frontmatter_lines(tmp_path):
+    (tmp_path / "README.md").write_text("readme")
+    manifest(
+        tmp_path,
+        '"type": "devlegate.project"\n\n"common":\n  - "README.md"',
+    )
+
+    assert load_project_context(tmp_path).for_role("architect") == (Path("README.md"),)
+
+
 @pytest.mark.parametrize(
     "field, value",
     [
@@ -52,14 +65,30 @@ def test_routes_fail_closed(tmp_path, field, value):
         load_project_context(tmp_path)
 
 
-def test_routes_reject_unknown_and_flow_fields(tmp_path):
+def test_routes_reject_unknown_fields(tmp_path):
     manifest(tmp_path, '"type": "devlegate.project"\n"magic_context": "x"')
     with pytest.raises(ProjectContextError, match="magic_context"):
         load_project_context(tmp_path, require_context=False)
 
+
+def test_flow_sequence_routes_are_accepted(tmp_path):
+    (tmp_path / "README.md").write_text("readme")
     manifest(tmp_path, '"type": "devlegate.project"\n"common": ["README.md"]')
-    with pytest.raises(ProjectContextError, match="NanoYAML"):
-        load_project_context(tmp_path, require_context=False)
+
+    context = load_project_context(tmp_path)
+
+    assert context.for_role("architect") == (Path("README.md"),)
+    assert context.for_role("reviewer") == (Path("README.md"),)
+
+
+def test_flow_sequence_routes_use_normal_path_validation(tmp_path):
+    manifest(
+        tmp_path,
+        '"type": "devlegate.project"\n"common": ["missing.md"]',
+    )
+
+    with pytest.raises(ProjectContextError, match="path does not exist"):
+        load_project_context(tmp_path)
 
 
 def test_empty_context_is_valid_for_init_but_not_readiness(tmp_path):

@@ -1,4 +1,8 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 import json
+import sqlite3
 
 import pytest
 from test_cli import git, invoke, publish_control, ticket
@@ -15,7 +19,13 @@ def code_update(fixture, name="remote.txt", content="remote\n"):
 
 
 def state_payload(fixture):
-    return json.loads(next(fixture["state"].glob("*.json")).read_text())
+    database = next(fixture["state"].glob("*.sqlite3"))
+    connection = sqlite3.connect(database)
+    payload = connection.execute(
+        "SELECT payload FROM runtime_state WHERE id = 1"
+    ).fetchone()[0]
+    connection.close()
+    return json.loads(payload)
 
 
 def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
@@ -24,7 +34,7 @@ def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
 
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
 
     assert result.returncode == 1
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == git(
@@ -32,7 +42,7 @@ def test_code_sync_completes_before_invalid_control_workflow(git_fixture):
     ).stdout.strip()
     assert "invalid ticket" in result.stdout
     assert state_payload(git_fixture)["phase"] != "merge_pending"
-    second = invoke(git_fixture, "run", "--once")
+    second = invoke(git_fixture, "--once")
     assert "resumed after completed merge" not in second.stdout
 
 
@@ -42,8 +52,8 @@ def test_invalid_workflow_repeated_run_has_no_stale_merge_recovery(git_fixture):
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
 
-    first = invoke(git_fixture, "run", "--once")
-    second = invoke(git_fixture, "run", "--once")
+    first = invoke(git_fixture, "--once")
+    second = invoke(git_fixture, "--once")
 
     assert first.returncode == second.returncode == 1
     assert "resumed after completed merge" not in second.stdout
@@ -55,7 +65,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
     publish_control(
         git_fixture, "invalid workflow", {"kanban/todo/T-1.md": "bad\n"}, sync=False
     )
-    assert invoke(git_fixture, "run", "--once").returncode == 1
+    assert invoke(git_fixture, "--once").returncode == 1
     publish_control(
         git_fixture,
         "repair workflow",
@@ -63,7 +73,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
         sync=False,
     )
 
-    result = invoke(git_fixture, "run", "--once")
+    result = invoke(git_fixture, "--once")
 
     assert result.returncode == 1
     assert "execution failed" in result.stdout
@@ -166,7 +176,7 @@ def test_agent_running_fails_closed_without_dispatch(
     restarted = Devlegate(git_fixture["config"])
     calls = []
     monkeypatch.setattr(restarted, "_run_worker", lambda *_args: calls.append(True))
-    with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+    with pytest.raises(DevlegateError, match="unsafe execution stage"):
         restarted.run_once()
     assert calls == []
     assert capsys.readouterr().out == ""
@@ -200,6 +210,6 @@ def test_unresolved_agent_phase_survives_repeated_runs(
         execution_remote_head=None,
     )
     for _ in range(2):
-        with pytest.raises(DevlegateError, match="interrupted execution is ambiguous"):
+        with pytest.raises(DevlegateError, match="unsafe execution stage"):
             devlegate.run_once()
     assert state_payload(git_fixture)["phase"] == "agent_running"

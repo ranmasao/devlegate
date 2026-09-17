@@ -37,21 +37,22 @@ unrestricted YAML. For a ticket without dependencies, use:
 ---
 ```
 
-For a ticket with dependencies, use the block sequence form exactly:
+For a ticket with dependencies, use the familiar flow sequence form exactly:
 
 ```text
 ---
 "type": "devlegate.ticket"
 "title": "Human-readable ticket title"
-"depends_on":
-  - "LAB-023"
-  - "LAB-024"
+"depends_on": ["LAB-023", "LAB-024"]
 ---
 ```
 
-Do not use YAML flow collections such as `["LAB-023"]`, and do not invent
-additional metadata. The filename stem is the ticket ID. Dependencies are
-satisfied only by `done`; `review` and `accepted` do not satisfy dependencies.
+For a ticket without dependencies, omit `depends_on`; an explicitly empty
+dependency list is not a valid ticket. NanoYAML supports JSON-compatible flow
+sequences on one physical line, but remains a restricted subset and does not
+support flow mappings. Do not invent additional metadata. The filename stem is
+the ticket ID. Dependencies are satisfied only by `done`; `review` and
+`accepted` do not satisfy dependencies.
 
 Every implementation ticket MUST define these Markdown sections:
 

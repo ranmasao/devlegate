@@ -1,0 +1,6 @@
+include LICENSE
+include LICENSING.md
+include NOTICE
+include LICENSES/CC0-1.0.txt
+include src/nanoyaml/LICENSE
+recursive-include src/devlegate/default_templates *

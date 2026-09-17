@@ -6,6 +6,37 @@ behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
 ## Unreleased
+
+## 0.5.0 -- 2026-09-17
+
+Persistent service execution, separated runtime state, and reproducible source distribution.
+
+### Added
+
+- Added a persistent service that owns workflow execution, with CLI clients using local IPC for status and supported operations.
+- Added the final service commands: bare `devlegate`, `devlegate foreground`, `devlegate once`, and `devlegate stop`.
+- Added SQLite-backed runtime state separate from product history and workflow control history.
+- Added interruption recovery, explicit retry, product-base reconciliation, and same-base resume for retained execution progress.
+- Added NanoYAML 0.2.0 flow-sequence support for managed workflow data.
+- Added CI coverage reporting and publication of the coverage badge.
+- Added an explicit distribution model covering Devlegate core, copyable default templates, and the separately licensed NanoYAML dependency.
+- Added deterministic full-source release packaging and validation for source trees containing gitlinks.
+
+### Changed
+
+- Separated product, control-plane, and per-ticket execution state and workspaces while keeping Devlegate responsible for lifecycle ownership.
+- Routed service-owned status, planning, retry, reconciliation, and shutdown operations through the local service boundary.
+- Made full-source archives reproducible and provenance-bearing, with normalized metadata and pinned recursive submodule content.
+- Finalized public CLI and service terminology and made repeated service startup requests idempotent when a healthy owner already exists.
+
+### Fixed
+
+- Hardened service ownership, IPC lifecycle, shutdown, retry, reconciliation, and restart handling so recoverable interruptions do not duplicate or lose execution state.
+
+### Removed
+
+- Removed the public `run` and `daemon` service command forms and retired obsolete compatibility seams.
+
 ## 0.4.0 -- 2026-09-01
 
 Control-plane isolation and Devlegate-owned execution lifecycle.

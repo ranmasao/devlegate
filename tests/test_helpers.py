@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,7 +34,7 @@ def test_dev_preserves_cwd_and_arguments(tmp_path):
     command = [
         str(checkout / "dev"),
         "run",
-        "--once",
+        "once",
         "--env",
         "file with spaces",
     ]
@@ -47,7 +50,7 @@ def test_dev_preserves_cwd_and_arguments(tmp_path):
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         f"cwd={target}",
-        "arg=--once",
+        "arg=once",
         "arg=--env",
         "arg=file with spaces",
     ]
