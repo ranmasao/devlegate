@@ -22,6 +22,12 @@ class BuildError(RuntimeError):
     """Raised when the selected source cannot be packaged safely."""
 
 
+def public_version(version: str) -> str:
+    if not VERSION_RE.fullmatch(version):
+        raise BuildError("version must match vX.Y.Z")
+    return version[1:]
+
+
 def git(repo: Path, *args: str, check: bool = True) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -217,15 +223,14 @@ def normalized_tar(source: Path, archive: Path, timestamp: int, top_level: str) 
 
 
 def build(repo: Path, ref: str, version: str, output_dir: Path) -> tuple[Path, Path]:
-    if not VERSION_RE.fullmatch(version):
-        raise BuildError("version must match vX.Y.Z")
+    archive_version = public_version(version)
     repo = repo.resolve()
     if not repo.exists():
         raise BuildError(f"repository does not exist: {repo}")
     commit = resolve_commit(repo, ref)
     timestamp = commit_timestamp(repo, commit)
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive_name = f"devlegate-{version}-full-source.tar.gz"
+    archive_name = f"devlegate-{archive_version}-full-source.tar.gz"
     archive = output_dir / archive_name
     sidecar = output_dir / f"{archive_name}.sha256"
 
@@ -235,7 +240,7 @@ def build(repo: Path, ref: str, version: str, output_dir: Path) -> tuple[Path, P
         submodules = verify_materialized_submodules(checkout, commit)
         write_manifest(checkout, version, commit, submodules)
         remove_git_metadata(checkout)
-        normalized_tar(checkout, archive, timestamp, f"devlegate-{version}")
+        normalized_tar(checkout, archive, timestamp, f"devlegate-{archive_version}")
 
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     sidecar.write_text(f"{digest}  {archive.name}\n", encoding="ascii")

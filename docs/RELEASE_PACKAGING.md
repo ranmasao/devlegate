@@ -3,13 +3,21 @@
 GitHub's automatic `Source code.zip` and `Source code.tar.gz` archives preserve
 Git submodule entries as gitlinks. They do not contain the submodule files.
 Devlegate releases whose selected source tree contains a submodule therefore
-also need a `devlegate-vX.Y.Z-full-source.tar.gz` asset. That archive includes
+also need a `devlegate-X.Y.Z-full-source.tar.gz` asset. For a `vX.Y.Z` release
+tag, the public asset is named without the leading `v`:
+
+```text
+vX.Y.Z -> devlegate-X.Y.Z-full-source.tar.gz
+```
+
+That archive includes
 the pinned NanoYAML source and can be built without network access to obtain
 repository source dependencies.
 
 ## Builder
 
-`tools/build-full-source.py` packages an explicitly selected ref or commit:
+`tools/build_full_source.py` (also exposed as `tools/build-full-source`)
+packages an explicitly selected ref or commit:
 
 ```sh
 python3 tools/build_full_source.py \
@@ -19,12 +27,13 @@ python3 tools/build_full_source.py \
   --output-dir /tmp/release-assets
 ```
 
-The command writes:
+The command writes (the tag/version argument retains its leading `v`):
 
-- `devlegate-vX.Y.Z-full-source.tar.gz`
-- `devlegate-vX.Y.Z-full-source.tar.gz.sha256`
+- `devlegate-X.Y.Z-full-source.tar.gz`
+- `devlegate-X.Y.Z-full-source.tar.gz.sha256`
 
-The archive root is `devlegate-vX.Y.Z/`. `SOURCE-MANIFEST` records the release,
+The archive root is `devlegate-X.Y.Z/`. `SOURCE-MANIFEST` records the release
+as `vX.Y.Z`,
 the exact Devlegate commit, and every recursively materialized submodule path
 and commit. Git metadata is removed before archiving. The builder refuses an
 unresolvable ref, malformed version, unavailable submodule object, or
@@ -52,5 +61,14 @@ retry or historical recovery. The release and tag must already exist. Existing
 asset names are replaced only by the workflow's explicit `--clobber` retry
 policy after all tag checks pass.
 
-Before upload, the workflow extracts the archive and checks its root,
-`SOURCE-MANIFEST`, absence of Git metadata, and materialized submodule paths.
+Before upload, the read-only build job extracts the actual archive and checks
+its root, SHA-256 sidecar, `SOURCE-MANIFEST`, selected tag target, absence of
+Git metadata, and every materialized submodule path and pinned commit. It runs
+`./dev setup && ./dev check` from the extracted tree when that source tree has
+the current development entrypoints; early historical trees receive the
+structural/provenance checks they support.
+
+The validated archive and sidecar cross the job boundary as a workflow
+artifact. Only the separate upload job has `contents: write`, and it uploads
+to the exact existing release tag. The explicit `--clobber` behavior is the
+documented idempotent retry policy for a requested release.

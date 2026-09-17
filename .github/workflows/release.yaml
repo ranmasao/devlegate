@@ -13,10 +13,13 @@ on:
 permissions: {}
 
 jobs:
-  full-source:
+  build-and-validate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      has_gitlinks: ${{ steps.source-shape.outputs.has_gitlinks }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
@@ -27,7 +30,13 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
       - name: Validate release and fetch selected source
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -42,6 +51,7 @@ jobs:
           git -C source fetch --quiet --force --tags origin
           test "$(git -C source cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           git -C source rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" >/dev/null
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Detect source gitlinks
         id: source-shape
@@ -53,7 +63,7 @@ jobs:
             echo 'has_gitlinks=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and smoke-test full-source archive
+      - name: Build full-source archive
         if: steps.source-shape.outputs.has_gitlinks == 'true'
         run: |
           set -Eeuo pipefail
@@ -63,35 +73,65 @@ jobs:
             --ref "refs/tags/$RELEASE_TAG" \
             --version "$RELEASE_TAG" \
             --output-dir "$RUNNER_TEMP/full-source"
-          cd "$RUNNER_TEMP/full-source"
-          sha256sum -c "devlegate-$RELEASE_TAG-full-source.tar.gz.sha256"
-          python3 - "$RELEASE_TAG" "devlegate-$RELEASE_TAG-full-source.tar.gz" <<'PY'
-          import sys
-          import tarfile
-          from pathlib import PurePosixPath
 
-          tag, archive = sys.argv[1:]
-          top = f"devlegate-{tag}/"
-          with tarfile.open(archive, "r:gz") as source:
-              names = source.getnames()
-              if not names or names[0] != top.rstrip("/"):
-                  raise SystemExit("invalid archive root")
-              if f"{top}SOURCE-MANIFEST" not in names:
-                  raise SystemExit("missing SOURCE-MANIFEST")
-              if any(".git" in PurePosixPath(name).parts for name in names):
-                  raise SystemExit("archive contains Git metadata")
-              if not any(name.startswith(f"{top}src/nanoyaml/") for name in names):
-                  raise SystemExit("materialized NanoYAML source is missing")
-          PY
-
-      - name: Upload full-source assets
+      - name: Extract and validate full-source archive
         if: steps.source-shape.outputs.has_gitlinks == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${RELEASE_TAG#v}"
+          python3 tools/validate_full_source.py \
+            --archive "$RUNNER_TEMP/full-source/devlegate-$archive_version-full-source.tar.gz" \
+            --sidecar "$RUNNER_TEMP/full-source/devlegate-$archive_version-full-source.tar.gz.sha256" \
+            --repo "$GITHUB_WORKSPACE/source" \
+            --ref "refs/tags/$RELEASE_TAG" \
+            --version "$RELEASE_TAG" \
+            --extract-dir "$RUNNER_TEMP/full-source-extracted"
+
+      - name: Run extracted source checks when supported
+        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${RELEASE_TAG#v}"
+          extracted="$RUNNER_TEMP/full-source-extracted/devlegate-$archive_version"
+          if [[ -x "$extracted/dev" && -f "$extracted/pyproject.toml" ]] \
+            && grep -q '^  setup)' "$extracted/dev" \
+            && grep -q '^  check)' "$extracted/dev"; then
+            (cd "$extracted" && ./dev setup && ./dev check)
+          else
+            printf 'Skipping modern Devlegate checks for this historical source tree\n'
+          fi
+
+      - name: Publish validated workflow artifact
+        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-source-${{ steps.release.outputs.release_tag }}
+          path: ${{ runner.temp }}/full-source/
+          if-no-files-found: error
+
+  upload-release-assets:
+    needs: build-and-validate
+    if: needs.build-and-validate.outputs.has_gitlinks == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.build-and-validate.outputs.release_tag }}
+    steps:
+      - name: Download validated full-source assets
+        uses: actions/download-artifact@v8
+        with:
+          name: full-source-${{ needs.build-and-validate.outputs.release_tag }}
+          path: full-source
+
+      - name: Upload validated assets to exact release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          archive_version="${RELEASE_TAG#v}"
           gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/full-source/devlegate-$RELEASE_TAG-full-source.tar.gz" \
-            "$RUNNER_TEMP/full-source/devlegate-$RELEASE_TAG-full-source.tar.gz.sha256" \
+            "full-source/devlegate-$archive_version-full-source.tar.gz" \
+            "full-source/devlegate-$archive_version-full-source.tar.gz.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
