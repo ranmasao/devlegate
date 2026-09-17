@@ -80,7 +80,7 @@ it is not a replacement for Git history.
 
 ## Current 0.5 Limitations
 
-- Devlegate 0.5 is unreleased.
+- Devlegate 0.5 is the current release.
 
 The current implementation has these practical limits:
 
@@ -95,7 +95,7 @@ The current implementation has these practical limits:
 
 ## Quick Start
 
-Install this unreleased checkout, then configure it in the target project:
+Install this checkout, then configure it in the target project:
 
 ```sh
 python -m pip install -e /path/to/devlegate

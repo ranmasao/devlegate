@@ -1,6 +1,6 @@
 # Devlegate Architecture
 
-This document describes the current unreleased 0.5 architecture. It is a
+This document describes the current 0.5 architecture. It is a
 technical reference for contributors and operators. The product overview is in
 the [README](../README.md); development direction is in the
 [roadmap](../ROADMAP.md).
