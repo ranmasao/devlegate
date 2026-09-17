@@ -2665,14 +2665,9 @@ def test_real_service_process_executes_retry_from_real_cli(
         assert result.returncode == 0, result.stderr
         assert "retry accepted: T-1" in result.stdout
 
-        def completed():
-            status = service.cli("status", "--json")
-            if status.returncode != 0:
-                return False
-            payload = json.loads(status.stdout)
-            return any(item["id"] == "T-1" for item in payload["tickets"]["review"])
-
-        service.wait_for(completed)
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
+        )
         status = json.loads(service.cli("status", "--json").stdout)
         assert status["tickets"]["review"] == [
             {"id": "T-1", "title": "Control ticket"}
