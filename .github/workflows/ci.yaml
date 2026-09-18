@@ -28,7 +28,7 @@ jobs:
         run: ./dev setup
 
       - name: Run tests with coverage
-        run: ./dev coverage
+        run: ./dev coverage -n 4 --dist=worksteal
 
       - name: Generate coverage badge payload
         run: |

@@ -135,9 +135,12 @@ integrated into product history.
 ./dev setup
 ./dev check
 ./dev coverage
+./dev test-parallel
 ```
 
-Coverage is diagnostic; there is no percentage gate.
+`./dev test` remains the serial debugging path. `./dev test-parallel` uses four
+worksteal workers. CI runs the coverage suite with the same four-worker
+configuration; coverage is diagnostic and there is no percentage gate.
 
 ## Documentation
 

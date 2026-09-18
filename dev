@@ -18,6 +18,7 @@ Local development helper for Devlegate.
 Commands:
   setup             Create .venv and install the project and development tools
   test [args...]    Run pytest
+  test-parallel     Run pytest with four worksteal workers
   lint [args...]    Run Ruff check
   check             Run tests and lint
   coverage          Run pytest with statement/branch coverage
@@ -57,6 +58,11 @@ setup() {
 test() {
   require_venv
   "$PYTHON" -m pytest "$@"
+}
+
+test_parallel() {
+  require_venv
+  "$PYTHON" -m pytest -n 4 --dist=worksteal "$@"
 }
 
 lint() {
@@ -118,6 +124,7 @@ shift
 case "$command" in
   setup) setup "$@" ;;
   test) test "$@" ;;
+  test-parallel) test_parallel "$@" ;;
   lint) lint "$@" ;;
   check) check "$@" ;;
   coverage)
