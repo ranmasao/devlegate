@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
+from git_support import control_publisher
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
 import devlegate.cli as cli
@@ -316,7 +317,7 @@ def test_stop_during_observation_prevents_fresh_mutation(tmp_path, monkeypatch):
 
 def test_stop_before_merge_commit_does_not_fast_forward(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")
@@ -342,7 +343,7 @@ def test_stop_before_merge_commit_does_not_fast_forward(tmp_path, monkeypatch):
 
 def test_committed_merge_pending_drains_before_stop(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")
@@ -368,7 +369,7 @@ def test_persisted_merge_pending_drains_even_when_stop_already_set(
     tmp_path, monkeypatch
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")
@@ -403,7 +404,7 @@ def test_merge_pending_retries_matching_shutdown_fetch(
     tmp_path, monkeypatch, capsys, kind, returncode
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")
@@ -528,7 +529,7 @@ def test_merge_pending_retries_matching_product_merge(
     tmp_path, monkeypatch, kind, returncode
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")
@@ -572,7 +573,7 @@ def test_merge_pending_retries_product_merge_then_preserves_real_failure(
     tmp_path, monkeypatch
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-change.txt").write_text("remote\n")
     git(publisher, "add", "remote-change.txt")

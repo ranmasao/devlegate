@@ -20,6 +20,7 @@ from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 import pytest
+from git_support import clone_world
 from service_harness import LiveService
 
 from devlegate import __version__
@@ -47,43 +48,19 @@ def git(cwd, *args):
 
 @pytest.fixture
 def git_fixture(tmp_path, request):
-    bare = tmp_path / "remote.git"
-    seed = tmp_path / "seed"
-    working = tmp_path / "working"
-    publisher = tmp_path / "publisher"
     state = Path("/tmp") / (
         "devlegate-test-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]
     )
     request.addfinalizer(lambda: shutil.rmtree(state, ignore_errors=True))
-
-    git(tmp_path, "init", "--bare", bare)
-    git(tmp_path, "init", "-b", "main", seed)
-    git(seed, "config", "user.email", "test@example.com")
-    git(seed, "config", "user.name", "Test User")
-    (seed / "tracked.txt").write_text("initial\n")
-    (seed / "README.md").write_text("project context\n")
-    (seed / ".devlegate").mkdir()
-    (seed / ".devlegate/project.md").write_text(
-        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    world = clone_world(
+        tmp_path,
+        baseline="empty-control",
+        state=state,
+        with_publisher=True,
     )
-    git(seed, "add", ".")
-    git(seed, "commit", "-m", "product")
-    git(seed, "remote", "add", "origin", bare)
-    git(seed, "push", "-u", "origin", "main")
-
-    git(seed, "switch", "--orphan", "devlegate/control")
-    for name in ("backlog", "todo", "review", "accepted", "done"):
-        (seed / "kanban" / name).mkdir(parents=True)
-        (seed / "kanban" / name / ".gitkeep").touch()
-    git(seed, "add", ".")
-    git(seed, "commit", "-m", "control")
-    git(seed, "push", "origin", "devlegate/control")
-
-    git(tmp_path, "clone", "-b", "main", bare, working)
-    git(tmp_path, "clone", "-b", "main", bare, publisher)
-    for repo in (working, publisher):
-        git(repo, "config", "user.email", "test@example.com")
-        git(repo, "config", "user.name", "Test User")
+    bare = world["bare"]
+    working = world["working"]
+    publisher = world["publisher"]
 
     key = hashlib.sha256(str(working.resolve()).encode()).hexdigest()
     control = state / "worktrees" / key / "control"

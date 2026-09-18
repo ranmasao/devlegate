@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from git_support import clone_world, control_publisher
 
 import devlegate.cli as cli
 import devlegate.execution_workspace as execution_workspace
@@ -135,45 +136,19 @@ def persist_agent_running(
 
 
 def control_fixture(tmp_path):
-    bare = tmp_path / "remote.git"
-    seed = tmp_path / "seed"
-    working = tmp_path / "working"
-    git(tmp_path, "init", "--bare", bare)
-    git(tmp_path, "init", "-b", "main", seed)
-    git(seed, "config", "user.email", "test@example.com")
-    git(seed, "config", "user.name", "Test User")
-    (seed / "product.txt").write_text("product\n")
-    (seed / "README.md").write_text("project context\n")
-    (seed / ".devlegate").mkdir()
-    (seed / ".devlegate/project.md").write_text(
-        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
+    state = tmp_path / "state"
+    world = clone_world(
+        tmp_path,
+        baseline="ticket-control",
+        state=state,
     )
-    git(seed, "add", ".")
-    git(seed, "commit", "-m", "product")
-    git(seed, "remote", "add", "origin", bare)
-    git(seed, "push", "-u", "origin", "main")
-    git(seed, "switch", "--orphan", "devlegate/control")
-    (seed / "product.txt").unlink(missing_ok=True)
-    for state in ("backlog", "todo", "review", "accepted", "done"):
-        (seed / "kanban" / state).mkdir(parents=True)
-        (seed / "kanban" / state / ".gitkeep").touch()
-    (seed / "kanban/todo/T-1.md").write_text(
-        '---\n"type": "devlegate.ticket"\n"title": "Control ticket"\n'
-        "---\nwork\n"
-    )
-    git(seed, "add", ".")
-    git(seed, "commit", "-m", "control workflow")
-    git(seed, "push", "origin", "devlegate/control")
-    git(tmp_path, "clone", "-b", "main", bare, working)
-    git(working, "config", "user.email", "test@example.com")
-    git(working, "config", "user.name", "Test User")
     config = tmp_path / "devlegate.env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
-        f"STATE_DIR={tmp_path / 'state'}\n"
+        f"STATE_DIR={state}\n"
     )
-    return working, config, tmp_path / "state"
+    return world["working"], config, state
 
 
 def divergent_control_heads(working, config, tmp_path):
@@ -206,27 +181,8 @@ def divergent_control_heads(working, config, tmp_path):
 
 
 def fresh_control_fixture(tmp_path):
-    bare = tmp_path / "remote.git"
-    seed = tmp_path / "seed"
-    working = tmp_path / "working"
-    git(tmp_path, "init", "--bare", bare)
-    git(tmp_path, "init", "-b", "main", seed)
-    git(seed, "config", "user.email", "test@example.com")
-    git(seed, "config", "user.name", "Test User")
-    (seed / "product.txt").write_text("product\n")
-    (seed / "README.md").write_text("project context\n")
-    (seed / ".devlegate").mkdir()
-    (seed / ".devlegate/project.md").write_text(
-        '---\n"type": "devlegate.project"\n"common":\n  - "README.md"\n---\n'
-    )
-    git(seed, "add", ".")
-    git(seed, "commit", "-m", "product")
-    git(seed, "remote", "add", "origin", bare)
-    git(seed, "push", "-u", "origin", "main")
-    git(tmp_path, "clone", "-b", "main", bare, working)
-    git(working, "config", "user.email", "test@example.com")
-    git(working, "config", "user.name", "Test User")
     state = tmp_path / "state"
+    world = clone_world(tmp_path, baseline="product", state=state)
     config = tmp_path / "devlegate.env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
@@ -236,7 +192,7 @@ def fresh_control_fixture(tmp_path):
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
         f"STATE_DIR={state}\n"
     )
-    return working, config, state
+    return world["working"], config, state
 
 
 def invoke(working, *args, config):
@@ -520,7 +476,7 @@ def test_check_is_read_only_and_missing_control_does_not_create_state(tmp_path):
 
 def test_once_validates_control_before_product_fast_forward(tmp_path):
     working, config, _state = control_fixture(tmp_path)
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "new-product.txt").write_text("new\n")
     git(publisher, "add", ".")
@@ -1782,7 +1738,7 @@ def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, caps
     devlegate = Devlegate(config)
     control = next((state / "worktrees").glob("*/control"))
     old_head = git(control, "rev-parse", "HEAD").stdout.strip()
-    seed = tmp_path / "seed"
+    seed = control_publisher(tmp_path)
     (seed / "kanban/backlog/refresh.md").write_text("refresh\n")
     git(seed, "add", "kanban/backlog/refresh.md")
     git(seed, "commit", "-m", "refresh control")
@@ -2575,7 +2531,7 @@ def test_interrupted_recovery_refreshes_stale_product_remote(tmp_path, monkeypat
     persist_agent_running(devlegate, state)
     before = dict(devlegate._state)
     calls = []
-    publisher = tmp_path / "seed"
+    publisher = control_publisher(tmp_path)
     git(publisher, "switch", "main")
     (publisher / "remote-advance.txt").write_text("advanced\n")
     git(publisher, "add", "remote-advance.txt")
@@ -3276,7 +3232,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     git(execution, "commit", "-m", "execution checkpoint")
     execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
     original_base = state_payload(state)["execution_base_head"]
-    product = tmp_path / "seed"
+    product = control_publisher(tmp_path)
     git(product, "switch", "main")
     (product / "product-update.txt").write_text("product\n")
     git(product, "add", "product-update.txt")
@@ -3369,7 +3325,7 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     (execution / "implementation.txt").write_text("checkpoint\n")
     git(execution, "add", "implementation.txt")
     git(execution, "commit", "-m", "execution checkpoint")
-    product = tmp_path / "seed"
+    product = control_publisher(tmp_path)
     git(product, "switch", "main")
     (product / "product-update.txt").write_text("product\n")
     git(product, "add", "product-update.txt")
