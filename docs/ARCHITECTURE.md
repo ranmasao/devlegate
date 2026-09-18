@@ -26,6 +26,22 @@ disposable active workspace. A worktree may be recreated only when its branch
 and workspace identity can be proven; a dirty, conflicting, detached, unsafe,
 or unexpectedly occupied worktree is refused.
 
+## Python Import Boundary
+
+The installed `devlegate` console entry point loads Devlegate-owned code and
+private bundled dependencies from the installed package tree. Bundled
+NanoYAML therefore lives under `devlegate._vendor` rather than under the public
+top-level `nanoyaml` name; a managed checkout cannot replace it merely by
+containing a same-named package.
+
+`python -m devlegate` retains the interpreter's normal module lookup behavior.
+Python resolves the initial `devlegate` package before its code can establish
+any policy, so a checkout-local `devlegate/` can shadow the installed package
+for that invocation form. This is an interpreter startup boundary, not a
+claim that Devlegate can defend against `PYTHONPATH`, `sitecustomize`, modified
+interpreters, or modified installations. Use the installed console entry
+point when the managed checkout is not trusted to own Python namespaces.
+
 ## Runtime Service
 
 The production runtime is one persistent service hosting one `ServiceEngine`.

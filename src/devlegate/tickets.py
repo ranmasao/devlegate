@@ -11,7 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from nanoyaml import NanoYAMLError, loads
+from ._vendor.nanoyaml import NanoYAMLError, loads
 
 
 class TicketError(ValueError):

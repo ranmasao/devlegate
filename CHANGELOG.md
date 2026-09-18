@@ -7,6 +7,11 @@ release are not separate product changes.
 
 ## Unreleased
 
+### Fixed
+
+- Devlegate's bundled Python dependencies can no longer be shadowed by same-named
+  packages in the managed repository.
+
 ## 0.5.0 -- 2026-09-17
 
 Persistent service execution, separated runtime state, and reproducible source distribution.

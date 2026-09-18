@@ -44,7 +44,8 @@ The timestamp is derived from the selected commit, so repeated builds from the
 same source state produce identical bytes and SHA-256 values.
 
 Historical source trees are handled from their actual Git tree shape. A
-vendored `src/nanoyaml` directory is copied as ordinary source. A gitlink is
+vendored directory such as `src/nanoyaml` or
+`src/devlegate/_vendor/nanoyaml` is copied as ordinary source. A gitlink is
 initialized at exactly its recorded commit, recursively, and recorded in the
 manifest. The builder never uses `git submodule update --remote`.
 

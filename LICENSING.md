@@ -10,7 +10,7 @@ guide conflicts with an applicable license, the license text controls.
 | --- | --- | --- |
 | Devlegate implementation, tests, and tooling | EUPL-1.2 | [LICENSE](LICENSE) |
 | `src/devlegate/default_templates/**` | CC0-1.0 | [LICENSES/CC0-1.0.txt](LICENSES/CC0-1.0.txt) |
-| `src/nanoyaml/**` | MIT | [`src/nanoyaml/LICENSE`](src/nanoyaml/LICENSE) |
+| `src/devlegate/_vendor/nanoyaml/**` | MIT | [`src/devlegate/_vendor/nanoyaml/LICENSE`](src/devlegate/_vendor/nanoyaml/LICENSE) |
 
 ## Devlegate core: EUPL-1.2
 
@@ -47,9 +47,11 @@ source template came from this directory.
 ## NanoYAML
 
 NanoYAML is a separate project included as a pinned dependency/submodule at
-`src/nanoyaml`. It retains its own MIT License; Devlegate does not relicense it.
-The submodule's license is distributed at `src/nanoyaml/LICENSE` alongside the
-materialized NanoYAML source.
+`src/devlegate/_vendor/nanoyaml`. It retains its own MIT License; Devlegate does
+not relicense it. The submodule's license is distributed at
+`src/devlegate/_vendor/nanoyaml/LICENSE` alongside the materialized NanoYAML
+source. The `_vendor` namespace is private implementation detail and is not a
+public dependency API.
 
 ## Legal texts
 

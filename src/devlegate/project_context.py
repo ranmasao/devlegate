@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from nanoyaml import NanoYAMLError, loads
+from ._vendor.nanoyaml import NanoYAMLError, loads
 
 
 class ProjectContextError(ValueError):
