@@ -37,6 +37,36 @@ def render_table(title: str, rows: Iterable[tuple[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_grid(
+    title: str, headers: Iterable[str], rows: Iterable[Iterable[Any]]
+) -> str:
+    header_values = [_display(value) for value in headers]
+    row_values = [[_display(value) for value in row] for row in rows]
+    if not header_values:
+        raise ValueError("table requires at least one column")
+    if any(len(row) != len(header_values) for row in row_values):
+        raise ValueError("table rows must match the header width")
+    columns = [header_values, *row_values]
+    widths = [
+        max(len(row[index]) for row in columns)
+        for index in range(len(header_values))
+    ]
+    top = "┌" + "┬".join("─" * (width + 2) for width in widths) + "┐"
+    middle = "├" + "┼".join("─" * (width + 2) for width in widths) + "┤"
+    bottom = "└" + "┴".join("─" * (width + 2) for width in widths) + "┘"
+
+    def row(values: list[str]) -> str:
+        return "│" + "│".join(
+            f" {value:<{width}} " for value, width in zip(values, widths)
+        ) + "│"
+
+    lines = [title, top, row(header_values)]
+    for values in row_values:
+        lines.extend([middle, row(values)])
+    lines.append(bottom)
+    return "\n".join(lines)
+
+
 def _display(value: Any) -> str:
     if value is None:
         return "none"

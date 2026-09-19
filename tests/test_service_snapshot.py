@@ -19,6 +19,29 @@ def make_engine(tmp_path, monkeypatch):
     return ServiceEngine(config), state
 
 
+def _persist_active_execution(
+    engine, phase, stage, execution_id="execution-1", worker_identity=None
+):
+    engine._save_state(
+        phase,
+        local_head=engine._state.get("local_head", "unknown"),
+        remote_head=engine._state.get("remote_head", "unknown"),
+        changed_paths="",
+        control_head=engine._state.get("control_head", "unknown"),
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=engine._state.get("local_head", "unknown"),
+        execution_control_head=engine._state.get("control_head", "unknown"),
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(engine.execution_worktree_root / "work" / "T-1"),
+        execution_id=execution_id,
+        execution_remote_head=None,
+        execution_stage=stage,
+        worker_identity=worker_identity,
+    )
+
+
 def test_service_snapshot_is_deeply_immutable_and_replaced(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     first = engine.service_snapshot()
@@ -137,6 +160,96 @@ def test_stranded_agent_running_is_not_reported_as_live(tmp_path, monkeypatch):
     assert snapshot.phase == "agent_running"
     assert snapshot.worker_running is False
     assert snapshot.execution_id == "stranded-execution"
+
+
+@pytest.mark.parametrize(
+    ("phase", "stage"),
+    [
+        ("agent_pending", "lifecycle"),
+        ("agent_running", "worker-launch"),
+        ("agent_running", "post-worker"),
+    ],
+)
+def test_restarted_active_execution_has_no_current_service_evidence(
+    tmp_path, monkeypatch, phase, stage
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, phase, stage)
+
+    restarted = ServiceEngine(engine.env_file)
+
+    assert restarted._owned_execution_id is None
+    assert restarted.live_execution_evidence() is None
+
+
+@pytest.mark.parametrize(
+    ("phase", "stage"),
+    [
+        ("agent_pending", "lifecycle"),
+        ("agent_running", "worker-launch"),
+        ("agent_running", "post-worker"),
+    ],
+)
+def test_current_service_execution_ownership_produces_evidence(
+    tmp_path, monkeypatch, phase, stage
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, phase, stage)
+    engine._owned_execution_id = "execution-1"
+
+    assert engine.live_execution_evidence() == {
+        "ticket_id": "T-1",
+        "execution_id": "execution-1",
+        "stage": stage,
+        "ownership": "current-service",
+    }
+
+
+def test_execution_ownership_evidence_rejects_wrong_process_execution(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "post-worker")
+    engine._owned_execution_id = "different-execution"
+
+    assert engine.live_execution_evidence() is None
+
+
+def test_worker_evidence_still_requires_matching_live_identity(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    identity = {
+        "execution_id": "execution-1",
+        "pid": 1,
+        "pgid": 1,
+        "sid": 1,
+        "boot_id": "test-boot",
+        "start_time": 0,
+    }
+    _persist_active_execution(
+        engine, "agent_running", "worker-running", worker_identity=identity
+    )
+    engine._owned_execution_id = "execution-1"
+    engine._worker_execution_id = "execution-1"
+    engine._worker_identity_handler = lambda _identity: None
+
+    monkeypatch.setattr(
+        "devlegate.runtime.observe_worker_identity", lambda _identity: "matching-live"
+    )
+
+    assert engine.live_execution_evidence() == {
+        "ticket_id": "T-1",
+        "execution_id": "execution-1",
+        "stage": "worker-running",
+        "ownership": "current-service",
+        "identity_state": "matching-live",
+    }
+
+    monkeypatch.setattr(
+        "devlegate.runtime.observe_worker_identity", lambda _identity: "not-live"
+    )
+    assert engine.live_execution_evidence() is None
 
 
 def test_blocked_reason_is_published_and_cleared(tmp_path, monkeypatch):

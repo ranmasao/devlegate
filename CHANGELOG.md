@@ -18,6 +18,10 @@ release are not separate product changes.
   commands, with mutually exclusive `--yaml` and `--json` flags.
 - Added authoritative service state to status output without changing execution
   phase or service ownership semantics.
+- Refined human status output around concise execution, repository, workflow,
+  and eligibility summaries. Operator `running` now requires proven live
+  ownership of the exact worker execution; persisted active state alone is
+  reported conservatively as recovery-required.
 
 ## 0.5.0 -- 2026-09-17
 

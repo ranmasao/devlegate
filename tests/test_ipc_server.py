@@ -895,6 +895,36 @@ def test_dispatch_uses_service_views_without_persistence_access():
     assert dispatch_read_only(FakeEngine(), _request("plan")) == {"view": True}
 
 
+def test_status_ipc_keeps_raw_worker_identity_private():
+    class View:
+        def as_dict(self):
+            return {"view": True}
+
+    class FakeEngine:
+        def status_view(self):
+            return View()
+
+        def live_execution_evidence(self):
+            return {
+                "ticket_id": "T-1",
+                "execution_id": "exec-1",
+                "stage": "worker-running",
+                "ownership": "current-service",
+                "identity_state": "matching-live",
+                "worker_identity": {"pid": 123},
+            }
+
+    result = dispatch_read_only(FakeEngine(), _request("status"))
+
+    assert result["live_execution"] == {
+        "ticket_id": "T-1",
+        "execution_id": "exec-1",
+        "stage": "worker-running",
+        "ownership": "current-service",
+        "identity_state": "matching-live",
+    }
+
+
 def test_retry_submission_runs_on_service_owner_thread(
     tmp_path, monkeypatch, short_state_dir
 ):

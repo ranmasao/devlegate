@@ -267,6 +267,13 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
             reconciliation=_optional_dict(
                 value.get("reconciliation"), "reconciliation"
             ),
+            execution_stage=_optional_text(
+                execution.get("stage"), "execution stage"
+            ),
+            execution_id=_optional_text(execution.get("execution_id"), "execution id"),
+            bound_ticket_title=_optional_text(
+                execution.get("ticket_title"), "bound ticket title"
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IPCClientError(f"service IPC returned invalid status: {error}") from error

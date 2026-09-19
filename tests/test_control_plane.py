@@ -2804,8 +2804,9 @@ def test_stale_failed_execution_remains_visible_but_not_retryable(
         stale.failed_executions[0].nonretryable_reason or ""
     )
     text = devlegate._render_status_text(stale)
-    assert "execution: failed;" in text
-    assert "retryable: no" in text
+    assert "Retryable" in text
+    assert "no" in text
+    assert "todo workflow changed since the failure" in text
     assert stale.as_dict()["failed_executions"][0]["retryable"] is False
     assert devlegate._retry_candidates() == ()
 

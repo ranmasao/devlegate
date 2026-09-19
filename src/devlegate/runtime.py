@@ -155,12 +155,18 @@ class StatusSnapshot:
     plan: ExecutionPlan
     failed_executions: tuple["FailedExecution", ...] = ()
     reconciliation: dict[str, object] | None = None
+    execution_stage: str | None = None
+    execution_id: str | None = None
+    bound_ticket_title: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
             "execution": {
                 "phase": self.phase,
+                "stage": self.execution_stage if self.bound_ticket_id else None,
+                "execution_id": self.execution_id if self.bound_ticket_id else None,
                 "bound_ticket": self.bound_ticket_id,
+                "ticket_title": self.bound_ticket_title,
                 "persisted_body": self.persisted_body_present,
             },
             "observation": {
@@ -172,6 +178,11 @@ class StatusSnapshot:
                 "runnable": [
                     {"id": ticket_id, "title": title}
                     for ticket_id, title in self.runnable
+                ],
+                "eligible": [
+                    {"id": ticket_id, "title": title}
+                    for ticket_id, title in self.runnable
+                    if ticket_id != self.bound_ticket_id
                 ],
                 "blocked": [
                     {
@@ -969,6 +980,7 @@ class ServiceEngine:
             Callable[[WorkerProcessIdentity], None] | None
         ) = None
         self._worker_execution_id: str | None = None
+        self._owned_execution_id: str | None = None
         self._worker_interruption_handler: Callable[[str], None] | None = None
         self._validate()
         self._state = self._load_state()
@@ -1433,6 +1445,43 @@ class ServiceEngine:
         """Return the latest published snapshot without performing observation I/O."""
         with self._snapshot_lock:
             return self._published_snapshot
+
+    def live_execution_evidence(self) -> dict[str, object] | None:
+        """Return proof of this process-owned execution, if it is provable."""
+        state = self._state
+        if (
+            state.get("phase") not in {"agent_pending", "agent_running"}
+        ):
+            return None
+        execution_id = state.get("execution_id")
+        ticket_id = state.get("execution_ticket_id")
+        selected_ticket_id = state.get("selected_ticket_id")
+        if (
+            not isinstance(execution_id, str)
+            or not isinstance(ticket_id, str)
+            or ticket_id != selected_ticket_id
+            or self._owned_execution_id != execution_id
+        ):
+            return None
+        evidence = {
+            "ticket_id": ticket_id,
+            "execution_id": execution_id,
+            "stage": state.get("execution_stage"),
+            "ownership": "current-service",
+        }
+        if state.get("execution_stage") != "worker-running":
+            return evidence
+        if (
+            self._worker_execution_id != execution_id
+            or self._worker_identity_handler is None
+        ):
+            return None
+        identity = _worker_identity_from_value(
+            state.get("worker_identity"), execution_id
+        )
+        if identity is None or observe_worker_identity(identity) != "matching-live":
+            return None
+        return {**evidence, "identity_state": "matching-live"}
 
     def _publish_service_snapshot(
         self,
@@ -2463,6 +2512,13 @@ class ServiceEngine:
             self._automatic_resume_ticket_id = None
 
     def _run_once(self) -> int:
+        self._owned_execution_id = None
+        try:
+            return self._run_once_owned()
+        finally:
+            self._owned_execution_id = None
+
+    def _run_once_owned(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
         if (
             self._stop_requested()
@@ -3161,6 +3217,7 @@ class ServiceEngine:
             )
             if self._stop_before_admission():
                 return 0
+            self._owned_execution_id = execution_id
             self._publish_service_snapshot(worker_running=False)
 
         try:
@@ -3220,6 +3277,7 @@ class ServiceEngine:
             execution_remote_head=execution_remote_head,
             worker_identity=None,
         )
+        self._owned_execution_id = execution_id
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         self._worker_identity_handler = lambda identity: self._save_state(
             "agent_running",
@@ -5329,11 +5387,17 @@ export default tool({
             if plan.ticket_id is not None and plan.ticket_id in ticket_store.by_id
             else None
         )
+        bound_ticket_id = (
+            selected_id if bound_phase and isinstance(selected_id, str) else None
+        )
+        bound_ticket_title = (
+            ticket_store.by_id[bound_ticket_id].title
+            if bound_ticket_id is not None and bound_ticket_id in ticket_store.by_id
+            else None
+        )
         return StatusSnapshot(
             phase=str(state["phase"]),
-            bound_ticket_id=(
-                selected_id if bound_phase and isinstance(selected_id, str) else None
-            ),
+            bound_ticket_id=bound_ticket_id,
             persisted_body_present=bound_phase
             and isinstance(state.get("selected_ticket_body"), str),
             code=code,
@@ -5351,6 +5415,19 @@ export default tool({
                 if isinstance(state.get("reconciliation"), dict)
                 else None
             ),
+            execution_stage=(
+                state.get("execution_stage")
+                if bound_ticket_id is not None
+                and isinstance(state.get("execution_stage"), str)
+                else None
+            ),
+            execution_id=(
+                state.get("execution_id")
+                if bound_ticket_id is not None
+                and isinstance(state.get("execution_id"), str)
+                else None
+            ),
+            bound_ticket_title=bound_ticket_title,
         )
 
     def _make_execution_plan(

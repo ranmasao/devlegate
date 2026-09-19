@@ -7,7 +7,7 @@ from copy import deepcopy
 
 import pytest
 
-from devlegate.cli import _render_status_text
+from devlegate.cli import _execution_projection, _render_status_text
 from devlegate.ipc_client import (
     IPCClientError,
     decode_plan,
@@ -217,9 +217,39 @@ def test_status_round_trip_preserves_complete_view():
         plan,
         (FailedExecution("F-1", "Failed", "broken", True, None, "operator_abort"),),
         {"ticket": "T-1", "onto": "main"},
+        execution_stage="worker-running",
+        execution_id="execution-1",
+        bound_ticket_title="Ticket",
     )
 
-    assert decode_status(snapshot.as_dict()) == snapshot
+    payload = snapshot.as_dict()
+    assert set(payload) == {
+        "execution",
+        "observation",
+        "tickets",
+        "plan",
+        "failed_executions",
+        "reconciliation",
+    }
+    assert payload["execution"] == {
+        "phase": "agent_running",
+        "stage": "worker-running",
+        "execution_id": "execution-1",
+        "bound_ticket": "T-1",
+        "ticket_title": "Ticket",
+        "persisted_body": True,
+    }
+    assert set(payload["tickets"]) == {
+        "counts",
+        "runnable",
+        "eligible",
+        "blocked",
+        "review",
+        "accepted",
+        "next",
+    }
+    assert payload["tickets"]["eligible"] == []
+    assert decode_status(payload) == snapshot
 
 
 def test_plan_round_trip_preserves_complete_view():
@@ -244,8 +274,13 @@ def test_status_text_is_identical_after_ipc_round_trip():
         representative_plan(),
     )
 
-    ipc_text = _render_status_text(decode_status(snapshot.as_dict()), "stopped")
-    direct_text = _render_status_text(snapshot, "stopped")
+    ipc_snapshot = decode_status(snapshot.as_dict())
+    ipc_text = _render_status_text(
+        ipc_snapshot, "stopped", _execution_projection(ipc_snapshot, None)
+    )
+    direct_text = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None)
+    )
     assert ipc_text == direct_text
 
 
@@ -279,12 +314,14 @@ def test_reconciliation_text_distinguishes_actionable_history(status):
         reconciliation=reconciliation,
     )
 
-    text = _render_status_text(snapshot, "stopped")
+    text = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None)
+    )
     payload = snapshot.as_dict()
     assert payload["reconciliation"]["status"] == status
     if status == "pending":
-        assert "Reconciliation required:" in text
-        assert "Update-base eligible" in text
+        assert "Reconciliation" in text
+        assert "Product Target Eligible" in text
         assert "yes" in text
     else:
         assert "Reconciliation required:" not in text

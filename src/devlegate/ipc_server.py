@@ -39,7 +39,15 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
         return {"service": "devlegate", "protocol_version": 1}
     if request.method == "status":
         view = engine.status_view()
-        return view.as_dict()
+        result = view.as_dict()
+        evidence = getattr(engine, "live_execution_evidence", lambda: None)()
+        if isinstance(evidence, dict):
+            result["live_execution"] = {
+                key: value
+                for key, value in evidence.items()
+                if key != "worker_identity"
+            }
+        return result
     if request.method == "plan":
         view = engine.plan_view()
         return view.as_dict()

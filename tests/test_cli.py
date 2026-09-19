@@ -496,7 +496,6 @@ def test_version_command(monkeypatch, capsys):
     assert main() == 0
     output = capsys.readouterr().out
     assert "Devlegate" in output
-    assert "Program" in output
     assert __version__ in output
 
 
@@ -869,10 +868,16 @@ def test_status_uses_daemon_ipc_without_fallback(
     )
 
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
-    assert json.loads(capsys.readouterr().out) == {
-        "service": {"state": "running"},
-        **expected,
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["service"] == {"state": "running"}
+    assert set(payload) == {"service", *expected}
+    assert payload["execution"] == {
+        **expected["execution"],
+        "state": "idle",
     }
+    for key, value in expected.items():
+        if key != "execution":
+            assert payload[key] == value
 
 
 def test_status_without_service_reports_stopped_from_local_observation(git_fixture):
@@ -929,7 +934,7 @@ def test_blocked_dependency_status_uses_daemon_semantics(
     output = capsys.readouterr().out
     assert "T-1" in output
     assert "Waiting" in output
-    assert "by D-1 [review]" in output
+    assert "D-1 [review]" in output
 
 
 def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
@@ -2853,7 +2858,7 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
         sys, "argv", ["devlegate", "status", "--env", str(git_fixture["config"])]
     )
     assert main() == 0
-    assert "Execution:" in capsys.readouterr().out
+    assert "Repositories" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,
@@ -2938,7 +2943,7 @@ def test_status_table_and_machine_formats_share_service_state(monkeypatch, capsy
     monkeypatch.setattr(sys, "argv", ["devlegate", "status"])
     assert main() == 0
     table = capsys.readouterr().out
-    assert table.index("Service") < table.index("Execution:")
+    assert "service running" in table
     assert "running" in table
 
     monkeypatch.setattr(sys, "argv", ["devlegate", "status", "--json"])

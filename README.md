@@ -115,8 +115,9 @@ devlegate plan
 devlegate retry
 ```
 
-Finite commands use a human-readable table by default. Add `--yaml` for
-canonical vendored NanoYAML or `--json` for deterministic pretty JSON; the two
+Finite commands use concise operator-oriented human output by default. Tables
+are used where information is genuinely tabular. Add `--yaml` for canonical
+vendored NanoYAML or `--json` for deterministic pretty JSON; the two
 machine-readable flags are mutually exclusive. This applies to `version`,
 `init`, `render`, `check`, `status`, `plan`, `stop`, `retry`, `control init`,
 and the `reconcile update-base`, `reconcile resume`, and `reconcile control`
@@ -124,8 +125,12 @@ commands. Service and worker logs from `foreground` and the background daemon
 remain operational streams, not YAML or JSON documents.
 
 Status reports service state (`running` or `stopped`) separately from the
-execution phase (`idle`, `agent_pending`, `agent_running`, and other workflow
-phases).
+execution phase and operator execution state (`idle`, `preparing`, `starting`,
+`running`, `finalizing`, or `recovery-required`). Operator `running` means the
+live service proved ownership of the exact worker execution; persisted
+`agent_running` state alone is not sufficient. Human `Eligible` work excludes
+the currently bound ticket, while the compatibility machine `runnable` field
+retains its scheduler-level meaning.
 
 `init` creates missing project-owned setup files without starting execution.
 `control init` prepares the separate workflow history. `check` validates the

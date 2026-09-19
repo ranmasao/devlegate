@@ -29,7 +29,7 @@ from devlegate.ipc_client import (
     decode_status,
     request,
 )
-from devlegate.output import add_output_arguments, emit, render_table
+from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.runtime import (
     DevlegateError,
     ExecutionPlan,
@@ -64,6 +64,7 @@ def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine
 class ReadOnlyView:
     value: StatusSnapshot | ExecutionPlan
     service_state: str
+    live_execution: dict[str, object] | None = None
 
 
 def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
@@ -101,7 +102,16 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
                 if method == "status"
                 else decode_plan(response)
             )
-            return ReadOnlyView(value, "running")
+            live_execution = response.get("live_execution")
+            if not isinstance(live_execution, dict):
+                live_execution = None
+            elif "worker_identity" in live_execution:
+                live_execution = {
+                    key: item
+                    for key, item in live_execution.items()
+                    if key != "worker_identity"
+                }
+            return ReadOnlyView(value, "running", live_execution)
         except IPCClientError as decode_error:
             raise DevlegateError(str(decode_error)) from decode_error
     except RuntimeLocatorError as error:
@@ -177,7 +187,7 @@ def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> 
     emit(
         result,
         output_format,
-        render_table(f"retry accepted: {ticket_id}", result.items()),
+        f"retry accepted: {ticket_id}",
     )
     return 0
 
@@ -206,7 +216,7 @@ def _reconcile_daemon(
     emit(
         result,
         output_format,
-        render_table(f"reconciliation accepted: {ticket_id}", result.items()),
+        f"reconciliation accepted: {ticket_id}",
     )
     return 0
 
@@ -235,7 +245,7 @@ def _reconcile_resume_daemon(
     emit(
         result,
         output_format,
-        render_table(f"reconciliation resume accepted: {ticket_id}", result.items()),
+        f"reconciliation resume accepted: {ticket_id}",
     )
     return 0
 
@@ -264,7 +274,7 @@ def _reconcile_control(
     emit(
         result,
         output_format,
-        render_table("control reconciliation accepted", result.items()),
+        f"control reconciliation accepted: {from_head} -> {to_head}",
     )
     return 0
 
@@ -283,7 +293,7 @@ def _stop_service(env_file: Path, output_format: str) -> int:
     if set(response) != {"accepted"} or response["accepted"] is not True:
         raise DevlegateError("service IPC returned invalid stop acknowledgement")
     result = {"result": "accepted", "service": "devlegate", "action": "stop"}
-    emit(result, output_format, render_table("service stop accepted", result.items()))
+    emit(result, output_format, "service stop accepted")
     return 0
 
 
@@ -404,197 +414,252 @@ def _start_background(env_file: Path) -> int:
         os.close(read_fd)
 
 
+def _execution_projection(
+    snapshot: StatusSnapshot, live_execution: dict[str, object] | None
+) -> dict[str, object]:
+    phase = snapshot.phase
+    stage = snapshot.execution_stage
+    has_bound_execution = (
+        snapshot.bound_ticket_id is not None and snapshot.execution_id is not None
+    )
+    if phase == "idle":
+        state = "idle"
+    elif phase == "agent_pending" and _service_owns_execution(
+        snapshot, live_execution
+    ):
+        state = "preparing"
+    elif (
+        phase == "agent_running"
+        and stage == "worker-launch"
+        and _service_owns_execution(snapshot, live_execution)
+    ):
+        state = "starting"
+    elif phase == "agent_running" and stage in {
+        "post-worker",
+        "pre-checkpoint",
+        "checkpointing",
+        "post-checkpoint",
+        "publishing",
+        "post-publication",
+        "lifecycle",
+    } and _service_owns_execution(snapshot, live_execution):
+        state = "finalizing"
+    elif (
+        phase == "agent_running"
+        and stage == "worker-running"
+        and _service_owns_execution(snapshot, live_execution)
+        and live_execution.get("identity_state") == "matching-live"
+    ):
+        state = "running"
+    elif phase != "idle":
+        state = "recovery-required"
+    else:
+        state = "idle"
+    title = snapshot.bound_ticket_title if snapshot.bound_ticket_id else None
+    return {
+        "state": state,
+        "phase": phase,
+        "stage": stage if has_bound_execution else None,
+        "execution_id": snapshot.execution_id if has_bound_execution else None,
+        "ticket_id": snapshot.bound_ticket_id,
+        "ticket_title": title,
+    }
+
+
+def _service_owns_execution(
+    snapshot: StatusSnapshot, live_execution: dict[str, object] | None
+) -> bool:
+    return (
+        isinstance(live_execution, dict)
+        and snapshot.bound_ticket_id is not None
+        and snapshot.execution_id is not None
+        and live_execution.get("ticket_id") == snapshot.bound_ticket_id
+        and live_execution.get("execution_id") == snapshot.execution_id
+        and live_execution.get("stage") == snapshot.execution_stage
+        and live_execution.get("ownership") == "current-service"
+    )
+
+
+def _short_hash(value: str | None) -> str:
+    return (value or "<unknown>")[:12]
+
+
 def _render_status_text(
-    snapshot: StatusSnapshot, service_state: str
+    snapshot: StatusSnapshot,
+    service_state: str,
+    execution: dict[str, object],
 ) -> str:
     code = snapshot.code
     control = snapshot.control
-
-    def list_table(title: str, rows: tuple[tuple[str, str], ...], empty: str) -> str:
-        return render_table(title, rows or ((empty, "none"),))
-
-    lines = [
-        f"Devlegate {__version__}",
-        "",
-        render_table("Service", (("State", service_state),)),
-        "",
-        render_table(
-            "Execution:",
-            (
-                ("Phase", snapshot.phase),
-                ("Bound ticket", snapshot.bound_ticket_id),
-                ("Persisted body", snapshot.persisted_body_present),
-            ),
-        ),
-        "",
-        render_table(
-            "Code plane:",
-            (
-                ("Branch", code.branch or "<detached>"),
-                ("Local HEAD", code.local_head),
-                ("Known remote", code.remote_ref),
-                ("Known remote HEAD", code.remote_head or "<unknown>"),
-                ("Working tree", "clean" if code.working_tree_clean else "dirty"),
-            ),
-        ),
-        "",
-        render_table(
-            "Control plane:",
-            (
-                (("Worktree", "missing (run 'devlegate control init')"),)
-                if control is None
-                else (
-                    ("Branch", control.branch or "<detached>"),
-                    ("Local HEAD", control.local_head),
-                    ("Known remote", control.remote_ref),
-                    ("Known remote HEAD", control.remote_head or "<unknown>"),
-                    (
-                        "Working tree",
-                        "clean" if control.working_tree_clean else "dirty",
-                    ),
-                )
-            ),
-        ),
-        "",
-        render_table("Tickets:", snapshot.counts),
-        "",
-        list_table("Runnable:", snapshot.runnable, "Tickets"),
-        "",
-        list_table(
-            "Failed executions:",
-            tuple(
-                (
-                    failure.ticket_id,
-                    "execution: failed; "
-                    f"retryable: {'yes' if failure.retryable else 'no'}; "
-                    f"reason: {failure.display_reason}",
-                )
-                for failure in snapshot.failed_executions
-            ),
-            "Executions",
-        ),
-    ]
-    if (
-        snapshot.reconciliation is not None
-        and snapshot.reconciliation.get("status") == "pending"
-    ):
-        reconciliation = snapshot.reconciliation
-        product_branch = reconciliation.get("product_branch", "") or "detached"
-        product_local_head = reconciliation.get("product_local_head", "")
-        product_dirty = reconciliation.get("product_dirty", False)
-        target_eligible = reconciliation.get("product_target_eligible", False)
-        product_observation = reconciliation.get("product_observation", "")
+    lines = [f"Devlegate {__version__}  •  service {service_state}"]
+    if execution["state"] != "idle":
         lines.extend(
             [
                 "",
                 render_table(
-                    "Reconciliation required:",
+                    "Current execution",
                     (
-                        ("Ticket", reconciliation["ticket_id"]),
-                        ("Original base", reconciliation["original_base"]),
-                        ("Observed product", reconciliation["observed_product"]),
-                        ("Worker checkpoint", reconciliation["worker_checkpoint"]),
-                        ("Product branch", product_branch),
-                        ("Product local HEAD", product_local_head),
-                        ("Product dirty", product_dirty),
-                        ("Update-base eligible", target_eligible),
-                        ("Product observation", product_observation),
+                        ("State", execution["state"]),
+                        (
+                            "Ticket",
+                            (
+                                f"{execution['ticket_id']} · "
+                                f"{execution['ticket_title']}"
+                                if execution["ticket_id"]
+                                else "<unknown>"
+                            ),
+                        ),
                     ),
                 ),
             ]
         )
+        if execution["state"] == "recovery-required":
+            lines.append(
+                render_table(
+                    "Recovery diagnostics",
+                    (
+                        ("Phase", execution["phase"]),
+                        ("Stage", execution["stage"]),
+                        ("Execution", execution["execution_id"]),
+                    ),
+                )
+            )
+    repository_rows = [
+        (
+            "Code",
+            code.branch or "<detached>",
+            _short_hash(code.local_head),
+            f"{code.remote_ref} @ {_short_hash(code.remote_head)}",
+            "clean" if code.working_tree_clean else "dirty",
+        )
+    ]
+    if control is None:
+        repository_rows.append(("Control", "missing", "-", "-", "-"))
+    else:
+        repository_rows.append(
+            (
+                "Control",
+                control.branch or "<detached>",
+                _short_hash(control.local_head),
+                f"{control.remote_ref} @ {_short_hash(control.remote_head)}",
+                "clean" if control.working_tree_clean else "dirty",
+            )
+        )
     lines.extend(
         [
             "",
-            list_table(
-                "Blocked:",
-                tuple(
-                    (
-                        ticket_id,
-                        f"{title}; blocked by "
-                        + ", ".join(
-                            f"{dependency_id} [{state}]"
-                            for dependency_id, state in blockers
-                        ),
-                    )
-                    for ticket_id, title, blockers in snapshot.blocked
-                ),
-                "Tickets",
+            render_grid(
+                "Repositories",
+                ("Plane", "Branch", "Local", "Remote", "Tree"),
+                repository_rows,
             ),
             "",
-            list_table("Review:", snapshot.review, "Tickets"),
-            "",
-            list_table("Accepted:", snapshot.accepted, "Tickets"),
-            "",
-            render_table(
-                "Next:",
-                (
-                    ("Ticket", snapshot.next_ticket[0]),
-                    ("Title", snapshot.next_ticket[1]),
-                )
-                if snapshot.next_ticket
-                else (("Ticket", "none"),),
+            render_grid(
+                "Workflow",
+                tuple(state.title() for state, _count in snapshot.counts),
+                (tuple(count for _state, count in snapshot.counts),),
             ),
         ]
     )
+    bound_id = snapshot.bound_ticket_id
+    eligible = tuple(item for item in snapshot.runnable if item[0] != bound_id)
+    if eligible:
+        lines.extend(["", render_grid("Eligible", ("Ticket", "Title"), eligible)])
+    else:
+        lines.extend(["", "Eligible: none"])
+    if snapshot.blocked:
+        lines.extend(
+            [
+                "",
+                render_grid(
+                    "Blocked",
+                    ("Ticket", "Title", "Waiting for"),
+                    tuple(
+                        (
+                            ticket_id,
+                            title,
+                            ", ".join(
+                                f"{dependency_id} [{state}]"
+                                for dependency_id, state in blockers
+                            ),
+                        )
+                        for ticket_id, title, blockers in snapshot.blocked
+                    ),
+                ),
+            ]
+        )
+    if snapshot.review:
+        lines.extend(["", render_grid("Review", ("Ticket", "Title"), snapshot.review)])
+    if snapshot.accepted:
+        lines.extend(
+            ["", render_grid("Accepted", ("Ticket", "Title"), snapshot.accepted)]
+        )
+    if snapshot.failed_executions:
+        lines.extend(
+            [
+                "",
+                render_grid(
+                    "Failed executions",
+                    ("Ticket", "Retryable", "Reason"),
+                    tuple(
+                        (
+                            failure.ticket_id,
+                            "yes" if failure.retryable else "no",
+                            failure.display_reason,
+                        )
+                        for failure in snapshot.failed_executions
+                    ),
+                ),
+            ]
+        )
+    if snapshot.reconciliation and snapshot.reconciliation.get("status") == "pending":
+        reconciliation = snapshot.reconciliation
+        lines.extend(
+            [
+                "",
+                render_table(
+                    "Reconciliation",
+                    tuple(
+                        (key.replace("_", " ").title(), value)
+                        for key, value in reconciliation.items()
+                        if key in {
+                            "ticket_id",
+                            "original_base",
+                            "observed_product",
+                            "worker_checkpoint",
+                            "product_target_eligible",
+                            "product_observation",
+                        }
+                    ),
+                ),
+            ]
+        )
     return "\n".join(lines)
 
 
 def _render_plan_text(plan: ExecutionPlan) -> str:
     lines = [
         f"Devlegate {__version__}",
-        render_table(
-            "Execution plan:",
-            (("Action", plan.action), ("Reason", plan.reason)),
-        ),
+        "",
+        "Execution plan:",
+        f"Plan: {plan.action} · {plan.reason}",
     ]
     if plan.ticket_id is not None:
-        lines.extend(
-            [
-                "",
-                render_table(
-                    "Ticket",
-                    (
-                        ("ID", plan.ticket_id),
-                        ("Title", plan.ticket_title),
-                        ("State", plan.ticket_state),
-                    ),
-                ),
-            ]
-        )
+        lines.append(f"Ticket: {plan.ticket_id} · {plan.ticket_title}")
+        lines.append(f"Ticket state: {plan.ticket_state}")
     if plan.code:
-        lines.extend(
-            [
-                "",
-                render_table(
-                    "Code",
-                    (
-                        ("Branch", plan.code.branch or "<detached>"),
-                        ("Local HEAD", plan.code.local_head),
-                        ("Known remote", plan.code.remote_ref),
-                        ("Known remote HEAD", plan.code.remote_head or "<unknown>"),
-                    ),
-                ),
-            ]
+        lines.append(
+            f"Code: {plan.code.branch or '<detached>'} @ "
+            f"{_short_hash(plan.code.local_head)}"
         )
     if plan.control:
-        lines.extend(
-            [
-                "",
-                render_table(
-                    "Control",
-                    (
-                        ("Branch", plan.control.branch or "<detached>"),
-                        ("Local HEAD", plan.control.local_head),
-                        ("Known remote", plan.control.remote_ref),
-                        ("Known remote HEAD", plan.control.remote_head or "<unknown>"),
-                    ),
-                ),
-            ]
+        lines.append(
+            f"Control: {plan.control.branch or '<detached>'} @ "
+            f"{_short_hash(plan.control.local_head)}"
         )
     else:
-        lines.extend(["", render_table("Control", (("Worktree", "missing"),))])
-    lines.extend(["", render_table("Execution", (("Bound", plan.bound),))])
+        lines.append("Control: missing")
+    lines.append(f"Bound: {'yes' if plan.bound else 'no'}")
     return "\n".join(lines)
 
 
@@ -607,13 +672,14 @@ def _render_check_text(result: dict[str, object]) -> str:
             (("State", "ready" if result["ready"] else "not ready"),),
         ),
         "",
-        render_table(
+        render_grid(
             "Checks:",
+            ("Check", "State", "Detail"),
             tuple(
                 (
                     check["name"],
-                    ("OK" if check["passed"] else "FAIL")
-                    + (f": {check['detail']}" if check["detail"] else ""),
+                    "OK" if check["passed"] else "FAIL",
+                    check["detail"] or "",
                 )
                 for check in result["checks"]
             ),
@@ -836,7 +902,9 @@ class Devlegate(ServiceEngine):
     """Legacy CLI-facing runtime surface; presentation remains here."""
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
-        return _render_status_text(snapshot, "stopped")
+        return _render_status_text(
+            snapshot, "stopped", _execution_projection(snapshot, None)
+        )
 
     def run_once(self, stop_event=None) -> int:
         # Preserve the historical CLI test hook while keeping runtime independent.
@@ -860,7 +928,9 @@ class Devlegate(ServiceEngine):
         print(
             json.dumps(snapshot.as_dict(), indent=2, sort_keys=True)
             if json_output
-            else _render_status_text(snapshot, "stopped")
+            else _render_status_text(
+                snapshot, "stopped", _execution_projection(snapshot, None)
+            )
         )
         return 1 if snapshot.plan.action == "blocked" else 0
 
@@ -1116,10 +1186,7 @@ def main() -> int:
         emit(
             value,
             args.output_format,
-            render_table(
-                "Devlegate",
-                (("Program", "devlegate"), ("Version", __version__)),
-            ),
+            f"Devlegate {__version__}",
         )
         return 0
     if args.command in {"foreground", "once"}:
@@ -1180,31 +1247,59 @@ def main() -> int:
             emit(
                 value,
                 args.output_format,
-                render_table(f"init (rendered {value['rendered']})", value.items()),
+                "Initialized Devlegate project; "
+                f"rendered {value['rendered']} artifacts.",
             )
             return 0
         if args.command == "render":
             value = devlegate.render_result(args.check)
             value = {**value, "command": "render"}
-            emit(value, args.output_format, render_table("render", value.items()))
+            emit(
+                value,
+                args.output_format,
+                (
+                    "Generated agent protocol artifacts are current."
+                    if args.check
+                    else f"Rendered {value['artifacts']} agent protocol artifacts "
+                    f"({value['changed']} changed)."
+                ),
+            )
             return 0
         if args.command == "control":
             value = devlegate.control_init_result()
             value = {**value, "command": "control init"}
-            emit(value, args.output_format, render_table("control init", value.items()))
+            control_messages = {
+                "already_attached": "Control worktree already attached",
+                "attached_existing_remote": "Control worktree attached",
+                "initialized_new_control_plane": "Control plane initialized",
+            }
+            emit(
+                value,
+                args.output_format,
+                f"{control_messages[value['result']]}: "
+                f"{value['control_worktree']}",
+            )
             return 0
         if args.command == "status":
             view = _read_only_view(env_file, "status")
             snapshot = view.value
             assert isinstance(snapshot, StatusSnapshot)
+            execution = _execution_projection(snapshot, view.live_execution)
             payload = {
                 "service": {"state": view.service_state},
                 **snapshot.as_dict(),
             }
+            payload["execution"] = {
+                **payload["execution"],
+                "state": execution["state"],
+                "ticket_title": execution["ticket_title"],
+            }
+            if view.live_execution is not None:
+                payload["live_execution"] = view.live_execution
             emit(
                 payload,
                 args.output_format,
-                _render_status_text(snapshot, view.service_state),
+                _render_status_text(snapshot, view.service_state, execution),
             )
             return 1 if snapshot.plan.action == "blocked" else 0
         if args.command == "plan":
