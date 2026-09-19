@@ -484,6 +484,25 @@ def _short_hash(value: str | None) -> str:
     return (value or "<unknown>")[:12]
 
 
+def _blocked_reason_text(
+    blockers: tuple[tuple[str, str], ...],
+    reasons: tuple[tuple[str, str], ...],
+) -> str:
+    states = dict(blockers)
+    effective = reasons or tuple(
+        ("unfinished-dependency", dependency_id)
+        for dependency_id, _state in blockers
+    )
+    return ", ".join(
+        (
+            f"{dependency_id} integration in progress"
+            if kind == "integration-in-progress"
+            else f"{dependency_id} unfinished ({states.get(dependency_id, 'unknown')})"
+        )
+        for kind, dependency_id in effective
+    )
+
+
 def _render_status_text(
     snapshot: StatusSnapshot,
     service_state: str,
@@ -524,6 +543,17 @@ def _render_status_text(
                     ),
                 )
             )
+    if snapshot.lifecycle_integration is not None:
+        ticket_id, state = snapshot.lifecycle_integration
+        lines.extend(
+            [
+                "",
+                render_table(
+                    "Lifecycle",
+                    (("Integration", f"{state} {ticket_id}"),),
+                ),
+            ]
+        )
     repository_rows = [
         (
             "Code",
@@ -568,19 +598,19 @@ def _render_status_text(
     else:
         lines.extend(["", "Eligible: none"])
     if snapshot.blocked:
+        reasons_by_ticket = dict(snapshot.blocked_reasons)
         lines.extend(
             [
                 "",
                 render_grid(
                     "Blocked",
-                    ("Ticket", "Title", "Waiting for"),
+                    ("Ticket", "Title", "Reason"),
                     tuple(
                         (
                             ticket_id,
                             title,
-                            ", ".join(
-                                f"{dependency_id} [{state}]"
-                                for dependency_id, state in blockers
+                            _blocked_reason_text(
+                                blockers, reasons_by_ticket.get(ticket_id, ())
                             ),
                         )
                         for ticket_id, title, blockers in snapshot.blocked

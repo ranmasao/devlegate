@@ -153,6 +153,38 @@ def test_machine_eligible_excludes_bound_ticket():
     ]
 
 
+def test_accepted_integration_is_visible_with_structured_blocking_reason():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("idle", None),
+        blocked=(
+            (
+                "LAB-127",
+                "Dependent work",
+                (("LAB-126", "accepted"),),
+            ),
+        ),
+        blocked_reasons=(
+            ("LAB-127", (("integration-in-progress", "LAB-126"),)),
+        ),
+        lifecycle_integration=("LAB-126", "in-progress"),
+    )
+
+    payload = snapshot.as_dict()
+    output = _render_status_text(
+        snapshot, "running", _execution_projection(snapshot, None)
+    )
+
+    assert payload["lifecycle"] == {
+        "integration": {"ticket_id": "LAB-126", "state": "in-progress"}
+    }
+    assert payload["tickets"]["blocked"][0]["reasons"] == [
+        {"kind": "integration-in-progress", "ticket_id": "LAB-126"}
+    ]
+    assert "Lifecycle" in output
+    assert "in-progress LAB-126" in output
+    assert "LAB-126 integration in progress" in output
+
+
 def test_one_row_table_has_no_middle_separator():
     output = render_table("One", (("A", "B"),))
 

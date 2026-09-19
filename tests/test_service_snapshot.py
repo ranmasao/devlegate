@@ -5,7 +5,7 @@ import dataclasses
 import threading
 
 import pytest
-from test_control_plane import control_fixture, invoke
+from test_control_plane import control_fixture, git, invoke
 
 from devlegate.runtime import ServiceSnapshot
 from devlegate.service import ServiceEngine
@@ -250,6 +250,39 @@ def test_worker_evidence_still_requires_matching_live_identity(
         "devlegate.runtime.observe_worker_identity", lambda _identity: "not-live"
     )
     assert engine.live_execution_evidence() is None
+
+
+def test_accepted_integration_takes_plan_and_status_precedence(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    control = next((engine.state_dir / "worktrees").glob("*/control"))
+    accepted = control / "kanban/todo/T-1.md"
+    accepted.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept ticket")
+    git(
+        control,
+        "push",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    checkpoint = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    engine._save_state(
+        "idle",
+        accepted_integration={
+            "ticket_id": "T-1",
+            "checkpoint": checkpoint,
+            "control_head": control_head,
+        },
+    )
+
+    snapshot = engine.status_view()
+
+    assert snapshot.lifecycle_integration == ("T-1", "in-progress")
+    assert snapshot.plan.action == "none"
+    assert "accepted integration recovery in progress" in snapshot.plan.reason
+    assert engine.service_snapshot().lifecycle == "blocked"
+    assert engine.service_snapshot().blocked_reason == snapshot.plan.reason
 
 
 def test_blocked_reason_is_published_and_cleared(tmp_path, monkeypatch):

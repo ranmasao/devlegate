@@ -29,6 +29,8 @@ from devlegate.cli import (
     Devlegate,
     DevlegateError,
     ReadOnlyView,
+    _execution_projection,
+    _render_status_text,
     _todo_fingerprint,
     build_parser,
     main,
@@ -934,7 +936,7 @@ def test_blocked_dependency_status_uses_daemon_semantics(
     output = capsys.readouterr().out
     assert "T-1" in output
     assert "Waiting" in output
-    assert "D-1 [review]" in output
+    assert "D-1 unfinished (review)" in output
 
 
 def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
@@ -2237,6 +2239,137 @@ def test_real_service_accepted_integration_restart_is_idempotent(
         assert not (engine.control_worktree / "kanban/accepted/T-1.md").exists()
     finally:
         service.stop()
+
+
+def test_accepted_integration_blocks_dependent_worker_after_product_publication(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    dependent = engine.control_worktree / "kanban/todo/T-2.md"
+    dependent.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependent"\n'
+        '"depends_on":\n  - "T-1"\n---\nwait for T-1\n'
+    )
+    git(engine.control_worktree, "add", "kanban/todo/T-2.md")
+    git(engine.control_worktree, "commit", "-m", "add dependent ticket")
+    git(
+        engine.control_worktree,
+        "push",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+    monkeypatch.setenv("H1_CRASH_POINT", "integration_product_after_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_h1_driver(config, "integration_product_after_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        assert attempts.read_text().splitlines() == ["attempt"]
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+
+        monkeypatch.delenv("H1_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/review/T-2.md").is_file()
+        )
+        assert (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        assert not isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+    finally:
+        service.stop()
+
+
+def test_live_accepted_integration_window_precedes_dependent_scheduling(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    dependent = engine.control_worktree / "kanban/todo/T-2.md"
+    dependent.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependent"\n'
+        '"depends_on":\n  - "T-1"\n---\nwait for T-1\n'
+    )
+    git(engine.control_worktree, "add", "kanban/todo/T-2.md")
+    git(engine.control_worktree, "commit", "-m", "add dependent ticket")
+    git(
+        engine.control_worktree,
+        "push",
+        "origin",
+        "HEAD:refs/heads/devlegate/control",
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    stop_event = threading.Event()
+    original_complete = engine._complete_accepted
+
+    def pause_before_control_transition(ticket_id, expected_head):
+        entered.set()
+        assert release.wait(10)
+        result = original_complete(ticket_id, expected_head)
+        stop_event.set()
+        return result
+
+    monkeypatch.setattr(engine, "_complete_accepted", pause_before_control_transition)
+    result = []
+    owner = threading.Thread(
+        target=lambda: result.append(engine.serve(stop_event)), daemon=True
+    )
+    owner.start()
+    try:
+        assert entered.wait(15)
+        pending = _disk_state(config)["accepted_integration"]
+        assert pending["ticket_id"] == "T-1"
+        assert (engine.control_worktree / "kanban/accepted/T-1.md").is_file()
+        assert (
+            git(
+                engine.repo,
+                "ls-remote",
+                "origin",
+                f"refs/heads/{engine.remote_branch}",
+            ).stdout.split()[0]
+            == pending["checkpoint"]
+        )
+
+        plan = engine.plan_view()
+        snapshot = engine.status_view()
+        status_text = _render_status_text(
+            snapshot,
+            "running",
+            _execution_projection(snapshot, None),
+        )
+        assert plan.action == "none"
+        assert "accepted integration recovery in progress" in plan.reason
+        assert not any(ticket_id == "T-2" for ticket_id, _title in snapshot.runnable)
+        assert snapshot.lifecycle_integration == ("T-1", "in-progress")
+        assert snapshot.blocked_reasons == (
+            ("T-2", (("integration-in-progress", "T-1"),)),
+        )
+        assert "T-1 integration in progress" in status_text
+        assert attempts.read_text().splitlines() == ["attempt"]
+
+        release.set()
+        owner.join(15)
+        assert not owner.is_alive()
+        assert result == [0]
+        assert (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        assert _disk_state(config).get("accepted_integration") is None
+
+        completed = engine.status_view()
+        assert ("T-2", "Dependent") in completed.runnable
+        assert completed.lifecycle_integration is None
+    finally:
+        release.set()
+        stop_event.set()
+        owner.join(15)
 
 
 def test_real_service_foreign_local_control_descendant_stays_blocked(

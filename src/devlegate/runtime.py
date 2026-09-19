@@ -158,8 +158,13 @@ class StatusSnapshot:
     execution_stage: str | None = None
     execution_id: str | None = None
     bound_ticket_title: str | None = None
+    blocked_reasons: tuple[
+        tuple[str, tuple[tuple[str, str], ...]], ...
+    ] = ()
+    lifecycle_integration: tuple[str, str] | None = None
 
     def as_dict(self) -> dict[str, object]:
+        blocked_reasons = dict(self.blocked_reasons)
         return {
             "execution": {
                 "phase": self.phase,
@@ -192,6 +197,18 @@ class StatusSnapshot:
                             {"id": dependency_id, "state": state}
                             for dependency_id, state in blockers
                         ],
+                        **(
+                            {
+                                "reasons": [
+                                    {"kind": kind, "ticket_id": dependency_id}
+                                    for kind, dependency_id in blocked_reasons[
+                                        ticket_id
+                                    ]
+                                ]
+                            }
+                            if ticket_id in blocked_reasons
+                            else {}
+                        ),
                     }
                     for ticket_id, title, blockers in self.blocked
                 ],
@@ -214,6 +231,18 @@ class StatusSnapshot:
                 failure.as_dict() for failure in self.failed_executions
             ],
             "reconciliation": self.reconciliation,
+            **(
+                {
+                    "lifecycle": {
+                        "integration": {
+                            "ticket_id": self.lifecycle_integration[0],
+                            "state": self.lifecycle_integration[1],
+                        }
+                    }
+                }
+                if self.lifecycle_integration is not None
+                else {}
+            ),
         }
 
 
@@ -1541,6 +1570,8 @@ class ServiceEngine:
         blocked_reason = (
             snapshot.plan.reason if snapshot.plan.action == "blocked" else None
         )
+        if snapshot.lifecycle_integration is not None:
+            blocked_reason = snapshot.plan.reason
         worker_running = self.service_snapshot().worker_running
         lifecycle = "worker" if worker_running else (
             "blocked" if blocked_reason else "ready"
@@ -5296,6 +5327,13 @@ export default tool({
         code = git_observation["code"]
         control = git_observation["control"]
         assert code is not None
+        pending_integration = state.get("accepted_integration")
+        lifecycle_integration = (
+            (pending_integration["ticket_id"], "in-progress")
+            if isinstance(pending_integration, dict)
+            and isinstance(pending_integration.get("ticket_id"), str)
+            else None
+        )
         if ticket_store is None:
             return StatusSnapshot(
                 phase=str(state["phase"]),
@@ -5318,6 +5356,7 @@ export default tool({
                     code=code,
                     control=control,
                 ),
+                lifecycle_integration=lifecycle_integration,
             )
         counts = tuple(
             (
@@ -5333,6 +5372,30 @@ export default tool({
                 ticket.title,
                 tuple(
                     (dependency, ticket_store.by_id[dependency].state)
+                    for dependency in sorted(ticket.depends_on)
+                    if ticket_store.by_id[dependency].state != "done"
+                ),
+            )
+            for ticket in ticket_store.tickets
+            if ticket.state == "todo"
+            and any(
+                ticket_store.by_id[dependency].state != "done"
+                for dependency in ticket.depends_on
+            )
+        )
+        integration_ticket_id = (
+            lifecycle_integration[0] if lifecycle_integration is not None else None
+        )
+        blocked_reasons = tuple(
+            (
+                ticket.id,
+                tuple(
+                    (
+                        "integration-in-progress"
+                        if dependency == integration_ticket_id
+                        else "unfinished-dependency",
+                        dependency,
+                    )
                     for dependency in sorted(ticket.depends_on)
                     if ticket_store.by_id[dependency].state != "done"
                 ),
@@ -5428,6 +5491,8 @@ export default tool({
                 else None
             ),
             bound_ticket_title=bound_ticket_title,
+            blocked_reasons=blocked_reasons,
+            lifecycle_integration=lifecycle_integration,
         )
 
     def _make_execution_plan(
@@ -5473,6 +5538,29 @@ export default tool({
                     f"worker checkpoint {reconciliation['worker_checkpoint']}"
                 )
             return ExecutionPlan("blocked", reason, **identity)
+        accepted_integration = state.get("accepted_integration")
+        if isinstance(accepted_integration, dict):
+            ticket_id = accepted_integration.get("ticket_id")
+            ticket = (
+                ticket_store.by_id.get(ticket_id)
+                if isinstance(ticket_id, str)
+                else None
+            )
+            if ticket is None:
+                return ExecutionPlan(
+                    "blocked",
+                    "accepted integration ticket is no longer observable",
+                    **identity,
+                )
+            return ExecutionPlan(
+                "none",
+                f"accepted integration recovery in progress: {ticket.id}",
+                ticket.id,
+                ticket.title,
+                ticket.state,
+                False,
+                **identity,
+            )
         if dirty:
             reason = "code or control working tree is dirty"
             blocked = True

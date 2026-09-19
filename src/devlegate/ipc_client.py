@@ -244,6 +244,7 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
         execution = _mapping(value["execution"], "execution")
         observation = _mapping(value["observation"], "observation")
         tickets = _mapping(value["tickets"], "tickets")
+        blocked = _blocked(tickets["blocked"])
         return StatusSnapshot(
             phase=_text(execution["phase"], "execution phase"),
             bound_ticket_id=_optional_text(
@@ -258,7 +259,7 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
             ),
             counts=_counts(tickets["counts"]),
             runnable=_ticket_pairs(tickets["runnable"], "runnable"),
-            blocked=_blocked(tickets["blocked"]),
+            blocked=blocked,
             review=_ticket_pairs(tickets["review"], "review"),
             accepted=_ticket_pairs(tickets["accepted"], "accepted"),
             next_ticket=_optional_pair(tickets["next"], "next ticket"),
@@ -274,6 +275,8 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
             bound_ticket_title=_optional_text(
                 execution.get("ticket_title"), "bound ticket title"
             ),
+            blocked_reasons=_blocked_reasons(tickets["blocked"]),
+            lifecycle_integration=_lifecycle_integration(value.get("lifecycle")),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IPCClientError(f"service IPC returned invalid status: {error}") from error
@@ -379,6 +382,49 @@ def _blocked(value: object) -> tuple[tuple[str, str, tuple[tuple[str, str], ...]
             )
         )
     return tuple(entries)
+
+
+def _blocked_reasons(
+    value: object,
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    if not isinstance(value, list):
+        raise ValueError("blocked must be a list")
+    entries = []
+    for item in value:
+        mapping = _mapping(item, "blocked ticket")
+        reasons_value = mapping.get("reasons")
+        if reasons_value is None:
+            continue
+        if not isinstance(reasons_value, list):
+            raise ValueError("blocked reasons must be a list")
+        reasons = []
+        for reason in reasons_value:
+            reason_mapping = _mapping(reason, "blocked reason")
+            reasons.append(
+                (
+                    _text(reason_mapping["kind"], "blocked reason kind"),
+                    _text(reason_mapping["ticket_id"], "blocked reason ticket"),
+                )
+            )
+        entries.append((_text(mapping["id"], "blocked id"), tuple(reasons)))
+    return tuple(entries)
+
+
+def _lifecycle_integration(value: object) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    lifecycle = _mapping(value, "lifecycle")
+    integration = lifecycle.get("integration")
+    if integration is None:
+        return None
+    mapping = _mapping(integration, "lifecycle integration")
+    state = _text(mapping["state"], "lifecycle integration state")
+    if state != "in-progress":
+        raise ValueError("invalid lifecycle integration state")
+    return (
+        _text(mapping["ticket_id"], "lifecycle integration ticket"),
+        state,
+    )
 
 
 def _dependency_pairs(value: object) -> tuple[tuple[str, str], ...]:
