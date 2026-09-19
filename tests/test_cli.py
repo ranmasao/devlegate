@@ -2122,6 +2122,97 @@ def test_real_service_absent_worker_uses_process_loss_resume(
         service.stop()
 
 
+def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "h1-auto-resume-worker.py"
+    pid_file = git_fixture["tmp"] / "h1-auto-resume-worker.pid"
+    attempts = git_fixture["tmp"] / "h1-auto-resume-attempts.txt"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "attempts = pathlib.Path(os.environ['DEVLEGATE_TEST_ATTEMPTS'])\n"
+        "count = len(attempts.read_text().splitlines()) if attempts.exists() else 0\n"
+        "with attempts.open('a') as handle:\n"
+        "    handle.write('attempt\\n')\n"
+        "    handle.flush()\n"
+        "pathlib.Path(os.environ['DEVLEGATE_TEST_WORKER_PID']).write_text(str(os.getpid()))\n"
+        "if count == 0:\n"
+        "    while True:\n"
+        "        time.sleep(1)\n"
+        "(workspace / 'process-worker.txt').write_text('completed\\n')\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'process worker', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    worker.chmod(0o755)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid_file))
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    service.start()
+    service.wait_ready()
+    try:
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running"
+            and _worker_body_started(
+                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            ),
+            timeout=30,
+        )
+        service.stop()
+        interrupted = _disk_state(config)
+        assert interrupted["phase"] == "idle"
+        assert interrupted["failed_executions"]["T-1"]["interrupted"] is True
+        assert (
+            interrupted["failed_executions"]["T-1"]["interruption_kind"]
+            == "service_shutdown"
+        )
+
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: _disk_state(config)["phase"] == "idle"
+            and (engine.control_worktree / "kanban/review/T-1.md").is_file(),
+            timeout=30,
+        )
+        time.sleep(1.5)
+        assert service.process is not None and service.process.poll() is None
+        assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+        plan = json.loads(service.cli("plan", "--json").stdout)
+        assert plan["action"] == "none"
+        assert "waiting for review" in plan["reason"]
+
+        review = engine.control_worktree / "kanban/review/T-1.md"
+        review.rename(engine.control_worktree / "kanban/todo/T-1.md")
+        git(engine.control_worktree, "add", "-A")
+        git(engine.control_worktree, "commit", "-m", "return T-1 to todo")
+        git(
+            engine.control_worktree,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
+        service.wait_for(
+            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
+            and attempts.read_text().splitlines()
+            == ["attempt", "attempt", "attempt"],
+            timeout=30,
+        )
+        assert service.process is not None and service.process.poll() is None
+    finally:
+        if service.process is not None and service.process.poll() is None:
+            service.stop()
+
+
 def test_real_service_post_worker_loss_requires_resume(
     git_fixture, monkeypatch
 ):

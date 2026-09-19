@@ -2548,6 +2548,7 @@ class ServiceEngine:
             return self._run_once_owned()
         finally:
             self._owned_execution_id = None
+            self._automatic_resume_ticket_id = None
 
     def _run_once_owned(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
