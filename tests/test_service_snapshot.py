@@ -285,6 +285,37 @@ def test_accepted_integration_takes_plan_and_status_precedence(tmp_path, monkeyp
     assert engine.service_snapshot().blocked_reason == snapshot.plan.reason
 
 
+def test_live_superseding_execution_hides_only_its_historical_failure(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    metadata = {
+        "execution_id": "old-execution",
+        "product_head": "old-product",
+        "remote_head": "old-remote",
+        "control_head": "old-control",
+        "todo_fingerprint": "old-todo",
+        "reason": "old failure",
+        "report_unavailable": True,
+    }
+    engine._save_state(
+        "agent_running",
+        failed_executions={"T-1": metadata, "T-99": metadata},
+    )
+    engine._owned_execution_id = "execution-1"
+
+    active = engine.status_view()
+
+    assert [failure.ticket_id for failure in active.failed_executions] == ["T-99"]
+    assert "T-1" not in active.as_dict()["failed_executions"]
+
+    engine._owned_execution_id = None
+    ended = engine.status_view()
+
+    assert {failure.ticket_id for failure in ended.failed_executions} == {"T-1", "T-99"}
+
+
 def test_blocked_reason_is_published_and_cleared(tmp_path, monkeypatch):
     engine, state = make_engine(tmp_path, monkeypatch)
     control = next((state / "worktrees").glob("*/control"))

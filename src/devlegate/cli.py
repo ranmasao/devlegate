@@ -10,6 +10,7 @@ import os
 import select
 import subprocess
 import sys
+import textwrap
 import time
 from pathlib import Path
 from typing import NoReturn
@@ -415,7 +416,9 @@ def _start_background(env_file: Path) -> int:
 
 
 def _execution_projection(
-    snapshot: StatusSnapshot, live_execution: dict[str, object] | None
+    snapshot: StatusSnapshot,
+    live_execution: dict[str, object] | None,
+    service_state: str = "stopped",
 ) -> dict[str, object]:
     phase = snapshot.phase
     stage = snapshot.execution_stage
@@ -452,7 +455,28 @@ def _execution_projection(
     ):
         state = "running"
     elif phase != "idle":
-        state = "recovery-required"
+        known_stages = {
+            "worker-launch",
+            "worker-running",
+            "post-worker",
+            "pre-checkpoint",
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        }
+        incomplete_protocol = (
+            snapshot.execution_id is None and stage not in known_stages
+        )
+        if (
+            service_state == "running"
+            and live_execution is None
+            and incomplete_protocol
+        ):
+            state = "unverified"
+        else:
+            state = "recovery-required"
     else:
         state = "idle"
     title = snapshot.bound_ticket_title if snapshot.bound_ticket_id else None
@@ -512,35 +536,41 @@ def _render_status_text(
     control = snapshot.control
     lines = [f"Devlegate {__version__}  •  service {service_state}"]
     if execution["state"] != "idle":
-        lines.extend(
-            [
-                "",
-                render_table(
-                    "Current execution",
-                    (
-                        ("State", execution["state"]),
-                        (
-                            "Ticket",
-                            (
-                                f"{execution['ticket_id']} · "
-                                f"{execution['ticket_title']}"
-                                if execution["ticket_id"]
-                                else "<unknown>"
-                            ),
-                        ),
-                    ),
-                ),
-            ]
+        ticket_id = execution.get("ticket_id")
+        current = (
+            f"Current: {ticket_id}  •  {execution['state']}"
+            if ticket_id
+            else f"Current: {execution['state']}"
         )
-        if execution["state"] == "recovery-required":
+        lines.extend(["", current])
+        title = execution.get("ticket_title")
+        if title:
+            lines.extend(
+                textwrap.wrap(
+                    str(title),
+                    width=88,
+                    initial_indent="  ",
+                    subsequent_indent="  ",
+                )
+            )
+        if execution["state"] == "unverified":
+            lines.append("  Live ownership evidence is unavailable.")
+        elif execution["state"] == "recovery-required":
+            diagnostics = tuple(
+                f"{label}={execution[key]}"
+                for label, key in (
+                    ("phase", "phase"),
+                    ("stage", "stage"),
+                    ("execution", "execution_id"),
+                )
+                if execution.get(key) is not None
+            )
             lines.append(
-                render_table(
-                    "Recovery diagnostics",
-                    (
-                        ("Phase", execution["phase"]),
-                        ("Stage", execution["stage"]),
-                        ("Execution", execution["execution_id"]),
-                    ),
+                "  Recovery: "
+                + (
+                    ", ".join(diagnostics)
+                    if diagnostics
+                    else "operator verification required"
                 )
             )
     if snapshot.lifecycle_integration is not None:
@@ -584,10 +614,9 @@ def _render_status_text(
                 repository_rows,
             ),
             "",
-            render_grid(
-                "Workflow",
-                tuple(state.title() for state, _count in snapshot.counts),
-                (tuple(count for _state, count in snapshot.counts),),
+            "Workflow  "
+            + "  ·  ".join(
+                f"{state.title()}: {count}" for state, count in snapshot.counts
             ),
         ]
     )
@@ -595,8 +624,6 @@ def _render_status_text(
     eligible = tuple(item for item in snapshot.runnable if item[0] != bound_id)
     if eligible:
         lines.extend(["", render_grid("Eligible", ("Ticket", "Title"), eligible)])
-    else:
-        lines.extend(["", "Eligible: none"])
     if snapshot.blocked:
         reasons_by_ticket = dict(snapshot.blocked_reasons)
         lines.extend(
@@ -1314,7 +1341,9 @@ def main() -> int:
             view = _read_only_view(env_file, "status")
             snapshot = view.value
             assert isinstance(snapshot, StatusSnapshot)
-            execution = _execution_projection(snapshot, view.live_execution)
+            execution = _execution_projection(
+                snapshot, view.live_execution, view.service_state
+            )
             payload = {
                 "service": {"state": view.service_state},
                 **snapshot.as_dict(),

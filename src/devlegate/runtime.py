@@ -5442,6 +5442,14 @@ export default tool({
         failed_executions = self._evaluate_failed_executions(
             failures, ticket_store, code, control, admission_reason
         )
+        live_evidence = self.live_execution_evidence()
+        if isinstance(live_evidence, dict):
+            active_ticket_id = live_evidence.get("ticket_id")
+            failed_executions = tuple(
+                failure
+                for failure in failed_executions
+                if failure.ticket_id != active_ticket_id
+            )
         next_ticket = (
             (
                 ticket_store.by_id[plan.ticket_id].id,

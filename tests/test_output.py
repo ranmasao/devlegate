@@ -96,7 +96,29 @@ def test_operator_execution_projection_requires_exact_live_evidence():
     )["state"] == "recovery-required"
 
 
-def test_old_status_payload_without_live_evidence_fails_closed():
+def test_running_service_without_live_evidence_is_unverified():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("agent_running", None), execution_id=None
+    )
+
+    assert _execution_projection(snapshot, None, "running")["state"] == "unverified"
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["worker-launch", "worker-running"],
+)
+def test_running_service_with_complete_execution_shape_requires_recovery_evidence(
+    stage,
+):
+    snapshot = _execution_snapshot("agent_running", stage)
+
+    assert _execution_projection(snapshot, None, "running")["state"] == (
+        "recovery-required"
+    )
+
+
+def test_old_status_payload_without_live_evidence_is_unverified():
     snapshot = _execution_snapshot("agent_running", "worker-running")
     payload = snapshot.as_dict()
     payload["execution"].pop("stage")
@@ -104,7 +126,7 @@ def test_old_status_payload_without_live_evidence_fails_closed():
 
     decoded = decode_status(payload)
 
-    assert _execution_projection(decoded, None)["state"] == "recovery-required"
+    assert _execution_projection(decoded, None, "running")["state"] == "unverified"
 
 
 def test_bound_title_does_not_depend_on_execution_plan():
@@ -137,6 +159,81 @@ def test_idle_snapshot_suppresses_stale_execution_identity():
 
     assert payload["execution"]["stage"] is None
     assert payload["execution"]["execution_id"] is None
+
+
+def test_current_execution_is_compact_and_wraps_long_title():
+    title = "A very long current execution title " * 8
+    snapshot = dataclasses.replace(
+        _execution_snapshot("agent_running", "worker-launch"),
+        bound_ticket_title=title,
+    )
+
+    output = _render_status_text(
+        snapshot,
+        "running",
+        _execution_projection(
+            snapshot,
+            {
+                "ticket_id": "LAB-1",
+                "execution_id": "exec-1",
+                "stage": "worker-launch",
+                "ownership": "current-service",
+            },
+            "running",
+        ),
+    )
+
+    lines = output.splitlines()
+    assert "Current: LAB-1  •  starting" in lines
+    assert "Current execution" not in output
+    assert max(map(len, lines)) <= 88
+    assert sum(line.startswith("  ") for line in lines) > 1
+
+
+def test_missing_title_and_recovery_coordinates_are_not_rendered_as_none():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("agent_running", None),
+        bound_ticket_title=None,
+        execution_id=None,
+    )
+
+    output = _render_status_text(
+        snapshot,
+        "stopped",
+        _execution_projection(snapshot, None, "stopped"),
+    )
+
+    assert "Current: LAB-1  •  recovery-required" in output
+    assert "LAB-1 · None" not in output
+    assert "stage=none" not in output.lower()
+    assert "execution=none" not in output.lower()
+
+
+def test_workflow_is_a_compact_summary_and_empty_eligible_is_omitted():
+    snapshot = _execution_snapshot("idle", None)
+
+    output = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None, "stopped")
+    )
+
+    assert (
+        "Workflow  Backlog: 0  ·  Todo: 0  ·  Review: 0  ·  Accepted: 0  ·  Done: 0"
+        in output
+    )
+    assert "Eligible" not in output
+
+
+def test_non_empty_eligible_remains_visible():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("idle", None), runnable=(("LAB-2", "Runnable"),)
+    )
+
+    output = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None, "stopped")
+    )
+
+    assert "Eligible" in output
+    assert "LAB-2" in output
 
 
 def test_machine_eligible_excludes_bound_ticket():

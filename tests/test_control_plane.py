@@ -2577,6 +2577,62 @@ def test_explicit_retry_recovers_agent_running_with_fresh_identity(
         devlegate._state["failed_executions"]["T-1"]["interrupted_execution_id"]
         == old_id
     )
+    assert any(
+        failure.ticket_id == "T-1"
+        for failure in devlegate.status_view().failed_executions
+    )
+
+
+def test_active_retry_projection_hides_superseded_failure(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    _workspace, control = persist_agent_running(devlegate, state)
+    code_head = git(devlegate.repo, "rev-parse", "HEAD").stdout.strip()
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    todo_fingerprint, _count = _todo_fingerprint(control, devlegate.todo_path)
+    devlegate._save_state(
+        "agent_running",
+        failed_executions={
+            "T-1": {
+                "execution_id": "interrupted-old",
+                "product_head": code_head,
+                "remote_head": code_head,
+                "control_head": control_head,
+                "todo_fingerprint": todo_fingerprint,
+                "reason": "previous attempt failed",
+                "report_unavailable": True,
+            },
+            "T-99": {
+                "execution_id": "unrelated-failure",
+                "product_head": code_head,
+                "remote_head": code_head,
+                "control_head": control_head,
+                "todo_fingerprint": todo_fingerprint,
+                "reason": "unrelated attempt failed",
+                "report_unavailable": True,
+            },
+        },
+    )
+    monkeypatch.setattr("devlegate.runtime.observe_worker_identity", lambda _: "absent")
+    observed = []
+
+    def stop_during_prepare(plan):
+        snapshot = devlegate.status_view()
+        observed.append(snapshot)
+        raise ExecutionWorkspaceError("test stops the resumed attempt")
+
+    monkeypatch.setattr(devlegate, "_prepare_execution_workspace", stop_during_prepare)
+
+    with pytest.raises(DevlegateError, match="test stops"):
+        devlegate.retry("T-1")
+
+    assert observed
+    assert [failure.ticket_id for failure in observed[0].failed_executions] == ["T-99"]
+    assert devlegate._state["failed_executions"]["T-1"]["execution_id"] == (
+        "interrupted-old"
+    )
 
 
 def test_interactive_retry_lists_recoverable_agent_running_without_side_effects(
