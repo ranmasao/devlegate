@@ -12,6 +12,13 @@ release are not separate product changes.
 - Devlegate's bundled Python dependencies can no longer be shadowed by same-named
   packages in the managed repository.
 
+### Added
+
+- Added shared table, canonical NanoYAML, and JSON presentation for finite CLI
+  commands, with mutually exclusive `--yaml` and `--json` flags.
+- Added authoritative service state to status output without changing execution
+  phase or service ownership semantics.
+
 ## 0.5.0 -- 2026-09-17
 
 Persistent service execution, separated runtime state, and reproducible source distribution.

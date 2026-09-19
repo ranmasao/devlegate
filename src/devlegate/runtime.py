@@ -1773,7 +1773,7 @@ class ServiceEngine:
             )
         return bool(observed.stdout.strip())
 
-    def _attach_existing_control(self) -> int:
+    def _attach_existing_control(self) -> dict[str, object]:
         fetch = _git(
             self.repo, "fetch", self.remote_name, self.control_branch, check=False
         )
@@ -1850,8 +1850,10 @@ class ServiceEngine:
                     "existing control worktree is not compatible with the remote "
                     "control branch"
                 )
-            print(f"control worktree already attached: {self.control_worktree}")
-            return 0
+            return {
+                "result": "already_attached",
+                "control_worktree": str(self.control_worktree),
+            }
         self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
         local_branch = _git(
             self.repo,
@@ -1893,10 +1895,12 @@ class ServiceEngine:
             raise DevlegateError(
                 f"cannot attach control worktree: {created.stderr.strip()}"
             )
-        print(f"attached control worktree: {self.control_worktree}")
-        return 0
+        return {
+            "result": "attached_existing_remote",
+            "control_worktree": str(self.control_worktree),
+        }
 
-    def _bootstrap_control(self) -> int:
+    def _bootstrap_control(self) -> dict[str, object]:
         if self.control_worktree.exists() or self.control_worktree.is_symlink():
             raise DevlegateError(
                 "expected control worktree path already exists: "
@@ -1971,14 +1975,26 @@ class ServiceEngine:
                 )
         except DevlegateError:
             raise
-        print(f"initialized control worktree: {self.control_worktree}")
-        return 0
+        return {
+            "result": "initialized_new_control_plane",
+            "control_worktree": str(self.control_worktree),
+        }
 
-    def control_init(self) -> int:
+    def control_init_result(self) -> dict[str, object]:
         """Attach an existing control branch or bootstrap a fresh control plane."""
         if self._control_remote_exists():
             return self._attach_existing_control()
         return self._bootstrap_control()
+
+    def control_init(self) -> int:
+        result = self.control_init_result()
+        messages = {
+            "already_attached": "control worktree already attached",
+            "attached_existing_remote": "attached control worktree",
+            "initialized_new_control_plane": "initialized control worktree",
+        }
+        print(f"{messages[result['result']]}: {result['control_worktree']}")
+        return 0
 
     def _probe_state_access(self) -> None:
         self._runtime_store.probe()
@@ -6467,7 +6483,7 @@ export default tool({
             product_branch=self.remote_branch,
         )
 
-    def init_project(self, conflicts: str = "abort") -> int:
+    def init_project_result(self, conflicts: str = "abort") -> dict[str, object]:
         try:
             _total, changed = initialize_project(
                 self.repo,
@@ -6477,23 +6493,39 @@ export default tool({
             )
         except AgentProtocolError as error:
             raise DevlegateError(str(error)) from error
+        return {"result": "initialized", "rendered": changed}
+
+    def init_project(self, conflicts: str = "abort") -> int:
+        result = self.init_project_result(conflicts)
         print(
             "initialized Devlegate project protocol templates "
-            f"and rendered {changed} agent protocol artifacts"
+            f"and rendered {result['rendered']} agent protocol artifacts"
         )
         return 0
 
-    def render(self, check: bool = False) -> int:
+    def render_result(self, check: bool = False) -> dict[str, object]:
         try:
             total, changed = render_project(
                 self.repo, self._agent_render_context(), check=check
             )
         except AgentProtocolError as error:
             raise DevlegateError(str(error)) from error
+        return {
+            "result": "current" if check else "rendered",
+            "artifacts": total,
+            "changed": changed,
+            "check": check,
+        }
+
+    def render(self, check: bool = False) -> int:
+        result = self.render_result(check)
         if check:
             print("generated agent protocol artifacts are current")
         else:
-            print(f"rendered {total} agent protocol artifacts ({changed} changed)")
+            print(
+                f"rendered {result['artifacts']} agent protocol artifacts "
+                f"({result['changed']} changed)"
+            )
         return 0
 
     def plan_view(self) -> ExecutionPlan:
@@ -6533,9 +6565,15 @@ export default tool({
         """Compatibility spelling for the read-only plan projection."""
         return self.plan_view()
 
-    def check(self) -> int:
+    def check_result(
+        self, *, emit_output: bool = False
+    ) -> tuple[int, dict[str, object]]:
         """Run read-only configuration and checkout diagnostics."""
-        print(f"Devlegate {__version__} preflight")
+        def write(*args: object) -> None:
+            if emit_output:
+                print(*args)
+
+        write(f"Devlegate {__version__} preflight")
         status = _git(self.repo, "status", "--porcelain").stdout
         control_observation = self._status_git_observation()["control"]
         todo_fingerprint, todo_count = _todo_fingerprint(
@@ -6668,19 +6706,22 @@ export default tool({
             ),
         ]
         failed = False
+        check_results: list[dict[str, object]] = []
         for name, passed, detail in checks:
             label = "OK" if passed else "FAIL"
             suffix = f": {detail}" if detail else ""
-            print(f"{label:4}  {name}{suffix}")
+            check_results.append({"name": name, "passed": passed, "detail": detail})
+            write(f"{label:4}  {name}{suffix}")
             failed |= not passed
         if status:
-            print("Dirty working tree details:")
+            write("Dirty working tree details:")
             for line in status.rstrip().splitlines():
-                print(f"  {line}")
+                write(f"  {line}")
             for name, count in _status_summary(status).items():
-                print(f"{name.replace('_', ' ')}: {count}")
-        print(f"local HEAD: {local_head}")
-        print(f"known remote HEAD: {remote_head or '<unknown>'}")
+                write(f"{name.replace('_', ' ')}: {count}")
+        write(f"local HEAD: {local_head}")
+        write(f"known remote HEAD: {remote_head or '<unknown>'}")
+        display_counts = None
         if remote_head:
             counts = _git(
                 self.repo,
@@ -6696,38 +6737,75 @@ export default tool({
                 if len(count_parts) == 2
                 else "<unknown>"
             )
-            print(f"ahead/behind: {display_counts}")
-        print(f"todo files: {todo_count}")
-        print(f"todo fingerprint: {todo_fingerprint}")
+            write(f"ahead/behind: {display_counts}")
+        write(f"todo files: {todo_count}")
+        write(f"todo fingerprint: {todo_fingerprint}")
         if self.control_worktree.is_dir():
-            print(
+            write(
                 "control HEAD: "
-                + _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+                + (
+                    control_observation.local_head
+                    if control_observation is not None
+                    else "<unknown>"
+                )
             )
+        ticket_counts = None
+        selected = None
         if ticket_store is not None:
-            counts = {
+            ticket_counts = {
                 state: sum(ticket.state == state for ticket in ticket_store.tickets)
                 for state in ("backlog", "todo", "review", "accepted", "done")
             }
-            print("Ticket storage:")
+            write("Ticket storage:")
             for state in ("backlog", "todo", "review", "accepted", "done"):
-                print(f"  {state}: {counts[state]}")
-            print(f"Runnable tickets: {len(ticket_store.runnable)}")
+                write(f"  {state}: {ticket_counts[state]}")
+            write(f"Runnable tickets: {len(ticket_store.runnable)}")
             selected = ticket_store.selected()
             if selected is not None:
-                print(f"Next runnable: {selected.id} - {selected.title}")
+                write(f"Next runnable: {selected.id} - {selected.title}")
         elif ticket_error:
-            print(f"Ticket storage: invalid: {ticket_error}")
-        print(f"work generation differs from persisted: {generation_differs}")
-        print(
+            write(f"Ticket storage: invalid: {ticket_error}")
+        write(f"work generation differs from persisted: {generation_differs}")
+        write(
             "remote information is from the existing remote-tracking ref; "
             "check does not fetch"
         )
-        if failed:
-            print("\nNot ready.")
-            return 1
-        print("\nReady.")
-        return 0
+        details = {
+            "ready": not failed,
+            "checks": check_results,
+            "local_head": local_head,
+            "known_remote_head": remote_head or None,
+            "ahead_behind": display_counts,
+            "todo_files": todo_count,
+            "todo_fingerprint": todo_fingerprint,
+            "work_generation_differs": generation_differs,
+            "dirty_files": status.rstrip().splitlines(),
+            "dirty_summary": _status_summary(status),
+            "remote_note": (
+                "remote information is from the existing remote-tracking ref; "
+                "check does not fetch"
+            ),
+            "control_head": (
+                control_observation.local_head
+                if control_observation is not None
+                else None
+            ),
+            "ticket_counts": ticket_counts,
+            "runnable_tickets": (
+                len(ticket_store.runnable) if ticket_store is not None else None
+            ),
+            "next_runnable": (
+                {"id": selected.id, "title": selected.title}
+                if selected is not None
+                else None
+            ),
+        }
+        write("\nNot ready." if failed else "\nReady.")
+        return (1 if failed else 0), details
+
+    def check(self) -> int:
+        result, _details = self.check_result(emit_output=True)
+        return result
 
 
 # Compatibility import for callers of the pre-ServiceEngine runtime surface.

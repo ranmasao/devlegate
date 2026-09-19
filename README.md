@@ -115,6 +115,18 @@ devlegate plan
 devlegate retry
 ```
 
+Finite commands use a human-readable table by default. Add `--yaml` for
+canonical vendored NanoYAML or `--json` for deterministic pretty JSON; the two
+machine-readable flags are mutually exclusive. This applies to `version`,
+`init`, `render`, `check`, `status`, `plan`, `stop`, `retry`, `control init`,
+and the `reconcile update-base`, `reconcile resume`, and `reconcile control`
+commands. Service and worker logs from `foreground` and the background daemon
+remain operational streams, not YAML or JSON documents.
+
+Status reports service state (`running` or `stopped`) separately from the
+execution phase (`idle`, `agent_pending`, `agent_running`, and other workflow
+phases).
+
 `init` creates missing project-owned setup files without starting execution.
 `control init` prepares the separate workflow history. `check` validates the
 project before work starts. Bare `devlegate` ensures the persistent background

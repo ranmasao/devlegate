@@ -24,9 +24,11 @@ from git_support import clone_world
 from service_harness import LiveService
 
 from devlegate import __version__
+from devlegate._vendor import nanoyaml
 from devlegate.cli import (
     Devlegate,
     DevlegateError,
+    ReadOnlyView,
     _todo_fingerprint,
     build_parser,
     main,
@@ -226,7 +228,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert control_reconcile.reconcile_command == "control"
     assert control_reconcile.from_head == "a" * 40
     assert control_reconcile.to_head == "b" * 40
-    assert parser.parse_args(["status", "--json"]).json
+    assert parser.parse_args(["status", "--json"]).output_format == "json"
     monkeypatch.setattr("sys.argv", ["devlegate", "--help"])
     with pytest.raises(SystemExit) as error:
         main()
@@ -492,7 +494,31 @@ def test_version_command(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["devlegate", "version"])
 
     assert main() == 0
-    assert capsys.readouterr().out.strip() == f"devlegate {__version__}"
+    output = capsys.readouterr().out
+    assert "Devlegate" in output
+    assert "Program" in output
+    assert __version__ in output
+
+
+@pytest.mark.parametrize("flag", ["--yaml", "--json"])
+def test_version_machine_formats(monkeypatch, capsys, flag):
+    monkeypatch.setattr("sys.argv", ["devlegate", "version", flag])
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    value = (
+        nanoyaml.loads(output)
+        if flag == "--yaml"
+        else json.loads(output)
+    )
+    assert value == {"program": "devlegate", "version": __version__}
+
+
+def test_machine_format_flags_are_mutually_exclusive():
+    parser = build_parser()
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["status", "--yaml", "--json"])
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("old", ["--version", "--foreground", "--once"])
@@ -651,6 +677,10 @@ def test_stop_without_service_is_conclusive(git_fixture):
 def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixture):
     assert not git_fixture["control"].exists() or git_fixture["control"].is_dir()
     assert invoke(git_fixture, "control", "init").returncode == 0
+    structured = invoke(git_fixture, "control", "init", "--json")
+    payload = json.loads(structured.stdout)
+    assert payload["result"] == "already_attached"
+    assert payload["control_worktree"]
     assert git_fixture["control"].is_dir()
     assert (
         git(git_fixture["control"], "symbolic-ref", "--short", "HEAD").stdout.strip()
@@ -702,8 +732,9 @@ def test_check_distinguishes_missing_configured_remote_from_stale_ref(git_fixtur
     result = invoke(git_fixture, "check")
 
     assert result.returncode == 1
-    assert "FAIL  configured remote: origin" in result.stdout
-    assert "known remote HEAD:" in result.stdout
+    assert "configured remote" in result.stdout
+    assert "origin" in result.stdout
+    assert "known remote HEAD" in result.stdout
     assert "Not ready." in result.stdout
 
 
@@ -714,7 +745,8 @@ def test_check_reports_local_product_branch_ahead(git_fixture):
 
     result = invoke(git_fixture, "check")
 
-    assert "ahead/behind: 1 0" in result.stdout
+    assert "ahead/behind" in result.stdout
+    assert "1 0" in result.stdout
 
 
 def test_check_reports_local_product_branch_behind(git_fixture):
@@ -727,7 +759,8 @@ def test_check_reports_local_product_branch_behind(git_fixture):
 
     result = invoke(git_fixture, "check")
 
-    assert "ahead/behind: 0 1" in result.stdout
+    assert "ahead/behind" in result.stdout
+    assert "0 1" in result.stdout
 
 
 def test_check_reports_diverged_product_branch(git_fixture):
@@ -743,7 +776,8 @@ def test_check_reports_diverged_product_branch(git_fixture):
 
     result = invoke(git_fixture, "check")
 
-    assert "ahead/behind: 1 1" in result.stdout
+    assert "ahead/behind" in result.stdout
+    assert "1 1" in result.stdout
 
 
 def test_init_outside_git_does_not_seed_project_files(tmp_path):
@@ -835,7 +869,17 @@ def test_status_uses_daemon_ipc_without_fallback(
     )
 
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
-    assert json.loads(capsys.readouterr().out) == expected
+    assert json.loads(capsys.readouterr().out) == {
+        "service": {"state": "running"},
+        **expected,
+    }
+
+
+def test_status_without_service_reports_stopped_from_local_observation(git_fixture):
+    result = invoke(git_fixture, "status", "--json")
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["service"] == {"state": "stopped"}
 
 
 def test_plan_uses_daemon_ipc_without_fallback(
@@ -883,7 +927,8 @@ def test_blocked_dependency_status_uses_daemon_semantics(
 
     assert main() == 0
     output = capsys.readouterr().out
-    assert "T-1  Waiting" in output
+    assert "T-1" in output
+    assert "Waiting" in output
     assert "by D-1 [review]" in output
 
 
@@ -2862,6 +2907,53 @@ def test_status_reports_nested_code_and_control_observations(git_fixture):
     assert payload["observation"]["code"]["branch"] == "main"
     assert payload["observation"]["control"]["branch"] == "devlegate/control"
     assert payload["tickets"]["next"]["id"] == "T-1"
+
+
+def test_status_table_and_machine_formats_share_service_state(monkeypatch, capsys):
+    observation = GitObservation(
+        "main", False, "local", "origin/main", "remote", True, "fingerprint"
+    )
+    plan = ExecutionPlan("none", "no runnable tickets", code=observation)
+    snapshot = StatusSnapshot(
+        "idle",
+        None,
+        False,
+        observation,
+        None,
+        (("backlog", 0), ("todo", 0), ("review", 0), ("accepted", 0), ("done", 0)),
+        (),
+        (),
+        (),
+        (),
+        None,
+        plan,
+    )
+    monkeypatch.setattr(
+        "devlegate.cli._read_only_view",
+        lambda _env, method: ReadOnlyView(
+            plan if method == "plan" else snapshot, "running"
+        ),
+    )
+
+    monkeypatch.setattr(sys, "argv", ["devlegate", "status"])
+    assert main() == 0
+    table = capsys.readouterr().out
+    assert table.index("Service") < table.index("Execution:")
+    assert "running" in table
+
+    monkeypatch.setattr(sys, "argv", ["devlegate", "status", "--json"])
+    assert main() == 0
+    json_value = json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(sys, "argv", ["devlegate", "status", "--yaml"])
+    assert main() == 0
+    yaml_value = nanoyaml.loads(capsys.readouterr().out)
+    assert yaml_value == json_value
+    assert json_value["service"] == {"state": "running"}
+
+    monkeypatch.setattr(sys, "argv", ["devlegate", "plan", "--yaml"])
+    assert main() == 0
+    assert nanoyaml.loads(capsys.readouterr().out)["action"] == "none"
 
 
 def test_missing_control_blocks_without_product_mutation(git_fixture):

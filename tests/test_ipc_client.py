@@ -244,8 +244,8 @@ def test_status_text_is_identical_after_ipc_round_trip():
         representative_plan(),
     )
 
-    ipc_text = _render_status_text(decode_status(snapshot.as_dict()))
-    direct_text = _render_status_text(snapshot)
+    ipc_text = _render_status_text(decode_status(snapshot.as_dict()), "stopped")
+    direct_text = _render_status_text(snapshot, "stopped")
     assert ipc_text == direct_text
 
 
@@ -279,12 +279,13 @@ def test_reconciliation_text_distinguishes_actionable_history(status):
         reconciliation=reconciliation,
     )
 
-    text = _render_status_text(snapshot)
+    text = _render_status_text(snapshot, "stopped")
     payload = snapshot.as_dict()
     assert payload["reconciliation"]["status"] == status
     if status == "pending":
         assert "Reconciliation required:" in text
-        assert "  update-base eligible: True" in text
+        assert "Update-base eligible" in text
+        assert "yes" in text
     else:
         assert "Reconciliation required:" not in text
         assert "  ticket: T-1" not in text

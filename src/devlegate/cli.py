@@ -4,6 +4,7 @@
 """Command-line interface for Devlegate."""
 
 import argparse
+import dataclasses
 import json
 import os
 import select
@@ -28,6 +29,7 @@ from devlegate.ipc_client import (
     decode_status,
     request,
 )
+from devlegate.output import add_output_arguments, emit, render_table
 from devlegate.runtime import (
     DevlegateError,
     ExecutionPlan,
@@ -58,7 +60,13 @@ def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine
     return ServiceEngine(env_file, read_only=read_only)
 
 
-def _read_only_view(env_file: Path, method: str) -> StatusSnapshot | ExecutionPlan:
+@dataclasses.dataclass(frozen=True)
+class ReadOnlyView:
+    value: StatusSnapshot | ExecutionPlan
+    service_state: str
+
+
+def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -79,7 +87,8 @@ def _read_only_view(env_file: Path, method: str) -> StatusSnapshot | ExecutionPl
                 view = getattr(engine, "status_view", engine.status)
             else:
                 view = getattr(engine, "plan_view", engine.plan)
-            return view()
+            value = view()
+            return ReadOnlyView(value, "stopped")
     except RuntimeAuthorityPresent as error:
         if ipc_error is not None:
             if ipc_error.application:
@@ -87,9 +96,12 @@ def _read_only_view(env_file: Path, method: str) -> StatusSnapshot | ExecutionPl
             raise DevlegateError(str(error)) from ipc_error
         assert response is not None
         try:
-            return (
-                decode_status(response) if method == "status" else decode_plan(response)
+            value = (
+                decode_status(response)
+                if method == "status"
+                else decode_plan(response)
             )
+            return ReadOnlyView(value, "running")
         except IPCClientError as decode_error:
             raise DevlegateError(str(decode_error)) from decode_error
     except RuntimeLocatorError as error:
@@ -103,7 +115,7 @@ def _interactive_terminal() -> bool:
         return False
 
 
-def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
+def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -112,6 +124,11 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
         raise DevlegateError(
             "interactive retry requires a terminal; specify a ticket ID:\n"
             "devlegate retry <ticket-id>"
+        )
+    if ticket_id is None and output_format != "table":
+        raise DevlegateError(
+            "machine-readable retry requires a ticket ID; "
+            "specify devlegate retry <ticket-id>"
         )
     if ticket_id is not None and not ticket_id:
         raise DevlegateError("retry ticket ID must be non-empty")
@@ -156,11 +173,18 @@ def _retry_daemon(env_file: Path, ticket_id: str | None) -> int:
         decode_retry_ack(result, ticket_id)
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    print(f"retry accepted: {ticket_id}")
+    result = {"result": "accepted", "ticket_id": ticket_id}
+    emit(
+        result,
+        output_format,
+        render_table(f"retry accepted: {ticket_id}", result.items()),
+    )
     return 0
 
 
-def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
+def _reconcile_daemon(
+    env_file: Path, ticket_id: str, onto: str, output_format: str
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
@@ -178,11 +202,18 @@ def _reconcile_daemon(env_file: Path, ticket_id: str, onto: str) -> int:
         raise DevlegateError(str(error)) from error
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    print(f"reconciliation accepted: {ticket_id}")
+    result = {"result": "accepted", "ticket_id": ticket_id, "onto": onto}
+    emit(
+        result,
+        output_format,
+        render_table(f"reconciliation accepted: {ticket_id}", result.items()),
+    )
     return 0
 
 
-def _reconcile_resume_daemon(env_file: Path, ticket_id: str) -> int:
+def _reconcile_resume_daemon(
+    env_file: Path, ticket_id: str, output_format: str = "table"
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
@@ -200,11 +231,18 @@ def _reconcile_resume_daemon(env_file: Path, ticket_id: str) -> int:
         raise DevlegateError(str(error)) from error
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    print(f"reconciliation resume accepted: {ticket_id}")
+    result = {"result": "accepted", "ticket_id": ticket_id}
+    emit(
+        result,
+        output_format,
+        render_table(f"reconciliation resume accepted: {ticket_id}", result.items()),
+    )
     return 0
 
 
-def _reconcile_control(env_file: Path, from_head: str, to_head: str) -> int:
+def _reconcile_control(
+    env_file: Path, from_head: str, to_head: str, output_format: str
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
@@ -222,11 +260,16 @@ def _reconcile_control(env_file: Path, from_head: str, to_head: str) -> int:
         raise DevlegateError(str(error)) from error
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    print(f"control reconciliation accepted: {from_head} -> {to_head}")
+    result = {"result": "accepted", "from": from_head, "to": to_head}
+    emit(
+        result,
+        output_format,
+        render_table("control reconciliation accepted", result.items()),
+    )
     return 0
 
 
-def _stop_service(env_file: Path) -> int:
+def _stop_service(env_file: Path, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -239,7 +282,8 @@ def _stop_service(env_file: Path) -> int:
         raise DevlegateError(str(error)) from error
     if set(response) != {"accepted"} or response["accepted"] is not True:
         raise DevlegateError("service IPC returned invalid stop acknowledgement")
-    print("service stop accepted")
+    result = {"result": "accepted", "service": "devlegate", "action": "stop"}
+    emit(result, output_format, render_table("service stop accepted", result.items()))
     return 0
 
 
@@ -360,59 +404,76 @@ def _start_background(env_file: Path) -> int:
         os.close(read_fd)
 
 
-def _render_status_text(snapshot: StatusSnapshot) -> str:
+def _render_status_text(
+    snapshot: StatusSnapshot, service_state: str
+) -> str:
     code = snapshot.code
     control = snapshot.control
+
+    def list_table(title: str, rows: tuple[tuple[str, str], ...], empty: str) -> str:
+        return render_table(title, rows or ((empty, "none"),))
+
     lines = [
         f"Devlegate {__version__}",
         "",
-        "Execution:",
-        f"  phase: {snapshot.phase}",
-        f"  bound ticket: {snapshot.bound_ticket_id or 'none'}",
-        (
-            f"  persisted body: {'yes' if snapshot.persisted_body_present else 'no'}"
-            if snapshot.bound_ticket_id
-            else ""
+        render_table("Service", (("State", service_state),)),
+        "",
+        render_table(
+            "Execution:",
+            (
+                ("Phase", snapshot.phase),
+                ("Bound ticket", snapshot.bound_ticket_id),
+                ("Persisted body", snapshot.persisted_body_present),
+            ),
         ),
         "",
-        "Code plane:",
-        f"  branch: {code.branch or '<detached>'}",
-        f"  local HEAD: {code.local_head}",
-        f"  known remote: {code.remote_ref}",
-        f"  known remote HEAD: {code.remote_head or '<unknown>'}",
-        f"  working tree: {'clean' if code.working_tree_clean else 'dirty'}",
-        "Control plane:",
-        (
-            "  worktree: missing (run 'devlegate control init')"
-            if control is None
-            else f"  branch: {control.branch or '<detached>'}"
+        render_table(
+            "Code plane:",
+            (
+                ("Branch", code.branch or "<detached>"),
+                ("Local HEAD", code.local_head),
+                ("Known remote", code.remote_ref),
+                ("Known remote HEAD", code.remote_head or "<unknown>"),
+                ("Working tree", "clean" if code.working_tree_clean else "dirty"),
+            ),
         ),
         "",
-        "Tickets:",
+        render_table(
+            "Control plane:",
+            (
+                (("Worktree", "missing (run 'devlegate control init')"),)
+                if control is None
+                else (
+                    ("Branch", control.branch or "<detached>"),
+                    ("Local HEAD", control.local_head),
+                    ("Known remote", control.remote_ref),
+                    ("Known remote HEAD", control.remote_head or "<unknown>"),
+                    (
+                        "Working tree",
+                        "clean" if control.working_tree_clean else "dirty",
+                    ),
+                )
+            ),
+        ),
+        "",
+        render_table("Tickets:", snapshot.counts),
+        "",
+        list_table("Runnable:", snapshot.runnable, "Tickets"),
+        "",
+        list_table(
+            "Failed executions:",
+            tuple(
+                (
+                    failure.ticket_id,
+                    "execution: failed; "
+                    f"retryable: {'yes' if failure.retryable else 'no'}; "
+                    f"reason: {failure.display_reason}",
+                )
+                for failure in snapshot.failed_executions
+            ),
+            "Executions",
+        ),
     ]
-    if control is not None:
-        lines.extend(
-            [
-                f"  local HEAD: {control.local_head}",
-                f"  known remote: {control.remote_ref}",
-                f"  known remote HEAD: {control.remote_head or '<unknown>'}",
-                f"  working tree: {'clean' if control.working_tree_clean else 'dirty'}",
-            ]
-        )
-    lines.extend(f"  {state}: {count}" for state, count in snapshot.counts)
-    lines.extend(["", "Runnable:"])
-    lines.extend(f"  {ticket_id}  {title}" for ticket_id, title in snapshot.runnable)
-    if not snapshot.runnable:
-        lines.append("  none")
-    lines.append("Failed executions:")
-    lines.extend(
-        f"  {failure.ticket_id}  execution: failed  "
-        f"retryable: {'yes' if failure.retryable else 'no'}  reason: "
-        f"{failure.display_reason}"
-        for failure in snapshot.failed_executions
-    )
-    if not snapshot.failed_executions:
-        lines.append("  none")
     if (
         snapshot.reconciliation is not None
         and snapshot.reconciliation.get("status") == "pending"
@@ -425,42 +486,54 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
         product_observation = reconciliation.get("product_observation", "")
         lines.extend(
             [
-                "Reconciliation required:",
-                f"  ticket: {reconciliation['ticket_id']}",
-                f"  original base: {reconciliation['original_base']}",
-                f"  observed product: {reconciliation['observed_product']}",
-                f"  worker checkpoint: {reconciliation['worker_checkpoint']}",
-                f"  product branch: {product_branch}",
-                f"  product local HEAD: {product_local_head}",
-                f"  product dirty: {product_dirty}",
-                f"  update-base eligible: {target_eligible}",
-                f"  product observation: {product_observation}",
+                "",
+                render_table(
+                    "Reconciliation required:",
+                    (
+                        ("Ticket", reconciliation["ticket_id"]),
+                        ("Original base", reconciliation["original_base"]),
+                        ("Observed product", reconciliation["observed_product"]),
+                        ("Worker checkpoint", reconciliation["worker_checkpoint"]),
+                        ("Product branch", product_branch),
+                        ("Product local HEAD", product_local_head),
+                        ("Product dirty", product_dirty),
+                        ("Update-base eligible", target_eligible),
+                        ("Product observation", product_observation),
+                    ),
+                ),
             ]
         )
-    lines.append("Blocked:")
-    if snapshot.blocked:
-        for ticket_id, title, blockers in snapshot.blocked:
-            lines.append(f"  {ticket_id}  {title}")
-            lines.extend(
-                f"    by {dependency_id} [{state}]" for dependency_id, state in blockers
-            )
-    else:
-        lines.append("  none")
-    lines.append("Review:")
-    lines.extend(f"  {ticket_id}  {title}" for ticket_id, title in snapshot.review)
-    if not snapshot.review:
-        lines.append("  none")
-    lines.append("Accepted:")
-    lines.extend(f"  {ticket_id}  {title}" for ticket_id, title in snapshot.accepted)
-    if not snapshot.accepted:
-        lines.append("  none")
     lines.extend(
         [
-            "Next:",
-            (
-                f"  {snapshot.next_ticket[0]}  {snapshot.next_ticket[1]}"
+            "",
+            list_table(
+                "Blocked:",
+                tuple(
+                    (
+                        ticket_id,
+                        f"{title}; blocked by "
+                        + ", ".join(
+                            f"{dependency_id} [{state}]"
+                            for dependency_id, state in blockers
+                        ),
+                    )
+                    for ticket_id, title, blockers in snapshot.blocked
+                ),
+                "Tickets",
+            ),
+            "",
+            list_table("Review:", snapshot.review, "Tickets"),
+            "",
+            list_table("Accepted:", snapshot.accepted, "Tickets"),
+            "",
+            render_table(
+                "Next:",
+                (
+                    ("Ticket", snapshot.next_ticket[0]),
+                    ("Title", snapshot.next_ticket[1]),
+                )
                 if snapshot.next_ticket
-                else "  none"
+                else (("Ticket", "none"),),
             ),
         ]
     )
@@ -468,39 +541,163 @@ def _render_status_text(snapshot: StatusSnapshot) -> str:
 
 
 def _render_plan_text(plan: ExecutionPlan) -> str:
-    lines = [f"Devlegate {__version__}", "Execution plan:", f"  action: {plan.action}"]
+    lines = [
+        f"Devlegate {__version__}",
+        render_table(
+            "Execution plan:",
+            (("Action", plan.action), ("Reason", plan.reason)),
+        ),
+    ]
     if plan.ticket_id is not None:
         lines.extend(
             [
-                f"  ticket: {plan.ticket_id}  {plan.ticket_title}",
-                f"  ticket state: {plan.ticket_state}",
+                "",
+                render_table(
+                    "Ticket",
+                    (
+                        ("ID", plan.ticket_id),
+                        ("Title", plan.ticket_title),
+                        ("State", plan.ticket_state),
+                    ),
+                ),
             ]
         )
     if plan.code:
         lines.extend(
             [
-                f"  code branch: {plan.code.branch or '<detached>'}",
-                f"  code local HEAD: {plan.code.local_head}",
-                f"  code known remote: {plan.code.remote_ref}",
-                f"  code known remote HEAD: {plan.code.remote_head or '<unknown>'}",
+                "",
+                render_table(
+                    "Code",
+                    (
+                        ("Branch", plan.code.branch or "<detached>"),
+                        ("Local HEAD", plan.code.local_head),
+                        ("Known remote", plan.code.remote_ref),
+                        ("Known remote HEAD", plan.code.remote_head or "<unknown>"),
+                    ),
+                ),
             ]
         )
     if plan.control:
         lines.extend(
             [
-                f"  control branch: {plan.control.branch or '<detached>'}",
-                f"  control local HEAD: {plan.control.local_head}",
-                f"  control known remote: {plan.control.remote_ref}",
-                "  control known remote HEAD: "
-                f"{plan.control.remote_head or '<unknown>'}",
+                "",
+                render_table(
+                    "Control",
+                    (
+                        ("Branch", plan.control.branch or "<detached>"),
+                        ("Local HEAD", plan.control.local_head),
+                        ("Known remote", plan.control.remote_ref),
+                        ("Known remote HEAD", plan.control.remote_head or "<unknown>"),
+                    ),
+                ),
             ]
         )
     else:
-        lines.append("  control worktree: missing")
+        lines.extend(["", render_table("Control", (("Worktree", "missing"),))])
+    lines.extend(["", render_table("Execution", (("Bound", plan.bound),))])
+    return "\n".join(lines)
+
+
+def _render_check_text(result: dict[str, object]) -> str:
+    lines = [
+        f"Devlegate {__version__} preflight",
+        "",
+        render_table(
+            "Ready." if result["ready"] else "Not ready.",
+            (("State", "ready" if result["ready"] else "not ready"),),
+        ),
+        "",
+        render_table(
+            "Checks:",
+            tuple(
+                (
+                    check["name"],
+                    ("OK" if check["passed"] else "FAIL")
+                    + (f": {check['detail']}" if check["detail"] else ""),
+                )
+                for check in result["checks"]
+            ),
+        ),
+    ]
+    labels = (
+        ("local_head", "local HEAD"),
+        ("known_remote_head", "known remote HEAD"),
+        ("ahead_behind", "ahead/behind"),
+        ("todo_files", "todo files"),
+        ("todo_fingerprint", "todo fingerprint"),
+        ("work_generation_differs", "work generation differs from persisted"),
+    )
     lines.extend(
-        [f"  reason: {plan.reason}", f"  bound: {'yes' if plan.bound else 'no'}"]
+        [
+            "",
+            render_table(
+                "Repository diagnostics:",
+                tuple(
+                    (label, _display_output_value(result[key]))
+                    for key, label in labels
+                ),
+            ),
+        ]
+    )
+    if result.get("dirty_files"):
+        lines.extend(
+            [
+                "",
+                render_table(
+                    "Dirty working tree details:",
+                    tuple(
+                        (str(index), line)
+                        for index, line in enumerate(result["dirty_files"], 1)
+                    ),
+                ),
+                "",
+                render_table(
+                    "Dirty summary:",
+                    tuple(
+                        (name.replace("_", " "), count)
+                        for name, count in result["dirty_summary"].items()
+                    ),
+                ),
+            ]
+        )
+    if result.get("ticket_counts") is not None:
+        ticket_rows = list(result["ticket_counts"].items())
+        ticket_rows.append(("Runnable", result["runnable_tickets"]))
+        lines.extend(["", render_table("Ticket storage:", ticket_rows)])
+        if result.get("next_runnable") is not None:
+            lines.extend(
+                [
+                    "",
+                    render_table(
+                        "Next runnable:",
+                        (
+                            ("ID", result["next_runnable"]["id"]),
+                            ("Title", result["next_runnable"]["title"]),
+                        ),
+                    ),
+                ]
+            )
+    lines.extend(
+        [
+            "",
+            render_table(
+                "Control diagnostics:",
+                (
+                    ("Control HEAD", result["control_head"]),
+                    ("Remote source", result["remote_note"]),
+                ),
+            ),
+        ]
     )
     return "\n".join(lines)
+
+
+def _display_output_value(value: object) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
 
 
 def _short_git_identity(repo: Path) -> tuple[str, str]:
@@ -639,7 +836,7 @@ class Devlegate(ServiceEngine):
     """Legacy CLI-facing runtime surface; presentation remains here."""
 
     def _render_status_text(self, snapshot: StatusSnapshot) -> str:
-        return _render_status_text(snapshot)
+        return _render_status_text(snapshot, "stopped")
 
     def run_once(self, stop_event=None) -> int:
         # Preserve the historical CLI test hook while keeping runtime independent.
@@ -663,7 +860,7 @@ class Devlegate(ServiceEngine):
         print(
             json.dumps(snapshot.as_dict(), indent=2, sort_keys=True)
             if json_output
-            else _render_status_text(snapshot)
+            else _render_status_text(snapshot, "stopped")
         )
         return 1 if snapshot.plan.action == "blocked" else 0
 
@@ -710,11 +907,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run one service pass attached to this terminal, then exit.",
     )
     once_parser.add_argument("--env", metavar="FILE", type=Path)
-    commands.add_parser(
+    version_parser = commands.add_parser(
         "version",
         help="show program version",
         description="Show the concise program and version identity.",
     )
+    add_output_arguments(version_parser)
     init_parser = commands.add_parser(
         "init",
         help="initialize project-local agent workflow files",
@@ -732,6 +930,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="abort",
         help="how to handle existing generated files: abort, backup, or replace",
     )
+    add_output_arguments(init_parser)
     render_parser = commands.add_parser(
         "render",
         help="render project-local agent workflow files",
@@ -746,6 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(render_parser)
     stop_parser = commands.add_parser(
         "stop",
         help="orderly stop the persistent workflow service",
@@ -757,6 +957,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(stop_parser)
     check_parser = commands.add_parser(
         "check",
         help="validate setup readiness",
@@ -768,6 +969,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(check_parser)
     for name in ("status", "plan"):
         command_parser = commands.add_parser(
             name,
@@ -782,9 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
                 else "Show what Devlegate plans to do next."
             ),
         )
-        command_parser.add_argument(
-            "--json", action="store_true", help="emit machine-readable JSON"
-        )
+        add_output_arguments(command_parser)
         command_parser.add_argument(
             "--env",
             metavar="FILE",
@@ -807,6 +1007,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(retry_parser)
     reconcile_parser = commands.add_parser(
         "reconcile",
         help="handle pending product-base changes",
@@ -838,12 +1039,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(resume_parser)
     update_base_parser.add_argument(
         "--env",
         metavar="FILE",
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(update_base_parser)
     control_reconcile_parser = reconcile_commands.add_parser(
         "control",
         help="adopt an explicitly authorized divergent control history",
@@ -864,6 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(control_reconcile_parser)
     control_parser = commands.add_parser(
         "control",
         help="manage workflow history",
@@ -883,6 +1087,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="configuration file to use instead of $PWD/.env",
     )
+    add_output_arguments(init_parser)
     return parser
 
 
@@ -907,7 +1112,15 @@ def main() -> int:
     if args.command == "version":
         if args.service_env is not None:
             parser.error("--env is only valid for bare background startup")
-        print(f"devlegate {__version__}")
+        value = {"program": "devlegate", "version": __version__}
+        emit(
+            value,
+            args.output_format,
+            render_table(
+                "Devlegate",
+                (("Program", "devlegate"), ("Version", __version__)),
+            ),
+        )
         return 0
     if args.command in {"foreground", "once"}:
         if args.service_env is not None:
@@ -962,39 +1175,70 @@ def main() -> int:
         if args.command in {"init", "render", "check", "control"}:
             devlegate = Devlegate(env_file, read_only=True)
         if args.command == "init":
-            return devlegate.init_project(args.conflicts)
+            value = devlegate.init_project_result(args.conflicts)
+            value = {**value, "command": "init"}
+            emit(
+                value,
+                args.output_format,
+                render_table(f"init (rendered {value['rendered']})", value.items()),
+            )
+            return 0
         if args.command == "render":
-            return devlegate.render(args.check)
+            value = devlegate.render_result(args.check)
+            value = {**value, "command": "render"}
+            emit(value, args.output_format, render_table("render", value.items()))
+            return 0
         if args.command == "control":
-            return devlegate.control_init()
+            value = devlegate.control_init_result()
+            value = {**value, "command": "control init"}
+            emit(value, args.output_format, render_table("control init", value.items()))
+            return 0
         if args.command == "status":
-            snapshot = _read_only_view(env_file, "status")
-            print(
-                json.dumps(snapshot.as_dict(), indent=2, sort_keys=True)
-                if args.json
-                else _render_status_text(snapshot)
+            view = _read_only_view(env_file, "status")
+            snapshot = view.value
+            assert isinstance(snapshot, StatusSnapshot)
+            payload = {
+                "service": {"state": view.service_state},
+                **snapshot.as_dict(),
+            }
+            emit(
+                payload,
+                args.output_format,
+                _render_status_text(snapshot, view.service_state),
             )
             return 1 if snapshot.plan.action == "blocked" else 0
         if args.command == "plan":
-            plan = _read_only_view(env_file, "plan")
-            print(
-                json.dumps(plan.as_dict(), indent=2, sort_keys=True)
-                if args.json
-                else _render_plan_text(plan)
-            )
+            view = _read_only_view(env_file, "plan")
+            plan = view.value
+            assert isinstance(plan, ExecutionPlan)
+            emit(plan.as_dict(), args.output_format, _render_plan_text(plan))
             return 0
         if args.command == "check":
-            return devlegate.check()
+            result, check_result = devlegate.check_result()
+            emit(
+                check_result,
+                args.output_format,
+                _render_check_text(check_result),
+            )
+            return result
         if args.command == "stop":
-            return _stop_service(env_file)
+            return _stop_service(env_file, args.output_format)
         if args.command == "retry":
-            return _retry_daemon(env_file, args.ticket_id)
+            return _retry_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "reconcile":
             if args.reconcile_command == "control":
-                return _reconcile_control(env_file, args.from_head, args.to_head)
+                return _reconcile_control(
+                    env_file, args.from_head, args.to_head, args.output_format
+                )
             if args.reconcile_command == "resume":
-                return _reconcile_resume_daemon(env_file, args.ticket_id)
-            return _reconcile_daemon(env_file, args.ticket_id, args.onto)
+                if args.output_format == "table":
+                    return _reconcile_resume_daemon(env_file, args.ticket_id)
+                return _reconcile_resume_daemon(
+                    env_file, args.ticket_id, args.output_format
+                )
+            return _reconcile_daemon(
+                env_file, args.ticket_id, args.onto, args.output_format
+            )
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())
         return 130
