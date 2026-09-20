@@ -636,6 +636,120 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
     assert "pid     :" in log
 
 
+def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
+    git_fixture, tmp_path, monkeypatch
+):
+    marker = tmp_path / "shadowed-child"
+    local_package = git_fixture["working"] / "devlegate"
+    local_package.mkdir()
+    (local_package / "__init__.py").write_text("")
+    (local_package / "__main__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('checkout-shadowed\\n')\n"
+    )
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    git_fixture["config"].write_text(
+        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "devlegate",
+            "--env",
+            str(git_fixture["config"]),
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    monkeypatch.chdir(git_fixture["working"])
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    assert locator.daemon_authority_present()
+    assert ipc_request(locator.socket_path, "ping") == {
+        "service": "devlegate",
+        "protocol_version": 1,
+    }
+    stopped = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "devlegate",
+            "stop",
+            "--env",
+            str(git_fixture["config"]),
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert stopped.returncode == 0, stopped.stderr
+
+
+def test_background_child_safe_bootstrap_rejects_checkout_module_shadowing(
+    git_fixture, tmp_path, monkeypatch
+):
+    marker = tmp_path / "shadowed-module"
+    (git_fixture["working"] / "devlegate.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('checkout-shadowed\\n')\n"
+    )
+    (git_fixture["working"] / "nanoyaml.py").write_text(
+        "raise RuntimeError('checkout NanoYAML shadowed')\n"
+    )
+    git_fixture["config"].write_text(
+        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+    )
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "devlegate",
+            "--env",
+            str(git_fixture["config"]),
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    monkeypatch.chdir(git_fixture["working"])
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    assert ipc_request(locator.socket_path, "ping")["service"] == "devlegate"
+    stopped = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "devlegate",
+            "stop",
+            "--env",
+            str(git_fixture["config"]),
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert stopped.returncode == 0, stopped.stderr
+
+
 @pytest.mark.parametrize("start_args", [(), ("--foreground",), ("--once",)])
 def test_service_start_forms_are_idempotent_for_healthy_owner(
     git_fixture, monkeypatch, start_args

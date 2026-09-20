@@ -359,6 +359,7 @@ def _start_background(env_file: Path) -> int:
     # The child uses the attached entry only as a process-hosting shim.
     command = [
         sys.executable,
+        "-P",
         "-m",
         "devlegate",
         "foreground",

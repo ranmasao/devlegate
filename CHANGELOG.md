@@ -13,6 +13,7 @@ release are not separate product changes.
 - Scoped retry and automatic-resume authorization to individual scheduler iterations.
 - Simplified status projections to expose scheduler eligibility and one structured blocking reason per todo ticket.
 - Routed hosted repository authority through the service owner thread and published read-only IPC views.
+- Hardened the background service bootstrap against managed-checkout import shadowing.
 
 ## 0.5.1 -- 2026-09-20
 

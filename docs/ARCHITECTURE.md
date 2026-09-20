@@ -37,10 +37,13 @@ containing a same-named package.
 `python -m devlegate` retains the interpreter's normal module lookup behavior.
 Python resolves the initial `devlegate` package before its code can establish
 any policy, so a checkout-local `devlegate/` can shadow the installed package
-for that invocation form. This is an interpreter startup boundary, not a
-claim that Devlegate can defend against `PYTHONPATH`, `sitecustomize`, modified
-interpreters, or modified installations. Use the installed console entry
-point when the managed checkout is not trusted to own Python namespaces.
+for that invocation form. Devlegate's background launcher is different: a
+trusted parent starts its child with Python safe-path mode (`-P`), so the
+managed checkout cannot win merely because it is the child's working directory.
+This does not sanitize an explicitly supplied `PYTHONPATH`, `sitecustomize`,
+modified interpreters or installations, or an arbitrary same-UID compromise.
+Use the installed console entry point when the managed checkout is not trusted
+to own Python namespaces.
 
 ## Runtime Service
 
