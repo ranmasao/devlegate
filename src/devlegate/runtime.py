@@ -163,6 +163,39 @@ class ExecutionPlan:
 
 
 @dataclasses.dataclass(frozen=True)
+class AdmissionBarrier:
+    action: str
+    kind: str
+    reason: str
+    ticket_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class BlockedReason:
+    kind: str
+    ticket_id: str | None = None
+    tickets: tuple[tuple[str, str], ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        if self.kind == "dependencies":
+            return {
+                "kind": self.kind,
+                "tickets": [
+                    {"id": ticket_id, "state": state}
+                    for ticket_id, state in self.tickets
+                ],
+            }
+        return {
+            "kind": self.kind,
+            **(
+                {"ticket_id": self.ticket_id}
+                if self.ticket_id is not None
+                else {}
+            ),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class StatusSnapshot:
     phase: str
     bound_ticket_id: str | None
@@ -170,8 +203,8 @@ class StatusSnapshot:
     code: GitObservation
     control: GitObservation | None
     counts: tuple[tuple[str, int], ...]
-    runnable: tuple[tuple[str, str], ...]
-    blocked: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]
+    runnable: tuple[tuple[str, str], ...] = dataclasses.field(compare=False)
+    blocked: tuple[tuple[str, str, BlockedReason], ...]
     review: tuple[tuple[str, str], ...]
     accepted: tuple[tuple[str, str], ...]
     next_ticket: tuple[str, str] | None
@@ -181,13 +214,10 @@ class StatusSnapshot:
     execution_stage: str | None = None
     execution_id: str | None = None
     bound_ticket_title: str | None = None
-    blocked_reasons: tuple[
-        tuple[str, tuple[tuple[str, str], ...]], ...
-    ] = ()
     lifecycle_integration: tuple[str, str] | None = None
+    eligible: tuple[tuple[str, str], ...] = ()
 
     def as_dict(self) -> dict[str, object]:
-        blocked_reasons = dict(self.blocked_reasons)
         return {
             "execution": {
                 "phase": self.phase,
@@ -203,37 +233,17 @@ class StatusSnapshot:
             },
             "tickets": {
                 "counts": dict(self.counts),
-                "runnable": [
-                    {"id": ticket_id, "title": title}
-                    for ticket_id, title in self.runnable
-                ],
                 "eligible": [
                     {"id": ticket_id, "title": title}
-                    for ticket_id, title in self.runnable
-                    if ticket_id != self.bound_ticket_id
+                    for ticket_id, title in self.eligible
                 ],
                 "blocked": [
                     {
                         "id": ticket_id,
                         "title": title,
-                        "blocked_by": [
-                            {"id": dependency_id, "state": state}
-                            for dependency_id, state in blockers
-                        ],
-                        **(
-                            {
-                                "reasons": [
-                                    {"kind": kind, "ticket_id": dependency_id}
-                                    for kind, dependency_id in blocked_reasons[
-                                        ticket_id
-                                    ]
-                                ]
-                            }
-                            if ticket_id in blocked_reasons
-                            else {}
-                        ),
+                        "reason": reason.as_dict(),
                     }
-                    for ticket_id, title, blockers in self.blocked
+                    for ticket_id, title, reason in self.blocked
                 ],
                 "review": [
                     {"id": ticket_id, "title": title}
@@ -5316,6 +5326,102 @@ export default tool({
             state_after, git_after, ticket_store, workflow_error=ticket_error
         )
 
+    def _admission_barrier(
+        self,
+        state: dict[str, object],
+        ticket_store: TicketStore,
+        dirty: bool,
+        branch_ok: bool,
+        code: GitObservation,
+    ) -> AdmissionBarrier | None:
+        if not branch_ok:
+            reason = "control worktree is unavailable or on the wrong branch"
+            if code.detached:
+                reason = "detached HEAD is not supported"
+            return AdmissionBarrier("blocked", "repository", reason)
+        reconciliation = state.get("reconciliation")
+        if isinstance(reconciliation, dict) and reconciliation.get("status") in {
+            "pending",
+            "resolving",
+        }:
+            return AdmissionBarrier(
+                "blocked",
+                "reconciliation",
+                (
+                    "reconciliation recovery in progress: "
+                    f"ticket {reconciliation['ticket_id']}; "
+                    f"resolution {reconciliation.get('resolution', 'unknown')}"
+                    if reconciliation.get("status") == "resolving"
+                    else "reconciliation required: "
+                    f"ticket {reconciliation['ticket_id']}; "
+                    f"original base {reconciliation['original_base']}; "
+                    f"observed product {reconciliation['observed_product']}; "
+                    f"worker checkpoint {reconciliation['worker_checkpoint']}"
+                ),
+                reconciliation.get("ticket_id")
+                if isinstance(reconciliation.get("ticket_id"), str)
+                else None,
+            )
+        accepted_integration = state.get("accepted_integration")
+        if isinstance(accepted_integration, dict):
+            ticket_id = accepted_integration.get("ticket_id")
+            ticket = (
+                ticket_store.by_id.get(ticket_id)
+                if isinstance(ticket_id, str)
+                else None
+            )
+            if ticket is None:
+                return AdmissionBarrier(
+                    "blocked",
+                    "accepted-integration",
+                    "accepted integration ticket is no longer observable",
+                )
+            return AdmissionBarrier(
+                "none",
+                "accepted-integration",
+                f"accepted integration recovery in progress: {ticket.id}",
+                ticket.id,
+            )
+        if dirty:
+            return AdmissionBarrier(
+                "blocked", "repository", "code or control working tree is dirty"
+            )
+        boundary = tuple(
+            ticket
+            for ticket in ticket_store.tickets
+            if ticket.state in {"review", "accepted"}
+        )
+        if len(boundary) > 1:
+            return AdmissionBarrier(
+                "blocked",
+                "scheduler-barrier",
+                "multiple tickets occupy the review/accepted serial boundary",
+            )
+        return None
+
+    @staticmethod
+    def _serial_admission_barrier(
+        ticket_store: TicketStore,
+    ) -> AdmissionBarrier | None:
+        boundary = tuple(
+            ticket
+            for ticket in ticket_store.tickets
+            if ticket.state in {"review", "accepted"}
+        )
+        if not boundary:
+            return None
+        ticket = boundary[0]
+        if ticket.state == "review":
+            return AdmissionBarrier(
+                "none", "review", f"waiting for review: {ticket.id}", ticket.id
+            )
+        return AdmissionBarrier(
+            "integrate",
+            "accepted",
+            f"accepted, ready for integration: {ticket.id}",
+            ticket.id,
+        )
+
     def _make_status_snapshot(
         self,
         state: dict[str, object],
@@ -5365,7 +5471,7 @@ export default tool({
             for state_name in ("backlog", "todo", "review", "accepted", "done")
         )
         runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
-        blocked = tuple(
+        dependency_blocked = tuple(
             (
                 ticket.id,
                 ticket.title,
@@ -5385,27 +5491,6 @@ export default tool({
         integration_ticket_id = (
             lifecycle_integration[0] if lifecycle_integration is not None else None
         )
-        blocked_reasons = tuple(
-            (
-                ticket.id,
-                tuple(
-                    (
-                        "integration-in-progress"
-                        if dependency == integration_ticket_id
-                        else "unfinished-dependency",
-                        dependency,
-                    )
-                    for dependency in sorted(ticket.depends_on)
-                    if ticket_store.by_id[dependency].state != "done"
-                ),
-            )
-            for ticket in ticket_store.tickets
-            if ticket.state == "todo"
-            and any(
-                ticket_store.by_id[dependency].state != "done"
-                for dependency in ticket.depends_on
-            )
-        )
         review = tuple(
             (ticket.id, ticket.title)
             for ticket in ticket_store.tickets
@@ -5421,15 +5506,21 @@ export default tool({
             "agent_pending",
             "agent_running",
         }
-        plan = self._make_execution_plan(
-            state,
-            ticket_store,
-            not code.working_tree_clean or not (control and control.working_tree_clean),
+        dirty = not code.working_tree_clean or not (
+            control and control.working_tree_clean
+        )
+        branch_ok = (
             not code.detached
             and code.branch == self.remote_branch
             and control is not None
             and not control.detached
-            and control.branch == self.control_branch,
+            and control.branch == self.control_branch
+        )
+        plan = self._make_execution_plan(
+            state,
+            ticket_store,
+            dirty,
+            branch_ok,
             observation=git_observation,
         )
         admission_reason = (
@@ -5465,6 +5556,74 @@ export default tool({
             if bound_ticket_id is not None and bound_ticket_id in ticket_store.by_id
             else None
         )
+        eligible = (
+            runnable if plan.action == "run-worker" and not plan.bound else ()
+        )
+        eligible_ids = {ticket_id for ticket_id, _title in eligible}
+        pre_barrier = self._admission_barrier(
+            state, ticket_store, dirty, branch_ok, code
+        )
+        if pre_barrier is not None:
+            global_barrier = pre_barrier
+        elif bound_ticket_id is not None:
+            global_barrier = AdmissionBarrier(
+                "blocked",
+                "active-execution",
+                "active execution is in progress",
+                bound_ticket_id,
+            )
+        elif bound_phase:
+            global_barrier = AdmissionBarrier(
+                "blocked",
+                "scheduler-barrier",
+                "persisted bound execution is not observable",
+            )
+        else:
+            global_barrier = self._serial_admission_barrier(ticket_store)
+        global_block_reason = (
+            BlockedReason(global_barrier.kind, ticket_id=global_barrier.ticket_id)
+            if global_barrier is not None
+            else None
+        )
+        dependency_entries = {
+            ticket_id: (title, blockers)
+            for ticket_id, title, blockers in dependency_blocked
+        }
+        blocked_entries = []
+        for ticket in ticket_store.tickets:
+            if ticket.state != "todo" or ticket.id == bound_ticket_id:
+                continue
+            if ticket.id in dependency_entries:
+                title, blockers = dependency_entries[ticket.id]
+                blocked_reason = BlockedReason(
+                    "dependencies",
+                    tickets=tuple(
+                        (
+                            dependency,
+                            (
+                                "integration-in-progress"
+                                if dependency == integration_ticket_id
+                                else state
+                            ),
+                        )
+                        for dependency, state in blockers
+                    ),
+                )
+                if (
+                    integration_ticket_id is not None
+                    and len(blockers) == 1
+                    and blockers[0][0] == integration_ticket_id
+                ):
+                    blocked_reason = BlockedReason(
+                        "integration-in-progress",
+                        ticket_id=integration_ticket_id,
+                    )
+                blocked_entries.append((ticket.id, title, blocked_reason))
+            elif ticket.id not in eligible_ids:
+                assert global_block_reason is not None
+                blocked_entries.append(
+                    (ticket.id, ticket.title, global_block_reason)
+                )
         return StatusSnapshot(
             phase=str(state["phase"]),
             bound_ticket_id=bound_ticket_id,
@@ -5474,7 +5633,7 @@ export default tool({
             control=control,
             counts=counts,
             runnable=runnable,
-            blocked=blocked,
+            blocked=tuple(blocked_entries),
             review=review,
             accepted=accepted,
             next_ticket=next_ticket,
@@ -5498,8 +5657,8 @@ export default tool({
                 else None
             ),
             bound_ticket_title=bound_ticket_title,
-            blocked_reasons=blocked_reasons,
             lifecycle_integration=lifecycle_integration,
+            eligible=eligible,
         )
 
     def _make_execution_plan(
@@ -5514,77 +5673,27 @@ export default tool({
         code = observation.get("code")
         control = observation.get("control")
         assert isinstance(code, GitObservation)
-        if not branch_ok:
-            reason = "control worktree is unavailable or on the wrong branch"
-            if code.detached:
-                reason = "detached HEAD is not supported"
-            return ExecutionPlan(
-                "blocked",
-                reason,
-                code=code,
-                control=control,
-            )
         identity = {"code": code, "control": control}
-        reconciliation = state.get("reconciliation")
-        if isinstance(reconciliation, dict) and reconciliation.get("status") in {
-            "pending",
-            "resolving",
-        }:
-            if reconciliation.get("status") == "resolving":
-                reason = (
-                    "reconciliation recovery in progress: "
-                    f"ticket {reconciliation['ticket_id']}; "
-                    f"resolution {reconciliation.get('resolution', 'unknown')}"
-                )
-            else:
-                reason = (
-                    "reconciliation required: "
-                    f"ticket {reconciliation['ticket_id']}; "
-                    f"original base {reconciliation['original_base']}; "
-                    f"observed product {reconciliation['observed_product']}; "
-                    f"worker checkpoint {reconciliation['worker_checkpoint']}"
-                )
-            return ExecutionPlan("blocked", reason, **identity)
-        accepted_integration = state.get("accepted_integration")
-        if isinstance(accepted_integration, dict):
-            ticket_id = accepted_integration.get("ticket_id")
+        barrier = self._admission_barrier(
+            state,
+            ticket_store,
+            dirty,
+            branch_ok,
+            code,
+        )
+        if barrier is not None:
             ticket = (
-                ticket_store.by_id.get(ticket_id)
-                if isinstance(ticket_id, str)
+                ticket_store.by_id.get(barrier.ticket_id)
+                if barrier.ticket_id is not None
                 else None
             )
-            if ticket is None:
-                return ExecutionPlan(
-                    "blocked",
-                    "accepted integration ticket is no longer observable",
-                    **identity,
-                )
             return ExecutionPlan(
-                "none",
-                f"accepted integration recovery in progress: {ticket.id}",
-                ticket.id,
-                ticket.title,
-                ticket.state,
+                barrier.action,
+                barrier.reason,
+                ticket.id if ticket is not None else None,
+                ticket.title if ticket is not None else None,
+                ticket.state if ticket is not None else None,
                 False,
-                **identity,
-            )
-        if dirty:
-            reason = "code or control working tree is dirty"
-            blocked = True
-        else:
-            reason = ""
-            blocked = False
-        if blocked:
-            return ExecutionPlan("blocked", reason, **identity)
-        boundary = tuple(
-            ticket
-            for ticket in ticket_store.tickets
-            if ticket.state in {"review", "accepted"}
-        )
-        if len(boundary) > 1:
-            return ExecutionPlan(
-                "blocked",
-                "multiple tickets occupy the review/accepted serial boundary",
                 **identity,
             )
         bound_phase = str(state["phase"]) in {
@@ -5661,16 +5770,21 @@ export default tool({
                 True,
                 **identity,
             )
-        if boundary:
-            ticket = boundary[0]
-            if ticket.state == "review":
-                return ExecutionPlan(
-                    "none", f"waiting for review: {ticket.id}", ticket.id,
-                    ticket.title, ticket.state, False, **identity
-                )
+        barrier = self._serial_admission_barrier(ticket_store)
+        if barrier is not None:
+            ticket = (
+                ticket_store.by_id.get(barrier.ticket_id)
+                if barrier.ticket_id is not None
+                else None
+            )
             return ExecutionPlan(
-                "integrate", f"accepted, ready for integration: {ticket.id}",
-                ticket.id, ticket.title, ticket.state, False, **identity
+                barrier.action,
+                barrier.reason,
+                ticket.id if ticket is not None else None,
+                ticket.title if ticket is not None else None,
+                ticket.state if ticket is not None else None,
+                False,
+                **identity,
             )
         selected = ticket_store.selected()
         if selected is None:

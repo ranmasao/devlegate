@@ -30,7 +30,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
-from devlegate.runtime import _capture_worker_identity, _todo_fingerprint
+from devlegate.runtime import BlockedReason, _capture_worker_identity, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
@@ -303,9 +303,10 @@ def test_product_workflow_copy_fails_closed(tmp_path):
     assert "product checkout" in json.loads(result.stdout)["reason"]
 
 
-def test_dependency_state_change_on_control_changes_plan(tmp_path):
+def test_dependency_state_change_on_control_changes_plan(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/review/D-1.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n'
@@ -326,6 +327,9 @@ def test_dependency_state_change_on_control_changes_plan(tmp_path):
     runnable = json.loads(invoke(working, "plan", "--json", config=config).stdout)
     assert runnable["action"] == "run-worker"
     assert runnable["ticket"]["id"] == "T-1"
+    snapshot = Devlegate(config).status_view()
+    assert snapshot.eligible == (("T-1", "Waiting"),)
+    assert snapshot.blocked == ()
 
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
@@ -338,6 +342,99 @@ def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     assert result.returncode == 1
     assert "control working tree is dirty" in result.stdout
     assert git(working, "rev-parse", "HEAD").stdout.strip() == before
+
+
+def test_diamond_frontier_keeps_all_ready_tickets_eligible(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").unlink()
+    (control / "kanban/done/A-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Root"\n---\ndone\n'
+    )
+    for ticket_id, title in (("B-1", "Branch B"), ("C-1", "Branch C")):
+        (control / f"kanban/todo/{ticket_id}.md").write_text(
+            f'---\n"type": "devlegate.ticket"\n"title": "{title}"\n'
+            '"depends_on":\n  - "A-1"\n---\nwork\n'
+        )
+    (control / "kanban/todo/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Join"\n'
+        '"depends_on":\n  - "B-1"\n  - "C-1"\n---\nwork\n'
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "add diamond workflow")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    snapshot = Devlegate(config).status_view()
+
+    assert snapshot.plan.ticket_id == "B-1"
+    assert snapshot.eligible == (("B-1", "Branch B"), ("C-1", "Branch C"))
+    assert snapshot.blocked == (
+        (
+            "D-1",
+            "Join",
+            BlockedReason(
+                "dependencies",
+                tickets=(("B-1", "todo"), ("C-1", "todo")),
+            ),
+        ),
+    )
+
+
+def test_wide_frontier_keeps_join_blockers_immediate_and_deterministic(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").unlink()
+    for ticket_id, title in (
+        ("F-1", "Front 1"),
+        ("F-2", "Front 2"),
+        ("F-3", "Front 3"),
+    ):
+        (control / f"kanban/todo/{ticket_id}.md").write_text(
+            f'---\n"type": "devlegate.ticket"\n"title": "{title}"\n---\nwork\n'
+        )
+    for ticket_id, title, dependencies in (
+        ("J-1", "Join 1", ("F-1", "F-2")),
+        ("J-2", "Join 2", ("F-2", "F-3")),
+    ):
+        dependency_lines = "".join(f'  - "{item}"\n' for item in dependencies)
+        (control / f"kanban/todo/{ticket_id}.md").write_text(
+            f'---\n"type": "devlegate.ticket"\n"title": "{title}"\n'
+            f'"depends_on":\n{dependency_lines}---\nwork\n'
+        )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "add wide workflow frontier")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    snapshot = Devlegate(config).status_view()
+
+    assert snapshot.plan.ticket_id == "F-1"
+    assert snapshot.eligible == (
+        ("F-1", "Front 1"),
+        ("F-2", "Front 2"),
+        ("F-3", "Front 3"),
+    )
+    assert snapshot.blocked == (
+        (
+            "J-1",
+            "Join 1",
+            BlockedReason(
+                "dependencies", tickets=(("F-1", "todo"), ("F-2", "todo"))
+            ),
+        ),
+        (
+            "J-2",
+            "Join 2",
+            BlockedReason(
+                "dependencies", tickets=(("F-2", "todo"), ("F-3", "todo"))
+            ),
+        ),
+    )
 
 
 def test_explicit_control_reconciliation_adopts_exact_divergent_history(
@@ -1508,7 +1605,21 @@ def test_independent_ticket_remains_blocked_by_review_barrier(tmp_path, monkeypa
     (control / "kanban/todo/T-2.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
     )
-    git(control, "add", "kanban/todo/T-2.md")
+    (control / "kanban/todo/T-3.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Third"\n'
+        '"depends_on":\n  - "T-2"\n---\nwork\n'
+    )
+    (control / "kanban/todo/T-4.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Fourth"\n'
+        '"depends_on":\n  - "T-1"\n  - "T-2"\n---\nwork\n'
+    )
+    git(
+        control,
+        "add",
+        "kanban/todo/T-2.md",
+        "kanban/todo/T-3.md",
+        "kanban/todo/T-4.md",
+    )
     git(control, "commit", "-m", "add independent ticket")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
 
@@ -1519,6 +1630,58 @@ def test_independent_ticket_remains_blocked_by_review_barrier(tmp_path, monkeypa
     assert "waiting for review" in plan.reason
     assert (control / "kanban/review/T-1.md").is_file()
     assert (control / "kanban/todo/T-2.md").is_file()
+    snapshot = devlegate.status_view()
+    assert snapshot.eligible == ()
+    assert snapshot.blocked == (
+        ("T-2", "Second", BlockedReason("review", ticket_id="T-1")),
+        (
+            "T-3",
+            "Third",
+            BlockedReason("dependencies", tickets=(("T-2", "todo"),)),
+        ),
+        (
+            "T-4",
+            "Fourth",
+            BlockedReason(
+                "dependencies",
+                tickets=(("T-1", "review"), ("T-2", "todo")),
+            ),
+        ),
+    )
+    status = invoke(working, "status", "--json", config=config)
+    payload = json.loads(status.stdout)
+    assert payload["tickets"]["eligible"] == []
+    assert payload["tickets"]["blocked"] == [
+        {
+            "id": "T-2",
+            "title": "Second",
+            "reason": {"kind": "review", "ticket_id": "T-1"},
+        },
+        {
+            "id": "T-3",
+            "title": "Third",
+            "reason": {
+                "kind": "dependencies",
+                "tickets": [{"id": "T-2", "state": "todo"}],
+            },
+        },
+        {
+            "id": "T-4",
+            "title": "Fourth",
+            "reason": {
+                "kind": "dependencies",
+                "tickets": [
+                    {"id": "T-1", "state": "review"},
+                    {"id": "T-2", "state": "todo"},
+                ],
+            },
+        },
+    ]
+    human = invoke(working, "status", config=config)
+    assert "Eligible" not in human.stdout
+    assert "Blocked" in human.stdout
+    assert "T-1 awaiting review" in human.stdout
+    assert "T-2 unfinished (todo)" in human.stdout
 
 
 def test_unchanged_empty_generation_remains_a_noop(tmp_path, monkeypatch):
@@ -1539,9 +1702,10 @@ def test_unchanged_empty_generation_remains_a_noop(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
+def test_review_and_accepted_states_enforce_serial_planning(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/todo/T-2.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
@@ -1554,6 +1718,11 @@ def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
     review = json.loads(invoke(working, "plan", "--json", config=config).stdout)
     assert review["action"] == "none"
     assert "waiting for review" in review["reason"]
+    review_status = Devlegate(config).status_view()
+    assert review_status.eligible == ()
+    assert review_status.blocked == (
+        ("T-2", "Second", BlockedReason("review", ticket_id="T-1")),
+    )
 
     (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
     git(control, "add", "-A")
@@ -1562,6 +1731,11 @@ def test_review_and_accepted_states_enforce_serial_planning(tmp_path):
     accepted = json.loads(invoke(working, "plan", "--json", config=config).stdout)
     assert accepted["action"] == "integrate"
     assert accepted["ticket"]["id"] == "T-1"
+    accepted_status = Devlegate(config).status_view()
+    assert accepted_status.eligible == ()
+    assert accepted_status.blocked == (
+        ("T-2", "Second", BlockedReason("accepted", ticket_id="T-1")),
+    )
 
 
 def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypatch):

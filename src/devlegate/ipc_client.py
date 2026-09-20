@@ -17,6 +17,7 @@ from devlegate.ipc_protocol import (
     send_frame,
 )
 from devlegate.runtime import (
+    BlockedReason,
     ExecutionPlan,
     FailedExecution,
     GitObservation,
@@ -258,7 +259,8 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
                 observation.get("control"), "control observation"
             ),
             counts=_counts(tickets["counts"]),
-            runnable=_ticket_pairs(tickets["runnable"], "runnable"),
+            runnable=(),
+            eligible=_ticket_pairs(tickets["eligible"], "eligible"),
             blocked=blocked,
             review=_ticket_pairs(tickets["review"], "review"),
             accepted=_ticket_pairs(tickets["accepted"], "accepted"),
@@ -275,7 +277,6 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
             bound_ticket_title=_optional_text(
                 execution.get("ticket_title"), "bound ticket title"
             ),
-            blocked_reasons=_blocked_reasons(tickets["blocked"]),
             lifecycle_integration=_lifecycle_integration(value.get("lifecycle")),
         )
     except (KeyError, TypeError, ValueError) as error:
@@ -367,46 +368,33 @@ def _ticket_pairs(value: object, label: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
-def _blocked(value: object) -> tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...]:
+def _blocked(value: object) -> tuple[tuple[str, str, BlockedReason], ...]:
     if not isinstance(value, list):
         raise ValueError("blocked must be a list")
     entries = []
     for item in value:
         mapping = _mapping(item, "blocked ticket")
-        blockers = _dependency_pairs(mapping["blocked_by"])
+        reason_mapping = _mapping(mapping["reason"], "blocked reason")
+        kind = _text(reason_mapping["kind"], "blocked reason kind")
+        if kind == "dependencies":
+            reason = BlockedReason(
+                kind,
+                tickets=_dependency_pairs(reason_mapping["tickets"]),
+            )
+        else:
+            reason = BlockedReason(
+                kind,
+                ticket_id=_optional_text(
+                    reason_mapping.get("ticket_id"), "blocked reason ticket"
+                ),
+            )
         entries.append(
             (
                 _text(mapping["id"], "blocked id"),
                 _text(mapping["title"], "blocked title"),
-                blockers,
+                reason,
             )
         )
-    return tuple(entries)
-
-
-def _blocked_reasons(
-    value: object,
-) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
-    if not isinstance(value, list):
-        raise ValueError("blocked must be a list")
-    entries = []
-    for item in value:
-        mapping = _mapping(item, "blocked ticket")
-        reasons_value = mapping.get("reasons")
-        if reasons_value is None:
-            continue
-        if not isinstance(reasons_value, list):
-            raise ValueError("blocked reasons must be a list")
-        reasons = []
-        for reason in reasons_value:
-            reason_mapping = _mapping(reason, "blocked reason")
-            reasons.append(
-                (
-                    _text(reason_mapping["kind"], "blocked reason kind"),
-                    _text(reason_mapping["ticket_id"], "blocked reason ticket"),
-                )
-            )
-        entries.append((_text(mapping["id"], "blocked id"), tuple(reasons)))
     return tuple(entries)
 
 

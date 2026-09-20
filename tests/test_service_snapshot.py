@@ -8,7 +8,7 @@ import pytest
 from runtime_helpers import run_test_iteration
 from test_control_plane import control_fixture, git, invoke
 
-from devlegate.runtime import ServiceSnapshot
+from devlegate.runtime import BlockedReason, ServiceSnapshot
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerRunResult
 
@@ -334,6 +334,31 @@ def test_blocked_reason_is_published_and_cleared(tmp_path, monkeypatch):
     )
     engine.status_view()
     assert engine.service_snapshot().blocked_reason is None
+
+
+def test_bound_execution_is_current_and_blocks_other_runnable_tickets(
+    tmp_path, monkeypatch
+):
+    engine, state = make_engine(tmp_path, monkeypatch)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add second ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    _persist_active_execution(engine, "agent_pending", "lifecycle")
+
+    snapshot = engine.status_view()
+
+    assert snapshot.bound_ticket_id == "T-1"
+    assert snapshot.eligible == ()
+    assert snapshot.blocked == (
+        ("T-2", "Second", BlockedReason("active-execution", ticket_id="T-1")),
+    )
+    assert snapshot.blocked == (
+        ("T-2", "Second", BlockedReason("active-execution", ticket_id="T-1")),
+    )
 
 
 def test_service_snapshot_keeps_last_known_coordinates(tmp_path, monkeypatch):

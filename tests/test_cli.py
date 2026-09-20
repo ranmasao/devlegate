@@ -39,7 +39,12 @@ from devlegate.cli import (
 from devlegate.ipc_client import IPCClientError
 from devlegate.ipc_client import request as ipc_request
 from devlegate.ipc_server import UnixIPCServer
-from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
+from devlegate.runtime import (
+    BlockedReason,
+    ExecutionPlan,
+    GitObservation,
+    StatusSnapshot,
+)
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
@@ -2439,10 +2444,14 @@ def test_live_accepted_integration_window_precedes_dependent_scheduling(
         )
         assert plan.action == "none"
         assert "accepted integration recovery in progress" in plan.reason
-        assert not any(ticket_id == "T-2" for ticket_id, _title in snapshot.runnable)
+        assert snapshot.eligible == ()
         assert snapshot.lifecycle_integration == ("T-1", "in-progress")
-        assert snapshot.blocked_reasons == (
-            ("T-2", (("integration-in-progress", "T-1"),)),
+        assert snapshot.blocked == (
+            (
+                "T-2",
+                "Dependent",
+                BlockedReason("integration-in-progress", ticket_id="T-1"),
+            ),
         )
         assert "T-1 integration in progress" in status_text
         assert attempts.read_text().splitlines() == ["attempt"]
@@ -2455,7 +2464,7 @@ def test_live_accepted_integration_window_precedes_dependent_scheduling(
         assert _disk_state(config).get("accepted_integration") is None
 
         completed = engine.status_view()
-        assert ("T-2", "Dependent") in completed.runnable
+        assert ("T-2", "Dependent") in completed.eligible
         assert completed.lifecycle_integration is None
     finally:
         release.set()

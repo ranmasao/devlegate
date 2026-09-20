@@ -24,6 +24,7 @@ from devlegate.ipc_protocol import (
     send_frame,
 )
 from devlegate.runtime import (
+    BlockedReason,
     ExecutionPlan,
     FailedExecution,
     GitObservation,
@@ -210,7 +211,13 @@ def test_status_round_trip_preserves_complete_view():
         representative_observation("devlegate/control"),
         (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
         (("T-1", "Ticket"),),
-        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (
+            (
+                "T-2",
+                "Waiting",
+                BlockedReason("dependencies", tickets=(("D-1", "review"),)),
+            ),
+        ),
         (("R-1", "Review"),),
         (("A-1", "Accepted"),),
         ("T-1", "Ticket"),
@@ -241,7 +248,6 @@ def test_status_round_trip_preserves_complete_view():
     }
     assert set(payload["tickets"]) == {
         "counts",
-        "runnable",
         "eligible",
         "blocked",
         "review",
@@ -267,7 +273,13 @@ def test_status_text_is_identical_after_ipc_round_trip():
         representative_observation("devlegate/control"),
         (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
         (("T-1", "Ticket"),),
-        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (
+            (
+                "T-2",
+                "Waiting",
+                BlockedReason("dependencies", tickets=(("D-1", "review"),)),
+            ),
+        ),
         (("R-1", "Review"),),
         (("A-1", "Accepted"),),
         ("T-1", "Ticket"),
@@ -364,7 +376,9 @@ def test_counts_decode_in_canonical_order():
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value["tickets"]["blocked"][0]["blocked_by"][0].pop("state"),
+        lambda value: value["tickets"]["blocked"][0]["reason"]["tickets"][0].pop(
+            "state"
+        ),
         lambda value: value["tickets"]["counts"].pop("todo"),
         lambda value: value["tickets"]["counts"].update({"unexpected": 1}),
         lambda value: value["tickets"]["counts"].update({"todo": True}),
@@ -379,7 +393,13 @@ def test_malformed_status_nested_shapes_raise_ipc_error(mutate):
         None,
         (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
         (),
-        (("T-2", "Waiting", (("D-1", "review"),)),),
+        (
+            (
+                "T-2",
+                "Waiting",
+                BlockedReason("dependencies", tickets=(("D-1", "review"),)),
+            ),
+        ),
         (),
         (),
         None,

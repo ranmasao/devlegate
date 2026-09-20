@@ -131,6 +131,23 @@ Only `todo` tickets whose dependencies are in `done` are runnable. `review` and
 `accepted` do not satisfy dependencies. Devlegate selects one runnable ticket
 for a possible execution.
 
+Status exposes scheduler admission rather than duplicating internal dependency
+readiness:
+
+- `eligible` means immediately admissible by the scheduler;
+- `blocked` means a `todo` ticket that is neither current nor eligible and has
+  exactly one effective tagged blocking reason.
+
+For valid enumerable workflow state, the admission projection is partitioned as
+`todo = current union eligible union blocked`. These sets are pairwise
+disjoint. Dependency readiness remains an internal DAG predicate used by the
+scheduler; it is not serialized as a second status category.
+
+Machine status serializes `tickets.eligible` and `tickets.blocked`. Each
+blocked entry has one tagged `reason`: `dependencies` carries only immediate
+unfinished dependency IDs and states, while scheduler-wide barriers carry the
+single applicable barrier kind and ticket ID when one exists.
+
 The worker starts in the ticket's execution worktree at the planned product
 revision. A completed result is submitted to `review`. An incomplete, blocked,
 or failed result remains in `todo` with its execution evidence. Reviewer

@@ -32,6 +32,7 @@ from devlegate.ipc_client import (
 )
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.runtime import (
+    BlockedReason,
     DevlegateError,
     ExecutionPlan,
     StatusSnapshot,
@@ -510,22 +511,32 @@ def _short_hash(value: str | None) -> str:
 
 
 def _blocked_reason_text(
-    blockers: tuple[tuple[str, str], ...],
-    reasons: tuple[tuple[str, str], ...],
+    reason: BlockedReason,
 ) -> str:
-    states = dict(blockers)
-    effective = reasons or tuple(
-        ("unfinished-dependency", dependency_id)
-        for dependency_id, _state in blockers
-    )
-    return ", ".join(
-        (
-            f"{dependency_id} integration in progress"
-            if kind == "integration-in-progress"
-            else f"{dependency_id} unfinished ({states.get(dependency_id, 'unknown')})"
+    if reason.kind == "dependencies":
+        return ", ".join(
+            (
+                f"{ticket_id} integration in progress"
+                if state == "integration-in-progress"
+                else f"{ticket_id} unfinished ({state})"
+            )
+            for ticket_id, state in reason.tickets
         )
-        for kind, dependency_id in effective
-    )
+    if reason.kind == "integration-in-progress":
+        return f"{reason.ticket_id} integration in progress"
+    if reason.kind == "review":
+        return f"{reason.ticket_id} awaiting review"
+    if reason.kind == "accepted":
+        return f"{reason.ticket_id} accepted; integration pending"
+    if reason.kind == "active-execution":
+        return f"{reason.ticket_id} execution in progress"
+    if reason.kind == "reconciliation":
+        return "reconciliation in progress"
+    if reason.kind == "accepted-integration":
+        return "accepted integration recovery in progress"
+    if reason.kind == "repository":
+        return "repository is not admissible"
+    return "scheduler admission is blocked"
 
 
 def _render_status_text(
@@ -621,12 +632,11 @@ def _render_status_text(
             ),
         ]
     )
-    bound_id = snapshot.bound_ticket_id
-    eligible = tuple(item for item in snapshot.runnable if item[0] != bound_id)
-    if eligible:
-        lines.extend(["", render_grid("Eligible", ("Ticket", "Title"), eligible)])
+    if snapshot.eligible:
+        lines.extend(
+            ["", render_grid("Eligible", ("Ticket", "Title"), snapshot.eligible)]
+        )
     if snapshot.blocked:
-        reasons_by_ticket = dict(snapshot.blocked_reasons)
         lines.extend(
             [
                 "",
@@ -637,11 +647,9 @@ def _render_status_text(
                         (
                             ticket_id,
                             title,
-                            _blocked_reason_text(
-                                blockers, reasons_by_ticket.get(ticket_id, ())
-                            ),
+                            _blocked_reason_text(reason),
                         )
-                        for ticket_id, title, blockers in snapshot.blocked
+                        for ticket_id, title, reason in snapshot.blocked
                     ),
                 ),
             ]

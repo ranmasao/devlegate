@@ -9,7 +9,12 @@ import pytest
 from devlegate.cli import _execution_projection, _render_status_text
 from devlegate.ipc_client import decode_status
 from devlegate.output import render_grid, render_table
-from devlegate.runtime import ExecutionPlan, GitObservation, StatusSnapshot
+from devlegate.runtime import (
+    BlockedReason,
+    ExecutionPlan,
+    GitObservation,
+    StatusSnapshot,
+)
 
 
 def test_status_renderer_requires_explicit_service_state():
@@ -225,7 +230,7 @@ def test_workflow_is_a_compact_summary_and_empty_eligible_is_omitted():
 
 def test_non_empty_eligible_remains_visible():
     snapshot = dataclasses.replace(
-        _execution_snapshot("idle", None), runnable=(("LAB-2", "Runnable"),)
+        _execution_snapshot("idle", None), eligible=(("LAB-2", "Runnable"),)
     )
 
     output = _render_status_text(
@@ -243,11 +248,31 @@ def test_machine_eligible_excludes_bound_ticket():
             ("LAB-1", "bound"),
             ("LAB-2", "eligible"),
         ),
+        eligible=(("LAB-2", "eligible"),),
     )
 
     assert snapshot.as_dict()["tickets"]["eligible"] == [
         {"id": "LAB-2", "title": "eligible"}
     ]
+
+
+def test_global_blocking_reason_has_no_fabricated_ticket_dependency():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("idle", None),
+        blocked=(
+            ("LAB-2", "Blocked", BlockedReason("repository")),
+        ),
+    )
+
+    payload = snapshot.as_dict()
+    assert payload["tickets"]["blocked"][0]["reason"] == {
+        "kind": "repository"
+    }
+    assert decode_status(payload).blocked == snapshot.blocked
+    output = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None, "stopped")
+    )
+    assert "repository is not admissible" in output
 
 
 def test_accepted_integration_is_visible_with_structured_blocking_reason():
@@ -257,11 +282,8 @@ def test_accepted_integration_is_visible_with_structured_blocking_reason():
             (
                 "LAB-127",
                 "Dependent work",
-                (("LAB-126", "accepted"),),
+                BlockedReason("integration-in-progress", ticket_id="LAB-126"),
             ),
-        ),
-        blocked_reasons=(
-            ("LAB-127", (("integration-in-progress", "LAB-126"),)),
         ),
         lifecycle_integration=("LAB-126", "in-progress"),
     )
@@ -274,9 +296,10 @@ def test_accepted_integration_is_visible_with_structured_blocking_reason():
     assert payload["lifecycle"] == {
         "integration": {"ticket_id": "LAB-126", "state": "in-progress"}
     }
-    assert payload["tickets"]["blocked"][0]["reasons"] == [
-        {"kind": "integration-in-progress", "ticket_id": "LAB-126"}
-    ]
+    assert payload["tickets"]["blocked"][0]["reason"] == {
+        "kind": "integration-in-progress",
+        "ticket_id": "LAB-126",
+    }
     assert "Lifecycle" in output
     assert "in-progress LAB-126" in output
     assert "LAB-126 integration in progress" in output

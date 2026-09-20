@@ -11,6 +11,7 @@ release are not separate product changes.
 
 - Unified background, foreground, and single-iteration operation around one service-host execution model.
 - Scoped retry and automatic-resume authorization to individual scheduler iterations.
+- Simplified status projections to expose scheduler eligibility and one structured blocking reason per todo ticket.
 
 ## 0.5.1 -- 2026-09-20
 
