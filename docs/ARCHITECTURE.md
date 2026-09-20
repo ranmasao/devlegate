@@ -74,6 +74,9 @@ shutdown through the service IPC endpoint. The host is supervisor-neutral, but
 the service is managed directly by Devlegate and does not require an external
 service manager.
 
+Retry and automatic-resume authorization are scheduler-iteration inputs or
+local iteration state, not persistent service state.
+
 ## Runtime State
 
 SQLite stores local operational runtime state. This state records active

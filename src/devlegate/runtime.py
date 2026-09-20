@@ -78,6 +78,29 @@ class ShutdownInterrupted(Exception):
     """A requested shutdown interrupted a foreground Git child."""
 
 
+@dataclasses.dataclass(frozen=True)
+class IterationIntent:
+    """Explicit operator intent supplied to one scheduler iteration."""
+
+    retry_ticket_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionAuthorization:
+    """Iteration-local authorization for one retry or automatic resume."""
+
+    ticket_id: str
+    kind: str
+
+    @property
+    def is_automatic_resume(self) -> bool:
+        return self.kind == "automatic_resume"
+
+    @property
+    def is_explicit_retry(self) -> bool:
+        return self.kind == "explicit_retry"
+
+
 class SnapshotChanged(Exception):
     """The observed project changed during a status snapshot attempt."""
 
@@ -977,8 +1000,6 @@ class ServiceEngine:
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
-        self._retry_ticket_id: str | None = None
-        self._automatic_resume_ticket_id: str | None = None
         self._locator = RuntimeLocator.from_config(env_file, self.repo, config)
         self.state_dir = self._locator.state_dir
         self._state_key = self._locator.state_key
@@ -994,8 +1015,6 @@ class ServiceEngine:
         self._foreground_diagnostic_fingerprint: str | None = None
         self._iteration_diagnostic: str | None = None
         self._workflow_validation_succeeded = False
-        self._retry_ticket_id = None
-        self._automatic_resume_ticket_id = None
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.Lock()
         self._receipt_lock = threading.Lock()
@@ -2540,16 +2559,23 @@ class ServiceEngine:
             with self._stop_context(stop_event):
                 return self.run_iteration()
 
-    def run_iteration(self) -> int:
+    def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""
+        intent = intent or IterationIntent()
+        authorization = (
+            ExecutionAuthorization(intent.retry_ticket_id, "explicit_retry")
+            if intent.retry_ticket_id is not None
+            else None
+        )
         self._owned_execution_id = None
         try:
-            return self._run_iteration_body()
+            return self._run_iteration_body(authorization)
         finally:
             self._owned_execution_id = None
-            self._automatic_resume_ticket_id = None
 
-    def _run_iteration_body(self) -> int:
+    def _run_iteration_body(
+        self, authorization: ExecutionAuthorization | None
+    ) -> int:
         self._publish_service_snapshot(lifecycle="processing")
         if (
             self._stop_requested()
@@ -2609,7 +2635,13 @@ class ServiceEngine:
             automatic_ticket = self._reconcile_stranded_execution()
             if automatic_ticket is None or self._stop_requested():
                 return 0
-            self._automatic_resume_ticket_id = automatic_ticket
+            if authorization is not None:
+                raise DevlegateError(
+                    "explicit retry cannot also authorize automatic resume"
+                )
+            authorization = ExecutionAuthorization(
+                automatic_ticket, "automatic_resume"
+            )
         status = self._git_runtime(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -2945,16 +2977,8 @@ class ServiceEngine:
         )
         if self._stop_before_admission():
             return 0
-        if (
-            self._retry_ticket_id is not None
-            or self._automatic_resume_ticket_id is not None
-        ):
-            authorized_ticket_id = (
-                self._retry_ticket_id
-                if self._retry_ticket_id is not None
-                else self._automatic_resume_ticket_id
-            )
-            assert authorized_ticket_id is not None
+        if authorization is not None:
+            authorized_ticket_id = authorization.ticket_id
             if execution_plan.action != "run-worker" or execution_plan.bound:
                 raise DevlegateError(execution_plan.reason)
             retry_ticket = ticket_store.by_id.get(authorized_ticket_id)
@@ -2970,7 +2994,7 @@ class ServiceEngine:
                 "run-worker",
                 (
                     "automatic resume of safely interrupted execution"
-                    if self._automatic_resume_ticket_id is not None
+                    if authorization.is_automatic_resume
                     else "explicit retry of current failed execution"
                 ),
                 retry_ticket.id, retry_ticket.title, retry_ticket.state, False,
@@ -3108,8 +3132,7 @@ class ServiceEngine:
                 and failed_for_ticket.get("interrupted") is True
             )
             if (
-                self._retry_ticket_id is None
-                and self._automatic_resume_ticket_id is None
+                authorization is None
                 and execution_plan.action == "run-worker"
                 and not execution_plan.bound
                 and interrupted_failure
@@ -3119,19 +3142,17 @@ class ServiceEngine:
                     in {"service_shutdown", "process_loss"}
                     and generation_is_same
                 ):
-                    self._automatic_resume_ticket_id = selected_ticket.id
+                    authorization = ExecutionAuthorization(
+                        selected_ticket.id, "automatic_resume"
+                    )
                 else:
                     _log(
                         f"interrupted execution for {selected_ticket.id} is not "
                         "eligible for automatic resume; explicit retry is required"
                     )
                     return 0
-            authorized_ticket_id = (
-                self._retry_ticket_id
-                if self._retry_ticket_id is not None
-                else self._automatic_resume_ticket_id
-            )
-            if authorized_ticket_id is not None:
+            if authorization is not None:
+                authorized_ticket_id = authorization.ticket_id
                 if not isinstance(failed_for_ticket, dict) or any(
                     failed_for_ticket.get(field) != expected
                     for field, expected in (
@@ -3145,7 +3166,7 @@ class ServiceEngine:
                         f"ticket {authorized_ticket_id} failed execution is stale; "
                         "current project state must be reviewed before retry"
                     )
-                if self._automatic_resume_ticket_id is not None and (
+                if authorization.is_automatic_resume and (
                     failed_for_ticket.get("interrupted") is not True
                     or failed_for_ticket.get("interruption_kind")
                     not in {"service_shutdown", "process_loss"}
@@ -3154,8 +3175,7 @@ class ServiceEngine:
                         "automatic resume requires a safely interrupted execution"
                     )
             if (
-                self._retry_ticket_id is None
-                and self._automatic_resume_ticket_id is None
+                authorization is None
                 and not pending_agent_execution
                 and isinstance(failed_for_ticket, dict)
                 and generation_is_same
@@ -3166,14 +3186,14 @@ class ServiceEngine:
                     "suppressed; explicit retry is required"
                 )
                 return 0
-            if self._retry_ticket_id is not None:
-                if selected_ticket.id != self._retry_ticket_id:
+            if authorization is not None and authorization.is_explicit_retry:
+                if selected_ticket.id != authorization.ticket_id:
                     raise DevlegateError(
-                        f"ticket {self._retry_ticket_id} is no longer the current "
+                        f"ticket {authorization.ticket_id} is no longer the current "
                         "runnable ticket"
                     )
-            if self._automatic_resume_ticket_id is not None and (
-                selected_ticket.id != self._automatic_resume_ticket_id
+            if authorization is not None and authorization.is_automatic_resume and (
+                selected_ticket.id != authorization.ticket_id
             ):
                 raise DevlegateError(
                     "automatic resume ticket is no longer the current runnable ticket"
@@ -3181,8 +3201,7 @@ class ServiceEngine:
             if (
                 generation_is_same
                 and not pending_agent_execution
-                and self._retry_ticket_id is None
-                and self._automatic_resume_ticket_id is None
+                and authorization is None
                 and not resume_required
                 and self._state.get("execution_ticket_id") == selected_ticket.id
             ):
@@ -3258,7 +3277,7 @@ class ServiceEngine:
         )
         directive = WorkDirective.FRESH
         retrying_interrupted = False
-        if self._retry_ticket_id is not None:
+        if authorization is not None and authorization.is_explicit_retry:
             failures = self._state.get("failed_executions", {})
             failure = (
                 failures.get(selected_ticket.id)
@@ -3271,9 +3290,13 @@ class ServiceEngine:
         if (
             bound_execution
             or resume_required
-            or self._automatic_resume_ticket_id is not None
             or (
-                self._retry_ticket_id is not None
+                authorization is not None
+                and authorization.is_automatic_resume
+            )
+            or (
+                authorization is not None
+                and authorization.is_explicit_retry
                 and (workspace.head != workspace.base_head or retrying_interrupted)
             )
         ):
@@ -5854,14 +5877,11 @@ export default tool({
         candidate_ids = {candidate[0] for candidate in candidates}
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
-        self._retry_ticket_id = ticket_id
-        try:
-            if stop_event is None:
-                return self.run_iteration()
-            with self._stop_context(stop_event):
-                return self.run_iteration()
-        finally:
-            self._retry_ticket_id = None
+        intent = IterationIntent(retry_ticket_id=ticket_id)
+        if stop_event is None:
+            return self.run_iteration(intent)
+        with self._stop_context(stop_event):
+            return self.run_iteration(intent)
 
     def reconcile_update_base(self, ticket_id: str, onto: str) -> int:
         """Transplant one preserved worker checkpoint onto an explicit base."""

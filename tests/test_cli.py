@@ -3408,7 +3408,7 @@ def test_interactive_retry_selects_only_requested_candidate(monkeypatch, capsys)
     monkeypatch.setattr(
         devlegate,
         "run_iteration",
-        lambda: selected.append(devlegate._retry_ticket_id) or 0,
+        lambda intent: selected.append(intent.retry_ticket_id) or 0,
     )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
@@ -3435,7 +3435,7 @@ def test_interactive_retry_cancel_without_running(monkeypatch, answer):
     monkeypatch.setattr(
         devlegate,
         "run_iteration",
-        lambda: selected.append(devlegate._retry_ticket_id) or 0,
+        lambda intent: selected.append(intent.retry_ticket_id) or 0,
     )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
@@ -3452,7 +3452,9 @@ def test_interactive_retry_rejects_invalid_selection_without_running(monkeypatch
     monkeypatch.setattr(
         devlegate, "_retry_candidates", lambda: (("T-1", "one", "first"),)
     )
-    monkeypatch.setattr(devlegate, "run_iteration", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(
+        devlegate, "run_iteration", lambda _intent: ran.append(True) or 0
+    )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
     monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)

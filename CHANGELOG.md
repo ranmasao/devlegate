@@ -10,6 +10,7 @@ release are not separate product changes.
 ### Changed
 
 - Unified background, foreground, and single-iteration operation around one service-host execution model.
+- Scoped retry and automatic-resume authorization to individual scheduler iterations.
 
 ## 0.5.1 -- 2026-09-20
 

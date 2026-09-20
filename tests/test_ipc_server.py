@@ -1131,7 +1131,7 @@ def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
         release.wait(2)
         return 0
 
-    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
+    monkeypatch.setattr(engine, "run_iteration", lambda _intent=None: 0)
     monkeypatch.setattr(engine, "_retry_owned", execute)
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
@@ -1339,7 +1339,7 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
         return result
 
     monkeypatch.setattr(engine, "_retry_owned", retry_owned)
-    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
+    monkeypatch.setattr(engine, "run_iteration", lambda _intent=None: 0)
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()

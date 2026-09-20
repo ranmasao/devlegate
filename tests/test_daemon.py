@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+import inspect
 import json
 import os
 import signal
@@ -22,8 +23,12 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
 )
-from devlegate.runtime import ShutdownInterrupted, WorkflowBlockedError
-from devlegate.service import ServiceEngine
+from devlegate.runtime import (
+    IterationIntent,
+    ServiceEngine,
+    ShutdownInterrupted,
+    WorkflowBlockedError,
+)
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
@@ -32,6 +37,34 @@ def make_engine(tmp_path, monkeypatch):
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     return ServiceEngine(config), config, state
+
+
+def test_explicit_retry_intent_cannot_leak_to_next_iteration(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    intents = []
+    monkeypatch.setattr(
+        engine,
+        "_retry_candidates",
+        lambda: (("T-1", "ticket", "retry"),),
+    )
+
+    def iteration(intent=None):
+        intents.append(intent)
+        return 0
+
+    monkeypatch.setattr(engine, "run_iteration", iteration)
+
+    assert engine._retry_locked("T-1") == 0
+    assert engine.run_iteration() == 0
+    assert intents == [
+        IterationIntent(retry_ticket_id="T-1"),
+        None,
+    ]
+
+
+def test_iteration_body_does_not_reenter_scheduler():
+    source = inspect.getsource(ServiceEngine._run_iteration_body)
+    assert "run_iteration(" not in source
 
 
 @pytest.mark.parametrize(
@@ -286,7 +319,9 @@ def test_daemon_stop_already_requested_does_not_admit_iteration(
     stop_event = threading.Event()
     stop_event.set()
     calls = []
-    monkeypatch.setattr(engine, "run_iteration", lambda: calls.append(True))
+    monkeypatch.setattr(
+        engine, "run_iteration", lambda _intent=None: calls.append(True)
+    )
     monkeypatch.setattr(
         "devlegate.runtime._git",
         lambda *_args, **_kwargs: pytest.fail("unexpected observation"),
