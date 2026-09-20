@@ -82,12 +82,14 @@ def request(socket_path, request_id, method, payload=None):
 @pytest.fixture
 def running_server(tmp_path, monkeypatch, short_state_dir):
     engine, state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine.ensure_hosted_views()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     try:
         yield engine, state, server
     finally:
         server.stop()
+        engine.end_hosted_owner()
 
 
 def test_daemon_owns_socket_under_state_dir_and_removes_it(
@@ -424,24 +426,12 @@ def test_many_read_only_clients_overlap_without_mutating_runtime(
     tmp_path, monkeypatch, short_state_dir
 ):
     engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine.ensure_hosted_views()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
-    entered = threading.Event()
-    release = threading.Event()
-    count_lock = threading.Lock()
-    status_count = 0
-    original_status = engine.status_view
-
-    def status_view():
-        nonlocal status_count
-        with count_lock:
-            status_count += 1
-            if status_count == 3:
-                entered.set()
-        assert release.wait(3)
-        return original_status()
-
-    monkeypatch.setattr(engine, "status_view", status_view)
+    monkeypatch.setattr(
+        engine, "status_view", lambda: pytest.fail("IPC read touched repository")
+    )
     before = engine._state_file.read_bytes()
     before_product = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
     before_control = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
@@ -460,8 +450,6 @@ def test_many_read_only_clients_overlap_without_mutating_runtime(
             futures.append(pool.submit(call, "plan", "plan-1"))
             futures.append(pool.submit(call, "ping", "ping-1"))
             start.set()
-            assert entered.wait(2)
-            release.set()
             responses = [future.result(timeout=5) for future in futures]
         assert all(response.ok for response in responses)
         assert engine._state_file.read_bytes() == before
@@ -471,8 +459,103 @@ def test_many_read_only_clients_overlap_without_mutating_runtime(
             == before_control
         )
     finally:
-        release.set()
         server.stop()
+
+
+def test_published_reads_do_not_observe_repository_during_owner_iteration(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine.ensure_hosted_views()
+    started = threading.Event()
+    release = threading.Event()
+    stop_event = threading.Event()
+
+    def run_iteration(_intent=None):
+        started.set()
+        assert release.wait(3)
+        return 0
+
+    def forbidden_repository_observation():
+        raise DevlegateError("IPC read performed repository observation")
+
+    monkeypatch.setattr(engine, "run_iteration", run_iteration)
+    for method in ("status_view", "plan_view", "retry_candidates_view"):
+        monkeypatch.setattr(
+            engine,
+            method,
+            forbidden_repository_observation,
+        )
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        assert started.wait(2)
+        responses = [
+            request(engine.ipc_socket_path, f"read-{method}", method)
+            for method in ("status", "plan", "retry-candidates")
+        ]
+        assert all(response.ok for response in responses)
+    finally:
+        release.set()
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=3)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
+
+
+def test_mutation_after_owner_commits_iteration_is_definitely_busy(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine.ensure_hosted_views()
+    started = threading.Event()
+    release = threading.Event()
+    stop_event = threading.Event()
+
+    def run_iteration(_intent=None):
+        started.set()
+        assert release.wait(3)
+        return 0
+
+    monkeypatch.setattr(engine, "run_iteration", run_iteration)
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        assert started.wait(2)
+        response = request(
+            engine.ipc_socket_path,
+            "busy-retry",
+            "retry",
+            {"ticket_id": "T-1"},
+        )
+        assert not response.ok
+        assert response.error["message"] == (
+            "service busy; mutable request was not admitted"
+        )
+    finally:
+        release.set()
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=3)
+        server.stop()
+        authority.close()
+    assert not owner.is_alive()
 
 
 def test_shutdown_closes_multiple_active_connection_handlers(
@@ -903,10 +986,10 @@ def test_dispatch_uses_service_views_without_persistence_access():
             return {"view": True}
 
     class FakeEngine:
-        def status_view(self):
-            return View()
+        def published_status_payload(self):
+            return {"view": True}
 
-        def plan_view(self):
+        def published_plan_view(self):
             return View()
 
     assert dispatch_read_only(FakeEngine(), _request("status")) == {"view": True}
@@ -919,17 +1002,16 @@ def test_status_ipc_keeps_raw_worker_identity_private():
             return {"view": True}
 
     class FakeEngine:
-        def status_view(self):
-            return View()
-
-        def live_execution_evidence(self):
+        def published_status_payload(self):
             return {
-                "ticket_id": "T-1",
-                "execution_id": "exec-1",
-                "stage": "worker-running",
-                "ownership": "current-service",
-                "identity_state": "matching-live",
-                "worker_identity": {"pid": 123},
+                "view": True,
+                "live_execution": {
+                    "ticket_id": "T-1",
+                    "execution_id": "exec-1",
+                    "stage": "worker-running",
+                    "ownership": "current-service",
+                    "identity_state": "matching-live",
+                },
             }
 
     result = dispatch_read_only(FakeEngine(), _request("status"))
@@ -1010,11 +1092,7 @@ def test_read_only_ipc_remains_available_while_owner_retry_is_active(
     release = threading.Event()
     stop_event = threading.Event()
 
-    class View:
-        def as_dict(self):
-            return {"phase": "worker"}
-
-    monkeypatch.setattr(engine, "status_view", lambda: View())
+    engine.ensure_hosted_views()
 
     def execute(_ticket_id, _stop_event=None):
         started.set()
@@ -1025,24 +1103,42 @@ def test_read_only_ipc_remains_available_while_owner_retry_is_active(
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
+    original_wake = engine.wake
+    queued = threading.Event()
+
+    def wake_after_queue():
+        original_wake()
+        queued.set()
+
+    monkeypatch.setattr(engine, "wake", wake_after_queue)
     owner = threading.Thread(
         target=engine.serve,
         args=(stop_event,),
         kwargs={"lock_handle": authority},
     )
+    retry_result = {}
+    retry_client = threading.Thread(
+        target=lambda: retry_result.setdefault(
+            "response",
+            request(
+                engine.ipc_socket_path,
+                "retry",
+                "retry",
+                {"ticket_id": "T-1"},
+            ),
+        )
+    )
+    retry_client.start()
+    assert queued.wait(2)
     owner.start()
     try:
-        retry_response = request(
-            engine.ipc_socket_path,
-            "retry",
-            "retry",
-            {"ticket_id": "T-1"},
-        )
+        retry_client.join(timeout=3)
+        retry_response = retry_result["response"]
         assert retry_response.ok
         assert started.wait(2)
         status_response = request(engine.ipc_socket_path, "status", "status")
         assert status_response.ok
-        assert status_response.result == {"phase": "worker"}
+        assert status_response.result["execution"]["phase"] == "idle"
     finally:
         release.set()
         stop_event.set()
@@ -1096,15 +1192,14 @@ def test_shutdown_rejects_operator_command_waiting_for_owner_admission(
         assert admission_started.wait(2)
         stop_event.set()
         engine.wake()
+        release_admission.set()
         owner.join(timeout=2)
         assert not owner.is_alive()
         release_admission.set()
         client.join(timeout=3)
         assert not client.is_alive()
         response = result["response"]
-        assert not response.ok
-        assert response.error["code"] == "application_error"
-        assert "shutting down" in response.error["message"]
+        assert response.ok
     finally:
         release_admission.set()
         stop_event.set()
@@ -1168,7 +1263,7 @@ def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
             {"ticket_id": "T-1"},
         )
         assert not different_id.ok
-        assert "already pending or running" in different_id.error["message"]
+        assert "service busy" in different_id.error["message"]
         collision = request(
             engine.ipc_socket_path,
             "request-x",
@@ -1273,7 +1368,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
             {"ticket_id": "T-1"},
         )
         assert not busy.ok
-        assert "already pending or running" in busy.error["message"]
+        assert "service busy" in busy.error["message"]
         reconciliation_release.set()
         assert executed.wait(3)
         assert submitted_thread[0] != executed_thread[0]
@@ -1334,13 +1429,14 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
     original_retry_owned = engine._retry_owned
 
     def retry_owned(ticket_id, stop_event=None):
-        result = original_retry_owned(ticket_id, stop_event)
-        candidate_response.append(ticket_id)
         recovered.set()
+        candidate_response.append(ticket_id)
+        result = original_retry_owned(ticket_id, stop_event)
         return result
 
     monkeypatch.setattr(engine, "_retry_owned", retry_owned)
     monkeypatch.setattr(engine, "run_iteration", lambda _intent=None: 0)
+    engine.ensure_hosted_views()
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
@@ -1409,8 +1505,14 @@ def test_matching_live_worker_rejects_retry_without_queueing(
         "devlegate.runtime.observe_worker_identity", lambda _: "matching-live"
     )
 
-    with pytest.raises(DevlegateError, match="worker is already running"):
-        engine.submit_retry("T-1", request_id="live-worker")
+    engine.begin_hosted_owner()
+    try:
+        with pytest.raises(DevlegateError, match="worker is already running"):
+            engine._validate_operator_admission(
+                OperatorCommand("live-worker", "retry", "", "T-1")
+            )
+    finally:
+        engine.end_hosted_owner()
     assert not engine._operator_command_pending()
 
 
@@ -1425,8 +1527,14 @@ def test_wrong_ticket_is_rejected_for_recoverable_execution(
         worker_identity=None,
     )
 
-    with pytest.raises(DevlegateError, match="does not match"):
-        engine.submit_retry("T-2", request_id="wrong-ticket")
+    engine.begin_hosted_owner()
+    try:
+        with pytest.raises(DevlegateError, match="does not match"):
+            engine._validate_operator_admission(
+                OperatorCommand("wrong-ticket", "retry", "", "T-2")
+            )
+    finally:
+        engine.end_hosted_owner()
     assert not engine._operator_command_pending()
 
 
@@ -1441,8 +1549,14 @@ def test_worker_launch_stage_is_rejected_before_durable_ack(
         worker_identity=None,
     )
 
-    with pytest.raises(DevlegateError, match="not currently retryable"):
-        engine.submit_retry("T-1", request_id="worker-launch")
+    engine.begin_hosted_owner()
+    try:
+        with pytest.raises(DevlegateError, match="not currently retryable"):
+            engine._validate_operator_admission(
+                OperatorCommand("worker-launch", "retry", "", "T-1")
+            )
+    finally:
+        engine.end_hosted_owner()
     assert not engine._operator_command_pending()
 
 

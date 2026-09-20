@@ -38,21 +38,11 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     if request.method == "ping":
         return {"service": "devlegate", "protocol_version": 1}
     if request.method == "status":
-        view = engine.status_view()
-        result = view.as_dict()
-        evidence = getattr(engine, "live_execution_evidence", lambda: None)()
-        if isinstance(evidence, dict):
-            result["live_execution"] = {
-                key: value
-                for key, value in evidence.items()
-                if key != "worker_identity"
-            }
-        return result
+        return engine.published_status_payload()
     if request.method == "plan":
-        view = engine.plan_view()
-        return view.as_dict()
+        return engine.published_plan_view().as_dict()
     if request.method == "retry-candidates":
-        return {"candidates": list(engine.retry_candidates_view())}
+        return {"candidates": list(engine.published_retry_candidates_view())}
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 

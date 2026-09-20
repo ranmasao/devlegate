@@ -96,8 +96,11 @@ class ServiceHost:
         )
         ready = False
         try:
-            server.start()
             with self._signal_ownership(stop_intent):
+                server.start()
+                prepare_views = getattr(self.engine, "ensure_hosted_views", None)
+                if prepare_views is not None:
+                    prepare_views()
                 if self.startup_report is not None:
                     self.startup_report()
                 _notify_startup(self.startup_fd, "READY")
@@ -122,6 +125,9 @@ class ServiceHost:
                 )
             server.stop()
             authority.close()
+            end_owner = getattr(self.engine, "end_hosted_owner", None)
+            if end_owner is not None:
+                end_owner()
 
     @contextmanager
     def _signal_ownership(

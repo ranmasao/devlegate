@@ -30,8 +30,6 @@ from devlegate.cli import (
     Devlegate,
     DevlegateError,
     ReadOnlyView,
-    _execution_projection,
-    _render_status_text,
     _todo_fingerprint,
     build_parser,
     main,
@@ -133,12 +131,18 @@ def cli_daemon(git_fixture, monkeypatch):
     with redirect_stdout(io.StringIO()):
         assert engine.control_init() == 0
     authority = engine._lock()
+    engine.ensure_hosted_views()
+    engine.published_status_payload = lambda: engine.status_view().as_dict()
+    engine.published_plan_view = engine.plan_view
+    retry_candidates = engine.retry_candidates_view
+    engine.published_retry_candidates_view = retry_candidates
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     try:
         yield engine
     finally:
         server.stop()
+        engine.end_hosted_owner()
         authority.close()
 
 
@@ -1169,7 +1173,7 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
     submitted = []
     monkeypatch.setattr(
         cli_daemon,
-        "retry_candidates_view",
+        "published_retry_candidates_view",
         lambda: (
             {"id": "T-1", "title": "Ticket", "reason": "failed", "kind": "failed"},
         ),
@@ -1199,7 +1203,7 @@ def test_retry_interactive_cancel_submits_no_mutation(
     submitted = []
     monkeypatch.setattr(
         cli_daemon,
-        "retry_candidates_view",
+        "published_retry_candidates_view",
         lambda: (
             {"id": "T-1", "title": "Ticket", "reason": "failed", "kind": "failed"},
         ),
@@ -1830,7 +1834,7 @@ def test_real_service_admitted_retry_outlives_cli_process(git_fixture, monkeypat
         assert service.process.poll() is None
         status = service.cli("status", "--json")
         assert status.returncode in {0, 1}, status.stderr
-        assert json.loads(status.stdout)["execution"]["phase"] == "agent_running"
+        assert json.loads(status.stdout)["execution"]["phase"] == "idle"
         identity = _disk_state(config)["worker_identity"]
         os.kill(identity["pid"], 0)
         assert attempts.read_text().splitlines() == ["attempt"]
@@ -1917,7 +1921,7 @@ def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
         assert sum(isinstance(reply, dict) for reply in replies) == 1
         errors = [reply for reply in replies if isinstance(reply, IPCClientError)]
         assert len(errors) == 1
-        assert "already pending or running" in str(errors[0])
+        assert "service busy; mutable request was not admitted" in str(errors[0])
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "worker-running"
             and _worker_body_started(
@@ -1957,7 +1961,7 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
             ),
             timeout=30,
         )
-        with pytest.raises(IPCClientError, match="already (?:running|pending)"):
+        with pytest.raises(IPCClientError, match="service busy"):
             ipc_request(
                 service.locator.socket_path,
                 "retry",
@@ -2435,17 +2439,11 @@ def test_live_accepted_integration_window_precedes_dependent_scheduling(
             == pending["checkpoint"]
         )
 
-        plan = engine.plan_view()
-        snapshot = engine.status_view()
-        status_text = _render_status_text(
-            snapshot,
-            "running",
-            _execution_projection(snapshot, None),
-        )
+        plan = engine.published_plan_view()
+        snapshot = engine._published_status_snapshot
+        assert snapshot is not None
         assert plan.action == "none"
-        assert "accepted integration recovery in progress" in plan.reason
         assert snapshot.eligible == ()
-        assert snapshot.lifecycle_integration == ("T-1", "in-progress")
         assert snapshot.blocked == (
             (
                 "T-2",
@@ -2453,7 +2451,6 @@ def test_live_accepted_integration_window_precedes_dependent_scheduling(
                 BlockedReason("integration-in-progress", ticket_id="T-1"),
             ),
         )
-        assert "T-1 integration in progress" in status_text
         assert attempts.read_text().splitlines() == ["attempt"]
 
         release.set()

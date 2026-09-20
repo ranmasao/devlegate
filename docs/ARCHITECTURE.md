@@ -66,6 +66,12 @@ Mutable operations are admitted and serialized by the service owner. The
 service owns ticket movement, worker execution, checkpoint commits, publication,
 reports, and accepted product integration.
 
+Hosted repository access is restricted to the service owner thread. IPC handlers
+do not inspect Git, SQLite, tickets, plans, or retry eligibility; they return
+published immutable views and enqueue mutable commands. The owner thread
+validates and dispatches commands at scheduler boundaries, while duplicate
+request identities are resolved through durable receipts.
+
 Bare `devlegate` starts the detached form of the canonical service host.
 `devlegate foreground` runs that host attached to the current terminal, and
 `devlegate once` runs it for one complete scheduler iteration. All three modes

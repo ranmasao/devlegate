@@ -379,14 +379,12 @@ class OperatorCommand:
     fingerprint: str
     ticket_id: str
     onto: str | None = None
-    preliminary_ready: threading.Event = dataclasses.field(
-        default_factory=threading.Event
-    )
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
     admission_result: dict[str, object] | None = None
     admission_error: DevlegateError | None = None
+    cancelled: threading.Event = dataclasses.field(default_factory=threading.Event)
 
 
 def _mutation_fingerprint(method: str, payload: dict[str, str]) -> str:
@@ -695,6 +693,7 @@ def _write_worker_line(text: str, stream) -> None:
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 WORKER_TERMINATION_TIMEOUT = 1.0
 WORKER_WAIT_INTERVAL = 0.05
+OPERATOR_ADMISSION_TIMEOUT = 1.0
 
 
 def _run_opencode(
@@ -1031,6 +1030,8 @@ class ServiceEngine:
         self._operator_command: OperatorCommand | None = None
         self._operator_active = False
         self._operator_active_command: OperatorCommand | None = None
+        self._scheduler_active = False
+        self._startup_admission_window = True
         self._service_wake = threading.Event()
         self._service_shutdown = threading.Event()
         self._foreground_abort_requested = False
@@ -1044,6 +1045,9 @@ class ServiceEngine:
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
         self._published_status_snapshot: StatusSnapshot | None = None
+        self._published_live_execution: dict[str, object] | None = None
+        self._published_retry_candidates: tuple[dict[str, str], ...] = ()
+        self._host_owner_thread_id: int | None = None
         self._published_snapshot = ServiceSnapshot(
             lifecycle="initialized",
             phase=str(self._state["phase"]),
@@ -1083,17 +1087,60 @@ class ServiceEngine:
         """Wake the owner loop for an internal command or shutdown request."""
         self._service_wake.set()
 
+    def begin_hosted_owner(self) -> None:
+        owner = threading.get_ident()
+        if self._host_owner_thread_id not in {None, owner}:
+            raise DevlegateError("hosted service already has an owner thread")
+        self._host_owner_thread_id = owner
+
+    def end_hosted_owner(self) -> None:
+        if self._host_owner_thread_id == threading.get_ident():
+            self._host_owner_thread_id = None
+
+    def _assert_repository_owner(self) -> None:
+        if (
+            self._host_owner_thread_id is not None
+            and self._host_owner_thread_id != threading.get_ident()
+        ):
+            raise DevlegateError(
+                "hosted repository access is restricted to the owner thread"
+            )
+
+    def ensure_hosted_views(self) -> None:
+        with self._snapshot_lock:
+            ready = self._published_status_snapshot is not None
+        if not ready:
+            self.status_view()
+
+    def published_status_payload(self) -> dict[str, object]:
+        with self._snapshot_lock:
+            snapshot = self._published_status_snapshot
+            live_execution = self._published_live_execution
+        if snapshot is None:
+            raise DevlegateError("service status view is not ready")
+        result = snapshot.as_dict()
+        if live_execution is not None:
+            result["live_execution"] = dict(live_execution)
+        return result
+
+    def published_plan_view(self) -> ExecutionPlan:
+        with self._snapshot_lock:
+            snapshot = self._published_status_snapshot
+        if snapshot is None:
+            raise DevlegateError("service plan view is not ready")
+        return snapshot.plan
+
+    def published_retry_candidates_view(self) -> tuple[dict[str, str], ...]:
+        with self._snapshot_lock:
+            if self._published_status_snapshot is None:
+                raise DevlegateError("service retry candidates are not ready")
+            return tuple(
+                dict(candidate) for candidate in self._published_retry_candidates
+            )
+
     def retry_candidates_view(self) -> tuple[dict[str, str], ...]:
-        """Return the service-owned semantic retry candidates for local prompting."""
-        return tuple(
-            {
-                "id": candidate.ticket_id,
-                "title": candidate.title,
-                "reason": candidate.reason,
-                "kind": candidate.kind,
-            }
-            for candidate in self._interactive_retry_candidates()
-        )
+        """Return retry candidates from the current owner-published view."""
+        return self.published_retry_candidates_view()
 
     def submit_retry(
         self, ticket_id: str, *, request_id: str
@@ -1182,33 +1229,41 @@ class ServiceEngine:
                     command = existing
                 else:
                     raise DevlegateError(
-                        "service runtime command already pending or running"
+                        "service busy; mutable request was not admitted"
                     )
             else:
+                if self._scheduler_active:
+                    raise DevlegateError(
+                        "service busy; mutable request was not admitted"
+                    )
                 command = OperatorCommand(
                     request_id, method, fingerprint, ticket_id, onto
                 )
                 self._operator_command = command
                 new_command = True
         if new_command:
-            try:
-                self._validate_operator_admission(command)
-            except DevlegateError as error:
-                command.admission_error = error
-                command.admission_event.set()
-                with self._operator_command_lock:
-                    if self._operator_command is command:
-                        self._operator_command = None
-                raise
-            command.preliminary_ready.set()
             self.wake()
         if command.admission_event.is_set():
             return self._admission_result(command)
-        command.admission_event.wait()
+        if not command.admission_event.wait(OPERATOR_ADMISSION_TIMEOUT):
+            with self._operator_command_lock:
+                if self._operator_command is command:
+                    self._operator_command = None
+                    command.cancelled.set()
+                    command.admission_error = DevlegateError(
+                        "service admission coordination timed out; "
+                        "request was not admitted"
+                    )
+                    command.admission_event.set()
+                else:
+                    command.cancelled.set()
+            raise DevlegateError(
+                "service admission coordination timed out; request was not admitted"
+            )
         return self._admission_result(command)
 
     def _validate_retry_admission(self, ticket_id: str) -> None:
-        """Perform preliminary admission; the owner repeats this before ACK."""
+        """Validate retry admission on the owner thread."""
         if self.service_snapshot().worker_running:
             raise DevlegateError("service worker is already running")
         if self._state.get("phase") == "agent_running":
@@ -1451,7 +1506,11 @@ class ServiceEngine:
 
     def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
+            if command.cancelled.is_set():
+                raise DevlegateError("service busy; mutable request was not admitted")
             self._validate_operator_admission(command)
+            if command.cancelled.is_set():
+                raise DevlegateError("service busy; mutable request was not admitted")
             self._record_operator_admission(command)
             command.admission_result = self._operator_ack(
                 command.method, command.ticket_id, command.onto
@@ -1466,8 +1525,8 @@ class ServiceEngine:
         with self._operator_command_lock:
             if (
                 self._operator_command is None
-                or not self._operator_command.preliminary_ready.is_set()
                 or self._operator_active
+                or self._scheduler_active
             ):
                 return None
             command = self._operator_command
@@ -1476,10 +1535,31 @@ class ServiceEngine:
             self._operator_active_command = command
             return command
 
+    def _claim_owner_work(
+        self, allow_operator: bool
+    ) -> tuple[OperatorCommand | None, bool]:
+        with self._operator_command_lock:
+            if allow_operator and self._operator_command is not None:
+                if self._operator_active or self._scheduler_active:
+                    return None, False
+                command = self._operator_command
+                self._operator_command = None
+                self._operator_active = True
+                self._operator_active_command = command
+                return command, False
+            if self._operator_active or self._scheduler_active:
+                return None, False
+            self._scheduler_active = True
+            return None, True
+
     def _release_operator_command(self) -> None:
         with self._operator_command_lock:
             self._operator_active = False
             self._operator_active_command = None
+
+    def _release_scheduler_iteration(self) -> None:
+        with self._operator_command_lock:
+            self._scheduler_active = False
 
     def _reject_pending_operator_command_on_shutdown(self) -> None:
         with self._operator_command_lock:
@@ -1496,7 +1576,6 @@ class ServiceEngine:
         with self._operator_command_lock:
             return bool(
                 self._operator_command is not None
-                and self._operator_command.preliminary_ready.is_set()
             )
 
     def service_snapshot(self) -> ServiceSnapshot:
@@ -1506,6 +1585,7 @@ class ServiceEngine:
 
     def live_execution_evidence(self) -> dict[str, object] | None:
         """Return proof of this process-owned execution, if it is provable."""
+        self._assert_repository_owner()
         state = self._state
         if (
             state.get("phase") not in {"agent_pending", "agent_running"}
@@ -1607,6 +1687,30 @@ class ServiceEngine:
         )
         if worker_running:
             blocked_reason = None
+        retry_candidates = [
+            {
+                "id": failure.ticket_id,
+                "title": failure.title,
+                "reason": failure.reason,
+                "kind": "failed",
+            }
+            for failure in snapshot.failed_executions
+            if failure.retryable
+        ]
+        interrupted = self._interrupted_retry_candidate()
+        if interrupted is not None and all(
+            candidate["id"] != interrupted.ticket_id
+            for candidate in retry_candidates
+        ):
+            retry_candidates.append(
+                {
+                    "id": interrupted.ticket_id,
+                    "title": interrupted.title,
+                    "reason": interrupted.reason,
+                    "kind": interrupted.kind,
+                }
+            )
+        live_execution = self.live_execution_evidence()
         self._publish_service_snapshot(
             lifecycle=lifecycle,
             product=snapshot.code,
@@ -1619,6 +1723,16 @@ class ServiceEngine:
         )
         with self._snapshot_lock:
             self._published_status_snapshot = snapshot
+            self._published_live_execution = (
+                {
+                    key: value
+                    for key, value in live_execution.items()
+                    if key != "worker_identity"
+                }
+                if isinstance(live_execution, dict)
+                else None
+            )
+            self._published_retry_candidates = tuple(retry_candidates)
 
     def _publish_ticket_projection(
         self,
@@ -1697,6 +1811,7 @@ class ServiceEngine:
         self, repo: Path, *args: str, check: bool = True
     ) -> subprocess.CompletedProcess[str]:
         """Run Git under the foreground shutdown policy for this runtime region."""
+        self._assert_repository_owner()
         result = _git(repo, *args, check=False)
         if result.returncode and self._state.get("phase") == "merge_pending":
             try:
@@ -1714,6 +1829,7 @@ class ServiceEngine:
         return self._stop_requested()
 
     def _ticket_store(self) -> TicketStore:
+        self._assert_repository_owner()
         product_workflow = [
             self.repo / configured_path
             for configured_path in self._workflow_paths().values()
@@ -3025,6 +3141,7 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration lacks fresh Git observations"
                 )
+            self.status_view()
             control_head = self._integrate_accepted(
                 str(pending_ticket), execution_plan.code, execution_plan.control
             )
@@ -3053,6 +3170,7 @@ class ServiceEngine:
                     "control_head": execution_plan.control.local_head,
                 },
             )
+            self.status_view()
             try:
                 control_head = self._integrate_accepted(
                     execution_plan.ticket_id,
@@ -4925,9 +5043,16 @@ export default tool({
         once: bool = False,
     ) -> int:
         """Run the service until the host requests a stop."""
-        return self._run_polling(
-            once=once, stop_event=stop_event, lock_handle=lock_handle
-        )
+        owned_here = self._host_owner_thread_id is None
+        if owned_here:
+            self.begin_hosted_owner()
+        try:
+            return self._run_polling(
+                once=once, stop_event=stop_event, lock_handle=lock_handle
+            )
+        finally:
+            if owned_here:
+                self.end_hosted_owner()
 
     def _has_recoverable_execution_stage(self) -> bool:
         return self._state.get("phase") == "agent_running" and self._state.get(
@@ -4998,10 +5123,13 @@ export default tool({
         with self._stop_context(stop_event), authority:
             self._publish_service_snapshot(lifecycle="polling", worker_running=False)
             if not once and not (stop_event is not None and stop_event.is_set()):
-                try:
-                    self.status_view()
-                except DevlegateError:
-                    pass
+                with self._snapshot_lock:
+                    published = self._published_status_snapshot
+                if published is None:
+                    try:
+                        self.status_view()
+                    except DevlegateError:
+                        pass
             while True:
                 if (
                     stop_event is not None
@@ -5013,8 +5141,12 @@ export default tool({
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
                 operator_command = None
-                if self._state.get("phase") != "merge_pending":
-                    operator_command = self._take_operator_command()
+                scheduler_active = False
+                if self._startup_admission_window:
+                    self._startup_admission_window = False
+                    self._service_wake.wait(OPERATOR_ADMISSION_TIMEOUT)
+                    self._service_wake.clear()
+                operator_command, scheduler_active = self._claim_owner_work(True)
                 workflow_blocked = False
                 self._iteration_diagnostic = None
                 try:
@@ -5104,6 +5236,13 @@ export default tool({
                 finally:
                     if operator_command is not None:
                         self._release_operator_command()
+                    elif scheduler_active:
+                        self._release_scheduler_iteration()
+                if operator_command is not None or scheduler_active:
+                    try:
+                        self.status_view()
+                    except DevlegateError:
+                        pass
                 if status and not workflow_blocked:
                     diagnostic = self._iteration_diagnostic
                     if diagnostic is None:
@@ -5145,6 +5284,10 @@ export default tool({
         self._service_wake.clear()
         if stop_event.is_set() or self._operator_command_pending():
             return stop_event.is_set()
+        # Recheck after clearing the wake event so a command submitted during
+        # the clear does not get stranded until the polling timeout.
+        if self._operator_command_pending():
+            return False
         self._service_wake.wait(timeout)
         return stop_event.is_set()
 
@@ -5152,6 +5295,7 @@ export default tool({
         """Testing hook for deterministic snapshot-race simulations."""
 
     def _status_state_observation(self) -> tuple[dict[str, object], str]:
+        self._assert_repository_owner()
         try:
             state, fingerprint = self._runtime_store.observe()
         except RuntimeStoreError as error:
