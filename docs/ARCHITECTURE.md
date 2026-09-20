@@ -97,6 +97,13 @@ By default the state is under `$XDG_STATE_HOME/devlegate`, or
 override the location. State and Git observations are used together when the
 service must establish whether a previous operation took effect.
 
+Terminal service failures have a separate lifetime from workflow runtime state.
+When a hosted service escapes its canonical host boundary unexpectedly,
+Devlegate records the latest small versioned diagnostic under the project state
+directory. A successful READY clears that diagnostic; orderly shutdown does not
+create one. Hard process loss, power loss, SIGKILL, and similar external events
+may leave no service diagnostic and are not assigned a cause by absence.
+
 ## IPC And CLI Clients
 
 The service exposes a project-specific local Unix IPC endpoint derived from the

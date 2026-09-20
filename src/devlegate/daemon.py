@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import _log
 from devlegate.service import ServiceEngine
+from devlegate.service_diagnostics import clear, create, write
 
 
 class ShutdownIntent:
@@ -85,6 +86,12 @@ class ServiceHost:
         stop_intent = ShutdownIntent()
         authority = self.engine._lock()
 
+        def record_failure(error: BaseException, stage: str) -> None:
+            try:
+                write(self.engine._locator, create(stage, error))
+            except BaseException as diagnostic_error:
+                _log(f"service failure diagnostic write failed: {diagnostic_error}")
+
         def request_service_stop() -> None:
             _log("shutdown explicitly requested through devlegate stop")
             stop_intent.request("service_shutdown", source="stop_command")
@@ -106,6 +113,10 @@ class ServiceHost:
                 _notify_startup(self.startup_fd, "READY")
                 self.startup_fd = None
                 ready = True
+                try:
+                    clear(self.engine._locator)
+                except BaseException as error:
+                    _log(f"service failure diagnostic clear failed: {error}")
                 result = self._serve_engine(
                     stop_intent, lock_handle=authority
                 )
@@ -114,6 +125,8 @@ class ServiceHost:
                 _log(f"orderly shutdown complete ({source})")
             return result
         except BaseException as error:
+            if not stop_intent.is_set():
+                record_failure(error, "runtime" if ready else "startup")
             if not ready:
                 _notify_startup(self.startup_fd, f"FAILED {error}")
                 self.startup_fd = None

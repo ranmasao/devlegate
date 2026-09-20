@@ -613,6 +613,9 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
         time.sleep(0.02)
     assert not locator.daemon_authority_present()
     assert not locator.socket_path.exists()
+    assert not (
+        locator.state_dir / "diagnostics" / f"{locator.state_key}.json"
+    ).exists()
     log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
     deadline = time.monotonic() + 5
     log = ""

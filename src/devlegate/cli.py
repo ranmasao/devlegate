@@ -44,6 +44,7 @@ from devlegate.runtime_locator import (
     RuntimeLocatorError,
 )
 from devlegate.service import ServiceEngine
+from devlegate.service_diagnostics import read as read_service_failure
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -67,6 +68,7 @@ class ReadOnlyView:
     value: StatusSnapshot | ExecutionPlan
     service_state: str
     live_execution: dict[str, object] | None = None
+    service_failure: dict[str, object] | None = None
 
 
 def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
@@ -91,7 +93,16 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
             else:
                 view = getattr(engine, "plan_view", engine.plan)
             value = view()
-            return ReadOnlyView(value, "stopped")
+            diagnostic, corrupt = read_service_failure(locator)
+            failure = (
+                {
+                    "state": "unavailable",
+                    "message": "service diagnostic unavailable/corrupt",
+                }
+                if corrupt
+                else diagnostic.as_public_dict() if diagnostic is not None else None
+            )
+            return ReadOnlyView(value, "stopped", service_failure=failure)
     except RuntimeAuthorityPresent as error:
         if ipc_error is not None:
             if ipc_error.application:
@@ -544,10 +555,24 @@ def _render_status_text(
     snapshot: StatusSnapshot,
     service_state: str,
     execution: dict[str, object],
+    service_failure: dict[str, object] | None = None,
 ) -> str:
     code = snapshot.code
     control = snapshot.control
     lines = [f"Devlegate {__version__}  •  service {service_state}"]
+    if service_failure is not None:
+        if service_failure.get("state") == "unavailable":
+            lines.extend(["", "Service failure:", "  Diagnostic unavailable/corrupt"])
+        else:
+            lines.extend(
+                [
+                    "",
+                    "Service failure:",
+                    f"  Stage: {service_failure.get('stage', '<unknown>')}",
+                    f"  Error: {service_failure.get('exception_type', '<unknown>')}",
+                    f"  Detail: {service_failure.get('message', '<unknown>')}",
+                ]
+            )
     if execution["state"] != "idle":
         ticket_id = execution.get("ticket_id")
         current = (
@@ -1341,6 +1366,8 @@ def main() -> int:
                 "service": {"state": view.service_state},
                 **snapshot.as_dict(),
             }
+            if view.service_failure is not None:
+                payload["service"]["failure"] = view.service_failure
             payload["execution"] = {
                 **payload["execution"],
                 "state": execution["state"],
@@ -1351,9 +1378,18 @@ def main() -> int:
             emit(
                 payload,
                 args.output_format,
-                _render_status_text(snapshot, view.service_state, execution),
+                _render_status_text(
+                    snapshot,
+                    view.service_state,
+                    execution,
+                    view.service_failure,
+                ),
             )
-            return 1 if snapshot.plan.action == "blocked" else 0
+            return (
+                1
+                if snapshot.plan.action == "blocked" or view.service_failure is not None
+                else 0
+            )
         if args.command == "plan":
             view = _read_only_view(env_file, "plan")
             plan = view.value

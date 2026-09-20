@@ -14,6 +14,7 @@ release are not separate product changes.
 - Simplified status projections to expose scheduler eligibility and one structured blocking reason per todo ticket.
 - Routed hosted repository authority through the service owner thread and published read-only IPC views.
 - Hardened the background service bootstrap against managed-checkout import shadowing.
+- Persisted the latest observed terminal service failure for offline status reporting.
 
 ## 0.5.1 -- 2026-09-20
 

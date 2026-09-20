@@ -30,6 +30,7 @@ from devlegate.runtime import (
     ShutdownInterrupted,
     WorkflowBlockedError,
 )
+from devlegate.service_diagnostics import read as read_service_failure
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
@@ -199,6 +200,149 @@ def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, cap
     output = capsys.readouterr().out
     assert "worker failed: worker exited with status 1" in output
     assert "run failed with status 1" not in output
+    diagnostic, corrupt = read_service_failure(engine._locator)
+    assert not corrupt
+    assert diagnostic is None
+
+
+def test_unhandled_host_failure_is_reported_by_offline_status(
+    tmp_path, monkeypatch, capsys
+):
+    engine, config, _state = make_engine(tmp_path, monkeypatch)
+    host = daemon.ServiceHost(engine)
+    failure = DevlegateError("unexpected owner failure")
+
+    def fail_iteration(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(engine, "run_iteration", fail_iteration)
+    with pytest.raises(DevlegateError, match="unexpected owner failure"):
+        host.run()
+
+    diagnostic, corrupt = read_service_failure(engine._locator)
+    assert not corrupt
+    assert diagnostic is not None
+    assert diagnostic.stage == "runtime"
+    assert diagnostic.exception_type == "DevlegateError"
+    assert diagnostic.message == "unexpected owner failure"
+
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["devlegate", "status", "--json", "--env", str(config)],
+    )
+    assert cli.main() == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["service"]["state"] == "stopped"
+    assert payload["service"]["failure"]["message"] == "unexpected owner failure"
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["devlegate", "status", "--env", str(config)],
+    )
+    assert cli.main() == 1
+    human = capsys.readouterr().out
+    assert "Service failure:" in human
+    assert "Detail: unexpected owner failure" in human
+
+
+def test_unhandled_startup_failure_is_persisted_as_startup_diagnostic(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    host = daemon.ServiceHost(engine)
+    monkeypatch.setattr(
+        engine,
+        "ensure_hosted_views",
+        lambda: (_ for _ in ()).throw(DevlegateError("startup views failed")),
+    )
+    with pytest.raises(DevlegateError, match="startup views failed"):
+        host.run()
+    diagnostic, corrupt = read_service_failure(engine._locator)
+    assert not corrupt
+    assert diagnostic is not None
+    assert diagnostic.stage == "startup"
+    assert diagnostic.message == "startup views failed"
+
+
+def test_successful_ready_clears_terminal_service_failure(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    host = daemon.ServiceHost(engine)
+    monkeypatch.setattr(
+        host,
+        "_serve_engine",
+        lambda stop_intent, **_kwargs: stop_intent.request(
+            "service_shutdown", source="test"
+        )
+        or 0,
+    )
+    from devlegate.service_diagnostics import create, write
+
+    write(engine._locator, create("runtime", DevlegateError("old failure")))
+    assert host.run() == 0
+    diagnostic, corrupt = read_service_failure(engine._locator)
+    assert not corrupt
+    assert diagnostic is None
+
+
+def test_operator_abort_does_not_create_terminal_service_failure(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    host = daemon.ServiceHost(engine)
+    monkeypatch.setattr(
+        host,
+        "_serve_engine",
+        lambda stop_intent, **_kwargs: stop_intent.request(
+            "operator_abort", source="test"
+        )
+        or 130,
+    )
+    assert host.run() == 130
+    diagnostic, corrupt = read_service_failure(engine._locator)
+    assert not corrupt
+    assert diagnostic is None
+
+
+def test_diagnostic_write_failure_does_not_replace_original_failure(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    host = daemon.ServiceHost(engine)
+    monkeypatch.setattr(
+        host,
+        "_serve_engine",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            DevlegateError("original failure")
+        ),
+    )
+    monkeypatch.setattr(
+        daemon,
+        "write",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    with pytest.raises(DevlegateError, match="original failure"):
+        host.run()
+
+
+def test_corrupt_service_diagnostic_is_reported_without_blocking_status(
+    tmp_path, monkeypatch, capsys
+):
+    engine, config, _state = make_engine(tmp_path, monkeypatch)
+    diagnostic_path = engine._locator.state_dir / "diagnostics"
+    diagnostic_path.mkdir(parents=True)
+    (diagnostic_path / f"{engine._locator.state_key}.json").write_text("not json")
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["devlegate", "status", "--json", "--env", str(config)],
+    )
+    assert cli.main() == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["service"]["failure"] == {
+        "state": "unavailable",
+        "message": "service diagnostic unavailable/corrupt",
+    }
 
 
 def test_foreground_repeated_blocker_is_reported_until_changed(
