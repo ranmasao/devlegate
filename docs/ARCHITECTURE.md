@@ -44,8 +44,20 @@ point when the managed checkout is not trusted to own Python namespaces.
 
 ## Runtime Service
 
+Devlegate has one service execution model. Background, foreground, and once
+differ only in hosting and lifetime policy. The canonical service host owns the
+project runtime lock, local Unix IPC endpoint, signal handling, readiness, and
+orderly teardown. It invokes one `ServiceEngine` scheduler iteration boundary.
+
+The hosting and lifetime policies are:
+
+```text
+background = detached + continuous
+foreground = attached + continuous
+once       = attached + one scheduler iteration
+```
+
 The production runtime is one persistent service hosting one `ServiceEngine`.
-The service host owns the project runtime lock and local Unix IPC endpoint.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow
 decisions, runs workers, and performs service operations.
 
@@ -54,11 +66,13 @@ Mutable operations are admitted and serialized by the service owner. The
 service owns ticket movement, worker execution, checkpoint commits, publication,
 reports, and accepted product integration.
 
-Bare `devlegate` ensures the persistent service is running in the background.
-`devlegate foreground` hosts the same service in the current terminal, and
-`devlegate once` performs one synchronization and execution pass. `devlegate stop`
-requests orderly shutdown through the service IPC endpoint. The service is
-managed directly by Devlegate and does not require an external service manager.
+Bare `devlegate` starts the detached form of the canonical service host.
+`devlegate foreground` runs that host attached to the current terminal, and
+`devlegate once` runs it for one complete scheduler iteration. All three modes
+use the same authority and IPC boundary. `devlegate stop` requests orderly
+shutdown through the service IPC endpoint. The host is supervisor-neutral, but
+the service is managed directly by Devlegate and does not require an external
+service manager.
 
 ## Runtime State
 

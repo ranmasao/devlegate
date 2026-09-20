@@ -7,6 +7,10 @@ release are not separate product changes.
 
 ## Unreleased
 
+### Changed
+
+- Unified background, foreground, and single-iteration operation around one service-host execution model.
+
 ## 0.5.1 -- 2026-09-20
 
 Status, lifecycle, and test hardening.

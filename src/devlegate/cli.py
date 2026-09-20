@@ -355,6 +355,7 @@ def _start_background(env_file: Path) -> int:
         **os.environ,
         "DEVLEGATE_STARTUP_FD": str(write_fd),
     }
+    # The child uses the attached entry only as a process-hosting shim.
     command = [
         sys.executable,
         "-m",
@@ -963,12 +964,12 @@ class Devlegate(ServiceEngine):
             snapshot, "stopped", _execution_projection(snapshot, None)
         )
 
-    def run_once(self, stop_event=None) -> int:
-        # Preserve the historical CLI test hook while keeping runtime independent.
+    def run_iteration(self) -> int:
+        # Preserve the CLI test hook at the canonical scheduler boundary.
         runtime_git = _runtime._git
         _runtime._git = _git
         try:
-            return super().run_once(stop_event)
+            return super().run_iteration()
         finally:
             _runtime._git = runtime_git
 

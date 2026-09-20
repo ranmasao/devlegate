@@ -2533,24 +2533,23 @@ class ServiceEngine:
         return local_head, remote_head
 
     def run_once(self, stop_event: threading.Event | None = None) -> int:
-        try:
-            with self._lock():
-                if stop_event is None:
-                    return self._run_once()
-                with self._stop_context(stop_event):
-                    return self._run_once()
-        finally:
-            self._automatic_resume_ticket_id = None
+        """Run one iteration for direct callers under normal authority."""
+        with self._lock():
+            if stop_event is None:
+                return self.run_iteration()
+            with self._stop_context(stop_event):
+                return self.run_iteration()
 
-    def _run_once(self) -> int:
+    def run_iteration(self) -> int:
+        """Execute exactly one scheduler iteration under host authority."""
         self._owned_execution_id = None
         try:
-            return self._run_once_owned()
+            return self._run_iteration_body()
         finally:
             self._owned_execution_id = None
             self._automatic_resume_ticket_id = None
 
-    def _run_once_owned(self) -> int:
+    def _run_iteration_body(self) -> int:
         self._publish_service_snapshot(lifecycle="processing")
         if (
             self._stop_requested()
@@ -2611,10 +2610,6 @@ class ServiceEngine:
             if automatic_ticket is None or self._stop_requested():
                 return 0
             self._automatic_resume_ticket_id = automatic_ticket
-            try:
-                return self._run_once()
-            finally:
-                self._automatic_resume_ticket_id = None
         status = self._git_runtime(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -4912,7 +4907,7 @@ export default tool({
         *,
         once: bool = False,
     ) -> int:
-        """Run the foreground service until the host requests a stop."""
+        """Run the service until the host requests a stop."""
         return self._run_polling(
             once=once, stop_event=stop_event, lock_handle=lock_handle
         )
@@ -5012,11 +5007,7 @@ export default tool({
                             operator_command, stop_event
                         )
                     else:
-                        status = (
-                            self.run_once()
-                            if "run_once" in self.__dict__
-                            else self._run_once()
-                        )
+                        status = self.run_iteration()
                 except ShutdownInterrupted:
                     self._service_shutdown.set()
                     self._publish_service_snapshot(lifecycle="ready")
@@ -5865,16 +5856,10 @@ export default tool({
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         self._retry_ticket_id = ticket_id
         try:
-            if "run_once" in self.__dict__:
-                return (
-                    self.run_once()
-                    if stop_event is None
-                    else self.run_once(stop_event)
-                )
             if stop_event is None:
-                return self._run_once()
+                return self.run_iteration()
             with self._stop_context(stop_event):
-                return self._run_once()
+                return self.run_iteration()
         finally:
             self._retry_ticket_id = None
 

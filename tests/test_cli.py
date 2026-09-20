@@ -1419,7 +1419,7 @@ def test_service_engine_serve_reuses_one_owner_across_polling_iterations(
             raise KeyboardInterrupt
         return 0
 
-    monkeypatch.setattr(engine, "run_once", run_once)
+    monkeypatch.setattr(engine, "run_iteration", run_once)
     engine.poll_interval = "0"
     with pytest.raises(KeyboardInterrupt):
         engine.serve(stop_event)
@@ -1441,7 +1441,7 @@ def test_persistent_service_survives_successful_iteration_until_stop(
             stop_event.set()
         return 0
 
-    monkeypatch.setattr(engine, "run_once", run_once)
+    monkeypatch.setattr(engine, "run_iteration", run_once)
     engine.poll_interval = "0"
     assert engine.serve(stop_event) == 0
     assert len(calls) == 3
@@ -1472,7 +1472,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     assert calls == [("init", git_fixture["config"], False), ("serve", True)]
 
 
-def test_once_uses_shared_foreground_service_host(git_fixture, monkeypatch):
+def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
     calls = []
 
     def host(engine, *, once=False, startup_fd=None, startup_report=None):
@@ -3407,7 +3407,7 @@ def test_interactive_retry_selects_only_requested_candidate(monkeypatch, capsys)
     monkeypatch.setattr(devlegate, "_lock", lambda: nullcontext())
     monkeypatch.setattr(
         devlegate,
-        "run_once",
+        "run_iteration",
         lambda: selected.append(devlegate._retry_ticket_id) or 0,
     )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
@@ -3434,7 +3434,7 @@ def test_interactive_retry_cancel_without_running(monkeypatch, answer):
     monkeypatch.setattr(devlegate, "_lock", lambda: nullcontext())
     monkeypatch.setattr(
         devlegate,
-        "run_once",
+        "run_iteration",
         lambda: selected.append(devlegate._retry_ticket_id) or 0,
     )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
@@ -3452,7 +3452,7 @@ def test_interactive_retry_rejects_invalid_selection_without_running(monkeypatch
     monkeypatch.setattr(
         devlegate, "_retry_candidates", lambda: (("T-1", "one", "first"),)
     )
-    monkeypatch.setattr(devlegate, "run_once", lambda: ran.append(True) or 0)
+    monkeypatch.setattr(devlegate, "run_iteration", lambda: ran.append(True) or 0)
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
     monkeypatch.setattr(sys.stdout, "fileno", lambda: 1)

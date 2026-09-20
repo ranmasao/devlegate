@@ -83,7 +83,7 @@ def test_polling_exits_cleanly_after_shutdown_interrupted_git(tmp_path, monkeypa
         stop_intent.request("operator_abort")
         raise ShutdownInterrupted
 
-    engine.run_once = run_once
+    engine.run_iteration = run_once
 
     assert engine.serve(stop_intent) == 0
     assert engine.service_snapshot().lifecycle == "ready"
@@ -183,7 +183,7 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
         stop_event.set()
         return 0
 
-    monkeypatch.setattr(engine, "run_once", run_once)
+    monkeypatch.setattr(engine, "run_iteration", run_once)
     engine.poll_interval = "0"
     assert engine.serve(stop_event) == 0
     output = capsys.readouterr().out
@@ -265,7 +265,7 @@ def test_daemon_signal_wakes_poll_wait_without_second_iteration(
         entered.set()
         return 0
 
-    monkeypatch.setattr(engine, "run_once", iteration)
+    monkeypatch.setattr(engine, "run_iteration", iteration)
     thread = threading.Thread(
         target=lambda: result.append(engine.serve(stop_event)), daemon=True
     )
@@ -286,7 +286,7 @@ def test_daemon_stop_already_requested_does_not_admit_iteration(
     stop_event = threading.Event()
     stop_event.set()
     calls = []
-    monkeypatch.setattr(engine, "run_once", lambda: calls.append(True))
+    monkeypatch.setattr(engine, "run_iteration", lambda: calls.append(True))
     monkeypatch.setattr(
         "devlegate.runtime._git",
         lambda *_args, **_kwargs: pytest.fail("unexpected observation"),
@@ -435,12 +435,10 @@ def test_merge_pending_retries_matching_shutdown_fetch(
 
     monkeypatch.setattr(runtime, "_git", interrupt_first_fetch)
 
-    def operation(stop_intent):
-        stop_intent.request(kind)
-        return engine.serve(stop_intent)
-
     expected_result = 130 if kind == "operator_abort" else 0
-    assert daemon.run_foreground(engine, operation) == expected_result
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request(kind)
+    assert daemon.ServiceHost(engine)._run_with_signals(stop_intent) == expected_result
     assert fetch_calls == 3
     assert engine._state["phase"] == "idle"
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
@@ -475,7 +473,7 @@ def test_service_survives_recoverable_stage_devlegate_error(
         stop_event.set()
         return 0
 
-    monkeypatch.setattr(engine, "_run_once", iteration)
+    monkeypatch.setattr(engine, "run_iteration", iteration)
     thread = threading.Thread(
         target=lambda: engine.serve(stop_event), daemon=True
     )
@@ -498,7 +496,7 @@ def test_recoverable_stage_error_keeps_once_semantics(tmp_path, monkeypatch):
     engine._state["execution_stage"] = "publishing"
     monkeypatch.setattr(
         engine,
-        "_run_once",
+        "run_iteration",
         lambda: (_ for _ in ()).throw(DevlegateError("one-shot failure")),
     )
 
@@ -510,7 +508,7 @@ def test_unrelated_devlegate_error_still_escapes_service(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     monkeypatch.setattr(
         engine,
-        "_run_once",
+        "run_iteration",
         lambda: (_ for _ in ()).throw(DevlegateError("fatal invariant")),
     )
 
@@ -558,12 +556,10 @@ def test_merge_pending_retries_matching_product_merge(
 
     monkeypatch.setattr(runtime, "_git", interrupt_product_merge)
 
-    def operation(stop_intent):
-        stop_intent.request(kind)
-        return engine.serve(stop_intent)
-
     expected_result = 130 if kind == "operator_abort" else 0
-    assert daemon.run_foreground(engine, operation) == expected_result
+    stop_intent = daemon.ShutdownIntent()
+    stop_intent.request(kind)
+    assert daemon.ServiceHost(engine)._run_with_signals(stop_intent) == expected_result
     assert merge_calls == 2
     assert engine._state["phase"] == "idle"
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
@@ -610,7 +606,7 @@ def test_merge_pending_retries_product_merge_then_preserves_real_failure(
     monkeypatch.setattr(runtime, "_git", fail_product_retry)
 
     with engine._stop_context(stop_intent):
-        assert engine._run_once() == 1
+        assert engine.run_iteration() == 1
     assert merge_calls == 2
     assert engine._state["phase"] == "merge_pending"
 
@@ -740,7 +736,7 @@ def test_merge_pending_nonmatching_fetch_failure_is_not_retried(
 
     with engine._stop_context(stop_intent):
         with pytest.raises(WorkflowBlockedError):
-            engine._run_once()
+            engine.run_iteration()
     assert fetch_calls == 1
 
 
@@ -995,7 +991,7 @@ def test_daemon_holds_project_lock_while_service_is_active(tmp_path, monkeypatch
         stop_event.set()
         return 0
 
-    monkeypatch.setattr(engine, "run_once", iteration)
+    monkeypatch.setattr(engine, "run_iteration", iteration)
     thread = threading.Thread(
         target=lambda: result.append(engine.serve(stop_event)), daemon=True
     )

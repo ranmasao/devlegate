@@ -95,12 +95,12 @@ def test_daemon_owns_socket_under_state_dir_and_removes_it(
     engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     observed = []
 
-    def host(_engine, _operation, **_kwargs):
+    def host(_host, _stop_intent, **_kwargs):
         assert engine.ipc_socket_path.is_socket()
         observed.append(True)
         return 0
 
-    monkeypatch.setattr(daemon, "run_foreground", host)
+    monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", host)
     assert daemon.run_service(engine) == 0
     assert observed == [True]
     assert not engine.ipc_socket_path.exists()
@@ -614,12 +614,29 @@ def test_service_host_once_owns_authority_and_socket_lifecycle(
     calls = []
 
     def iteration():
+        assert request(engine.ipc_socket_path, "once", "ping").ok
         calls.append(True)
         return 0
 
-    monkeypatch.setattr(engine, "run_once", iteration)
+    monkeypatch.setattr(engine, "run_iteration", iteration)
     assert daemon.run_service(engine, once=True) == 0
     assert calls == [True]
+    assert not engine.ipc_socket_path.exists()
+    authority = engine._lock()
+    authority.close()
+
+
+def test_service_host_startup_failure_releases_authority_and_socket(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+
+    def fail_startup():
+        raise RuntimeError("startup report failed")
+
+    with pytest.raises(RuntimeError, match="startup report failed"):
+        daemon.run_service(engine, startup_report=fail_startup)
+
     assert not engine.ipc_socket_path.exists()
     authority = engine._lock()
     authority.close()
@@ -634,11 +651,11 @@ def test_stale_socket_is_replaced_after_runtime_authority_is_acquired(
     stale.bind(str(engine.ipc_socket_path))
     stale.close()
 
-    def host(_engine, _operation, **_kwargs):
+    def host(_host, _stop_intent, **_kwargs):
         assert request(engine.ipc_socket_path, "1", "ping").ok
         return 0
 
-    monkeypatch.setattr(daemon, "run_foreground", host)
+    monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", host)
     assert daemon.run_service(engine) == 0
     assert not engine.ipc_socket_path.exists()
 
@@ -1114,7 +1131,7 @@ def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
         release.wait(2)
         return 0
 
-    monkeypatch.setattr(engine, "_run_once", lambda: 0)
+    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
     monkeypatch.setattr(engine, "_retry_owned", execute)
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
@@ -1322,7 +1339,7 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
         return result
 
     monkeypatch.setattr(engine, "_retry_owned", retry_owned)
-    monkeypatch.setattr(engine, "_run_once", lambda: 0)
+    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
