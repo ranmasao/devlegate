@@ -126,11 +126,14 @@ remain operational streams, not YAML or JSON documents.
 
 Status reports service state (`running` or `stopped`) separately from the
 execution phase and operator execution state (`idle`, `preparing`, `starting`,
-`running`, `finalizing`, or `recovery-required`). Operator `running` means the
-live service proved ownership of the exact worker execution; persisted
-`agent_running` state alone is not sufficient. Human `Eligible` work excludes
-the currently bound ticket, while the compatibility machine `runnable` field
-retains its scheduler-level meaning.
+`running`, `finalizing`, `unverified`, or `recovery-required`). Operator
+`running` means the live service proved ownership of the exact worker execution;
+`unverified` is used when a running service exposes an incomplete older status
+protocol, while `recovery-required` remains the stronger state for known or
+sufficiently evidenced ownership problems. Persisted `agent_running` state
+alone is not sufficient. Human `Eligible` work excludes the currently bound
+ticket, while the compatibility machine `runnable` field retains its
+scheduler-level meaning.
 
 `init` creates missing project-owned setup files without starting execution.
 `control init` prepares the separate workflow history. `check` validates the

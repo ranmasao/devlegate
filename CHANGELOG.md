@@ -7,21 +7,25 @@ release are not separate product changes.
 
 ## Unreleased
 
+## 0.5.1 -- 2026-09-20
+
+Status, lifecycle, and test hardening.
+
+### Changed
+
+- Improved finite CLI output and status reporting, including concise human output
+  and YAML/JSON machine formats.
+- Added parallel test/coverage execution and reduced repeated Git setup in the
+  test suite.
+
 ### Fixed
 
-- Devlegate's bundled Python dependencies can no longer be shadowed by same-named
-  packages in the managed repository.
-
-### Added
-
-- Added shared table, canonical NanoYAML, and JSON presentation for finite CLI
-  commands, with mutually exclusive `--yaml` and `--json` flags.
-- Added authoritative service state to status output without changing execution
-  phase or service ownership semantics.
-- Refined human status output around concise execution, repository, workflow,
-  and eligibility summaries. Operator `running` now requires proven live
-  ownership of the exact worker execution; persisted active state alone is
-  reported conservatively as recovery-required.
+- Prevented managed repositories from shadowing Devlegate's bundled NanoYAML
+  dependency and updated the bundled version to NanoYAML 0.2.1.
+- Hardened accepted-ticket integration and recovery so dependent work cannot
+  start before integration completes.
+- Fixed automatic-resume authorization leaking into later scheduler iterations
+  and terminating the service after successful recovery.
 
 ## 0.5.0 -- 2026-09-17
 
