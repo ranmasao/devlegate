@@ -83,12 +83,6 @@ class ServiceHost:
 
     def run(self) -> int:
         stop_intent = ShutdownIntent()
-        if not hasattr(self.engine, "state_dir"):
-            with self._signal_ownership(stop_intent):
-                if self.startup_report is not None:
-                    self.startup_report()
-                return self._serve_engine(stop_intent)
-
         authority = self.engine._lock()
 
         def request_service_stop() -> None:
@@ -157,29 +151,13 @@ class ServiceHost:
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
 
-    def _run_with_signals(
-        self,
-        stop_intent: ShutdownIntent,
-        *,
-        lock_handle: object | None = None,
-    ) -> int:
-        """Run the engine under host-owned signal handling."""
-        with self._signal_ownership(stop_intent):
-            return self._serve_engine(stop_intent, lock_handle=lock_handle)
-
     def _serve_engine(
         self,
         stop_intent: ShutdownIntent,
         *,
         lock_handle: object | None = None,
     ) -> int:
-        if not hasattr(self.engine, "state_dir"):
-            if self.once:
-                result = self.engine.serve(stop_intent, once=True)
-            else:
-                result = self.engine.serve(stop_intent)
-        else:
-            result = self.engine.serve(
-                stop_intent, lock_handle=lock_handle, once=self.once
-            )
+        result = self.engine.serve(
+            stop_intent, lock_handle=lock_handle, once=self.once
+        )
         return 130 if stop_intent.kind == "operator_abort" else result

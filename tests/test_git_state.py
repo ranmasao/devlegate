@@ -5,6 +5,7 @@ import json
 import sqlite3
 
 import pytest
+from runtime_helpers import run_test_iteration
 from test_cli import git, invoke, publish_control, ticket
 
 from devlegate.cli import Devlegate, DevlegateError
@@ -95,7 +96,7 @@ def test_interrupted_pre_sync_merge_pending_recovers(git_fixture, monkeypatch):
         control_head=git(git_fixture["control"], "rev-parse", "HEAD").stdout.strip(),
     )
 
-    assert devlegate.run_once() == 0
+    assert run_test_iteration(devlegate) == 0
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == target
     assert state_payload(git_fixture)["phase"] == "idle"
 
@@ -118,7 +119,7 @@ def test_post_sync_crash_state_is_cleared_without_second_merge(
         control_head=git(git_fixture["control"], "rev-parse", "HEAD").stdout.strip(),
     )
 
-    result = devlegate.run_once()
+    result = run_test_iteration(devlegate)
 
     assert result == 0
     assert state_payload(git_fixture)["phase"] == "idle"
@@ -142,7 +143,7 @@ def test_merge_pending_divergence_fails_closed(git_fixture, monkeypatch):
     )
 
     with pytest.raises(DevlegateError, match="does not match the local HEAD"):
-        devlegate.run_once()
+        run_test_iteration(devlegate)
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() != target
 
 
@@ -177,7 +178,7 @@ def test_agent_running_fails_closed_without_dispatch(
     calls = []
     monkeypatch.setattr(restarted, "_run_worker", lambda *_args: calls.append(True))
     with pytest.raises(DevlegateError, match="unsafe execution stage"):
-        restarted.run_once()
+        run_test_iteration(restarted)
     assert calls == []
     assert capsys.readouterr().out == ""
     assert state_payload(git_fixture)["phase"] == "agent_running"
@@ -211,5 +212,5 @@ def test_unresolved_agent_phase_survives_repeated_runs(
     )
     for _ in range(2):
         with pytest.raises(DevlegateError, match="unsafe execution stage"):
-            devlegate.run_once()
+            run_test_iteration(devlegate)
     assert state_payload(git_fixture)["phase"] == "agent_running"

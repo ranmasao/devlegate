@@ -139,8 +139,9 @@ topology and is currently truthful.
 
 ## Compatibility And Direct Seams
 
-The I3 reachability audit traced these seams through production code. They are
-not obsolete merely because the names are historical.
+The I3/I4 reachability audits traced these seams through production code. They
+are not obsolete merely because the names are historical; removal below is
+limited to seams with no supported production caller.
 
 | Symbol/path | Reachability | Classification | Evidence |
 | --- | --- | --- | --- |
@@ -153,6 +154,9 @@ not obsolete merely because the names are historical.
 | `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
 | `ServiceEngine.retry()` / `reconcile_update_base()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py:5339-5425`; owner command handling at `src/devlegate/runtime.py:4642-4649` |
+| `ServiceEngine.run()` / `run_once()` | No production callers; direct loop entry was replaced by `serve()` hosted through `run_service()` | REMOVE - test-only compatibility seams | `tests/runtime_helpers.py` provides the test-only iteration boundary |
+| `ServiceHost._run_with_signals()` | No production callers after host signal handling was consolidated in `run()` | REMOVE - test-only helper seam | `src/devlegate/daemon.py` |
+| `ServiceHost` incomplete-engine `state_dir` branch | Supported only fake engines missing the real engine contract | REMOVE - unsupported fake topology | `src/devlegate/daemon.py` always acquires the real engine lock |
 
 ### Construction Map
 
@@ -213,8 +217,8 @@ proof.
 ## Cleanup Candidates
 
 I4 removed four compatibility-only tests and retargeted three tests to the
-canonical engine seam. No further cleanup candidates remain from the audited
-I4 groups.
+canonical engine seam. Phase B removed the uncalled direct loop and signal
+helper seams; remaining direct engine tests use `tests/runtime_helpers.py`.
 
 ### KEEP - Unique Proof
 
@@ -235,11 +239,11 @@ I4 groups.
 - Direct receipt/idempotency tests plus IPC receipt tests plus real concurrent
   and restart receipt tests.
 
-### I3 CANDIDATE - Obsolete Architecture/Path
+### I3/Phase B CANDIDATE - Obsolete Architecture/Path
 
-None carried forward. I3 established reachability; I4 has now intentionally
-retired the unsupported Application injection seam and its compatibility
-residue.
+None carried forward. I3 established reachability; I4 retired the unsupported
+Application injection seam, and Phase B retired the uncalled direct loop and
+signal helper seams.
 
 ### I4 CANDIDATE - Redundant Or Compatibility-Only
 

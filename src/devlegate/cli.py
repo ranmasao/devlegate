@@ -964,23 +964,6 @@ class Devlegate(ServiceEngine):
             snapshot, "stopped", _execution_projection(snapshot, None)
         )
 
-    def run_iteration(self, intent=None) -> int:
-        # Preserve the CLI test hook at the canonical scheduler boundary.
-        runtime_git = _runtime._git
-        _runtime._git = _git
-        try:
-            return super().run_iteration(intent)
-        finally:
-            _runtime._git = runtime_git
-
-    def _run_worker(self, workspace, prompt):
-        runtime_runner = _runtime._run_opencode
-        _runtime._run_opencode = _run_opencode
-        try:
-            return super()._run_worker(workspace, prompt)
-        finally:
-            _runtime._run_opencode = runtime_runner
-
     def status(self, json_output: bool = False) -> int:
         snapshot = self.status_view()
         print(

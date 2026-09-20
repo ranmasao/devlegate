@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from git_support import control_publisher
+from runtime_helpers import run_test_iteration
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
 import devlegate.cli as cli
@@ -159,9 +160,8 @@ def test_foreground_service_command_constructs_one_service_engine(
         (signal.SIGTERM, "service_shutdown", 0),
     ],
 )
-@pytest.mark.parametrize("host", [daemon.run_service])
 def test_daemon_host_signal_handler_only_sets_stop_intent(
-    monkeypatch, signum, expected_kind, expected_status, host
+    monkeypatch, signum, expected_kind, expected_status
 ):
     installed = {}
 
@@ -170,7 +170,7 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
             installed[signum] = handler
 
     class FakeServiceEngine:
-        def serve(self, stop_event):
+        def serve(self, stop_event, *, lock_handle=None, once=False):
             installed[signum](signum, None)
             assert stop_event.is_set()
             assert stop_event.kind == expected_kind
@@ -179,7 +179,11 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
     monkeypatch.setattr(daemon.signal, "signal", install)
     monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
 
-    assert host(FakeServiceEngine()) == expected_status
+    intent = daemon.ShutdownIntent()
+    host = daemon.ServiceHost(FakeServiceEngine())
+    with host._signal_ownership(intent):
+        result = host._serve_engine(intent)
+    assert result == expected_status
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
 
 
@@ -227,9 +231,8 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )
-@pytest.mark.parametrize("host", [daemon.run_service])
 def test_daemon_host_operator_abort_precedes_service_shutdown(
-    monkeypatch, signals, host
+    monkeypatch, signals
 ):
     installed = {}
 
@@ -238,7 +241,7 @@ def test_daemon_host_operator_abort_precedes_service_shutdown(
             installed[signum] = handler
 
     class FakeServiceEngine:
-        def serve(self, stop_intent):
+        def serve(self, stop_intent, *, lock_handle=None, once=False):
             for signum in signals:
                 installed[signum](signum, None)
             assert stop_intent.kind == "operator_abort"
@@ -247,7 +250,11 @@ def test_daemon_host_operator_abort_precedes_service_shutdown(
     monkeypatch.setattr(daemon.signal, "signal", install)
     monkeypatch.setattr(daemon.signal, "getsignal", lambda _signum: signal.SIG_DFL)
 
-    assert host(FakeServiceEngine()) == 130
+    intent = daemon.ShutdownIntent()
+    host = daemon.ServiceHost(FakeServiceEngine())
+    with host._signal_ownership(intent):
+        result = host._serve_engine(intent)
+    assert result == 130
 
 
 def test_foreground_cli_remains_attached_until_host_returns(tmp_path, monkeypatch):
@@ -473,7 +480,10 @@ def test_merge_pending_retries_matching_shutdown_fetch(
     expected_result = 130 if kind == "operator_abort" else 0
     stop_intent = daemon.ShutdownIntent()
     stop_intent.request(kind)
-    assert daemon.ServiceHost(engine)._run_with_signals(stop_intent) == expected_result
+    host = daemon.ServiceHost(engine)
+    with host._signal_ownership(stop_intent):
+        result = host._serve_engine(stop_intent)
+    assert result == expected_result
     assert fetch_calls == 3
     assert engine._state["phase"] == "idle"
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
@@ -594,7 +604,10 @@ def test_merge_pending_retries_matching_product_merge(
     expected_result = 130 if kind == "operator_abort" else 0
     stop_intent = daemon.ShutdownIntent()
     stop_intent.request(kind)
-    assert daemon.ServiceHost(engine)._run_with_signals(stop_intent) == expected_result
+    host = daemon.ServiceHost(engine)
+    with host._signal_ownership(stop_intent):
+        result = host._serve_engine(stop_intent)
+    assert result == expected_result
     assert merge_calls == 2
     assert engine._state["phase"] == "idle"
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
@@ -876,7 +889,7 @@ def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
     )
 
     with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
-        engine.run_once(stop_event)
+        run_test_iteration(engine, stop_event)
     assert engine._state["phase"] == "idle"
     assert "interrupted" not in engine._state["failed_executions"]["T-1"]
 
@@ -901,7 +914,7 @@ def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
     )
 
     with pytest.raises(DevlegateError, match="execution branch publication failed"):
-        engine.run_once(stop_event)
+        run_test_iteration(engine, stop_event)
     assert engine._state["phase"] == "agent_running"
     assert engine._state["execution_stage"] == "publishing"
     assert engine._state.get("failed_executions", {}) == {}
@@ -970,7 +983,7 @@ def test_started_accepted_integration_drains_before_stop(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    assert engine.run_once() == 0
+    assert run_test_iteration(engine) == 0
     review = control / "kanban/review/T-1.md"
     review.rename(control / "kanban/accepted/T-1.md")
     git(control, "add", "-A")
@@ -1122,7 +1135,7 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
             WorkerRunResult(1, None, None, None),
         )[1],
     )
-    assert fresh.run_once() == (0 if kind == "operator_abort" else 1)
+    assert run_test_iteration(fresh) == (0 if kind == "operator_abort" else 1)
     assert calls == ([] if kind == "operator_abort" else [True])
 
 
@@ -1138,11 +1151,11 @@ def test_once_operator_abort_stops_after_one_iteration(
         calls.append(True)
         workspace_path.append(workspace.path)
         (workspace.path / "partial-work.txt").write_text("preserve\n")
+        signal.raise_signal(signal.SIGINT)
         return WorkerRunResult(-2, None, None, None, "operator_abort")
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    # Compatibility seam only; production CLI uses run_service/serve.
-    assert engine.run(once=once) == 130
+    assert daemon.run_service(engine, once=once) == 130
     assert calls == [True]
     assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
     assert engine._state["phase"] == "idle"
@@ -1179,7 +1192,7 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
     config.write_text(
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
     )
-    assert ServiceEngine(config).run_once() == 1
+    assert run_test_iteration(ServiceEngine(config)) == 1
     environment = {
         **os.environ,
         "DEVLEGATE_TEST_MARKER": str(marker),
@@ -1279,7 +1292,7 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch
     config.write_text(
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
     )
-    assert ServiceEngine(config).run_once() == 1
+    assert run_test_iteration(ServiceEngine(config)) == 1
     environment = {
         **os.environ,
         "DEVLEGATE_TEST_MARKER": str(marker),
@@ -1389,7 +1402,7 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
         with pytest.raises(
             DevlegateError, match="process group is still alive"
         ):
-            engine.run_once()
+            run_test_iteration(engine)
         assert marker.exists()
         processes = json.loads(marker.read_text())
         assert os.kill(processes["child"], 0) is None
@@ -1405,7 +1418,7 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
             lambda *_args: pytest.fail("restart reconciliation launched worker"),
         )
         with pytest.raises(DevlegateError, match="ownership is indeterminate"):
-            restarted.run_once()
+            run_test_iteration(restarted)
         assert os.kill(processes["child"], 0) is None
         os.killpg(processes["worker"], signal.SIGKILL)
         for _ in range(100):
@@ -1423,7 +1436,7 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
                 WorkerRunResult(1, None, None, None),
             )[1],
         )
-        assert restarted.run_once() == 1
+        assert run_test_iteration(restarted) == 1
         assert len(launches) == 1
         assert "Continue the existing implementation" in launches[0][1]
         assert restarted._state["phase"] == "idle"

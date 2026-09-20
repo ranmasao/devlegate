@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from runtime_helpers import run_test_iteration
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
 import devlegate.cli as cli
@@ -169,7 +170,7 @@ def test_reconcile_resume_runs_full_live_owner_path(
         )
 
     monkeypatch.setattr(engine, "_run_worker", initial_worker)
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     reconciliation = dict(engine._state["reconciliation"])
     checkpoint = reconciliation["worker_checkpoint"]
     execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
@@ -278,7 +279,7 @@ def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
         )
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     reconciliation = dict(engine._state["reconciliation"])
     checkpoint = reconciliation["worker_checkpoint"]
     execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
@@ -1212,7 +1213,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
         )
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     reconciliation = engine._state["reconciliation"]
     target = reconciliation["observed_product"]
     execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))

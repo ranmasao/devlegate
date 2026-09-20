@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import devlegate.cli as cli
+import devlegate.runtime as runtime
 from devlegate.cli import MAX_STDOUT_EVENT_BYTES, _run_opencode
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.worker_egress import (
@@ -404,7 +405,7 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
         event_handler(json.loads(report().decode()))
         return OpenCodeRunResult(0)
 
-    monkeypatch.setattr(cli, "_run_opencode", fake_run)
+    monkeypatch.setattr(runtime, "_run_opencode", fake_run)
     devlegate = object.__new__(cli.Devlegate)
     devlegate.opencode_bin = "opencode"
     devlegate.opencode_model = "provider/model"

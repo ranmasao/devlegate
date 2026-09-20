@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from git_support import clone_world
+from runtime_helpers import run_test_iteration
 from service_harness import LiveService
 
 from devlegate import __version__
@@ -1453,23 +1454,22 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     class FakeServiceEngine:
         def __init__(self, env_file, *, read_only=False):
             calls.append(("init", env_file, read_only))
-            self.repo = git_fixture["working"]
-            self.control_worktree = git_fixture["tmp"] / "missing-control"
-            self.control_branch = "devlegate/control"
-            self._state_key = "test-instance"
-
-        def serve(self, _stop_event, *, once=False):
-            calls.append(("serve", once))
-            return 8
 
     monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
+    monkeypatch.setattr(
+        "devlegate.cli.run_service",
+        lambda engine, **kwargs: calls.append(("host", engine, kwargs)) or 8,
+    )
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "once", "--env", str(git_fixture["config"])]
     )
     monkeypatch.chdir(git_fixture["working"])
 
     assert main() == 8
-    assert calls == [("init", git_fixture["config"], False), ("serve", True)]
+    assert calls[0] == ("init", git_fixture["config"], False)
+    assert calls[1][0] == "host"
+    assert calls[1][1] is not None
+    assert calls[1][2]["once"] is True
 
 
 def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
@@ -1689,7 +1689,7 @@ def _retryable_service(git_fixture, monkeypatch):
         "_run_worker",
         lambda *_args: WorkerRunResult(1, None, None, None),
     )
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     service = LiveService(git_fixture["working"], config)
     service.start()
     service.wait_ready()
@@ -2741,7 +2741,7 @@ def test_real_service_receipt_restart_is_not_a_persistent_command_queue(
         "_run_worker",
         lambda *_args: WorkerRunResult(1, None, None, None),
     )
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     service = LiveService(
         git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
     )
@@ -2788,7 +2788,7 @@ def test_real_service_reconcile_receipt_restart_is_not_a_queue(
         )
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     target = engine._state["reconciliation"]["observed_product"]
     git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
     monkeypatch.setenv("H1_CRASH_POINT", "receipt_after_save")
@@ -2912,7 +2912,7 @@ def test_real_service_process_executes_retry_from_real_cli(
         "_run_worker",
         lambda *_args: WorkerRunResult(1, None, None, None),
     )
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
 
     with LiveService(git_fixture["working"], config) as service:
         result = service.cli("retry", "T-1")
@@ -2949,7 +2949,7 @@ def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
         "_run_worker",
         lambda *_args: WorkerRunResult(1, None, None, None),
     )
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     service = LiveService(
         git_fixture["working"], config, command=_h1_driver(config, "receipt_after_save")
     )
@@ -2997,7 +2997,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         )
 
     monkeypatch.setattr(engine, "_run_worker", worker)
-    assert engine.run_once() == 1
+    assert run_test_iteration(engine) == 1
     target = engine._state["reconciliation"]["observed_product"]
     execution = next((engine.state_dir / "worktrees").glob("*/work/T-1"))
     git(git_fixture["working"], "pull", "--ff-only", "origin", "main")

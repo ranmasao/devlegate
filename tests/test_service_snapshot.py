@@ -5,6 +5,7 @@ import dataclasses
 import threading
 
 import pytest
+from runtime_helpers import run_test_iteration
 from test_control_plane import control_fixture, git, invoke
 
 from devlegate.runtime import ServiceSnapshot
@@ -129,7 +130,7 @@ def test_worker_running_clears_when_worker_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(engine, "_run_worker", worker)
     with pytest.raises(RuntimeError, match="worker exploded"):
-        engine.run_once()
+        run_test_iteration(engine)
 
     snapshot = engine.service_snapshot()
     assert snapshot.worker_running is False

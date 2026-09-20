@@ -2551,14 +2551,6 @@ class ServiceEngine:
             _log(f"control updated: {previous_head} -> {local_head}")
         return local_head, remote_head
 
-    def run_once(self, stop_event: threading.Event | None = None) -> int:
-        """Run one iteration for direct callers under normal authority."""
-        with self._lock():
-            if stop_event is None:
-                return self.run_iteration()
-            with self._stop_context(stop_event):
-                return self.run_iteration()
-
     def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""
         intent = intent or IterationIntent()
@@ -4914,14 +4906,6 @@ export default tool({
             return WorkerRunResult(-1, str(error), None, None)
         finally:
             shutil.rmtree(config_dir, ignore_errors=True)
-
-    def run(self, once: bool, stop_event: threading.Event | None = None) -> int:
-        """Run the polling loop without hosting authority or IPC.
-
-        Production CLI commands use the service host; this remains a narrow
-        internal compatibility seam for direct runtime tests and callers.
-        """
-        return self._run_polling(once=once, stop_event=stop_event)
 
     def serve(
         self,
