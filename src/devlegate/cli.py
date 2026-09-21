@@ -31,6 +31,7 @@ from devlegate.ipc_client import (
     request,
 )
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
+from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.runtime import (
     BlockedReason,
     DevlegateError,
@@ -351,6 +352,8 @@ def _notify_startup_failure(error: BaseException) -> None:
 
 
 def _start_background(env_file: Path) -> int:
+    if not hosted_runtime_supported():
+        raise DevlegateError(HOSTED_RUNTIME_ERROR)
     try:
         locator = RuntimeLocator.from_env(env_file)
         log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"

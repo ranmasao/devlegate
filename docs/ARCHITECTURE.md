@@ -52,6 +52,13 @@ differ only in hosting and lifetime policy. The canonical service host owns the
 project runtime lock, local Unix IPC endpoint, signal handling, readiness, and
 orderly teardown. It invokes one `ServiceEngine` scheduler iteration boundary.
 
+Devlegate 0.5 hosted execution requires Linux. The boundary is required by
+strong worker process identity and recovery, process-group lifecycle handling,
+and Unix IPC peer-authentication assumptions. Unsupported platforms fail before
+mutable service authority or scheduler operation begins. Low-level identity and
+peer-authentication checks still fail closed independently; broader portability
+is not promised by this release.
+
 The hosting and lifetime policies are:
 
 ```text

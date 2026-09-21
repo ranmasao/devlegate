@@ -84,6 +84,7 @@ it is not a replacement for Git history.
 
 The current implementation has these practical limits:
 
+- Hosted Devlegate execution currently requires Linux.
 - Workflow execution is serial; general parallel worker execution is not
   implemented yet.
 - Active workflow execution is hosted by one persistent Devlegate service.

@@ -40,6 +40,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.runtime_locator import (
     RuntimeLocator,
@@ -987,6 +988,8 @@ class ServiceEngine:
                 f"configuration file not found: {env_file} "
                 f"(copy devlegate's .env.example to $PWD/.env)"
             )
+        if not read_only and not hosted_runtime_supported():
+            raise DevlegateError(HOSTED_RUNTIME_ERROR)
         self.env_file = env_file
         config = _read_env(env_file)
         self.repo = self._repository_root()
@@ -7029,7 +7032,15 @@ export default tool({
         )
         phase = str(self._state.get("phase"))
         owner_live = self._mutation_owner_live()
+        platform_supported = hosted_runtime_supported()
         checks = [
+            (
+                "Platform",
+                platform_supported,
+                "Linux hosted runtime supported"
+                if platform_supported
+                else HOSTED_RUNTIME_ERROR,
+            ),
             (
                 "OPENCODE_MODEL",
                 bool(self.opencode_model),

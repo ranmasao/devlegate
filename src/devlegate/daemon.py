@@ -10,7 +10,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from devlegate.ipc_server import UnixIPCServer
-from devlegate.runtime import _log
+from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
+from devlegate.runtime import DevlegateError, _log
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import clear, create, write
 
@@ -83,6 +84,8 @@ class ServiceHost:
         self.startup_report = startup_report
 
     def run(self) -> int:
+        if not hosted_runtime_supported():
+            raise DevlegateError(HOSTED_RUNTIME_ERROR)
         stop_intent = ShutdownIntent()
         authority = self.engine._lock()
 

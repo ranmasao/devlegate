@@ -15,6 +15,7 @@ release are not separate product changes.
 - Routed hosted repository authority through the service owner thread and published read-only IPC views.
 - Hardened the background service bootstrap against managed-checkout import shadowing.
 - Persisted the latest observed terminal service failure for offline status reporting.
+- Declared Linux as the supported platform for hosted 0.5 execution.
 
 ## 0.5.1 -- 2026-09-20
 

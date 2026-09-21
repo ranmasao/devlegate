@@ -10,7 +10,6 @@ import os
 import socket
 import stat
 import struct
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -25,6 +24,7 @@ from devlegate.ipc_protocol import (
     receive_frame,
     send_frame,
 )
+from devlegate.platform_support import hosted_runtime_supported
 from devlegate.runtime import DevlegateError
 
 UNIX_SOCKET_PATH_MAX_BYTES = 107
@@ -388,8 +388,8 @@ class UnixIPCServer:
 
 
 def _peer_credentials_are_current_user(connection: socket.socket) -> bool:
-    if sys.platform != "linux":
-        return True
+    if not hosted_runtime_supported():
+        return False
     try:
         credentials = connection.getsockopt(
             socket.SOL_SOCKET, socket.SO_PEERCRED, _PEER_CREDENTIALS.size
