@@ -1,0 +1,1 @@
+Continue the existing implementation in the current workspace. Inspect the existing workspace and current changes before editing. Preserve useful existing changes and do not discard valid partial work. Continue the same assigned work.

@@ -147,12 +147,10 @@ def seed_project_context(root: Path) -> bool:
     if protocol.is_symlink():
         raise ProjectContextError(f"unsafe symlinked .devlegate root: {protocol}")
     protocol.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(
-        '---\n"type": "devlegate.project"\n---\n\n'
-        "# Devlegate project context\n\n"
-        "Add the existing project documentation used by Architect and Reviewer "
-        "to the NanoYAML frontmatter before running the project workflow.\n"
-    )
+    template = Path(__file__).parent / "default_templates/project_context.md"
+    if not template.is_file():
+        raise ProjectContextError(f"packaged project context is missing: {template}")
+    manifest.write_bytes(template.read_bytes())
     return True
 
 

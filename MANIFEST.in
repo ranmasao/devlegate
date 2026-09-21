@@ -3,4 +3,6 @@ include LICENSING.md
 include NOTICE
 include LICENSES/CC0-1.0.txt
 include src/devlegate/_vendor/nanoyaml/LICENSE
+include CONTRIBUTING.md
+include DCO
 recursive-include src/devlegate/default_templates *

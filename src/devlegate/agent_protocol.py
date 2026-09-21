@@ -61,12 +61,18 @@ _DEFAULT_ARTIFACTS = (
         "target": "skills/reviewer/SKILL.md",
     },
 )
-_MARKER = "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n\n"
 
 
 def packaged_template_root() -> Path:
     """Return the read-only packaged bootstrap template directory."""
     return Path(__file__).parent / "default_templates"
+
+
+def _generated_marker() -> str:
+    path = packaged_template_root() / "generated_marker.txt"
+    if not path.is_file():
+        raise AgentProtocolError(f"packaged template is missing: {path}")
+    return path.read_text().rstrip("\r\n") + "\n\n"
 
 
 def seed_project_env(path: Path) -> bool:
@@ -207,7 +213,7 @@ def _atomic_write(path: Path, content: str, *, allow_foreign: bool = False) -> b
         raise AgentProtocolError(f"target path is not a file: {path}")
     if path.is_file():
         existing = path.read_text()
-        if not existing.startswith(_MARKER) and not allow_foreign:
+        if not existing.startswith(_generated_marker()) and not allow_foreign:
             raise AgentProtocolError(
                 f"unrelated existing target will not be clobbered: {path}"
             )
@@ -273,13 +279,15 @@ def _render_plan(
         target = _check_components(project, target_relative, "target path")
         if target == project / ".git":
             raise AgentProtocolError(f"unsafe target path: {target}")
-        rendered = _MARKER + _render_template(source.read_text(), context, source)
+        rendered = _generated_marker() + _render_template(
+            source.read_text(), context, source
+        )
         backup = None
         if target.is_symlink():
             raise AgentProtocolError(f"unsafe symlinked target file: {target}")
         if target.exists() and not target.is_file():
             raise AgentProtocolError(f"target path is not a file: {target}")
-        if target.is_file() and not target.read_text().startswith(_MARKER):
+        if target.is_file() and not target.read_text().startswith(_generated_marker()):
             if conflicts == "abort":
                 conflicts_found.append(target)
             if conflicts == "backup":
@@ -367,7 +375,6 @@ def initialize_project(
     except ProjectContextError as error:
         raise AgentProtocolError(str(error)) from error
     _directory(templates / "skills", "skills template directory")
-    _directory(templates / "prompts", "prompts template directory")
     if not manifest.exists():
         packaged_manifest = packaged_template_root() / "artifacts.toml"
         manifest.write_bytes(packaged_manifest.read_bytes())
@@ -402,7 +409,6 @@ def render_project(
     _protocol, templates = _safe_project_roots(project, create=not check)
     if not check:
         _directory(templates / "skills", "skills template directory")
-        _directory(templates / "prompts", "prompts template directory")
     elif not (templates / _MANIFEST_NAME).is_file():
         raise AgentProtocolError(
             f"artifact manifest is missing: {templates / _MANIFEST_NAME}"

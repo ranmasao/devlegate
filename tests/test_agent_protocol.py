@@ -31,6 +31,7 @@ def test_init_seeds_templates_manifest_and_natural_targets(tmp_path):
     assert (tmp_path / ".devlegate/templates/artifacts.toml").is_file()
     assert (tmp_path / ".devlegate/templates/skills/architect/SKILL.md.tmpl").is_file()
     assert (tmp_path / ".devlegate/templates/skills/reviewer/SKILL.md.tmpl").is_file()
+    assert not (tmp_path / ".devlegate/templates/prompts").exists()
     architect = tmp_path / "skills/architect/SKILL.md"
     reviewer = tmp_path / "skills/reviewer/SKILL.md"
     assert "GENERATED FILE. DO NOT EDIT DIRECTLY." in architect.read_text()

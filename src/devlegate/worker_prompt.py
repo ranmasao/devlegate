@@ -6,6 +6,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 
 class WorkDirective(Enum):
@@ -20,36 +21,21 @@ class WorkerPromptInput:
     directive: WorkDirective
 
 
-_CORE_CONTRACT = """You are an implementation worker.
+_PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
 
-Implement the assigned work in the current repository workspace.
-Work only on the assigned task.
-Inspect source code and tests as needed.
-Preserve unrelated behavior.
-Run focused validation as appropriate.
-The worker owns implementation edits and the semantic claim only. Do not commit,
-push, merge, rebase, checkout, switch branches, create or delete branches,
-modify workflow or ticket state, write ExecutionReport artifacts, or integrate
-implementation changes into a product branch. Devlegate owns Git lifecycle,
-execution reports, ticket movement, and product integration.
 
-Before finishing, call the devlegate_report tool exactly once. Report one of
-these worker claims: completed when you believe the assigned work is complete,
-incomplete when useful work remains, or blocked when safe progress needs
-external information or action."""
+def _prompt_text(name: str) -> str:
+    path = _PROMPT_ROOT / name
+    if not path.is_file():
+        raise RuntimeError(f"packaged worker prompt is missing: {path}")
+    return path.read_text().rstrip("\r\n")
 
+
+_CORE_CONTRACT = _prompt_text("core_contract.txt")
 _DIRECTIVES = {
-    WorkDirective.FRESH: "Implement the assigned work in the current workspace.",
-    WorkDirective.RESUME: (
-        "Continue the existing implementation in the current workspace. "
-        "Inspect the existing workspace and current changes before editing. "
-        "Preserve useful existing changes and do not discard valid partial work. "
-        "Continue the same assigned work."
-    ),
-    WorkDirective.REWORK: (
-        "Revise the existing implementation according to the supplied feedback "
-        "while preserving correct work already present."
-    ),
+    WorkDirective.FRESH: _prompt_text("fresh.txt"),
+    WorkDirective.RESUME: _prompt_text("resume.txt"),
+    WorkDirective.REWORK: _prompt_text("rework.txt"),
 }
 
 
