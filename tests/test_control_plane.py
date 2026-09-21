@@ -30,8 +30,13 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
-from devlegate.runtime import BlockedReason, _capture_worker_identity, _todo_fingerprint
+from devlegate.runtime import BlockedReason, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
+from devlegate.worker_supervisor import (
+    WorkerProcessIdentity,
+    _capture_worker_identity,
+    observe_worker_identity,
+)
 
 
 def git(cwd, *args):
@@ -126,11 +131,7 @@ def persist_agent_running(
             "boot_id": "test-prior-boot",
             "start_time": 0,
         },
-        **(
-            {"execution_start_head": execution_start_head}
-            if record_start
-            else {}
-        ),
+        **({"execution_start_head": execution_start_head} if record_start else {}),
     )
     return workspace, control
 
@@ -251,9 +252,10 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
     assert git(working, "ls-remote", "origin", "refs/heads/devlegate/control").stdout
     assert invoke(working, "control", "init", config=config).returncode == 0
-    assert json.loads(invoke(working, "plan", "--json", config=config).stdout)[
-        "action"
-    ] == "none"
+    assert (
+        json.loads(invoke(working, "plan", "--json", config=config).stdout)["action"]
+        == "none"
+    )
     assert invoke(working, "check", config=config).returncode == 0
     assert invoke(working, "status", "--json", config=config).returncode == 0
     assert invoke(working, "--once", config=config).returncode == 0
@@ -309,8 +311,7 @@ def test_dependency_state_change_on_control_changes_plan(tmp_path, monkeypatch):
     monkeypatch.chdir(working)
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/review/D-1.md").write_text(
-        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n'
-        "---\ndependency\n"
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\ndependency\n'
     )
     (control / "kanban/todo/T-1.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Waiting"\n'
@@ -423,16 +424,12 @@ def test_wide_frontier_keeps_join_blockers_immediate_and_deterministic(
         (
             "J-1",
             "Join 1",
-            BlockedReason(
-                "dependencies", tickets=(("F-1", "todo"), ("F-2", "todo"))
-            ),
+            BlockedReason("dependencies", tickets=(("F-1", "todo"), ("F-2", "todo"))),
         ),
         (
             "J-2",
             "Join 2",
-            BlockedReason(
-                "dependencies", tickets=(("F-2", "todo"), ("F-3", "todo"))
-            ),
+            BlockedReason("dependencies", tickets=(("F-2", "todo"), ("F-3", "todo"))),
         ),
     )
 
@@ -653,10 +650,10 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(
         devlegate,
         "_apply_execution_lifecycle",
@@ -685,8 +682,8 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("lifecycle recovery launched a worker"),
     )
     assert run_test_iteration(recovered) == 1
@@ -709,9 +706,9 @@ def test_legacy_lifecycle_commit_replays_on_control_descendant_without_worker(
     devlegate = Devlegate(config)
 
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+        devlegate._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     monkeypatch.setattr(
         devlegate,
@@ -745,8 +742,8 @@ def test_legacy_lifecycle_commit_replays_on_control_descendant_without_worker(
     control = next((state / "worktrees").glob("*/control"))
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("legacy lifecycle recovery launched a worker"),
     )
     assert run_test_iteration(recovered) == 1
@@ -762,9 +759,9 @@ def test_unrelated_local_parent_blocks_lifecycle_reset(tmp_path, monkeypatch):
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+        devlegate._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     monkeypatch.setattr(
         devlegate,
@@ -818,13 +815,13 @@ def test_execution_start_head_is_persisted_before_worker(tmp_path, monkeypatch):
     devlegate = Devlegate(config)
     base_head = git(working, "rev-parse", "HEAD").stdout.strip()
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         assert workspace.head == base_head
         assert devlegate._state["execution_base_head"] == base_head
         assert devlegate._state["execution_start_head"] == base_head
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     assert state_payload(state)["phase"] == "idle"
 
@@ -890,9 +887,10 @@ def test_checkpoint_rejects_worker_created_history_and_preserves_it(tmp_path):
 
     assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == worker_head
     assert (workspace.path / "worker-commit.txt").read_text() == "worker history\n"
-    assert "Devlegate checkpoint" not in git(
-        workspace.path, "log", "-1", "--pretty=%s"
-    ).stdout
+    assert (
+        "Devlegate checkpoint"
+        not in git(workspace.path, "log", "-1", "--pretty=%s").stdout
+    )
     assert not (control / "executions").exists()
 
 
@@ -904,15 +902,13 @@ def test_worker_created_commit_cannot_reach_lifecycle_or_publication(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "worker-commit.txt").write_text("worker history\n")
         git(workspace.path, "add", "worker-commit.txt")
         git(workspace.path, "commit", "-m", "worker-owned commit")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
 
@@ -929,30 +925,28 @@ def test_worker_created_commit_cannot_reach_lifecycle_or_publication(
     ).stdout.strip()
 
 
-def test_unexpected_execution_remote_creation_blocks_publication(
-    tmp_path, monkeypatch
-):
+def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         git(workspace.path, "push", "origin", "HEAD:refs/heads/devlegate/work/T-1")
         (workspace.path / "implementation.txt").write_text("worker change\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     with pytest.raises(DevlegateError, match="remote changed"):
         run_test_iteration(devlegate)
 
     execution = next((state / "worktrees").glob("*/work/T-1"))
     control = next((state / "worktrees").glob("*/control"))
     assert (execution / "implementation.txt").exists()
-    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip().startswith(
-        "Devlegate checkpoint T-1 "
+    assert (
+        git(execution, "log", "-1", "--pretty=%s")
+        .stdout.strip()
+        .startswith("Devlegate checkpoint T-1 ")
     )
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
@@ -1028,14 +1022,15 @@ def test_execution_publication_lease_rejects_intervening_remote_generation(
     with pytest.raises(DevlegateError, match="remote changed during publication"):
         devlegate._publish_execution_branch(workspace, checkpoint, expected)
     assert raced
-    assert git(
-        workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
-    ).stdout.split()[0] == external
+    assert (
+        git(
+            workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+        ).stdout.split()[0]
+        == external
+    )
 
 
-def test_reconcile_resume_race_stays_unresolved_before_lifecycle(
-    tmp_path, monkeypatch
-):
+def test_reconcile_resume_race_stays_unresolved_before_lifecycle(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -1147,9 +1142,12 @@ def test_reconcile_resume_race_stays_unresolved_before_lifecycle(
     assert raced
     assert devlegate._state["reconciliation"]["status"] == "resolving"
     assert not (control / "kanban/review/T-1.md").exists()
-    assert git(
-        workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
-    ).stdout.split()[0] == external
+    assert (
+        git(
+            workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+        ).stdout.split()[0]
+        == external
+    )
 
 
 def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
@@ -1161,7 +1159,7 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         (workspace.path / "implementation.txt").write_text("worker change\n")
@@ -1169,14 +1167,16 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     assert calls == 1
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert (execution / "implementation.txt").read_text() == "worker change\n"
-    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip().startswith(
-        "Devlegate checkpoint T-1 "
+    assert (
+        git(execution, "log", "-1", "--pretty=%s")
+        .stdout.strip()
+        .startswith("Devlegate checkpoint T-1 ")
     )
     remote_control = git(
         control, "ls-remote", "origin", "refs/heads/devlegate/control"
@@ -1187,9 +1187,10 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     reports = list((control / "executions/T-1").glob("*.json"))
     assert len(reports) == 1
     assert json.loads(reports[0].read_text())["conclusion"] == "completed"
-    assert git(working, "rev-parse", "HEAD").stdout.strip() == git(
-        working, "rev-parse", "origin/main"
-    ).stdout.strip()
+    assert (
+        git(working, "rev-parse", "HEAD").stdout.strip()
+        == git(working, "rev-parse", "origin/main").stdout.strip()
+    )
     assert not (working / "implementation.txt").exists()
 
 
@@ -1201,11 +1202,9 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     original_checkpoint = ExecutionWorkspaceManager.checkpoint
     failed = False
@@ -1217,7 +1216,7 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
             raise ExecutionWorkspaceError("simulated checkpoint crash")
         return original_checkpoint(manager, workspace, execution_id)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", fail_once)
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
@@ -1226,8 +1225,8 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("checkpoint recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
@@ -1246,11 +1245,9 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     original_save = devlegate._save_state
     crashed = False
@@ -1265,7 +1262,7 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
             raise RuntimeError("simulated state crash")
         original_save(phase, **fields)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(devlegate, "_save_state", crash_before_post)
     with pytest.raises(RuntimeError, match="simulated state crash"):
         run_test_iteration(devlegate)
@@ -1287,8 +1284,8 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         (execution / "late-change.txt").write_text("must remain\n")
         recovered = Devlegate(config)
         monkeypatch.setattr(
-            recovered,
-            "_run_worker",
+            recovered._workers,
+            "run",
             lambda *_args: pytest.fail("dirty checkpoint recovery reran worker"),
         )
         with pytest.raises(DevlegateError, match="ambiguous checkpoint history"):
@@ -1301,21 +1298,24 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("checkpoint recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
-    assert int(
-        git(
-            execution,
-            "rev-list",
-            "--count",
-            "--all",
-            "--grep",
-            "Devlegate checkpoint",
-        ).stdout
-    ) == 1
+    assert (
+        int(
+            git(
+                execution,
+                "rev-list",
+                "--count",
+                "--all",
+                "--grep",
+                "Devlegate checkpoint",
+            ).stdout
+        )
+        == 1
+    )
 
 
 def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypatch):
@@ -1324,13 +1324,11 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(
         devlegate,
         "_publish_execution_branch",
@@ -1344,20 +1342,23 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("publication recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
     control = next((state / "worktrees").glob("*/control"))
     assert (control / "kanban/review/T-1.md").is_file()
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    assert git(
-        execution,
-        "ls-remote",
-        "origin",
-        "refs/heads/devlegate/work/T-1",
-    ).stdout.split()[0] == git(execution, "rev-parse", "HEAD").stdout.strip()
+    assert (
+        git(
+            execution,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/work/T-1",
+        ).stdout.split()[0]
+        == git(execution, "rev-parse", "HEAD").stdout.strip()
+    )
 
 
 def test_service_recovers_publication_failure_without_rerunning_worker(
@@ -1371,13 +1372,11 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
     worker_calls = 0
     publication_calls = 0
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         nonlocal worker_calls
         worker_calls += 1
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     original_publish = devlegate._publish_execution_branch
 
@@ -1388,12 +1387,10 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
             raise DevlegateError("simulated publication outage")
         return original_publish(*args)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(devlegate, "_publish_execution_branch", publish)
     stop_event = threading.Event()
-    thread = threading.Thread(
-        target=lambda: devlegate.serve(stop_event), daemon=True
-    )
+    thread = threading.Thread(target=lambda: devlegate.serve(stop_event), daemon=True)
     thread.start()
 
     for _ in range(300):
@@ -1420,11 +1417,9 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     original_checkpoint = ExecutionWorkspaceManager.checkpoint
     monkeypatch.setattr(
@@ -1434,7 +1429,7 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
             ExecutionWorkspaceError("simulated checkpoint crash")
         ),
     )
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
     monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", original_checkpoint)
@@ -1452,13 +1447,11 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
     before = git(execution, "rev-parse", "HEAD").stdout.strip()
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("stale recovery launched worker"),
     )
-    with pytest.raises(
-        DevlegateError, match="product checkout or remote changed"
-    ):
+    with pytest.raises(DevlegateError, match="product checkout or remote changed"):
         run_test_iteration(recovered)
     assert recovered._state["execution_stage"] == "checkpointing"
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == before
@@ -1475,11 +1468,9 @@ def test_post_publication_recovery_replays_lifecycle_without_worker(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     original_save = devlegate._save_state
     crashed = False
@@ -1494,7 +1485,7 @@ def test_post_publication_recovery_replays_lifecycle_without_worker(
             raise RuntimeError("simulated state crash")
         original_save(phase, **fields)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(devlegate, "_save_state", crash_after_publication)
     with pytest.raises(RuntimeError, match="simulated state crash"):
         run_test_iteration(devlegate)
@@ -1503,8 +1494,8 @@ def test_post_publication_recovery_replays_lifecycle_without_worker(
 
     recovered = Devlegate(config)
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
+        recovered._workers,
+        "run",
         lambda *_args: pytest.fail("post-publication recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
@@ -1520,13 +1511,13 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker change\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     control = next((state / "worktrees").glob("*/control"))
     review = control / "kanban/review/T-1.md"
@@ -1540,9 +1531,10 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     assert (working / "implementation.txt").is_file()
     assert not (control / "kanban/accepted/T-1.md").exists()
     assert (control / "kanban/done/T-1.md").is_file()
-    assert git(working, "rev-parse", "HEAD").stdout.strip() == git(
-        working, "rev-parse", "origin/main"
-    ).stdout.strip()
+    assert (
+        git(working, "rev-parse", "HEAD").stdout.strip()
+        == git(working, "rev-parse", "origin/main").stdout.strip()
+    )
 
 
 def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
@@ -1554,7 +1546,7 @@ def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
     devlegate = Devlegate(config)
     calls = []
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         calls.append(workspace.ticket_id)
         if workspace.ticket_id == "T-1":
             (workspace.path / "implementation.txt").write_text("worker change\n")
@@ -1563,7 +1555,7 @@ def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
             )
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/todo/T-2.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
@@ -1592,9 +1584,9 @@ def test_independent_ticket_remains_blocked_by_review_barrier(tmp_path, monkeypa
     devlegate = Devlegate(config)
     calls = []
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda workspace, _prompt: (
+        devlegate._workers,
+        "run",
+        lambda workspace, _prompt, **_kwargs: (
             calls.append(workspace.ticket_id)
             or WorkerRunResult(
                 0, None, WorkerClaim("completed", "implemented", (), ()), None
@@ -1695,7 +1687,9 @@ def test_unchanged_empty_generation_remains_a_noop(tmp_path, monkeypatch):
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     calls = []
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     assert run_test_iteration(devlegate) == 0
     assert run_test_iteration(devlegate) == 0
@@ -1745,7 +1739,7 @@ def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypat
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -1755,7 +1749,7 @@ def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypat
             )
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     assert run_test_iteration(devlegate) == 0
     assert calls == 1
@@ -1778,13 +1772,13 @@ def test_post_worker_integrity_failure_is_persisted_without_checkpoint(
     devlegate = Devlegate(config)
     control = next((state / "worktrees").glob("*/control"))
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "useful-change.txt").write_text("keep this\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(
         ExecutionWorkspaceManager,
         "verify_submodules",
@@ -1859,9 +1853,7 @@ def test_check_reports_active_runtime_when_mutation_owner_is_live(
     assert "\nReady." in output
 
 
-def test_mutation_owner_probe_reports_unlocked_without_acquiring(
-    tmp_path, monkeypatch
-):
+def test_mutation_owner_probe_reports_unlocked_without_acquiring(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -1924,16 +1916,14 @@ def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, caps
     assert f"control updated: {old_head} -> {new_head}" in output
 
 
-def test_engine_reconciliation_and_update_base_resumes(
-    tmp_path, monkeypatch
-):
+def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     observed = []
 
-    def worker(workspace, prompt):
+    def worker(workspace, prompt, **_kwargs):
         observed.append((workspace.path, prompt, devlegate._state["execution_id"]))
         (workspace.path / "implementation.txt").write_text("worker work\n")
         (working / "product-change.txt").write_text("product B\n")
@@ -1944,7 +1934,7 @@ def test_engine_reconciliation_and_update_base_resumes(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     assert reconciliation["status"] == "pending"
@@ -1952,9 +1942,10 @@ def test_engine_reconciliation_and_update_base_resumes(
     assert reconciliation["worker_checkpoint"]
     status = devlegate.status_view()
     assert status.reconciliation["original_base"] == reconciliation["original_base"]
-    assert status.reconciliation["worker_checkpoint"] == reconciliation[
-        "worker_checkpoint"
-    ]
+    assert (
+        status.reconciliation["worker_checkpoint"]
+        == reconciliation["worker_checkpoint"]
+    )
     assert not git(
         next((state / "worktrees").glob("*/work/T-1")),
         "ls-remote",
@@ -1964,14 +1955,14 @@ def test_engine_reconciliation_and_update_base_resumes(
     old_id = reconciliation["execution_id"]
     evidence = reconciliation["evidence_ref"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    assert git(execution, "rev-parse", evidence).stdout.strip() == reconciliation[
-        "worker_checkpoint"
-    ]
+    assert (
+        git(execution, "rev-parse", evidence).stdout.strip()
+        == reconciliation["worker_checkpoint"]
+    )
 
     git(working, "pull", "--ff-only", "origin", "main")
     assert (
-        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
-        == 0
+        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"]) == 0
     )
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["resume_required"]["status"] == "required"
@@ -1981,21 +1972,20 @@ def test_engine_reconciliation_and_update_base_resumes(
     resumed_ids = []
     prompts = []
 
-    def resumed_worker(workspace, prompt):
+    def resumed_worker(workspace, prompt, **_kwargs):
         resumed_ids.append(resumed._state["execution_id"])
         prompts.append(prompt)
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "validated", (), ()), None
         )
 
-    monkeypatch.setattr(resumed, "_run_worker", resumed_worker)
+    monkeypatch.setattr(resumed._workers, "run", resumed_worker)
     assert run_test_iteration(resumed) == 0
     assert resumed_ids[0] != old_id
     assert "Continue the existing implementation" in prompts[0]
     assert (execution / "implementation.txt").read_text() == "worker work\n"
     assert (
-        next((state / "worktrees").glob("*/control"))
-        / "kanban/review/T-1.md"
+        next((state / "worktrees").glob("*/control")) / "kanban/review/T-1.md"
     ).is_file()
 
 
@@ -2008,7 +1998,7 @@ def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     devlegate = Devlegate(config)
     calls = []
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         calls.append(True)
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
@@ -2016,7 +2006,7 @@ def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     checkpoint = reconciliation["worker_checkpoint"]
@@ -2037,14 +2027,14 @@ def test_resolving_reconciliation_restart_recovers_retained_report(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = dict(devlegate._state["reconciliation"])
     original_base = reconciliation["original_base"]
@@ -2072,7 +2062,7 @@ def test_resolving_reconciliation_restart_recovers_retained_report(
 
     restarted = Devlegate(config)
     monkeypatch.setattr(
-        restarted, "_run_worker", lambda *_args: pytest.fail("worker reran")
+        restarted._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker reran")
     )
     assert run_test_iteration(restarted) == 0
     assert restarted._state["reconciliation"]["status"] == "resolved"
@@ -2099,14 +2089,14 @@ def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = dict(devlegate._state["reconciliation"])
     old_id = reconciliation["execution_id"]
@@ -2122,7 +2112,7 @@ def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
     }
     resumed_ids = []
 
-    def resumed_worker(workspace, prompt):
+    def resumed_worker(workspace, prompt, **_kwargs):
         resumed_ids.append(devlegate._state["execution_id"])
         assert "Continue the existing implementation" in prompt
         assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == checkpoint
@@ -2130,7 +2120,7 @@ def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
             0, None, WorkerClaim("completed", "validated", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", resumed_worker)
+    monkeypatch.setattr(devlegate._workers, "run", resumed_worker)
     assert run_test_iteration(devlegate) == 0
     assert resumed_ids and resumed_ids[0] != old_id
 
@@ -2141,14 +2131,14 @@ def _pending_resume_fixture(tmp_path, monkeypatch):
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     (working / "dirty-product.txt").unlink()
     return devlegate, working, state
@@ -2275,17 +2265,15 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     git(publisher, "config", "user.name", "Test User")
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "shared.txt").write_text("worker\n")
         (publisher / "shared.txt").write_text("product\n")
         git(publisher, "add", "shared.txt")
         git(publisher, "commit", "-m", "advance product")
         git(publisher, "push", "origin", "HEAD:main")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
@@ -2311,14 +2299,12 @@ def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "uncommitted-product.txt").write_text("operator work\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     assert reconciliation["status"] == "pending"
@@ -2342,14 +2328,12 @@ def test_engine_dirty_product_can_become_valid_update_base_target(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "uncommitted-product.txt").write_text("operator work\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     evidence = reconciliation["evidence_ref"]
@@ -2362,9 +2346,10 @@ def test_engine_dirty_product_can_become_valid_update_base_target(
     assert devlegate.reconcile_update_base("T-1", target) == 0
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["resume_required"]["status"] == "required"
-    assert git(working, "rev-parse", evidence).stdout.strip() == reconciliation[
-        "worker_checkpoint"
-    ]
+    assert (
+        git(working, "rev-parse", evidence).stdout.strip()
+        == reconciliation["worker_checkpoint"]
+    )
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
 
@@ -2377,14 +2362,12 @@ def test_engine_still_dirty_product_blocks_update_base_without_rewrite(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "uncommitted-product.txt").write_text("operator work\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
@@ -2404,14 +2387,12 @@ def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
     devlegate = Devlegate(config)
     base = git(working, "rev-parse", "HEAD").stdout.strip()
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         git(working, "switch", "--detach", base)
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     assert reconciliation["status"] == "pending"
@@ -2425,23 +2406,19 @@ def test_wrong_product_branch_after_worker_preserves_checkpoint_and_branch(
     ).stdout.strip()
 
 
-def test_engine_detached_product_can_be_restored_for_update_base(
-    tmp_path, monkeypatch
-):
+def test_engine_detached_product_can_be_restored_for_update_base(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     base = git(working, "rev-parse", "HEAD").stdout.strip()
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         git(working, "switch", "--detach", base)
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     evidence = reconciliation["evidence_ref"]
@@ -2455,9 +2432,10 @@ def test_engine_detached_product_can_be_restored_for_update_base(
     assert devlegate.reconcile_update_base("T-1", target) == 0
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["resume_required"]["status"] == "required"
-    assert git(working, "rev-parse", evidence).stdout.strip() == reconciliation[
-        "worker_checkpoint"
-    ]
+    assert (
+        git(working, "rev-parse", evidence).stdout.strip()
+        == reconciliation["worker_checkpoint"]
+    )
 
 
 def test_engine_still_detached_product_blocks_update_base_without_rewrite(
@@ -2469,14 +2447,12 @@ def test_engine_still_detached_product_blocks_update_base_without_rewrite(
     devlegate = Devlegate(config)
     base = git(working, "rev-parse", "HEAD").stdout.strip()
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         git(working, "switch", "--detach", base)
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
@@ -2497,7 +2473,9 @@ def test_stranded_agent_running_without_worker_identity_refuses_retry(
     persist_agent_running(devlegate, state)
     devlegate._save_state("agent_running", worker_identity=None)
     calls = []
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="ownership cannot be proven absent"):
         devlegate.retry("T-1")
@@ -2510,9 +2488,7 @@ def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    workspace, _control = persist_agent_running(
-        devlegate, state, record_start=True
-    )
+    workspace, _control = persist_agent_running(devlegate, state, record_start=True)
     (workspace.path / "partial.txt").write_text("preserve\n")
     helper = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -2536,9 +2512,9 @@ def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch)
     old_execution_id = recovered._state["execution_id"]
     prompts = []
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
-        lambda workspace, prompt: (
+        recovered._workers,
+        "run",
+        lambda workspace, prompt, **_kwargs: (
             prompts.append((workspace.path, prompt)),
             WorkerRunResult(1, None, None, None),
         )[1],
@@ -2564,7 +2540,9 @@ def test_startup_launch_window_remains_blocked_without_identity(tmp_path, monkey
     )
     recovered = Devlegate(config)
     calls = []
-    monkeypatch.setattr(recovered, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        recovered._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="unsafe execution stage worker-launch"):
         run_test_iteration(recovered)
@@ -2578,9 +2556,7 @@ def test_startup_post_worker_normalizes_without_worker_launch(tmp_path, monkeypa
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    workspace, _control = persist_agent_running(
-        devlegate, state, record_start=True
-    )
+    workspace, _control = persist_agent_running(devlegate, state, record_start=True)
     (workspace.path / "partial.txt").write_text("preserve\n")
     devlegate._save_state(
         "agent_running", execution_stage="post-worker", worker_identity=None
@@ -2588,9 +2564,9 @@ def test_startup_post_worker_normalizes_without_worker_launch(tmp_path, monkeypa
     recovered = Devlegate(config)
     prompts = []
     monkeypatch.setattr(
-        recovered,
-        "_run_worker",
-        lambda workspace, prompt: (
+        recovered._workers,
+        "run",
+        lambda workspace, prompt, **_kwargs: (
             prompts.append((workspace.path, prompt)),
             WorkerRunResult(1, None, None, None),
         )[1],
@@ -2620,7 +2596,7 @@ def test_matching_live_worker_identity_refuses_retry_without_signaling(
         devlegate._save_state("agent_running", worker_identity=identity.as_dict())
         calls = []
         monkeypatch.setattr(
-            devlegate, "_run_worker", lambda *_args: calls.append(True)
+            devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
         )
 
         with pytest.raises(DevlegateError, match="worker is still alive"):
@@ -2633,49 +2609,53 @@ def test_matching_live_worker_identity_refuses_retry_without_signaling(
 
 
 def test_worker_identity_observer_rejects_pid_reuse_without_signaling(monkeypatch):
-    identity = runtime.WorkerProcessIdentity(
-        "execution-1", 123, 123, 123, "boot-1", 10
-    )
+    identity = WorkerProcessIdentity("execution-1", 123, 123, 123, "boot-1", 10)
     signals = []
-    monkeypatch.setattr(runtime, "_linux_boot_id", lambda: "boot-1")
-    monkeypatch.setattr(runtime, "_linux_process_start_time", lambda _pid: 11)
-    monkeypatch.setattr(runtime, "_worker_group_exists", lambda _pgid: False)
-    monkeypatch.setattr(runtime.os, "killpg", lambda *args: signals.append(args))
+    monkeypatch.setattr("devlegate.worker_supervisor._linux_boot_id", lambda: "boot-1")
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor._linux_process_start_time", lambda _pid: 11
+    )
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor._worker_group_exists", lambda _pgid: False
+    )
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor.os.killpg", lambda *args: signals.append(args)
+    )
 
-    assert runtime.observe_worker_identity(identity) == "absent"
+    assert observe_worker_identity(identity) == "absent"
     assert signals == []
 
 
 def test_worker_identity_observer_blocks_when_leader_is_gone_but_group_survives(
     monkeypatch,
 ):
-    identity = runtime.WorkerProcessIdentity(
-        "execution-1", 123, 456, 456, "boot-1", 10
-    )
-    monkeypatch.setattr(runtime, "_linux_boot_id", lambda: "boot-1")
+    identity = WorkerProcessIdentity("execution-1", 123, 456, 456, "boot-1", 10)
+    monkeypatch.setattr("devlegate.worker_supervisor._linux_boot_id", lambda: "boot-1")
     monkeypatch.setattr(
-        runtime,
-        "_linux_process_start_time",
+        "devlegate.worker_supervisor._linux_process_start_time",
         lambda _pid: (_ for _ in ()).throw(FileNotFoundError),
     )
-    monkeypatch.setattr(runtime, "_worker_group_exists", lambda _pgid: True)
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor._worker_group_exists", lambda _pgid: True
+    )
 
-    assert runtime.observe_worker_identity(identity) == "indeterminate"
+    assert observe_worker_identity(identity) == "indeterminate"
 
 
 def test_worker_identity_observer_treats_boot_change_as_absent_without_group_probe(
     monkeypatch,
 ):
-    identity = runtime.WorkerProcessIdentity(
-        "execution-1", 123, 123, 123, "old-boot", 10
-    )
+    identity = WorkerProcessIdentity("execution-1", 123, 123, 123, "old-boot", 10)
     probes = []
-    monkeypatch.setattr(runtime, "_linux_boot_id", lambda: "new-boot")
     monkeypatch.setattr(
-        runtime, "_worker_group_exists", lambda pgid: probes.append(pgid) or True
+        "devlegate.worker_supervisor._linux_boot_id", lambda: "new-boot"
+    )
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor._worker_group_exists",
+        lambda pgid: probes.append(pgid) or True,
     )
 
-    assert runtime.observe_worker_identity(identity) == "absent"
+    assert observe_worker_identity(identity) == "absent"
     assert probes == []
 
 
@@ -2687,7 +2667,9 @@ def test_locked_agent_running_cannot_be_recovered(tmp_path, monkeypatch):
     persist_agent_running(devlegate, state)
     before = dict(devlegate._state)
     calls = []
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with devlegate._lock():
         with pytest.raises(DevlegateError, match="another devlegate instance"):
@@ -2711,7 +2693,9 @@ def test_interrupted_recovery_refreshes_stale_product_remote(tmp_path, monkeypat
     git(publisher, "add", "remote-advance.txt")
     git(publisher, "commit", "-m", "advance product remote")
     git(publisher, "push", "origin", "HEAD:main")
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="product remote generation changed"):
         devlegate.retry("T-1")
@@ -2733,14 +2717,14 @@ def test_explicit_retry_recovers_agent_running_with_fresh_identity(
     old_id = devlegate._state["execution_id"]
     seen = []
 
-    def worker(current_workspace, _prompt):
+    def worker(current_workspace, _prompt, **_kwargs):
         seen.append(devlegate._state["execution_id"])
         assert (
             current_workspace.path / "useful-change.txt"
         ).read_text() == "keep this\n"
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert devlegate.retry("T-1") == 1
 
     assert seen and seen[0] != old_id
@@ -2789,7 +2773,9 @@ def test_active_retry_projection_hides_superseded_failure(tmp_path, monkeypatch)
             },
         },
     )
-    monkeypatch.setattr("devlegate.runtime.observe_worker_identity", lambda _: "absent")
+    monkeypatch.setattr(
+        "devlegate.worker_supervisor.observe_worker_identity", lambda _: "absent"
+    )
     observed = []
 
     def stop_during_prepare(plan):
@@ -2833,9 +2819,7 @@ def test_interactive_retry_lists_recoverable_agent_running_without_side_effects(
     assert devlegate._state["phase"] == "agent_running"
 
 
-def test_interactive_retry_selection_recovers_agent_running(
-    tmp_path, monkeypatch
-):
+def test_interactive_retry_selection_recovers_agent_running(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2843,10 +2827,12 @@ def test_interactive_retry_selection_recovers_agent_running(
     persist_agent_running(devlegate, state)
     seen = []
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda *_args: seen.append(devlegate._state["execution_id"])
-        or WorkerRunResult(1, None, None, None),
+        devlegate._workers,
+        "run",
+        lambda *_args, **_kwargs: (
+            seen.append(devlegate._state["execution_id"])
+            or WorkerRunResult(1, None, None, None)
+        ),
     )
     monkeypatch.setattr(os, "isatty", lambda _fd: True)
     monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
@@ -2871,7 +2857,9 @@ def test_explicit_retry_recovers_legacy_published_worktree_at_remote_head(
     assert "execution_start_head" not in devlegate._state
     assert devlegate._state["execution_remote_head"] == workspace.head
     monkeypatch.setattr(
-        devlegate, "_run_worker", lambda *_args: WorkerRunResult(1, None, None, None)
+        devlegate._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
 
     assert devlegate.retry("T-1") == 1
@@ -2895,7 +2883,9 @@ def test_explicit_retry_rejects_legacy_worktree_when_remote_advanced(
     git(workspace.path, "commit", "-m", "remote advance")
     git(workspace.path, "push", "origin", f"HEAD:refs/heads/{workspace.branch}")
     git(workspace.path, "reset", "--hard", recorded_remote_head)
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: pytest.fail("worker"))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker")
+    )
 
     with pytest.raises(DevlegateError, match="remote HEAD changed"):
         devlegate.retry("T-1")
@@ -2918,7 +2908,9 @@ def test_explicit_retry_rejects_worktree_advanced_after_execution_start(
     git(workspace.path, "add", "advanced.txt")
     git(workspace.path, "commit", "-m", "advanced after start")
     calls = []
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="does not match the execution start HEAD"):
         devlegate.retry("T-1")
@@ -2933,13 +2925,13 @@ def test_publication_failure_remains_ambiguous_not_retryable(tmp_path, monkeypat
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "change.txt").write_text("checkpointed\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(
         devlegate,
         "_publish_execution_branch",
@@ -2969,7 +2961,9 @@ def test_explicit_retry_rejects_mismatched_agent_running_ticket(tmp_path, monkey
     persist_agent_running(devlegate, state)
     before = dict(devlegate._state)
     calls = []
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="does not match"):
         devlegate.retry("T-2")
@@ -2994,7 +2988,9 @@ def test_explicit_retry_rejects_unsafe_agent_running_workspace(tmp_path, monkeyp
             ExecutionWorkspaceError("submodule T is dirty")
         ),
     )
-    monkeypatch.setattr(devlegate, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     with pytest.raises(DevlegateError, match="cannot safely recover"):
         devlegate.retry("T-1")
@@ -3014,9 +3010,9 @@ def test_stale_failed_execution_remains_visible_but_not_retryable(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+        devlegate._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(devlegate) == 1
 
@@ -3048,12 +3044,12 @@ def test_clean_local_product_advance_invalidates_retry(tmp_path, monkeypatch):
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     (working / "local.txt").write_text("local advance\n")
     git(working, "add", "local.txt")
@@ -3075,9 +3071,9 @@ def test_dirty_product_blocks_current_retryability(tmp_path, monkeypatch):
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     monkeypatch.setattr(
-        devlegate,
-        "_run_worker",
-        lambda _workspace, _prompt: WorkerRunResult(1, None, None, None),
+        devlegate._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(devlegate) == 1
     (working / "dirty.txt").write_text("uncommitted\n")
@@ -3102,12 +3098,12 @@ def test_retry_cannot_bypass_serial_barrier(
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     control = next((state / "worktrees").glob("*/control"))
     (control / f"kanban/{barrier_state}/T-2.md").write_text(
@@ -3141,12 +3137,12 @@ def test_retry_cannot_replace_persisted_bound_execution(tmp_path, monkeypatch):
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     persisted = dict(devlegate._state)
     devlegate._save_state(
@@ -3180,13 +3176,11 @@ def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         (working / "product.txt").write_text("unexpected\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
 
     control = next((state / "worktrees").glob("*/control"))
@@ -3211,15 +3205,13 @@ def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         (working / "product.txt").write_text("unexpected history\n")
         git(working, "add", "product.txt")
         git(working, "commit", "-m", "unexpected product commit")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
 
     control = next((state / "worktrees").glob("*/control"))
@@ -3243,23 +3235,24 @@ def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         git(working, "switch", "-c", "unexpected-product-branch")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
 
     control = next((state / "worktrees").glob("*/control"))
     reconciliation = devlegate._state["reconciliation"]
     assert reconciliation["status"] == "pending"
-    assert git(
-        next((state / "worktrees").glob("*/work/T-1")),
-        "rev-parse",
-        reconciliation["evidence_ref"],
-    ).stdout.strip() == reconciliation["worker_checkpoint"]
+    assert (
+        git(
+            next((state / "worktrees").glob("*/work/T-1")),
+            "rev-parse",
+            reconciliation["evidence_ref"],
+        ).stdout.strip()
+        == reconciliation["worker_checkpoint"]
+    )
     assert (control / "kanban/todo/T-1.md").exists()
 
 
@@ -3280,15 +3273,13 @@ def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
             )
         return original_git(repo, *args, check=check)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         nonlocal worker_finished
         worker_finished = True
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     monkeypatch.setattr(runtime, "_git", git_with_failed_status)
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
 
     control = next((state / "worktrees").glob("*/control"))
@@ -3312,7 +3303,7 @@ def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         (workspace.path / "partial.txt").write_text("partial\n")
@@ -3320,7 +3311,7 @@ def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
             0, None, WorkerClaim("incomplete", "more remains", ("finish",), ()), None
         )
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     assert run_test_iteration(devlegate) == 0
     assert calls == 1
@@ -3338,15 +3329,13 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         nonlocal calls
         calls += 1
         (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        )
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    monkeypatch.setattr(devlegate, "_run_worker", worker)
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     control = next((state / "worktrees").glob("*/control"))
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")

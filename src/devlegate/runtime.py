@@ -12,13 +12,10 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
-import termios
 import threading
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Callable
 
 from devlegate import __version__
 from devlegate.agent_protocol import (
@@ -55,15 +52,14 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     load_ticket_store,
 )
-from devlegate.worker_egress import (
-    OpenCodeRunResult,
-    WorkerEgressParser,
-    WorkerRunResult,
-)
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
     build_worker_prompt,
+)
+from devlegate.worker_supervisor import (
+    WorkerProcessIdentity,
+    WorkerSupervisor,
 )
 
 
@@ -115,6 +111,8 @@ def _is_git_identity(value: object) -> bool:
         and len(value) == 40
         and all(character in "0123456789abcdef" for character in value.lower())
     )
+
+
 @dataclasses.dataclass(frozen=True)
 class GitObservation:
     branch: str | None
@@ -188,11 +186,7 @@ class BlockedReason:
             }
         return {
             "kind": self.kind,
-            **(
-                {"ticket_id": self.ticket_id}
-                if self.ticket_id is not None
-                else {}
-            ),
+            **({"ticket_id": self.ticket_id} if self.ticket_id is not None else {}),
         }
 
 
@@ -345,9 +339,7 @@ class FailedExecution:
     @property
     def display_reason(self) -> str:
         return (
-            self.reason
-            if self.retryable
-            else (self.nonretryable_reason or "unknown")
+            self.reason if self.retryable else (self.nonretryable_reason or "unknown")
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -417,19 +409,6 @@ def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
     )
 
 
-@dataclasses.dataclass(frozen=True)
-class WorkerProcessIdentity:
-    execution_id: str
-    pid: int
-    pgid: int
-    sid: int
-    boot_id: str
-    start_time: int
-
-    def as_dict(self) -> dict[str, object]:
-        return dataclasses.asdict(self)
-
-
 def _worker_identity_from_value(
     value: object, execution_id: object | None = None
 ) -> WorkerProcessIdentity | None:
@@ -450,7 +429,8 @@ def _worker_identity_from_value(
         not isinstance(value["execution_id"], str)
         or not value["execution_id"]
         or not all(
-            isinstance(value[field], int) and not isinstance(value[field], bool)
+            isinstance(value[field], int)
+            and not isinstance(value[field], bool)
             and value[field] > 0
             for field in ("pid", "pgid", "sid")
         )
@@ -469,87 +449,6 @@ def _worker_identity_from_value(
         value["boot_id"],
         value["start_time"],
     )
-
-
-def _linux_boot_id() -> str:
-    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-
-
-def _linux_process_start_time(pid: int) -> int:
-    stat = Path(f"/proc/{pid}/stat").read_text()
-    closing = stat.rfind(")")
-    if closing < 0:
-        raise DevlegateError("worker process identity is malformed")
-    fields = stat[closing + 2 :].split()
-    try:
-        return int(fields[19])
-    except (IndexError, ValueError) as error:
-        raise DevlegateError("worker process identity is malformed") from error
-
-
-def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentity:
-    if os.name != "posix" or not sys.platform.startswith("linux"):
-        raise DevlegateError("strong worker process identity is unavailable")
-    if process.poll() is not None:
-        raise DevlegateError("worker exited before identity capture")
-    pid = process.pid
-    pgid = os.getpgid(pid)
-    sid = os.getsid(pid)
-    if pid <= 0 or pgid <= 0 or sid <= 0 or pgid != pid or sid != pid:
-        raise DevlegateError("worker process group/session identity is invalid")
-    boot_id = _linux_boot_id()
-    start_time = _linux_process_start_time(pid)
-    if not boot_id or start_time < 0:
-        raise DevlegateError("worker process identity is incomplete")
-    return WorkerProcessIdentity(execution_id, pid, pgid, sid, boot_id, start_time)
-
-
-def _worker_group_exists(pgid: int) -> bool | None:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return None
-    return True
-
-
-def _prove_worker_group_retired(pgid: int) -> bool:
-    """Prove a recorded group is gone without signaling it."""
-    deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
-    while True:
-        observed = _worker_group_exists(pgid)
-        if observed is False:
-            return True
-        if observed is None or time.monotonic() >= deadline:
-            return False
-        time.sleep(WORKER_WAIT_INTERVAL)
-
-
-def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
-    """Classify recorded worker ownership without mutating runtime state."""
-    if os.name != "posix" or not sys.platform.startswith("linux"):
-        return "indeterminate"
-    try:
-        if _linux_boot_id() != identity.boot_id:
-            return "absent"
-        current_start = _linux_process_start_time(identity.pid)
-    except (DevlegateError, OSError):
-        group = _worker_group_exists(identity.pgid)
-        return "absent" if group is False else "indeterminate"
-    try:
-        if (
-            current_start != identity.start_time
-            or os.getpgid(identity.pid) != identity.pgid
-            or os.getsid(identity.pid) != identity.sid
-        ):
-            group = _worker_group_exists(identity.pgid)
-            return "absent" if group is False else "indeterminate"
-    except OSError:
-        return "indeterminate"
-    return "matching-live"
 
 
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
@@ -609,324 +508,7 @@ def _log(message: str) -> None:
         pass
 
 
-@contextmanager
-def _preserve_terminal():
-    terminal_fd = None
-    terminal_state = None
-    for stream in (sys.stdin, sys.stdout, sys.stderr):
-        try:
-            fd = stream.fileno()
-            if not os.isatty(fd):
-                continue
-            terminal_state = termios.tcgetattr(fd)
-            terminal_fd = fd
-            break
-        except (OSError, ValueError):
-            continue
-    try:
-        yield
-    finally:
-        if terminal_fd is not None and terminal_state is not None:
-            try:
-                termios.tcsetattr(terminal_fd, termios.TCSANOW, terminal_state)
-            except OSError as error:
-                _log(f"could not restore terminal state: {error}")
-
-
-def _render_worker_text(text: str) -> str:
-    """Make worker-controlled text inert before it reaches an operator TTY."""
-    rendered: list[str] = []
-    for character in text:
-        codepoint = ord(character)
-        if character in "\n\t":
-            rendered.append(character)
-        elif 0x20 <= codepoint <= 0x7E or character.isprintable():
-            rendered.append(character)
-        elif codepoint <= 0x7F:
-            rendered.append(f"\\x{codepoint:02x}")
-        elif codepoint <= 0x9F:
-            rendered.append(f"\\u{codepoint:04x}")
-        else:
-            rendered.append(f"\\u{codepoint:04x}")
-    return "".join(rendered)
-
-
-_OPENCODE_JSON_TYPES = {
-    "error",
-    "reasoning",
-    "step_finish",
-    "step_start",
-    "text",
-    "tool_use",
-}
-
-
-def _write_worker_text(text: str, stream) -> None:
-    rendered = _render_worker_text(text)
-    if not rendered:
-        return
-    stream.write(rendered)
-    stream.flush()
-
-
-def _extract_error_message(error: object) -> str | None:
-    if isinstance(error, str):
-        return error
-    if not isinstance(error, dict):
-        return None
-    message = error.get("message")
-    if isinstance(message, str):
-        return message
-    data = error.get("data")
-    if isinstance(data, dict):
-        message = data.get("message")
-        if isinstance(message, str):
-            return message
-    name = error.get("name")
-    return name if isinstance(name, str) else None
-
-
-def _write_worker_line(text: str, stream) -> None:
-    _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
-
-
-# Caps raw JSONL events before decode and parsing while leaving normal events intact.
-MAX_STDOUT_EVENT_BYTES = 1024 * 1024
-WORKER_TERMINATION_TIMEOUT = 1.0
-WORKER_WAIT_INTERVAL = 0.05
 OPERATOR_ADMISSION_TIMEOUT = 1.0
-
-
-def _run_opencode(
-    command: list[str],
-    prompt: str,
-    *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    event_handler: Callable[[object], None] | None = None,
-    stop_request: object | None = None,
-    execution_id: str | None = None,
-    worker_identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
-    interruption_handler: Callable[[str], None] | None = None,
-) -> OpenCodeRunResult:
-    """Run OpenCode headlessly and render its worker output as inert text."""
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-    )
-    output_lock = threading.Lock()
-    transport_error: str | None = None
-    prompt_error: str | None = None
-
-    def write(text: str, stream) -> None:
-        with output_lock:
-            _write_worker_text(text, stream)
-
-    def consume_stdout() -> None:
-        nonlocal transport_error
-        assert process.stdout is not None
-        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
-            if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
-                transport_error = "stdout event exceeds maximum size"
-                _log(f"OpenCode protocol error: {transport_error}")
-                if not raw_line.endswith(b"\n"):
-                    while discarded := process.stdout.readline(
-                        MAX_STDOUT_EVENT_BYTES + 1
-                    ):
-                        if discarded.endswith(b"\n"):
-                            break
-                continue
-            try:
-                event = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                transport_error = "invalid JSON event on stdout"
-                _log(f"OpenCode protocol error: {transport_error}")
-                continue
-            if event_handler is not None:
-                event_handler(event)
-            if (
-                not isinstance(event, dict)
-                or event.get("type") not in _OPENCODE_JSON_TYPES
-            ):
-                transport_error = "unsupported event on stdout"
-                _log(f"OpenCode protocol error: {transport_error}")
-                continue
-            event_type = event["type"]
-            if event_type == "text" or event_type == "reasoning":
-                part = event.get("part")
-                if not isinstance(part, dict) or not isinstance(part.get("text"), str):
-                    transport_error = "text event has no text part"
-                    _log(f"OpenCode protocol error: {transport_error}")
-                    continue
-                write(part["text"] + "\n", sys.stdout)
-            elif event_type == "tool_use":
-                part = event.get("part")
-                if (
-                    not isinstance(part, dict)
-                    or not isinstance(part.get("tool"), str)
-                    or not isinstance(part.get("state"), dict)
-                    or part["state"].get("status")
-                    not in {"pending", "running", "completed", "error"}
-                ):
-                    transport_error = "invalid tool event on stdout"
-                    _log(f"OpenCode protocol error: {transport_error}")
-                    continue
-                tool = part["tool"]
-                write(f"OpenCode tool: {tool}\n", sys.stdout)
-                state = part["state"]
-                if state.get("status") == "completed":
-                    output = state.get("output")
-                    if isinstance(output, str):
-                        _write_worker_line(output, sys.stdout)
-                elif state.get("status") == "error":
-                    error = _extract_error_message(state.get("error"))
-                    if error:
-                        _write_worker_line(f"OpenCode tool failed: {error}", sys.stdout)
-            elif event_type == "error":
-                error = _extract_error_message(event.get("error"))
-                if error:
-                    write(f"OpenCode error: {error}\n", sys.stdout)
-
-    def consume_stderr() -> None:
-        assert process.stderr is not None
-        while raw_chunk := process.stderr.read(4096):
-            write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
-
-    stdout_thread = threading.Thread(target=consume_stdout)
-    stderr_thread = threading.Thread(target=consume_stderr)
-    stdout_thread.start()
-    stderr_thread.start()
-    stdin = getattr(process, "stdin", None)
-
-    def deliver_prompt() -> None:
-        nonlocal prompt_error
-        if stdin is None:
-            return
-        try:
-            remaining = prompt.encode("utf-8")
-            while remaining:
-                written = stdin.write(remaining)
-                if not written:
-                    raise OSError("worker stdin accepted no prompt bytes")
-                remaining = remaining[written:]
-            stdin.flush()
-        except (BrokenPipeError, OSError, ValueError) as error:
-            prompt_error = f"worker prompt delivery failed: {error}"
-        finally:
-            try:
-                stdin.close()
-            except (OSError, ValueError):
-                pass
-
-    prompt_thread = threading.Thread(target=deliver_prompt, daemon=True)
-    prompt_thread.start()
-    interruption_kind: str | None = None
-    interruption_error: str | None = None
-    worker_process_group = getattr(process, "pid", None)
-    if worker_process_group is not None:
-        try:
-            worker_process_group = os.getpgid(process.pid)
-        except (OSError, ProcessLookupError):
-            worker_process_group = None
-
-    def interrupt(kind: str) -> None:
-        nonlocal interruption_error, interruption_kind
-        if interruption_kind is not None:
-            return
-        if process.poll() is not None or worker_process_group is None:
-            return
-        try:
-            os.killpg(
-                worker_process_group,
-                signal.SIGINT if kind == "operator_abort" else signal.SIGTERM,
-            )
-        except (OSError, ProcessLookupError):
-            return
-        interruption_kind = kind
-        if interruption_handler is not None:
-            try:
-                interruption_handler(kind)
-            except Exception as error:
-                interruption_error = f"interruption persistence failed: {error}"
-
-    def finish_interrupted() -> int:
-        try:
-            return process.wait(timeout=WORKER_TERMINATION_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            try:
-                if worker_process_group is not None:
-                    os.killpg(worker_process_group, signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                pass
-            return process.wait()
-
-    identity_error: str | None = None
-    if worker_identity_handler is not None and execution_id is not None:
-        if process.poll() is None:
-            try:
-                worker_identity_handler(_capture_worker_identity(process, execution_id))
-            except Exception as error:
-                if process.poll() is None:
-                    identity_error = f"worker identity persistence failed: {error}"
-                    try:
-                        if worker_process_group is not None:
-                            os.killpg(worker_process_group, signal.SIGTERM)
-                    except (OSError, ProcessLookupError):
-                        pass
-
-    if identity_error is not None:
-        returncode = finish_interrupted()
-    elif stop_request is None:
-        try:
-            returncode = process.wait()
-        except KeyboardInterrupt:
-            interrupt("operator_abort")
-            returncode = finish_interrupted()
-    else:
-        while True:
-            try:
-                returncode = process.wait(timeout=WORKER_WAIT_INTERVAL)
-                break
-            except subprocess.TimeoutExpired:
-                kind = getattr(stop_request, "kind", None)
-                if kind in {"operator_abort", "service_shutdown"}:
-                    interrupt(kind)
-                    returncode = finish_interrupted()
-                    break
-    stdout_thread.join()
-    stderr_thread.join()
-    if prompt_thread.is_alive() and stdin is not None:
-        try:
-            stdin.close()
-        except (OSError, ValueError):
-            pass
-    prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
-    if identity_error is not None:
-        transport_error = identity_error
-    elif interruption_error is not None:
-        transport_error = interruption_error
-    elif prompt_error is not None and interruption_kind is None:
-        transport_error = transport_error or prompt_error
-    group_retired = (
-        True
-        if worker_identity_handler is None
-        else (
-            worker_process_group is not None
-            and _prove_worker_group_retired(worker_process_group)
-        )
-    )
-    if not group_retired:
-        transport_error = transport_error or (
-            "worker leader exited but execution process group is still alive"
-        )
-    return OpenCodeRunResult(
-        returncode, transport_error, interruption_kind, group_retired
-    )
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -1038,12 +620,10 @@ class ServiceEngine:
         self._service_wake = threading.Event()
         self._service_shutdown = threading.Event()
         self._foreground_abort_requested = False
-        self._worker_identity_handler: (
-            Callable[[WorkerProcessIdentity], None] | None
-        ) = None
-        self._worker_execution_id: str | None = None
+        self._workers = WorkerSupervisor(
+            self.opencode_bin, self.opencode_model, self.opencode_agent
+        )
         self._owned_execution_id: str | None = None
-        self._worker_interruption_handler: Callable[[str], None] | None = None
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -1145,9 +725,7 @@ class ServiceEngine:
         """Return retry candidates from the current owner-published view."""
         return self.published_retry_candidates_view()
 
-    def submit_retry(
-        self, ticket_id: str, *, request_id: str
-    ) -> dict[str, object]:
+    def submit_retry(self, ticket_id: str, *, request_id: str) -> dict[str, object]:
         """Submit one retry intent and wait only for owner-side admission."""
         return self._submit_operator_command(
             method="retry",
@@ -1222,10 +800,7 @@ class ServiceEngine:
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
                 if existing.request_id == request_id:
-                    if (
-                        existing.method != method
-                        or existing.fingerprint != fingerprint
-                    ):
+                    if existing.method != method or existing.fingerprint != fingerprint:
                         raise DevlegateError(
                             f"request id collision: {method} request semantics differ"
                         )
@@ -1280,10 +855,7 @@ class ServiceEngine:
                 self._state.get("worker_identity"),
                 self._state.get("execution_id"),
             )
-            if (
-                identity is not None
-                and observe_worker_identity(identity) != "absent"
-            ):
+            if identity is not None and self._workers.observe(identity) != "absent":
                 raise DevlegateError("service worker is already running")
             stage = self._state.get("execution_stage")
             if stage not in {
@@ -1577,9 +1149,7 @@ class ServiceEngine:
 
     def _operator_command_pending(self) -> bool:
         with self._operator_command_lock:
-            return bool(
-                self._operator_command is not None
-            )
+            return bool(self._operator_command is not None)
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
@@ -1590,9 +1160,7 @@ class ServiceEngine:
         """Return proof of this process-owned execution, if it is provable."""
         self._assert_repository_owner()
         state = self._state
-        if (
-            state.get("phase") not in {"agent_pending", "agent_running"}
-        ):
+        if state.get("phase") not in {"agent_pending", "agent_running"}:
             return None
         execution_id = state.get("execution_id")
         ticket_id = state.get("execution_ticket_id")
@@ -1612,15 +1180,12 @@ class ServiceEngine:
         }
         if state.get("execution_stage") != "worker-running":
             return evidence
-        if (
-            self._worker_execution_id != execution_id
-            or self._worker_identity_handler is None
-        ):
+        if not self._workers.owns(execution_id):
             return None
         identity = _worker_identity_from_value(
             state.get("worker_identity"), execution_id
         )
-        if identity is None or observe_worker_identity(identity) != "matching-live":
+        if identity is None or self._workers.observe(identity) != "matching-live":
             return None
         return {**evidence, "identity_state": "matching-live"}
 
@@ -1652,9 +1217,7 @@ class ServiceEngine:
                     else None
                 ),
                 worker_running=(
-                    current.worker_running
-                    if worker_running is None
-                    else worker_running
+                    current.worker_running if worker_running is None else worker_running
                 ),
                 selected_ticket_id=(
                     selected_ticket_id
@@ -1685,8 +1248,8 @@ class ServiceEngine:
         if snapshot.lifecycle_integration is not None:
             blocked_reason = snapshot.plan.reason
         worker_running = self.service_snapshot().worker_running
-        lifecycle = "worker" if worker_running else (
-            "blocked" if blocked_reason else "ready"
+        lifecycle = (
+            "worker" if worker_running else ("blocked" if blocked_reason else "ready")
         )
         if worker_running:
             blocked_reason = None
@@ -1702,8 +1265,7 @@ class ServiceEngine:
         ]
         interrupted = self._interrupted_retry_candidate()
         if interrupted is not None and all(
-            candidate["id"] != interrupted.ticket_id
-            for candidate in retry_candidates
+            candidate["id"] != interrupted.ticket_id for candidate in retry_candidates
         ):
             retry_candidates.append(
                 {
@@ -1964,9 +1526,7 @@ class ServiceEngine:
         observed_head = (
             head_result.stdout.strip() if head_result.returncode == 0 else None
         )
-        status_result = _git(
-            self.repo, "status", "--porcelain", check=False
-        )
+        status_result = _git(self.repo, "status", "--porcelain", check=False)
         if status_result.returncode:
             raise DevlegateError(
                 "cannot verify product checkout after worker execution; "
@@ -2311,8 +1871,7 @@ class ServiceEngine:
                 "evidence_ref",
             )
             if not all(
-                isinstance(reconciliation.get(field), str)
-                and reconciliation[field]
+                isinstance(reconciliation.get(field), str) and reconciliation[field]
                 for field in required_reconciliation
             ):
                 raise DevlegateError("invalid reconciliation identity")
@@ -2382,10 +1941,11 @@ class ServiceEngine:
         interruption_kind = state.get("execution_interruption_kind")
         if interruption_kind is not None and (
             not isinstance(interruption_kind, str)
-            or interruption_kind not in {
-            "operator_abort",
-            "service_shutdown",
-            "process_loss",
+            or interruption_kind
+            not in {
+                "operator_abort",
+                "service_shutdown",
+                "process_loss",
             }
         ):
             raise DevlegateError("invalid execution interruption kind")
@@ -2397,13 +1957,16 @@ class ServiceEngine:
                 raise DevlegateError(
                     "accepted integration state is only valid while idle"
                 )
-            if not isinstance(accepted_integration, dict) or set(
-                accepted_integration
-            ) != {"ticket_id", "checkpoint", "control_head"} or not (
-                isinstance(accepted_integration.get("ticket_id"), str)
-                and bool(accepted_integration["ticket_id"])
-                and _is_git_identity(accepted_integration.get("checkpoint"))
-                and _is_git_identity(accepted_integration.get("control_head"))
+            if (
+                not isinstance(accepted_integration, dict)
+                or set(accepted_integration)
+                != {"ticket_id", "checkpoint", "control_head"}
+                or not (
+                    isinstance(accepted_integration.get("ticket_id"), str)
+                    and bool(accepted_integration["ticket_id"])
+                    and _is_git_identity(accepted_integration.get("checkpoint"))
+                    and _is_git_identity(accepted_integration.get("control_head"))
+                )
             ):
                 raise DevlegateError("invalid accepted integration state")
         if phase == "idle":
@@ -2453,16 +2016,21 @@ class ServiceEngine:
             raise DevlegateError("invalid execution stage")
         if phase == "agent_running" and stage == "worker-running" and identity is None:
             raise DevlegateError("worker-running state requires worker identity")
-        if phase == "agent_running" and stage in {
-            "worker-launch",
-            "post-worker",
-            "pre-checkpoint",
-            "checkpointing",
-            "post-checkpoint",
-            "publishing",
-            "post-publication",
-            "lifecycle",
-        } and identity is not None:
+        if (
+            phase == "agent_running"
+            and stage
+            in {
+                "worker-launch",
+                "post-worker",
+                "pre-checkpoint",
+                "checkpointing",
+                "post-checkpoint",
+                "publishing",
+                "post-publication",
+                "lifecycle",
+            }
+            and identity is not None
+        ):
             raise DevlegateError("later execution stage cannot retain worker identity")
         if phase == "agent_running" and stage in {
             "checkpointing",
@@ -2496,8 +2064,7 @@ class ServiceEngine:
         )
         if phase in {"agent_pending", "agent_running"} and (
             not all(
-                field in state
-                for field in (*execution_fields, "execution_remote_head")
+                field in state for field in (*execution_fields, "execution_remote_head")
             )
             or not all(
                 isinstance(state.get(field), str) and state[field]
@@ -2694,14 +2261,9 @@ class ServiceEngine:
         finally:
             self._owned_execution_id = None
 
-    def _run_iteration_body(
-        self, authorization: ExecutionAuthorization | None
-    ) -> int:
+    def _run_iteration_body(self, authorization: ExecutionAuthorization | None) -> int:
         self._publish_service_snapshot(lifecycle="processing")
-        if (
-            self._stop_requested()
-            and self._state.get("phase") != "merge_pending"
-        ):
+        if self._stop_requested() and self._state.get("phase") != "merge_pending":
             return 0
         self._workflow_validation_succeeded = False
         branch = self._git_runtime(
@@ -2760,9 +2322,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "explicit retry cannot also authorize automatic resume"
                 )
-            authorization = ExecutionAuthorization(
-                automatic_ticket, "automatic_resume"
-            )
+            authorization = ExecutionAuthorization(automatic_ticket, "automatic_resume")
         status = self._git_runtime(self.repo, "status", "--porcelain").stdout
         dirty_changed = self._observe_worktree(status)
         if status:
@@ -2784,12 +2344,12 @@ class ServiceEngine:
         had_remote_change = False
         local_ahead = False
         fetch = self._git_runtime(
-                self.repo,
-                "fetch",
-                "--prune",
-                self.remote_name,
-                self.remote_branch,
-                check=False,
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
         )
         if fetch.returncode:
             _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
@@ -3091,9 +2651,7 @@ class ServiceEngine:
             product=execution_plan.code,
             control=execution_plan.control,
             blocked_reason=(
-                execution_plan.reason
-                if execution_plan.action == "blocked"
-                else None
+                execution_plan.reason if execution_plan.action == "blocked" else None
             ),
         )
         if self._stop_before_admission():
@@ -3118,8 +2676,12 @@ class ServiceEngine:
                     if authorization.is_automatic_resume
                     else "explicit retry of current failed execution"
                 ),
-                retry_ticket.id, retry_ticket.title, retry_ticket.state, False,
-                execution_plan.code, execution_plan.control,
+                retry_ticket.id,
+                retry_ticket.title,
+                retry_ticket.state,
+                False,
+                execution_plan.code,
+                execution_plan.control,
             )
         if execution_plan.action == "blocked":
             raise DevlegateError(execution_plan.reason)
@@ -3315,8 +2877,10 @@ class ServiceEngine:
                         f"ticket {authorization.ticket_id} is no longer the current "
                         "runnable ticket"
                     )
-            if authorization is not None and authorization.is_automatic_resume and (
-                selected_ticket.id != authorization.ticket_id
+            if (
+                authorization is not None
+                and authorization.is_automatic_resume
+                and (selected_ticket.id != authorization.ticket_id)
             ):
                 raise DevlegateError(
                     "automatic resume ticket is no longer the current runnable ticket"
@@ -3341,9 +2905,7 @@ class ServiceEngine:
                 else control_head
             )
             execution_base_head = (
-                self._state["execution_base_head"]
-                if existing_lineage
-                else local_head
+                self._state["execution_base_head"] if existing_lineage else local_head
             )
             execution_remote_head = (
                 self._state.get("execution_remote_head")
@@ -3403,9 +2965,7 @@ class ServiceEngine:
         if authorization is not None and authorization.is_explicit_retry:
             failures = self._state.get("failed_executions", {})
             failure = (
-                failures.get(selected_ticket.id)
-                if isinstance(failures, dict)
-                else None
+                failures.get(selected_ticket.id) if isinstance(failures, dict) else None
             )
             retrying_interrupted = (
                 isinstance(failure, dict) and failure.get("interrupted") is True
@@ -3413,10 +2973,7 @@ class ServiceEngine:
         if (
             bound_execution
             or resume_required
-            or (
-                authorization is not None
-                and authorization.is_automatic_resume
-            )
+            or (authorization is not None and authorization.is_automatic_resume)
             or (
                 authorization is not None
                 and authorization.is_explicit_retry
@@ -3452,32 +3009,31 @@ class ServiceEngine:
         )
         self._owned_execution_id = execution_id
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
-        self._worker_identity_handler = lambda identity: self._save_state(
-            "agent_running",
-            execution_stage="worker-running",
-            worker_identity=identity.as_dict(),
-        )
-        self._worker_execution_id = execution_id
-        self._worker_interruption_handler = lambda kind: self._save_state(
-            "agent_running", execution_interruption_kind=kind
-        )
         worker_returned = False
         try:
-            worker_run = self._run_worker(workspace, prompt)
+            worker_run = self._workers.run(
+                workspace,
+                prompt,
+                execution_id=execution_id,
+                stop_request=self._stop_event,
+                identity_handler=lambda identity: self._save_state(
+                    "agent_running",
+                    execution_stage="worker-running",
+                    worker_identity=identity.as_dict(),
+                ),
+                interruption_handler=lambda kind: self._save_state(
+                    "agent_running", execution_interruption_kind=kind
+                ),
+            )
             worker_returned = True
         finally:
-            self._worker_identity_handler = None
-            self._worker_execution_id = None
-            self._worker_interruption_handler = None
             if worker_returned and worker_run.worker_group_retired:
                 self._save_state(
                     "agent_running",
                     execution_stage="post-worker",
                     worker_identity=None,
                 )
-            self._publish_service_snapshot(
-                lifecycle="processing", worker_running=False
-            )
+            self._publish_service_snapshot(lifecycle="processing", worker_running=False)
         if not worker_run.worker_group_retired:
             raise DevlegateError(
                 "worker leader exited but execution process group is still alive"
@@ -3726,14 +3282,10 @@ class ServiceEngine:
             }:
                 failure["interrupted"] = True
                 failure["interruption_kind"] = interruption_kind
-                failure["reason"] = (
-                    "interrupted: "
-                    + interruption_kind.replace("_", " ")
+                failure["reason"] = "interrupted: " + interruption_kind.replace(
+                    "_", " "
                 )
-                if (
-                    interruption_kind == "operator_abort"
-                    and self._stop_event is None
-                ):
+                if interruption_kind == "operator_abort" and self._stop_event is None:
                     self._foreground_abort_requested = True
             prior_failure = failed_executions.get(report.ticket_id)
             if (
@@ -3806,9 +3358,7 @@ class ServiceEngine:
                 "execution plan has no complete revision binding"
             )
         same_ticket = self._state.get("execution_ticket_id") == plan.ticket_id
-        bound_base = (
-            self._state.get("execution_base_head") if same_ticket else None
-        )
+        bound_base = self._state.get("execution_base_head") if same_ticket else None
         bound_control = (
             self._state.get("execution_control_head")
             if same_ticket
@@ -3940,7 +3490,8 @@ class ServiceEngine:
         expected_branch = f"devlegate/work/{ticket_id}"
         remote_head = self._execution_remote_head(expected_branch)
         matches = [
-            report for report in reports
+            report
+            for report in reports
             if report.execution_branch == expected_branch
             and isinstance(report.workspace_head, str)
             and report.workspace_head == remote_head
@@ -3989,6 +3540,7 @@ class ServiceEngine:
         if not fields:
             raise WorkflowBlockedError("configured product branch is unavailable")
         product_head = fields[0]
+
         def is_ancestor(older: str, newer: str) -> bool:
             return (
                 _git(
@@ -4039,9 +3591,7 @@ class ServiceEngine:
         current = _git(self.repo, "rev-parse", "HEAD", check=False)
         status = _git(self.repo, "status", "--porcelain", check=False)
         if current.returncode or status.returncode or status.stdout:
-            raise WorkflowBlockedError(
-                "product checkout is not safely synchronized"
-            )
+            raise WorkflowBlockedError("product checkout is not safely synchronized")
         if current.stdout.strip() != checkpoint:
             fetch = _git(
                 self.repo,
@@ -4202,9 +3752,7 @@ class ServiceEngine:
     def _accepted_integration_commit_is_exact(
         self, commit: str, ticket_id: str, expected_parent: str
     ) -> bool:
-        parent = _git(
-            self.control_worktree, "rev-parse", f"{commit}^", check=False
-        )
+        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
         if parent.returncode or parent.stdout.strip() != expected_parent:
             return False
         names = _git(
@@ -4342,9 +3890,7 @@ class ServiceEngine:
             "execution_path": report.execution_path,
             "code_base_head": report.code_base_head,
         }
-        if any(
-            not isinstance(value, str) or not value for value in expected.values()
-        ):
+        if any(not isinstance(value, str) or not value for value in expected.values()):
             raise WorkflowBlockedError(
                 "persisted lifecycle execution binding is incomplete"
             )
@@ -4373,8 +3919,10 @@ class ServiceEngine:
         observed_product = _git(
             self.repo, "rev-parse", "--verify", product_ref, check=False
         )
-        if product_fetch.returncode or observed_product.returncode or (
-            observed_product.stdout.strip() != remote_head
+        if (
+            product_fetch.returncode
+            or observed_product.returncode
+            or (observed_product.stdout.strip() != remote_head)
         ):
             raise WorkflowBlockedError(
                 "product checkout or remote changed before execution recovery"
@@ -4386,9 +3934,10 @@ class ServiceEngine:
         base_head = state.get("execution_base_head")
         branch = state.get("execution_branch")
         path = state.get("execution_path")
-        if not all(isinstance(value, str) and value for value in (
-            ticket_id, base_head, branch, path
-        )):
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, base_head, branch, path)
+        ):
             raise WorkflowBlockedError(
                 "execution workspace recovery binding is incomplete"
             )
@@ -4439,9 +3988,7 @@ class ServiceEngine:
         )
         if lineage.returncode or lineage.stdout.splitlines() != [commit]:
             return False
-        subject = _git(
-            workspace.path, "log", "-1", "--format=%s", commit, check=False
-        )
+        subject = _git(workspace.path, "log", "-1", "--format=%s", commit, check=False)
         if subject.returncode or subject.stdout.rstrip("\r\n") != (
             f"Devlegate checkpoint {self._state['execution_ticket_id']} "
             f"{self._state['execution_id']}"
@@ -4588,12 +4135,8 @@ class ServiceEngine:
             return None
         return recovered if recovered.as_dict() == report.as_dict() else None
 
-    def _lifecycle_commit_is_exact(
-        self, commit: str, report: ExecutionReport
-    ) -> bool:
-        parent = _git(
-            self.control_worktree, "rev-parse", f"{commit}^", check=False
-        )
+    def _lifecycle_commit_is_exact(self, commit: str, report: ExecutionReport) -> bool:
+        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
         if parent.returncode:
             return False
         parent_head = parent.stdout.strip()
@@ -4669,9 +4212,7 @@ class ServiceEngine:
     def _prove_unpublished_lifecycle_lineage(
         self, commit: str, remote_head: str, report: ExecutionReport
     ) -> None:
-        parent = _git(
-            self.control_worktree, "rev-parse", f"{commit}^", check=False
-        )
+        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
         if parent.returncode:
             raise WorkflowBlockedError("unpublished lifecycle parent is unavailable")
         parent_head = parent.stdout.strip()
@@ -4793,7 +4334,8 @@ class ServiceEngine:
             )
         if report.result.conclusion == "completed":
             boundary = tuple(
-                item for item in ticket_store.tickets
+                item
+                for item in ticket_store.tickets
                 if item.state in {"review", "accepted"} and item.id != ticket.id
             )
             if boundary:
@@ -4934,109 +4476,6 @@ class ServiceEngine:
         raise WorkflowBlockedError(
             "control lifecycle reconciliation retry bound exceeded"
         )
-
-    def _run_worker(
-        self, workspace: ExecutionWorkspace, prompt: str
-    ) -> WorkerRunResult:
-        """Run a worker only in the validated execution workspace."""
-        if not isinstance(workspace, ExecutionWorkspace):
-            raise TypeError("worker workspace must be ExecutionWorkspace")
-        if not isinstance(prompt, str):
-            raise TypeError("worker prompt must be text")
-        execution_path = workspace.path.resolve()
-        command = [
-            self.opencode_bin,
-            "run",
-            "--dir",
-            str(execution_path),
-            "--format",
-            "json",
-            "--model",
-            self.opencode_model,
-        ]
-        if self.opencode_agent:
-            command.extend(("--agent", self.opencode_agent))
-        parser = WorkerEgressParser()
-        config_dir = Path(tempfile.mkdtemp(prefix="devlegate-opencode-"))
-        tool_dir = config_dir / "tools"
-        tool_dir.mkdir()
-        (tool_dir / "devlegate_report.ts").write_text(
-            '''import { tool } from "@opencode-ai/plugin"
-
-export default tool({
-  description: "Report the worker's semantic claim to Devlegate.",
-  args: {
-    outcome: tool.schema.enum(["completed", "incomplete", "blocked"]),
-    summary: tool.schema.string(),
-    remaining: tool.schema.array(tool.schema.string()),
-    questions: tool.schema.array(tool.schema.string()),
-  },
-  async execute() {
-    return "devlegate_report accepted"
-  },
-})
-'''
-        )
-        config = {
-            "$schema": "https://opencode.ai/config.json",
-            "permission": {
-                "external_directory": {
-                    "*": "deny",
-                    f"{execution_path}/**": "allow",
-                }
-            },
-        }
-        environment = os.environ.copy()
-        environment["PWD"] = str(execution_path)
-        environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
-        environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-            config, sort_keys=True
-        )
-        try:
-            stop_request = getattr(self, "_stop_event", None)
-            identity_handler = getattr(self, "_worker_identity_handler", None)
-            execution_id = getattr(self, "_worker_execution_id", None)
-            interruption_handler = getattr(
-                self, "_worker_interruption_handler", None
-            )
-            opencode_result = _run_opencode(
-                command,
-                prompt,
-                cwd=execution_path,
-                env=environment,
-                event_handler=parser.consume,
-                **(
-                    {"stop_request": stop_request}
-                    if stop_request is not None
-                    else {}
-                ),
-                **(
-                    {
-                        "execution_id": execution_id,
-                        "worker_identity_handler": identity_handler,
-                    }
-                    if identity_handler is not None and execution_id is not None
-                    else {}
-                ),
-                **(
-                    {"interruption_handler": interruption_handler}
-                    if interruption_handler is not None
-                    else {}
-                ),
-            )
-            claim, egress_error = parser.finish()
-            return WorkerRunResult(
-                opencode_result.process_returncode,
-                opencode_result.transport_error,
-                claim,
-                egress_error,
-                opencode_result.interruption_kind,
-                opencode_result.worker_group_retired,
-            )
-        except OSError as error:
-            return WorkerRunResult(-1, str(error), None, None)
-        finally:
-            shutil.rmtree(config_dir, ignore_errors=True)
 
     def serve(
         self,
@@ -5213,9 +4652,7 @@ export default tool({
                                     worker_running=False,
                                     blocked_reason=str(error),
                                 )
-                            self._iteration_diagnostic = (
-                                f"execution failed: {error}"
-                            )
+                            self._iteration_diagnostic = f"execution failed: {error}"
                             status = 1
                         else:
                             raise
@@ -5262,7 +4699,7 @@ export default tool({
                     if not self.service_snapshot().worker_running:
                         self._publish_service_snapshot(
                             lifecycle="blocked" if workflow_blocked else "ready"
-                    )
+                        )
                     return status
                 if stop_event is not None:
                     if self._wait_for_service_event(
@@ -5412,7 +4849,8 @@ export default tool({
                     invalid_reason is None,
                     invalid_reason,
                     metadata.get("interruption_kind")
-                    if metadata.get("interruption_kind") in {
+                    if metadata.get("interruption_kind")
+                    in {
                         "operator_abort",
                         "service_shutdown",
                         "process_loss",
@@ -5671,9 +5109,7 @@ export default tool({
             observation=git_observation,
         )
         admission_reason = (
-            None
-            if plan.action == "run-worker" and not plan.bound
-            else plan.reason
+            None if plan.action == "run-worker" and not plan.bound else plan.reason
         )
         failures = state.get("failed_executions", {})
         failed_executions = self._evaluate_failed_executions(
@@ -5703,9 +5139,7 @@ export default tool({
             if bound_ticket_id is not None and bound_ticket_id in ticket_store.by_id
             else None
         )
-        eligible = (
-            runnable if plan.action == "run-worker" and not plan.bound else ()
-        )
+        eligible = runnable if plan.action == "run-worker" and not plan.bound else ()
         eligible_ids = {ticket_id for ticket_id, _title in eligible}
         pre_barrier = self._admission_barrier(
             state, ticket_store, dirty, branch_ok, code
@@ -5768,9 +5202,7 @@ export default tool({
                 blocked_entries.append((ticket.id, title, blocked_reason))
             elif ticket.id not in eligible_ids:
                 assert global_block_reason is not None
-                blocked_entries.append(
-                    (ticket.id, ticket.title, global_block_reason)
-                )
+                blocked_entries.append((ticket.id, ticket.title, global_block_reason))
         return StatusSnapshot(
             phase=str(state["phase"]),
             bound_ticket_id=bound_ticket_id,
@@ -5855,7 +5287,7 @@ export default tool({
                         state.get("worker_identity"), state.get("execution_id")
                     )
                     if identity_value is not None:
-                        observation = observe_worker_identity(identity_value)
+                        observation = self._workers.observe(identity_value)
                         if observation == "matching-live":
                             reason = (
                                 "persisted worker ownership is matching-live; "
@@ -6039,7 +5471,7 @@ export default tool({
                 "previous worker ownership cannot be proven absent; duplicate "
                 "launch refused"
             )
-        observation = observe_worker_identity(identity)
+        observation = self._workers.observe(identity)
         if observation == "absent":
             return
         if observation == "matching-live":
@@ -6145,13 +5577,8 @@ export default tool({
             self._validate_control_reconcile_admission(from_head, to_head)
             # Re-observe immediately before preserving evidence or changing the branch.
             self._validate_control_reconcile_admission(from_head, to_head)
-            evidence = (
-                "refs/devlegate/recovery/control/"
-                f"{from_head}-{to_head}"
-            )
-            existing = _git(
-                self.repo, "rev-parse", "--verify", evidence, check=False
-            )
+            evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
+            existing = _git(self.repo, "rev-parse", "--verify", evidence, check=False)
             if existing.returncode == 0:
                 if existing.stdout.strip() != from_head:
                     raise DevlegateError(
@@ -6171,9 +5598,7 @@ export default tool({
                         "control recovery evidence ref could not be created"
                     )
 
-            moved = _git(
-                self.control_worktree, "reset", "--hard", to_head, check=False
-            )
+            moved = _git(self.control_worktree, "reset", "--hard", to_head, check=False)
             if moved.returncode:
                 raise DevlegateError(
                     f"control lineage adoption failed: {moved.stderr.strip()}"
@@ -6239,12 +5664,11 @@ export default tool({
                     "the original base"
                 )
             evidence = str(reconciliation["evidence_ref"])
-            preserved = _git(
-                self.repo, "rev-parse", "--verify", evidence, check=False
-            )
-            if preserved.returncode or preserved.stdout.strip() != reconciliation[
-                "worker_checkpoint"
-            ]:
+            preserved = _git(self.repo, "rev-parse", "--verify", evidence, check=False)
+            if (
+                preserved.returncode
+                or preserved.stdout.strip() != reconciliation["worker_checkpoint"]
+            ):
                 raise DevlegateError("preserved worker checkpoint evidence changed")
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket_id
@@ -6306,9 +5730,7 @@ export default tool({
             updated = self._execution_workspace_for_recovery()
             if updated.dirty or updated.head == target:
                 raise DevlegateError("reconciled execution lineage is invalid")
-            parent = _git(
-                updated.path, "rev-parse", "--verify", "HEAD^", check=False
-            )
+            parent = _git(updated.path, "rev-parse", "--verify", "HEAD^", check=False)
             if parent.returncode or parent.stdout.strip() != target:
                 raise DevlegateError("reconciled execution base proof failed")
             resolved = {
@@ -6502,7 +5924,7 @@ export default tool({
         )
         if stage == "worker-running":
             assert identity is not None
-            observation = observe_worker_identity(identity)
+            observation = self._workers.observe(identity)
             if observation == "matching-live":
                 reason = (
                     "previous Devlegate owner was lost; execution worker is still "
@@ -6968,8 +6390,8 @@ export default tool({
             snapshot.plan.reason if snapshot.plan.action == "blocked" else None
         )
         worker_running = self.service_snapshot().worker_running
-        lifecycle = "worker" if worker_running else (
-            "blocked" if blocked_reason else "ready"
+        lifecycle = (
+            "worker" if worker_running else ("blocked" if blocked_reason else "ready")
         )
         if worker_running:
             blocked_reason = None
@@ -6985,6 +6407,7 @@ export default tool({
         self, *, emit_output: bool = False
     ) -> tuple[int, dict[str, object]]:
         """Run read-only configuration and checkout diagnostics."""
+
         def write(*args: object) -> None:
             if emit_output:
                 print(*args)
@@ -7041,8 +6464,7 @@ export default tool({
             ("repository root", self.repo.is_dir(), str(self.repo)),
             (
                 "product branch",
-                bool(self.current_branch)
-                and self.current_branch == self.remote_branch,
+                bool(self.current_branch) and self.current_branch == self.remote_branch,
                 f"current={self.current_branch or '<detached>'}, "
                 f"configured={self.remote_branch or '<unset>'}",
             ),

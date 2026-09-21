@@ -49,9 +49,7 @@ from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 def make_engine(tmp_path, monkeypatch, state_override=None):
     working, config, state = control_fixture(tmp_path)
     if state_override is not None:
-        config.write_text(
-            config.read_text().replace(str(state), str(state_override))
-        )
+        config.write_text(config.read_text().replace(str(state), str(state_override)))
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     return ServiceEngine(config), state
@@ -182,14 +180,14 @@ def test_reconcile_resume_runs_full_live_owner_path(
     monkeypatch.chdir(working)
     engine = ServiceEngine(config)
 
-    def initial_worker(workspace, _prompt):
+    def initial_worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", initial_worker)
+    monkeypatch.setattr(engine._workers, "run", initial_worker)
     assert run_test_iteration(engine) == 1
     reconciliation = dict(engine._state["reconciliation"])
     checkpoint = reconciliation["worker_checkpoint"]
@@ -210,19 +208,20 @@ def test_reconcile_resume_runs_full_live_owner_path(
     monkeypatch.setattr(engine, "_reconcile_resume_owned", resume)
     if retained_report:
         monkeypatch.setattr(
-            engine,
-            "_run_worker",
-            lambda *_args: pytest.fail("retained resume launched a worker"),
+            engine._workers,
+            "run",
+            lambda *_args, **_kwargs: pytest.fail("retained resume launched a worker"),
         )
     else:
-        def resumed_worker(workspace, prompt):
+
+        def resumed_worker(workspace, prompt, **_kwargs):
             assert "Continue the existing implementation" in prompt
             assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == checkpoint
             return WorkerRunResult(
                 0, None, WorkerClaim("completed", "validated", (), ()), None
             )
 
-        monkeypatch.setattr(engine, "_run_worker", resumed_worker)
+        monkeypatch.setattr(engine._workers, "run", resumed_worker)
 
     authority = engine._lock()
     server = UnixIPCServer(engine, engine.ipc_socket_path)
@@ -291,14 +290,14 @@ def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
     monkeypatch.chdir(working)
     engine = ServiceEngine(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (working / "dirty-product.txt").write_text("operator\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert run_test_iteration(engine) == 1
     reconciliation = dict(engine._state["reconciliation"])
     checkpoint = reconciliation["worker_checkpoint"]
@@ -317,9 +316,11 @@ def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
     assert restarted.plan_view().action == "blocked"
     assert "recovery in progress" in restarted.plan_view().reason
     monkeypatch.setattr(
-        restarted,
-        "_run_worker",
-        lambda *_args: pytest.fail("ordinary worker launched before recovery"),
+        restarted._workers,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "ordinary worker launched before recovery"
+        ),
     )
     recovered = threading.Event()
     original_resume = restarted._reconcile_resume_owned
@@ -462,8 +463,7 @@ def test_many_read_only_clients_overlap_without_mutating_runtime(
     try:
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = [
-                pool.submit(call, "status", f"status-{index}")
-                for index in range(3)
+                pool.submit(call, "status", f"status-{index}") for index in range(3)
             ]
             futures.append(pool.submit(call, "plan", "plan-1"))
             futures.append(pool.submit(call, "ping", "ping-1"))
@@ -619,9 +619,7 @@ def test_distinct_projects_share_state_dir_without_socket_collision(
     working_b, config_b, _state_b = control_fixture(project_b)
     for config in (config_a, config_b):
         config.write_text(
-            config.read_text().replace(
-                str(config.parent / "state"), str(shared_state)
-            )
+            config.read_text().replace(str(config.parent / "state"), str(shared_state))
         )
     assert invoke(working_a, "control", "init", config=config_a).returncode == 0
     assert invoke(working_b, "control", "init", config=config_b).returncode == 0
@@ -677,9 +675,7 @@ def test_default_like_linux_state_path_fits_socket_limit(tmp_path, monkeypatch):
     assert len(str(path).encode()) <= UNIX_SOCKET_PATH_MAX_BYTES
 
 
-def test_excessively_long_socket_path_fails_as_devlegate_error(
-    tmp_path, monkeypatch
-):
+def test_excessively_long_socket_path_fails_as_devlegate_error(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     long_state = Path("/") / ("state-" + "x" * 120)
     server = UnixIPCServer(
@@ -710,9 +706,7 @@ def test_fallback_socket_directory_is_removed_after_owned_socket_stop(
     assert not fallback_directory.exists()
 
 
-def test_fallback_socket_directory_keeps_unrelated_entry(
-    tmp_path, monkeypatch
-):
+def test_fallback_socket_directory_keeps_unrelated_entry(tmp_path, monkeypatch):
     long_state = tmp_path / ("state-" + "y" * 80)
     engine, _state = make_engine(tmp_path, monkeypatch, long_state)
     fallback_directory = engine.ipc_socket_path.parent
@@ -868,9 +862,7 @@ def test_foreign_socket_directory_owner_fails_closed(
         UnixIPCServer(engine, engine.ipc_socket_path).start()
 
 
-def test_foreign_socket_owner_fails_closed(
-    tmp_path, monkeypatch, short_state_dir
-):
+def test_foreign_socket_owner_fails_closed(tmp_path, monkeypatch, short_state_dir):
     engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     path = engine.ipc_socket_path
     path.parent.mkdir(parents=True)
@@ -1363,7 +1355,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
     monkeypatch.chdir(working)
     engine = ServiceEngine(config)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker work\n")
         (working / "product-change.txt").write_text("product B\n")
         git(working, "add", "product-change.txt")
@@ -1373,7 +1365,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert run_test_iteration(engine) == 1
     reconciliation = engine._state["reconciliation"]
     target = reconciliation["observed_product"]
@@ -1568,7 +1560,7 @@ def test_matching_live_worker_rejects_retry_without_queueing(
         worker_identity=identity,
     )
     monkeypatch.setattr(
-        "devlegate.runtime.observe_worker_identity", lambda _: "matching-live"
+        "devlegate.worker_supervisor.observe_worker_identity", lambda _: "matching-live"
     )
 
     engine.begin_hosted_owner()
@@ -1694,9 +1686,10 @@ def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
     assert restarted._state["mutable_receipts"]["resume-request"]["accepted"] is True
     assert restarted._state["reconciliation"]["status"] == "resolving"
     assert restarted._state["reconciliation"]["resolution"] == "resume"
-    assert restarted.submit_reconcile_resume(
-        "T-1", request_id="resume-request"
-    ) == {"accepted": True, "ticket_id": "T-1"}
+    assert restarted.submit_reconcile_resume("T-1", request_id="resume-request") == {
+        "accepted": True,
+        "ticket_id": "T-1",
+    }
     assert restarted._state["reconciliation"]["status"] == "resolving"
 
 

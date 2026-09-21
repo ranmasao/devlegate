@@ -150,9 +150,9 @@ def cli_daemon(git_fixture, monkeypatch):
 def _short_runtime_config(git_fixture):
     config = git_fixture["tmp"] / "devlegate-short.env"
     config.write_text(
-        git_fixture["config"].read_text().replace(
-            str(git_fixture["state"]), str(git_fixture["short_state"])
-        )
+        git_fixture["config"]
+        .read_text()
+        .replace(str(git_fixture["state"]), str(git_fixture["short_state"]))
     )
     return config
 
@@ -270,9 +270,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         "reconcile",
         "version",
     ):
-        assert (
-            sum(line.startswith(f"  {command}") for line in output.splitlines()) == 1
-        )
+        assert sum(line.startswith(f"  {command}") for line in output.splitlines()) == 1
     assert (
         "  foreground     run the persistent service attached to this terminal"
         in output
@@ -377,8 +375,7 @@ def test_nested_command_help_uses_command_sections():
     top_level = parser.format_help()
     assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in top_level
     assert (
-        "{init,render,retry,reconcile,check,status,plan,stop,control}"
-        not in top_level
+        "{init,render,retry,reconcile,check,status,plan,stop,control}" not in top_level
     )
     for argv, commands in (
         (["control"], ("init",)),
@@ -518,11 +515,7 @@ def test_version_machine_formats(monkeypatch, capsys, flag):
 
     assert main() == 0
     output = capsys.readouterr().out
-    value = (
-        nanoyaml.loads(output)
-        if flag == "--yaml"
-        else json.loads(output)
-    )
+    value = nanoyaml.loads(output) if flag == "--yaml" else json.loads(output)
     assert value == {"program": "devlegate", "version": __version__}
 
 
@@ -1353,8 +1346,9 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
     monkeypatch.setattr(
         cli_daemon,
         "submit_retry",
-        lambda ticket_id, *, request_id: submitted.append(ticket_id)
-        or {"accepted": True, "ticket_id": ticket_id},
+        lambda ticket_id, *, request_id: (
+            submitted.append(ticket_id) or {"accepted": True, "ticket_id": ticket_id}
+        ),
     )
     monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt: "1")
@@ -1825,8 +1819,9 @@ def test_real_service_merge_pending_restart_is_observe_first(
         monkeypatch.delenv("H1_CRASH_POINT")
         service.restart()
         service.wait_for(lambda: _disk_state(config)["phase"] == "idle")
-        assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == (
-            crashed["remote_head"]
+        assert (
+            git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+            == (crashed["remote_head"])
         )
     finally:
         service.stop()
@@ -1866,9 +1861,9 @@ def _retryable_service(git_fixture, monkeypatch):
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
     monkeypatch.setattr(
-        engine,
-        "_run_worker",
-        lambda *_args: WorkerRunResult(1, None, None, None),
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(engine) == 1
     service = LiveService(git_fixture["working"], config)
@@ -1914,12 +1909,14 @@ def test_real_service_many_observers_succeed_while_worker_runs(
     identity = None
     try:
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
-                _disk_state(config).get("worker_identity"),
-                attempts,
-                1,
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                    _disk_state(config).get("worker_identity"),
+                    attempts,
+                    1,
+                )
             ),
             timeout=30,
         )
@@ -1961,12 +1958,14 @@ def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypa
         result = service.cli("retry", "T-1", timeout=10)
         assert result.returncode == 0, result.stderr
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
-                _disk_state(config).get("worker_identity"),
-                attempts,
-                1,
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                    _disk_state(config).get("worker_identity"),
+                    attempts,
+                    1,
+                )
             ),
             timeout=30,
         )
@@ -2047,12 +2046,14 @@ def test_real_service_same_request_id_retries_concurrently_once(
             {"accepted": True, "ticket_id": "T-1"},
         ]
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
-                _disk_state(config).get("worker_identity"),
-                attempts,
-                1,
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                    _disk_state(config).get("worker_identity"),
+                    attempts,
+                    1,
+                )
             ),
             timeout=30,
         )
@@ -2095,12 +2096,14 @@ def test_real_service_distinct_concurrent_retries_do_not_duplicate_worker(
         assert len(errors) == 1
         assert "service busy; mutable request was not admitted" in str(errors[0])
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
-                _disk_state(config).get("worker_identity"),
-                attempts,
-                1,
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                    _disk_state(config).get("worker_identity"),
+                    attempts,
+                    1,
+                )
             ),
             timeout=30,
         )
@@ -2124,12 +2127,14 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
         first = service.cli("retry", "T-1", timeout=10)
         assert first.returncode == 0, first.stderr
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
-                _disk_state(config).get("worker_identity"),
-                attempts,
-                1,
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    Path(os.environ["DEVLEGATE_TEST_WORKER_PID"]),
+                    _disk_state(config).get("worker_identity"),
+                    attempts,
+                    1,
+                )
             ),
             timeout=30,
         )
@@ -2177,8 +2182,7 @@ def _worker_body_started(pid_file, identity, attempts, expected_count):
     except (OSError, ValueError):
         return False
     return (
-        marker_pid == identity["pid"]
-        and attempt_lines == ["attempt"] * expected_count
+        marker_pid == identity["pid"] and attempt_lines == ["attempt"] * expected_count
     )
 
 
@@ -2190,9 +2194,7 @@ def _kill_worker_identity(identity):
             pass
 
 
-def test_real_service_worker_launch_restart_stays_fail_closed(
-    git_fixture, monkeypatch
-):
+def test_real_service_worker_launch_restart_stays_fail_closed(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     service, config, _engine, attempts = _h1_execution_service(
         git_fixture, monkeypatch, "worker-launch"
@@ -2236,9 +2238,11 @@ def test_real_service_matching_live_worker_restart_does_not_duplicate(
     identity = None
     try:
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+                )
             )
         )
         identity = _disk_state(config)["worker_identity"]
@@ -2252,9 +2256,7 @@ def test_real_service_matching_live_worker_restart_does_not_duplicate(
         service.stop()
 
 
-def test_real_service_absent_worker_uses_process_loss_resume(
-    git_fixture, monkeypatch
-):
+def test_real_service_absent_worker_uses_process_loss_resume(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "h1-absent-worker.py"
     pid_file = git_fixture["tmp"] / "h1-absent-worker.pid"
@@ -2275,9 +2277,11 @@ def test_real_service_absent_worker_uses_process_loss_resume(
     new_identity = None
     try:
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+                )
             )
         )
         old_identity = _disk_state(config)["worker_identity"]
@@ -2286,10 +2290,12 @@ def test_real_service_absent_worker_uses_process_loss_resume(
         pid_file.unlink(missing_ok=True)
         service.restart()
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and isinstance(_disk_state(config).get("worker_identity"), dict)
-            and _disk_state(config).get("execution_id")
-            != old_identity.get("execution_id")
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and isinstance(_disk_state(config).get("worker_identity"), dict)
+                and _disk_state(config).get("execution_id")
+                != old_identity.get("execution_id")
+            )
         )
         new_identity = _disk_state(config)["worker_identity"]
         assert new_identity["execution_id"] != old_identity["execution_id"]
@@ -2343,9 +2349,11 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
     service.wait_ready()
     try:
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "worker-running"
-            and _worker_body_started(
-                pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and _worker_body_started(
+                    pid_file, _disk_state(config).get("worker_identity"), attempts, 1
+                )
             ),
             timeout=30,
         )
@@ -2361,8 +2369,10 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         service.start()
         service.wait_ready()
         service.wait_for(
-            lambda: _disk_state(config)["phase"] == "idle"
-            and (engine.control_worktree / "kanban/review/T-1.md").is_file(),
+            lambda: (
+                _disk_state(config)["phase"] == "idle"
+                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
+            ),
             timeout=30,
         )
         time.sleep(1.5)
@@ -2383,9 +2393,11 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             "HEAD:refs/heads/devlegate/control",
         )
         service.wait_for(
-            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
-            and attempts.read_text().splitlines()
-            == ["attempt", "attempt", "attempt"],
+            lambda: (
+                (engine.control_worktree / "kanban/review/T-1.md").is_file()
+                and attempts.read_text().splitlines()
+                == ["attempt", "attempt", "attempt"]
+            ),
             timeout=30,
         )
         assert service.process is not None and service.process.poll() is None
@@ -2394,9 +2406,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             service.stop()
 
 
-def test_real_service_post_worker_loss_requires_resume(
-    git_fixture, monkeypatch
-):
+def test_real_service_post_worker_loss_requires_resume(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     service, config, engine, attempts = _h1_execution_service(
         git_fixture, monkeypatch, "post-worker"
@@ -2410,9 +2420,10 @@ def test_real_service_post_worker_loss_requires_resume(
 
         def resumed():
             state = _disk_state(config)
-            return state["phase"] == "idle" and (
-                engine.control_worktree / "kanban/review/T-1.md"
-            ).is_file()
+            return (
+                state["phase"] == "idle"
+                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
+            )
 
         service.wait_for(resumed)
         assert attempts.read_text().splitlines() == ["attempt", "attempt"]
@@ -2454,9 +2465,12 @@ def _prepare_accepted_integration(git_fixture, monkeypatch):
         "origin",
         "HEAD:refs/heads/devlegate/control",
     )
-    return config, engine, attempts, git(
-        engine.control_worktree, "rev-parse", "HEAD"
-    ).stdout.strip()
+    return (
+        config,
+        engine,
+        attempts,
+        git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip(),
+    )
 
 
 @pytest.mark.parametrize(
@@ -2504,9 +2518,7 @@ def test_real_service_accepted_integration_restart_is_idempotent(
                 and remote[0] == local
             )
 
-        service.wait_for(
-            completed
-        )
+        service.wait_for(completed)
         assert attempts.read_text().splitlines() == ["attempt"]
         assert not (engine.control_worktree / "kanban/accepted/T-1.md").exists()
     finally:
@@ -2670,16 +2682,17 @@ def test_real_service_foreign_local_control_descendant_stays_blocked(
         git(engine.control_worktree, "commit", "-m", "foreign control change")
         monkeypatch.delenv("H1_CRASH_POINT")
         service.restart()
-        service.wait_for(
-            lambda: service.cli("status", "--json").stdout != ""
-        )
+        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
         assert service.process is not None and service.process.poll() is None
-        assert git(
-            engine.control_worktree,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/control",
-        ).stdout.split()[0] == remote_before
+        assert (
+            git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == remote_before
+        )
         assert foreign.is_file()
         assert isinstance(_disk_state(config).get("accepted_integration"), dict)
         assert attempts.read_text().splitlines() == ["attempt"]
@@ -2712,9 +2725,10 @@ def test_real_service_exact_local_integration_with_foreign_descendant_stays_bloc
             "refs/heads/devlegate/control",
         ).stdout.split()[0]
         assert local_c != control_head
-        assert git(
-            engine.control_worktree, "rev-parse", f"{local_c}^"
-        ).stdout.strip() == control_head
+        assert (
+            git(engine.control_worktree, "rev-parse", f"{local_c}^").stdout.strip()
+            == control_head
+        )
         assert remote_r == control_head
 
         foreign = engine.control_worktree / "foreign-after-integration.txt"
@@ -2723,15 +2737,19 @@ def test_real_service_exact_local_integration_with_foreign_descendant_stays_bloc
         git(engine.control_worktree, "commit", "-m", "foreign after integration")
         local_x = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
         assert local_x != local_c
-        assert git(
-            engine.control_worktree, "rev-parse", f"{local_x}^"
-        ).stdout.strip() == local_c
-        assert git(
-            engine.control_worktree,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/control",
-        ).stdout.split()[0] == control_head
+        assert (
+            git(engine.control_worktree, "rev-parse", f"{local_x}^").stdout.strip()
+            == local_c
+        )
+        assert (
+            git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == control_head
+        )
 
         monkeypatch.delenv("H1_CRASH_POINT")
         service.restart()
@@ -2739,15 +2757,17 @@ def test_real_service_exact_local_integration_with_foreign_descendant_stays_bloc
         assert service.process is not None and service.process.poll() is None
         json.loads(service.cli("status", "--json").stdout)
         assert (
-            git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
-            == local_x
+            git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip() == local_x
         )
-        assert git(
-            engine.control_worktree,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/control",
-        ).stdout.split()[0] == control_head
+        assert (
+            git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == control_head
+        )
         assert isinstance(_disk_state(config).get("accepted_integration"), dict)
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
@@ -2836,12 +2856,15 @@ def test_real_service_remote_interleaving_before_control_commit_blocks(
         service.restart()
         service.wait_for(lambda: service.cli("status", "--json").stdout != "")
         assert service.process.poll() is None
-        assert git(
-            publisher_control,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/control",
-        ).stdout.split()[0] == remote_before
+        assert (
+            git(
+                publisher_control,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == remote_before
+        )
         assert isinstance(_disk_state(config).get("accepted_integration"), dict)
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
@@ -2887,12 +2910,15 @@ def test_real_service_divergent_control_histories_stay_blocked(
         service.restart()
         service.wait_for(lambda: service.cli("status", "--json").stdout != "")
         assert service.process.poll() is None
-        assert git(
-            publisher_control,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/control",
-        ).stdout.split()[0] == remote_before
+        assert (
+            git(
+                publisher_control,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == remote_before
+        )
         assert isinstance(_disk_state(config).get("accepted_integration"), dict)
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
@@ -2915,9 +2941,9 @@ def test_real_service_receipt_restart_is_not_a_persistent_command_queue(
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
     monkeypatch.setattr(
-        engine,
-        "_run_worker",
-        lambda *_args: WorkerRunResult(1, None, None, None),
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(engine) == 1
     service = LiveService(
@@ -2955,7 +2981,7 @@ def test_real_service_reconcile_receipt_restart_is_not_a_queue(
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
         (git_fixture["working"] / "product-change.txt").write_text("product B\n")
         git(git_fixture["working"], "add", "product-change.txt")
@@ -2965,7 +2991,7 @@ def test_real_service_reconcile_receipt_restart_is_not_a_queue(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert run_test_iteration(engine) == 1
     target = engine._state["reconciliation"]["observed_product"]
     git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
@@ -3029,9 +3055,10 @@ def test_real_service_transaction_stage_restart_preserves_execution(
 
         def completed():
             state = _disk_state(config)
-            return state["phase"] == "idle" and (
-                engine.control_worktree / "kanban/review/T-1.md"
-            ).is_file()
+            return (
+                state["phase"] == "idle"
+                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
+            )
 
         service.wait_for(completed)
         reports = list((engine.control_worktree / "executions/T-1").glob("*.json"))
@@ -3069,9 +3096,7 @@ def test_real_service_product_movement_during_downtime_blocks_stale_publish(
         service.stop()
 
 
-def test_real_service_process_executes_retry_from_real_cli(
-    git_fixture, monkeypatch
-):
+def test_real_service_process_executes_retry_from_real_cli(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "process-worker.py"
     attempts = git_fixture["tmp"] / "attempts.txt"
@@ -3086,9 +3111,9 @@ def test_real_service_process_executes_retry_from_real_cli(
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
     monkeypatch.setattr(
-        engine,
-        "_run_worker",
-        lambda *_args: WorkerRunResult(1, None, None, None),
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(engine) == 1
 
@@ -3101,9 +3126,7 @@ def test_real_service_process_executes_retry_from_real_cli(
             lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
         )
         status = json.loads(service.cli("status", "--json").stdout)
-        assert status["tickets"]["review"] == [
-            {"id": "T-1", "title": "Control ticket"}
-        ]
+        assert status["tickets"]["review"] == [{"id": "T-1", "title": "Control ticket"}]
         assert attempts.read_text().splitlines() == ["attempt"]
 
 
@@ -3123,9 +3146,9 @@ def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
     monkeypatch.setattr(
-        engine,
-        "_run_worker",
-        lambda *_args: WorkerRunResult(1, None, None, None),
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
     assert run_test_iteration(engine) == 1
     service = LiveService(
@@ -3164,7 +3187,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker work\n")
         (git_fixture["working"] / "product-change.txt").write_text("product B\n")
         git(git_fixture["working"], "add", "product-change.txt")
@@ -3174,7 +3197,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert run_test_iteration(engine) == 1
     target = engine._state["reconciliation"]["observed_product"]
     execution = next((engine.state_dir / "worktrees").glob("*/work/T-1"))
@@ -3185,9 +3208,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         service.kill()
         service.restart()
         assert _disk_state(config)["reconciliation"] == pending_before
-        result = service.cli(
-            "reconcile", "update-base", "T-1", "--onto", target
-        )
+        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
         assert result.returncode == 0, result.stderr
         assert "reconciliation accepted: T-1" in result.stdout
 
@@ -3214,9 +3235,9 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     database = next(engine.state_dir.glob("*.sqlite3"))
     connection = sqlite3.connect(database)
     persisted = json.loads(
-        connection.execute(
-            "SELECT payload FROM runtime_state WHERE id = 1"
-        ).fetchone()[0]
+        connection.execute("SELECT payload FROM runtime_state WHERE id = 1").fetchone()[
+            0
+        ]
     )
     connection.close()
     assert persisted["resume_required"]["status"] == "required"
@@ -3388,9 +3409,9 @@ def test_run_once_persists_idle_and_control_head(git_fixture):
     database = next(git_fixture["state"].glob("*.sqlite3"))
     connection = sqlite3.connect(database)
     payload = json.loads(
-        connection.execute(
-            "SELECT payload FROM runtime_state WHERE id = 1"
-        ).fetchone()[0]
+        connection.execute("SELECT payload FROM runtime_state WHERE id = 1").fetchone()[
+            0
+        ]
     )
     connection.close()
     assert payload["phase"] == "idle"

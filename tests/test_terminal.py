@@ -6,7 +6,7 @@ import pty
 import sys
 import termios
 
-from devlegate.runtime import _preserve_terminal
+from devlegate.worker_supervisor import _preserve_terminal
 
 
 def test_preserve_terminal_restores_worker_pty_attributes(monkeypatch):

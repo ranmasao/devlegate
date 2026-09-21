@@ -92,7 +92,7 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
     stop_event = threading.Event()
     result = []
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         worker_entered.set()
         durable = engine._runtime_store.load()
         assert durable["phase"] == "agent_running"
@@ -101,10 +101,8 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
         stop_event.set()
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
-    thread = threading.Thread(
-        target=lambda: result.append(engine.serve(stop_event))
-    )
+    monkeypatch.setattr(engine._workers, "run", worker)
+    thread = threading.Thread(target=lambda: result.append(engine.serve(stop_event)))
     thread.start()
     assert worker_entered.wait(10)
 
@@ -125,10 +123,10 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
 def test_worker_running_clears_when_worker_raises(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         raise RuntimeError("worker exploded")
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     with pytest.raises(RuntimeError, match="worker exploded"):
         run_test_iteration(engine)
 
@@ -216,9 +214,7 @@ def test_execution_ownership_evidence_rejects_wrong_process_execution(
     assert engine.live_execution_evidence() is None
 
 
-def test_worker_evidence_still_requires_matching_live_identity(
-    tmp_path, monkeypatch
-):
+def test_worker_evidence_still_requires_matching_live_identity(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     identity = {
         "execution_id": "execution-1",
@@ -232,11 +228,11 @@ def test_worker_evidence_still_requires_matching_live_identity(
         engine, "agent_running", "worker-running", worker_identity=identity
     )
     engine._owned_execution_id = "execution-1"
-    engine._worker_execution_id = "execution-1"
-    engine._worker_identity_handler = lambda _identity: None
+    monkeypatch.setattr(engine._workers, "owns", lambda _execution_id: True)
 
     monkeypatch.setattr(
-        "devlegate.runtime.observe_worker_identity", lambda _identity: "matching-live"
+        "devlegate.worker_supervisor.observe_worker_identity",
+        lambda _identity: "matching-live",
     )
 
     assert engine.live_execution_evidence() == {
@@ -248,7 +244,8 @@ def test_worker_evidence_still_requires_matching_live_identity(
     }
 
     monkeypatch.setattr(
-        "devlegate.runtime.observe_worker_identity", lambda _identity: "not-live"
+        "devlegate.worker_supervisor.observe_worker_identity",
+        lambda _identity: "not-live",
     )
     assert engine.live_execution_evidence() is None
 

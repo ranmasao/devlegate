@@ -176,7 +176,11 @@ def test_agent_running_fails_closed_without_dispatch(
 
     restarted = Devlegate(git_fixture["config"])
     calls = []
-    monkeypatch.setattr(restarted, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        restarted._workers,
+        "run",
+        lambda *_args, **_kwargs: calls.append(True),
+    )
     with pytest.raises(DevlegateError, match="unsafe execution stage"):
         run_test_iteration(restarted)
     assert calls == []

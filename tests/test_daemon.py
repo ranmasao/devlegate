@@ -191,9 +191,9 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
 def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, capsys):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        engine,
-        "_run_worker",
-        lambda *_args: WorkerRunResult(1, None, None, None),
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
     )
 
     assert daemon.run_service(engine, once=True) == 1
@@ -271,10 +271,9 @@ def test_successful_ready_clears_terminal_service_failure(tmp_path, monkeypatch)
     monkeypatch.setattr(
         host,
         "_serve_engine",
-        lambda stop_intent, **_kwargs: stop_intent.request(
-            "service_shutdown", source="test"
-        )
-        or 0,
+        lambda stop_intent, **_kwargs: (
+            stop_intent.request("service_shutdown", source="test") or 0
+        ),
     )
     from devlegate.service_diagnostics import create, write
 
@@ -285,18 +284,15 @@ def test_successful_ready_clears_terminal_service_failure(tmp_path, monkeypatch)
     assert diagnostic is None
 
 
-def test_operator_abort_does_not_create_terminal_service_failure(
-    tmp_path, monkeypatch
-):
+def test_operator_abort_does_not_create_terminal_service_failure(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     host = daemon.ServiceHost(engine)
     monkeypatch.setattr(
         host,
         "_serve_engine",
-        lambda stop_intent, **_kwargs: stop_intent.request(
-            "operator_abort", source="test"
-        )
-        or 130,
+        lambda stop_intent, **_kwargs: (
+            stop_intent.request("operator_abort", source="test") or 130
+        ),
     )
     assert host.run() == 130
     diagnostic, corrupt = read_service_failure(engine._locator)
@@ -375,9 +371,7 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )
-def test_daemon_host_operator_abort_precedes_service_shutdown(
-    monkeypatch, signals
-):
+def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signals):
     installed = {}
 
     def install(signum, handler):
@@ -463,9 +457,7 @@ def test_daemon_signal_wakes_poll_wait_without_second_iteration(
     assert len(calls) == 1
 
 
-def test_daemon_stop_already_requested_does_not_admit_iteration(
-    tmp_path, monkeypatch
-):
+def test_daemon_stop_already_requested_does_not_admit_iteration(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
     stop_event.set()
@@ -494,7 +486,9 @@ def test_stop_during_observation_prevents_fresh_mutation(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr(engine, "_sync_control", sync_control)
-    monkeypatch.setattr(engine, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        engine._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
 
     assert engine.serve(stop_event) == 0
     assert calls == []
@@ -614,9 +608,7 @@ def test_merge_pending_retries_matching_shutdown_fetch(
         if args and args[0] == "fetch":
             fetch_calls += 1
             if fetch_calls == 1:
-                return subprocess.CompletedProcess(
-                    ["git"], returncode, "", ""
-                )
+                return subprocess.CompletedProcess(["git"], returncode, "", "")
         return original_git(repo, *args, check=check)
 
     monkeypatch.setattr(runtime, "_git", interrupt_first_fetch)
@@ -663,9 +655,7 @@ def test_service_survives_recoverable_stage_devlegate_error(
         return 0
 
     monkeypatch.setattr(engine, "run_iteration", iteration)
-    thread = threading.Thread(
-        target=lambda: engine.serve(stop_event), daemon=True
-    )
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
     thread.start()
     assert first_iteration.wait(2)
     allow_failure.set()
@@ -787,12 +777,8 @@ def test_merge_pending_retries_product_merge_then_preserves_real_failure(
         if repo == engine.repo and args[:2] == ("merge", "--ff-only"):
             merge_calls += 1
             if merge_calls == 1:
-                return subprocess.CompletedProcess(
-                    ["git"], -signal.SIGINT, "", ""
-                )
-            return subprocess.CompletedProcess(
-                ["git"], 128, "", "fatal: merge failed"
-            )
+                return subprocess.CompletedProcess(["git"], -signal.SIGINT, "", "")
+            return subprocess.CompletedProcess(["git"], 128, "", "fatal: merge failed")
         return original_git(repo, *args, check=check)
 
     monkeypatch.setattr(runtime, "_git", fail_product_retry)
@@ -832,15 +818,10 @@ def test_merge_pending_retries_matching_control_merge(tmp_path, monkeypatch):
 
     def interrupt_control_merge(repo, *args, check=True):
         nonlocal merge_calls
-        if (
-            repo == engine.control_worktree
-            and args[:2] == ("merge", "--ff-only")
-        ):
+        if repo == engine.control_worktree and args[:2] == ("merge", "--ff-only"):
             merge_calls += 1
             if merge_calls == 1:
-                return subprocess.CompletedProcess(
-                    ["git"], -signal.SIGINT, "", ""
-                )
+                return subprocess.CompletedProcess(["git"], -signal.SIGINT, "", "")
         return original_git(repo, *args, check=check)
 
     monkeypatch.setattr(runtime, "_git", interrupt_control_merge)
@@ -938,7 +919,9 @@ def test_existing_agent_pending_is_preserved_on_stop(tmp_path, monkeypatch):
     engine._save_state("agent_pending")
     before = dict(engine._state)
     calls = []
-    monkeypatch.setattr(engine, "_run_worker", lambda *_args: calls.append(True))
+    monkeypatch.setattr(
+        engine._workers, "run", lambda *_args, **_kwargs: calls.append(True)
+    )
     stop_event = threading.Event()
     stop_event.set()
 
@@ -959,7 +942,9 @@ def test_stop_after_agent_pending_commit_preserves_binding(tmp_path, monkeypatch
             stop_event.set()
 
     monkeypatch.setattr(engine, "_save_state", save_state)
-    monkeypatch.setattr(engine, "_run_worker", lambda *_args: pytest.fail("worker"))
+    monkeypatch.setattr(
+        engine._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker")
+    )
     assert engine.serve(stop_event) == 0
     assert engine._state["phase"] == "agent_pending"
     assert engine._state["execution_id"]
@@ -980,15 +965,15 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
         return workspace
 
     monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
-    monkeypatch.setattr(engine, "_run_worker", lambda *_args: pytest.fail("worker"))
+    monkeypatch.setattr(
+        engine._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker")
+    )
     assert engine.serve(stop_event) == 0
     assert prepared and prepared[0].path.is_dir()
     assert engine._state["phase"] == "agent_pending"
 
 
-def test_stop_after_agent_running_commit_still_drains_attempt(
-    tmp_path, monkeypatch
-):
+def test_stop_after_agent_running_commit_still_drains_attempt(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
     original_save = engine._save_state
@@ -1002,12 +987,12 @@ def test_stop_after_agent_running_commit_still_drains_attempt(
         ):
             stop_event.set()
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         worker_calls.append(True)
         return WorkerRunResult(1, None, None, None)
 
     monkeypatch.setattr(engine, "_save_state", save_state)
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert engine.serve(stop_event) == 0
     assert worker_calls == [True]
     assert engine._state["phase"] == "idle"
@@ -1019,11 +1004,11 @@ def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         stop_event.set()
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     monkeypatch.setattr(
         ExecutionWorkspaceManager,
         "verify_submodules",
@@ -1042,13 +1027,13 @@ def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         stop_event.set()
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     monkeypatch.setattr(
         engine,
         "_publish_execution_branch",
@@ -1077,14 +1062,14 @@ def test_stop_at_committed_execution_stage_drains_to_idle(
         if phase == "agent_running" and fields.get("execution_stage") == drain_stage:
             stop_event.set()
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker change\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
     monkeypatch.setattr(engine, "_save_state", save_state)
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert engine.serve(stop_event) == 0
 
     control = next((state / "worktrees").glob("*/control"))
@@ -1093,9 +1078,7 @@ def test_stop_at_committed_execution_stage_drains_to_idle(
     assert engine.service_snapshot().worker_running is False
 
 
-def test_stop_before_accepted_integration_leaves_ticket_accepted(
-    tmp_path, monkeypatch
-):
+def test_stop_before_accepted_integration_leaves_ticket_accepted(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     control = next((state / "worktrees").glob("*/control"))
     todo = control / "kanban/todo/T-1.md"
@@ -1120,13 +1103,14 @@ def test_stop_before_accepted_integration_leaves_ticket_accepted(
 def test_started_accepted_integration_drains_before_stop(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     control = next((state / "worktrees").glob("*/control"))
-    def worker(workspace, _prompt):
+
+    def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker change\n")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert run_test_iteration(engine) == 0
     review = control / "kanban/review/T-1.md"
     review.rename(control / "kanban/accepted/T-1.md")
@@ -1159,12 +1143,12 @@ def test_stop_during_worker_prevents_next_ticket_admission(tmp_path, monkeypatch
     stop_event = threading.Event()
     calls = []
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         calls.append(workspace.ticket_id)
         stop_event.set()
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert engine.serve(stop_event) == 0
     assert calls == ["T-1"]
     assert (control / "kanban/todo/T-2.md").is_file()
@@ -1214,13 +1198,13 @@ def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
     worker_calls = []
     result = []
 
-    def worker(_workspace, _prompt):
+    def worker(_workspace, _prompt, **_kwargs):
         worker_calls.append(True)
         worker_entered.set()
         assert worker_release.wait(10)
         return WorkerRunResult(1, None, None, None)
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     thread = threading.Thread(
         target=lambda: result.append(engine.serve(stop_event)), daemon=True
     )
@@ -1249,13 +1233,13 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     stop_intent = daemon.ShutdownIntent()
     workspace_path = []
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         workspace_path.append(workspace.path)
         (workspace.path / "partial-work.txt").write_text("preserve\n")
         stop_intent.request(kind)
         return WorkerRunResult(-2, None, None, None, kind)
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert engine.serve(stop_intent) == 0
     assert engine._state["phase"] == "idle"
     assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
@@ -1272,9 +1256,9 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     assert failure.interruption_kind == kind
     calls = []
     monkeypatch.setattr(
-        fresh,
-        "_run_worker",
-        lambda _workspace, _prompt: (
+        fresh._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: (
             calls.append(True),
             WorkerRunResult(1, None, None, None),
         )[1],
@@ -1284,21 +1268,19 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
 
 
 @pytest.mark.parametrize("once", [False, True])
-def test_once_operator_abort_stops_after_one_iteration(
-    tmp_path, monkeypatch, once
-):
+def test_once_operator_abort_stops_after_one_iteration(tmp_path, monkeypatch, once):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     calls = []
     workspace_path = []
 
-    def worker(workspace, _prompt):
+    def worker(workspace, _prompt, **_kwargs):
         calls.append(True)
         workspace_path.append(workspace.path)
         (workspace.path / "partial-work.txt").write_text("preserve\n")
         signal.raise_signal(signal.SIGINT)
         return WorkerRunResult(-2, None, None, None, "operator_abort")
 
-    monkeypatch.setattr(engine, "_run_worker", worker)
+    monkeypatch.setattr(engine._workers, "run", worker)
     assert daemon.run_service(engine, once=once) == 130
     assert calls == [True]
     assert workspace_path[0].joinpath("partial-work.txt").read_text() == "preserve\n"
@@ -1540,18 +1522,16 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
     monkeypatch.chdir(working)
     monkeypatch.setenv("DEVLEGATE_TEST_MARKER", str(marker))
     engine = ServiceEngine(config)
-    original_worker = engine._run_worker
+    original_worker = engine._workers.run
 
-    def run_worker(workspace, prompt):
-        result = original_worker(workspace, prompt)
+    def run_worker(workspace, prompt, **_kwargs):
+        result = original_worker(workspace, prompt, **_kwargs)
         assert result.worker_group_retired is False
         return result
 
-    monkeypatch.setattr(engine, "_run_worker", run_worker)
+    monkeypatch.setattr(engine._workers, "run", run_worker)
     try:
-        with pytest.raises(
-            DevlegateError, match="process group is still alive"
-        ):
+        with pytest.raises(DevlegateError, match="process group is still alive"):
             run_test_iteration(engine)
         assert marker.exists()
         processes = json.loads(marker.read_text())
@@ -1563,9 +1543,11 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
         assert not list((control / "executions").glob("**/*.json"))
         restarted = ServiceEngine(config)
         monkeypatch.setattr(
-            restarted,
-            "_run_worker",
-            lambda *_args: pytest.fail("restart reconciliation launched worker"),
+            restarted._workers,
+            "run",
+            lambda *_args, **_kwargs: pytest.fail(
+                "restart reconciliation launched worker"
+            ),
         )
         with pytest.raises(DevlegateError, match="ownership is indeterminate"):
             run_test_iteration(restarted)
@@ -1579,9 +1561,9 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
             time.sleep(0.01)
         launches = []
         monkeypatch.setattr(
-            restarted,
-            "_run_worker",
-            lambda workspace, prompt: (
+            restarted._workers,
+            "run",
+            lambda workspace, prompt, **_kwargs: (
                 launches.append((workspace.path, prompt)),
                 WorkerRunResult(1, None, None, None),
             )[1],

@@ -14,15 +14,17 @@ from pathlib import Path
 
 import pytest
 
-import devlegate.cli as cli
-import devlegate.runtime as runtime
 from devlegate.execution_workspace import ExecutionWorkspace
-from devlegate.runtime import MAX_STDOUT_EVENT_BYTES, _run_opencode
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerClaim,
     WorkerEgressParser,
     WorkerRunResult,
+)
+from devlegate.worker_supervisor import (
+    MAX_STDOUT_EVENT_BYTES,
+    WorkerSupervisor,
+    _run_opencode,
 )
 
 
@@ -38,9 +40,7 @@ class FakeProcess:
 
 def run_worker(monkeypatch, stdout=b"", stderr=b"", returncode=0):
     process = FakeProcess(stdout, stderr, returncode)
-    monkeypatch.setattr(
-        subprocess, "Popen", lambda *args, **kwargs: process
-    )
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
     return process, _run_opencode(["fake"], "prompt")
 
 
@@ -48,9 +48,7 @@ def event(text):
     return (json.dumps({"type": "text", "part": {"text": text}}) + "\n").encode()
 
 
-def report(
-    outcome="completed", summary="implemented", remaining=None, questions=None
-):
+def report(outcome="completed", summary="implemented", remaining=None, questions=None):
     return (
         json.dumps(
             {
@@ -80,12 +78,11 @@ def run_typed_worker(monkeypatch, tmp_path, stdout=b"", returncode=0):
         "Popen",
         lambda *args, **kwargs: FakeProcess(stdout, returncode=returncode),
     )
-    devlegate = object.__new__(cli.Devlegate)
-    devlegate.opencode_bin = "opencode"
-    devlegate.opencode_model = "provider/model"
-    devlegate.opencode_agent = ""
+    supervisor = WorkerSupervisor("opencode", "provider/model", "")
     workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
-    return devlegate._run_worker(workspace, "prompt")
+    return supervisor.run(
+        execution_id="execution-1", workspace=workspace, prompt="prompt"
+    )
 
 
 def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
@@ -184,8 +181,7 @@ def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
     prompt = (
         "UNIQUE_PROMPT_MARKER_123456\n"
         "multiple lines, quotes ' \" and shell-looking $HOME; `rm -rf /`\n"
-        "unicode: \u03c0 \u4e2d\n"
-        + ("large prompt line\n" * 5000)
+        "unicode: \u03c0 \u4e2d\n" + ("large prompt line\n" * 5000)
     )
     received = tmp_path / "received.bin"
     arguments = tmp_path / "arguments.json"
@@ -206,9 +202,7 @@ def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
 
 def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
     prompt = "prompt\n" * 100000
-    result = _run_opencode(
-        [sys.executable, "-c", "raise SystemExit(0)"], prompt
-    )
+    result = _run_opencode([sys.executable, "-c", "raise SystemExit(0)"], prompt)
 
     assert result.process_returncode == 0
     assert result.interruption_kind is None
@@ -337,7 +331,7 @@ def test_foreground_keyboard_interrupt_classifies_operator_abort(monkeypatch):
 
 @pytest.mark.parametrize(
     "payload",
-    [b"not-json\n", b'{}\n', b'{"type":"text"}\n'],
+    [b"not-json\n", b"{}\n", b'{"type":"text"}\n'],
 )
 def test_malformed_worker_events_fail_closed(capsys, monkeypatch, payload):
     _, result = run_worker(monkeypatch, payload)
@@ -400,21 +394,28 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
     parent_pwd = "/some/operator/product/checkout"
     monkeypatch.setenv("PWD", parent_pwd)
 
-    def fake_run(command, prompt, *, cwd=None, env=None, event_handler=None):
+    def fake_run(
+        command,
+        prompt,
+        *,
+        cwd=None,
+        env=None,
+        event_handler=None,
+        **kwargs,
+    ):
         calls.append((command, prompt, cwd, env, event_handler))
         event_handler(json.loads(report().decode()))
         return OpenCodeRunResult(0)
 
-    monkeypatch.setattr(runtime, "_run_opencode", fake_run)
-    devlegate = object.__new__(cli.Devlegate)
-    devlegate.opencode_bin = "opencode"
-    devlegate.opencode_model = "provider/model"
-    devlegate.opencode_agent = "build"
+    supervisor = WorkerSupervisor("opencode", "provider/model", "build")
+    monkeypatch.setattr("devlegate.worker_supervisor._run_opencode", fake_run)
     workspace = ExecutionWorkspace(
         "internal-id", "internal-branch", tmp_path, "head", "base", False
     )
 
-    result = devlegate._run_worker(workspace, "assembled prompt")
+    result = supervisor.run(
+        execution_id="execution-1", workspace=workspace, prompt="assembled prompt"
+    )
     assert result == WorkerRunResult(
         0, None, WorkerClaim("completed", "implemented", (), ()), None
     )
@@ -657,13 +658,12 @@ def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
         return FakeProcess(report())
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    devlegate = object.__new__(cli.Devlegate)
-    devlegate.opencode_bin = "opencode"
-    devlegate.opencode_model = "provider/model"
-    devlegate.opencode_agent = ""
+    supervisor = WorkerSupervisor("opencode", "provider/model", "")
     workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
 
-    result = devlegate._run_worker(workspace, "prompt")
+    result = supervisor.run(
+        execution_id="execution-1", workspace=workspace, prompt="prompt"
+    )
 
     assert result.claim is not None
     assert result.transport_ok
@@ -686,16 +686,15 @@ def test_worker_config_permission_is_bound_to_exact_workspace(tmp_path, monkeypa
         return FakeProcess(report())
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    devlegate = object.__new__(cli.Devlegate)
-    devlegate.opencode_bin = "opencode"
-    devlegate.opencode_model = "provider/model"
-    devlegate.opencode_agent = ""
+    supervisor = WorkerSupervisor("opencode", "provider/model", "")
     workspace = ExecutionWorkspace(
         "T-1", "branch", tmp_path / "ticket", "head", "base", False
     )
     workspace.path.mkdir()
 
-    result = devlegate._run_worker(workspace, "prompt")
+    result = supervisor.run(
+        execution_id="execution-1", workspace=workspace, prompt="prompt"
+    )
 
     assert result.claim is not None
     permission = captured["config"]["permission"]["external_directory"]
@@ -733,9 +732,10 @@ def test_opencode_consumes_inline_worker_config(tmp_path):
     )
 
     resolved = json.loads(result.stdout)
-    assert resolved["permission"]["external_directory"] == config["permission"][
-        "external_directory"
-    ]
+    assert (
+        resolved["permission"]["external_directory"]
+        == config["permission"]["external_directory"]
+    )
 
 
 @pytest.mark.parametrize("returncode", [0, 7])
@@ -747,13 +747,12 @@ def test_worker_result_requires_report_and_keeps_exit_status_distinct(
         "Popen",
         lambda *args, **kwargs: FakeProcess(b"", returncode=returncode),
     )
-    devlegate = object.__new__(cli.Devlegate)
-    devlegate.opencode_bin = "opencode"
-    devlegate.opencode_model = "provider/model"
-    devlegate.opencode_agent = ""
+    supervisor = WorkerSupervisor("opencode", "provider/model", "")
     workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
 
-    result = devlegate._run_worker(workspace, "prompt")
+    result = supervisor.run(
+        execution_id="execution-1", workspace=workspace, prompt="prompt"
+    )
 
     assert result.claim is None
     assert result.transport_ok
