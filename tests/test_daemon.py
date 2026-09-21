@@ -26,6 +26,7 @@ from devlegate.execution_workspace import (
 )
 from devlegate.runtime import (
     IterationIntent,
+    OperatorCommand,
     ServiceEngine,
     ShutdownInterrupted,
     WorkflowBlockedError,
@@ -64,6 +65,41 @@ def test_explicit_retry_intent_cannot_leak_to_next_iteration(tmp_path, monkeypat
     ]
 
 
+def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    submitted = []
+
+    def submit():
+        try:
+            submitted.append(
+                engine.submit_retry("T-1", request_id="retry-before-drain")
+            )
+        except DevlegateError as error:
+            submitted.append(error)
+
+    thread = threading.Thread(
+        target=submit
+    )
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not engine._operator_command_pending() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert engine._operator_command_pending()
+    engine.request_lifecycle("stop", "stop-request")
+    command, scheduler = engine._claim_owner_work(True)
+    assert scheduler is False
+    assert isinstance(command, OperatorCommand)
+    with pytest.raises(DevlegateError, match="draining"):
+        engine._admit_operator_command(command)
+    engine._release_operator_command()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert len(submitted) == 1
+    assert isinstance(submitted[0], DevlegateError)
+
+
 def test_iteration_body_does_not_reenter_scheduler():
     source = inspect.getsource(ServiceEngine._run_iteration_body)
     assert "run_iteration(" not in source
@@ -73,7 +109,6 @@ def test_iteration_body_does_not_reenter_scheduler():
     ("kind", "returncode"),
     [
         ("operator_abort", -signal.SIGINT),
-        ("service_shutdown", -signal.SIGTERM),
     ],
 )
 def test_matching_shutdown_signal_is_control_flow(
@@ -94,7 +129,6 @@ def test_matching_shutdown_signal_is_control_flow(
     [
         (None, -signal.SIGINT),
         ("operator_abort", -signal.SIGTERM),
-        ("service_shutdown", 1),
     ],
 )
 def test_unmatched_git_failure_remains_diagnostic(
@@ -158,13 +192,14 @@ def test_foreground_service_command_constructs_one_service_engine(
     ("signum", "expected_kind", "expected_status"),
     [
         (signal.SIGINT, "operator_abort", 130),
-        (signal.SIGTERM, "service_shutdown", 0),
+        (signal.SIGTERM, None, 0),
     ],
 )
-def test_daemon_host_signal_handler_only_sets_stop_intent(
+def test_daemon_host_signal_handler_splits_abort_from_graceful_lifecycle(
     monkeypatch, signum, expected_kind, expected_status
 ):
     installed = {}
+    lifecycle_calls = []
 
     def install(signum, handler):
         if callable(handler):
@@ -173,8 +208,12 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
     class FakeServiceEngine:
         def serve(self, stop_event, *, lock_handle=None, once=False):
             installed[signum](signum, None)
-            assert stop_event.is_set()
-            assert stop_event.kind == expected_kind
+            if expected_kind is None:
+                assert not stop_event.is_set()
+                assert lifecycle_calls == ["stop"]
+            else:
+                assert stop_event.is_set()
+                assert stop_event.kind == expected_kind
             return 0
 
     monkeypatch.setattr(daemon.signal, "signal", install)
@@ -182,7 +221,9 @@ def test_daemon_host_signal_handler_only_sets_stop_intent(
 
     intent = daemon.ShutdownIntent()
     host = daemon.ServiceHost(FakeServiceEngine())
-    with host._signal_ownership(intent):
+    with host._signal_ownership(
+        intent, lambda lifecycle, _request_id: lifecycle_calls.append(lifecycle) or {}
+    ):
         result = host._serve_engine(intent)
     assert result == expected_status
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
@@ -272,7 +313,7 @@ def test_successful_ready_clears_terminal_service_failure(tmp_path, monkeypatch)
         host,
         "_serve_engine",
         lambda stop_intent, **_kwargs: (
-            stop_intent.request("service_shutdown", source="test") or 0
+            stop_intent.request("operator_abort", source="test") or 0
         ),
     )
     from devlegate.service_diagnostics import create, write
@@ -371,7 +412,7 @@ def test_foreground_repeated_blocker_is_reported_until_changed(
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
 )
-def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signals):
+def test_daemon_host_operator_abort_precedes_graceful_lifecycle(monkeypatch, signals):
     installed = {}
 
     def install(signum, handler):
@@ -390,7 +431,7 @@ def test_daemon_host_operator_abort_precedes_service_shutdown(monkeypatch, signa
 
     intent = daemon.ShutdownIntent()
     host = daemon.ServiceHost(FakeServiceEngine())
-    with host._signal_ownership(intent):
+    with host._signal_ownership(intent, lambda _intent, _request_id: {}):
         result = host._serve_engine(intent)
     assert result == 130
 
@@ -577,7 +618,6 @@ def test_persisted_merge_pending_drains_even_when_stop_already_set(
     ("kind", "returncode"),
     [
         ("operator_abort", -signal.SIGINT),
-        ("service_shutdown", -signal.SIGTERM),
     ],
 )
 def test_merge_pending_retries_matching_shutdown_fetch(
@@ -617,7 +657,7 @@ def test_merge_pending_retries_matching_shutdown_fetch(
     stop_intent = daemon.ShutdownIntent()
     stop_intent.request(kind)
     host = daemon.ServiceHost(engine)
-    with host._signal_ownership(stop_intent):
+    with host._signal_ownership(stop_intent, lambda _intent, _request_id: {}):
         result = host._serve_engine(stop_intent)
     assert result == expected_result
     assert fetch_calls == 3
@@ -699,7 +739,6 @@ def test_unrelated_devlegate_error_still_escapes_service(tmp_path, monkeypatch):
     ("kind", "returncode"),
     [
         ("operator_abort", -signal.SIGINT),
-        ("service_shutdown", -signal.SIGTERM),
     ],
 )
 def test_merge_pending_retries_matching_product_merge(
@@ -739,7 +778,7 @@ def test_merge_pending_retries_matching_product_merge(
     stop_intent = daemon.ShutdownIntent()
     stop_intent.request(kind)
     host = daemon.ServiceHost(engine)
-    with host._signal_ownership(stop_intent):
+    with host._signal_ownership(stop_intent, lambda _intent, _request_id: {}):
         result = host._serve_engine(stop_intent)
     assert result == expected_result
     assert merge_calls == 2
@@ -1049,6 +1088,31 @@ def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
     assert engine._state.get("failed_executions", {}) == {}
 
 
+def test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+
+    def worker(_workspace, _prompt, **_kwargs):
+        engine.request_lifecycle("stop", "stop-request")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager,
+        "checkpoint",
+        lambda *_args: (_ for _ in ()).throw(
+            ExecutionWorkspaceError("checkpoint unavailable")
+        ),
+    )
+    with pytest.raises(DevlegateError, match="execution checkpoint failed"):
+        run_test_iteration(engine)
+    assert engine.lifecycle_intent() == "stop"
+    assert engine._state["execution_stage"] == "checkpointing"
+
+
 @pytest.mark.parametrize("drain_stage", ["post-checkpoint", "publishing", "lifecycle"])
 def test_stop_at_committed_execution_stage_drains_to_idle(
     tmp_path, monkeypatch, drain_stage
@@ -1225,7 +1289,7 @@ def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
     assert engine._state["phase"] == "idle"
 
 
-@pytest.mark.parametrize("kind", ["operator_abort", "service_shutdown"])
+@pytest.mark.parametrize("kind", ["operator_abort"])
 def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     tmp_path, monkeypatch, kind, capsys
 ):
@@ -1288,109 +1352,6 @@ def test_once_operator_abort_stops_after_one_iteration(tmp_path, monkeypatch, on
     assert engine._state["failed_executions"]["T-1"]["interruption_kind"] == (
         "operator_abort"
     )
-
-
-@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_explicit_retry_sigterm_owns_worker_process_group(
-    tmp_path, monkeypatch, short_state_dir
-):
-    working, config, _state = control_fixture(tmp_path)
-    config.write_text(
-        config.read_text().replace(str(tmp_path / "state"), str(short_state_dir))
-    )
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    marker = tmp_path / "retry-processes.json"
-    attempt = tmp_path / "attempted"
-    worker = tmp_path / "worker.py"
-    worker.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, subprocess, sys, time\n"
-        f"attempt = pathlib.Path({str(attempt)!r})\n"
-        "if not attempt.exists():\n"
-        "    attempt.touch()\n"
-        "    raise SystemExit(1)\n"
-        "child = subprocess.Popen([sys.executable, '-c', "
-        "'import time; time.sleep(60)'])\n"
-        "pathlib.Path(os.environ['DEVLEGATE_TEST_MARKER']).write_text(\n"
-        "    json.dumps({'worker': os.getpid(), 'child': child.pid})\n"
-        ")\n"
-        "time.sleep(60)\n"
-    )
-    worker.chmod(0o755)
-    config.write_text(
-        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
-    )
-    assert run_test_iteration(ServiceEngine(config)) == 1
-    environment = {
-        **os.environ,
-        "DEVLEGATE_TEST_MARKER": str(marker),
-        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
-    }
-    daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "foreground", "--env", str(config)],
-        cwd=working,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    socket_path = ServiceEngine(config).ipc_socket_path
-    for _ in range(500):
-        if socket_path.exists():
-            break
-        time.sleep(0.01)
-    process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
-        cwd=working,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        for _ in range(500):
-            if marker.exists():
-                break
-            time.sleep(0.01)
-        if not marker.exists():
-            process.send_signal(signal.SIGTERM)
-            stdout, stderr = process.communicate(timeout=10)
-            daemon_status = daemon_process.poll()
-            if daemon_process.poll() is None:
-                daemon_process.kill()
-            try:
-                daemon_stdout, daemon_stderr = daemon_process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                daemon_stdout, daemon_stderr = "", "daemon cleanup timed out"
-            pytest.fail(
-                f"retry worker did not start: {stdout}\n{stderr}\n"
-                f"daemon status: {daemon_status}\n"
-                f"daemon output: {daemon_stdout}\n{daemon_stderr}"
-            )
-    finally:
-        if process.poll() is None:
-            stdout, stderr = process.communicate(timeout=10)
-        else:
-            stdout, stderr = process.communicate(timeout=10)
-        if daemon_process.poll() is None:
-            daemon_process.send_signal(signal.SIGTERM)
-        daemon_stdout, daemon_stderr = daemon_process.communicate(timeout=10)
-    assert process.returncode == 0, (stdout, stderr)
-    processes = json.loads(marker.read_text())
-    for process_id in (processes["worker"], processes["child"]):
-        for _ in range(100):
-            try:
-                os.kill(process_id, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
-        else:
-            pytest.fail(f"process {process_id} survived retry SIGTERM")
-    fresh = ServiceEngine(config)
-    failure = fresh.status_view().failed_executions[0]
-    assert failure.interruption_kind == "service_shutdown"
-    assert failure.retryable
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")

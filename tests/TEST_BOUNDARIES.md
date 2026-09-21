@@ -49,7 +49,7 @@ The counts are grouping counts, not test-case counts.
 | `test_git_state.py`, `test_snapshot.py` | Engine semantic/component | Git observation, synchronization/recovery decisions and stable snapshot retries | No service or independent CLI path |
 | `test_control_plane.py` direct `Devlegate` tests | Engine semantic | Control-plane validation, workspace binding, checkpoints, lifecycle/publication rules, accepted integration state, reconciliation semantics | `invoke()` setup is a subprocess bootstrap helper; most assertions exercise direct engine methods |
 | `test_service_snapshot.py` | Engine semantic | Immutable published projections, read-only snapshot behavior, worker lifecycle projection | The long-worker test uses a fake `WorkerSupervisor.run`; it proves engine publication ordering, not OS worker behavior |
-| `test_daemon.py` | Engine/host component | Signal intent, foreground polling, shutdown behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production service startup |
+| `test_daemon.py` | Engine/host component | Signal intent, checkpoint-aware drain, graceful stop/restart behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production service startup |
 | `test_worker_supervisor.py` | Worker/process component | `WorkerSupervisor` live ownership, worker launch configuration, and process supervision seams | Component tests do not prove production service/CLI topology |
 | `test_worker_protocol.py` | Pure/component plus worker protocol | `WorkerEgressParser`, typed claims, malformed/duplicate reports, transport-vs-claim status, reserved tool semantics, and worker process regression coverage | Some legacy process tests use real child processes, but this is the worker boundary, not production service/CLI topology |
 | `test_ipc_server.py` fake dispatch tests | IPC/component | Request validation and read-only dispatch against a minimal fake engine | `dispatch_*` with `FakeEngine` cannot prove mutation serialization or real engine semantics |
@@ -75,6 +75,7 @@ The counts are grouping counts, not test-case counts.
 | Worker result/state transitions are durable and fail closed | `test_control_plane.py`, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and H1 process-loss tests | KEEP |
 | Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_server.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
 | Socket ownership and cleanup are safe | Locator and server component tests | Real Unix socket tests, endpoint replacement and shutdown families | `LiveService` readiness/stop/restart | KEEP; topology adds process lifetime |
+| Graceful lifecycle commands close admission before exit | `test_lifecycle_drain_rejects_submitted_command_before_owner_admission`, checkpoint-barrier tests | Lifecycle IPC dispatch and service identity tests | `test_real_service_graceful_lifecycle_waits_for_active_worker` | KEEP; SIGINT remains abort-only |
 
 No important mutation-authority claim is supported solely by a mocked lower
 layer. The production claims have corresponding `LiveService` evidence. The
@@ -94,6 +95,7 @@ test driver, not a substitute engine.
 | H1 claim | Evidence location | Layer(s) | Evidence kind |
 | --- | --- | --- | --- |
 | Idle restart is inert; merge pending observes before effect | `test_real_service_sigkill_restarts_without_mutation`, `test_real_service_merge_pending_restart_is_observe_first` | Subprocess | SIGKILL, same SQLite/Git/worktrees, durable state and HEAD assertions |
+| Graceful stop/restart drains active workers and proves readiness | `test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary` | Subprocess | `test_real_service_graceful_lifecycle_waits_for_active_worker`, `test_bare_cli_restart_waits_for_ready_replacement` |
 | `worker-launch` remains fail closed | `test_real_service_worker_launch_restart_stays_fail_closed` | Subprocess | Crash after stage persistence; status/plan ambiguity and no rerun |
 | Matching live worker is not signaled or duplicated | `test_real_service_matching_live_worker_restart_does_not_duplicate` | Subprocess | Worker PID marker matches persisted identity; restart preserves one attempt |
 | Absent worker uses explicit RESUME | `test_real_service_absent_worker_uses_process_loss_resume` | Subprocess | Kill service and worker; new identity and second attempt are proven |

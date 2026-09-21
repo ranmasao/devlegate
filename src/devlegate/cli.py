@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import uuid
 from pathlib import Path
 from typing import NoReturn
 
@@ -29,6 +30,7 @@ from devlegate.ipc_client import (
     decode_status,
     request,
 )
+from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.runtime import (
@@ -73,6 +75,14 @@ def _service_metadata(response: dict[str, object]) -> dict[str, object]:
     pid = raw.get("pid")
     if isinstance(pid, int) and not isinstance(pid, bool):
         metadata["pid"] = pid
+    instance_id = raw.get("instance_id")
+    if isinstance(instance_id, str):
+        metadata["instance_id"] = instance_id
+    lifecycle = raw.get("lifecycle")
+    if isinstance(lifecycle, dict):
+        metadata["lifecycle"] = lifecycle
+        if isinstance(lifecycle.get("ready"), bool):
+            metadata["ready"] = lifecycle["ready"]
     return metadata
 
 
@@ -302,22 +312,143 @@ def _reconcile_control(
     return 0
 
 
-def _stop_service(env_file: Path, output_format: str) -> int:
+def _matching_lifecycle_receipt(
+    locator: RuntimeLocator,
+    request_id: str,
+    instance_id: str,
+    action: str,
+    state: str,
+) -> dict[str, object] | None:
+    receipt = read_lifecycle_receipt(locator)
+    if receipt is None:
+        return None
+    if (
+        receipt.get("request_id") == request_id
+        and receipt.get("instance_id") == instance_id
+        and receipt.get("action") == action
+        and receipt.get("state") == state
+    ):
+        return receipt
+    return None
+
+
+def _wait_for_service_stop(
+    locator: RuntimeLocator, request_id: str, instance_id: str
+) -> None:
+    while locator.daemon_authority_present():
+        time.sleep(0.05)
+    if _matching_lifecycle_receipt(
+        locator, request_id, instance_id, "stop", "completed"
+    ) is None:
+        raise DevlegateError(
+            "service authority disappeared without graceful stop completion"
+        )
+
+
+def _wait_for_service_restart(
+    locator: RuntimeLocator, request_id: str, old_instance: str
+) -> None:
+    readiness_deadline: float | None = None
+    while True:
+        failed = read_lifecycle_receipt(locator)
+        if (
+            isinstance(failed, dict)
+            and failed.get("request_id") == request_id
+            and failed.get("state") == "failed"
+        ):
+            raise DevlegateError(
+                f"restart replacement failed: {failed.get('error', 'unknown error')}"
+            )
+        handoff = _matching_lifecycle_receipt(
+            locator, request_id, old_instance, "restart", "handoff"
+        )
+        completed = _matching_lifecycle_receipt(
+            locator, request_id, old_instance, "restart", "completed"
+        )
+        if handoff is not None or completed is not None:
+            if readiness_deadline is None:
+                readiness_deadline = time.monotonic() + 10
+        elif not locator.daemon_authority_present():
+            failed = read_lifecycle_receipt(locator)
+            if (
+                isinstance(failed, dict)
+                and failed.get("request_id") == request_id
+                and failed.get("state") == "failed"
+            ):
+                raise DevlegateError(
+                    "restart replacement failed: "
+                    f"{failed.get('error', 'unknown error')}"
+                )
+            raise DevlegateError(
+                "service authority disappeared without restart handoff completion"
+            )
+        if not locator.daemon_authority_present():
+            raise DevlegateError("restart service authority was lost")
+        try:
+            response = request(locator.socket_path, "ping")
+        except IPCClientError:
+            if (
+                readiness_deadline is not None
+                and time.monotonic() >= readiness_deadline
+            ):
+                raise DevlegateError(
+                    "replacement service did not become ready; "
+                    f"receipt={read_lifecycle_receipt(locator)!r}"
+                )
+            time.sleep(0.05)
+            continue
+        if (
+            response.get("service") == "devlegate"
+            and response.get("instance_id") != old_instance
+            and response.get("ready") is True
+            and completed is not None
+            and response.get("instance_id") == completed.get("replacement_instance_id")
+        ):
+            return
+        if readiness_deadline is not None and time.monotonic() >= readiness_deadline:
+            raise DevlegateError(
+                "replacement service did not become ready; "
+                f"receipt={read_lifecycle_receipt(locator)!r}"
+            )
+        time.sleep(0.05)
+
+
+def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
     if not locator.daemon_authority_present():
         raise DevlegateError("service is not running")
+    request_id = uuid.uuid4().hex
     try:
-        response = request(locator.socket_path, "stop", mutable=True)
+        response = request(
+            locator.socket_path, intent, mutable=True, request_id=request_id
+        )
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    if set(response) != {"accepted"} or response["accepted"] is not True:
-        raise DevlegateError("service IPC returned invalid stop acknowledgement")
-    result = {"result": "accepted", "service": "devlegate", "action": "stop"}
-    emit(result, output_format, "service stop accepted")
+    if response.get("accepted") is not True:
+        raise DevlegateError(f"service IPC returned invalid {intent} acknowledgement")
+    instance_id = response.get("instance_id")
+    if not isinstance(instance_id, str) or not instance_id:
+        raise DevlegateError("service IPC returned no service instance identity")
+    if intent == "stop":
+        _wait_for_service_stop(locator, request_id, instance_id)
+        result = {"result": "stopped", "service": "devlegate", "action": intent}
+        emit(result, output_format, "service stopped")
+    else:
+        _wait_for_service_restart(locator, request_id, instance_id)
+        result = {"result": "restarted", "service": "devlegate", "action": intent}
+        emit(result, output_format, "service restarted")
     return 0
+
+
+def _stop_service(env_file: Path, output_format: str) -> int:
+    return _lifecycle_service(env_file, output_format, "stop")
+
+
+def _restart_service(env_file: Path, output_format: str) -> int:
+    return _lifecycle_service(env_file, output_format, "restart")
 
 
 def _healthy_service(env_file: Path) -> dict[str, object] | None:
@@ -588,6 +719,22 @@ def _render_status_text(
     control = snapshot.control
     lines = [f"Devlegate {__version__}  •  service {service_state}"]
     if service_state == "running" and service_metadata is not None:
+        lifecycle = service_metadata.get("lifecycle")
+        intent = lifecycle.get("intent") if isinstance(lifecycle, dict) else None
+        workers = lifecycle.get("workers") if isinstance(lifecycle, dict) else None
+        active = workers.get("active") if isinstance(workers, dict) else 0
+        if intent in {"stop", "restart"} and active:
+            action = "stop" if intent == "stop" else "restart"
+            lines.append(
+                f"Status: running, will {action} at checkpoint "
+                "(a worker is active)"
+            )
+        elif intent == "restart":
+            lines.append("Status: restarting")
+        elif intent == "stop":
+            lines.append("Status: stopping")
+        else:
+            lines.append("Status: running")
         lines.extend(["", f"Service version: {service_metadata['version']}"])
         if "pid" in service_metadata:
             lines.append(f"Service PID: {service_metadata['pid']}")
@@ -945,6 +1092,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
                 ("foreground", "run the persistent service attached to this terminal"),
                 ("once", "run one service pass, then exit"),
                 ("stop", "stop the persistent service"),
+                ("restart", "restart the persistent service"),
                 ("status", "show current workflow status"),
                 ("plan", "show the next workflow plan"),
             ),
@@ -1145,6 +1293,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(stop_parser)
+    restart_parser = commands.add_parser(
+        "restart",
+        help="restart the persistent workflow service at a checkpoint",
+        description="Restart the self-managed service after a graceful checkpoint.",
+    )
+    restart_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
+    add_output_arguments(restart_parser)
     check_parser = commands.add_parser(
         "check",
         help="validate setup readiness",
@@ -1313,7 +1473,11 @@ def main() -> int:
             parser.error("--env is only valid for bare background startup")
         env_file = args.env or Path.cwd() / ".env"
         try:
-            health = _healthy_service(env_file)
+            health = (
+                None
+                if os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD") is not None
+                else _healthy_service(env_file)
+            )
             if health is not None:
                 _warn_service_version_mismatch(health)
                 print("Devlegate service is already running.")
@@ -1456,6 +1620,8 @@ def main() -> int:
             return result
         if args.command == "stop":
             return _stop_service(env_file, args.output_format)
+        if args.command == "restart":
+            return _restart_service(env_file, args.output_format)
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "reconcile":

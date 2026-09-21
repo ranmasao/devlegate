@@ -12,6 +12,7 @@ import stat
 import struct
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,24 +34,32 @@ _SOCKET_DIRECTORY_MODE = 0o700
 _SOCKET_MODE = 0o600
 _PEER_CREDENTIALS = struct.Struct("3i")
 _FALLBACK_DIRECTORY_PREFIX = f".devlegate-sockets-{os.getuid()}-"
+_INSTANCE_ID = uuid.uuid4().hex
 
 
-def _service_identity() -> dict[str, object]:
-    return {
+def _service_identity(engine: object | None = None) -> dict[str, object]:
+    identity: dict[str, object] = {
         "service": "devlegate",
         "version": __version__,
         "protocol_version": 1,
         "pid": os.getpid(),
+        "instance_id": _INSTANCE_ID,
     }
+    lifecycle = getattr(engine, "lifecycle_status_payload", None)
+    if lifecycle is not None:
+        lifecycle_payload = lifecycle()
+        identity["lifecycle"] = lifecycle_payload
+        identity["ready"] = lifecycle_payload.get("ready") is True
+    return identity
 
 
 def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]:
     """Dispatch read-only methods through the service API."""
     if request.method == "ping":
-        return _service_identity()
+        return _service_identity(engine)
     if request.method == "status":
         result = engine.published_status_payload()
-        result["service"] = _service_identity()
+        result["service"] = _service_identity(engine)
         return result
     if request.method == "plan":
         return engine.published_plan_view().as_dict()
@@ -63,16 +72,23 @@ def dispatch_mutation(
     engine: object,
     request: IPCRequest,
     *,
-    shutdown: Callable[[], None] | None = None,
+    lifecycle: Callable[[str, str], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
-    if request.method == "stop":
+    if request.method in {"stop", "restart"}:
         if request.payload:
-            raise IPCProtocolError("invalid_request", "stop payload fields are invalid")
-        if shutdown is None:
-            raise IPCProtocolError("unknown_method", "unsupported method: stop")
-        shutdown()
-        return {"accepted": True}
+            raise IPCProtocolError(
+                "invalid_request", f"{request.method} payload fields are invalid"
+            )
+        if lifecycle is None:
+            raise IPCProtocolError(
+                "unknown_method", f"unsupported method: {request.method}"
+            )
+        return {
+            "accepted": True,
+            "instance_id": _INSTANCE_ID,
+            **lifecycle(request.method, request.request_id),
+        }
     if request.method == "retry":
         if set(request.payload) != {"ticket_id"}:
             raise IPCProtocolError(
@@ -142,11 +158,11 @@ def dispatch_request(
     engine: object,
     request: IPCRequest,
     *,
-    shutdown: Callable[[], None] | None = None,
+    lifecycle: Callable[[str, str], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Dispatch a request without duplicating method ownership knowledge."""
     try:
-        return dispatch_mutation(engine, request, shutdown=shutdown)
+        return dispatch_mutation(engine, request, lifecycle=lifecycle)
     except IPCProtocolError as error:
         if error.code != "unknown_method":
             raise
@@ -161,11 +177,11 @@ class UnixIPCServer:
         engine: object,
         socket_path: Path,
         *,
-        shutdown: Callable[[], None] | None = None,
+        lifecycle: Callable[[str, str], dict[str, object]] | None = None,
     ) -> None:
         self.engine = engine
         self.path = socket_path
-        self.shutdown = shutdown
+        self.lifecycle = lifecycle
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -390,7 +406,7 @@ class UnixIPCServer:
                         return
                     request = parse_request(payload)
                     result = dispatch_request(
-                        self.engine, request, shutdown=self.shutdown
+                        self.engine, request, lifecycle=self.lifecycle
                     )
                     response = encode_success_response(request.request_id, result)
                 except IPCProtocolError as error:

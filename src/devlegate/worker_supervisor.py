@@ -30,6 +30,10 @@ class WorkerSupervisionError(Exception):
     """A process-supervision failure that is not a workflow decision."""
 
 
+class WorkerAdmissionClosed(WorkerSupervisionError):
+    """A worker launch was rejected because the supervisor is draining."""
+
+
 @dataclasses.dataclass(frozen=True)
 class WorkerProcessIdentity:
     execution_id: str
@@ -419,7 +423,7 @@ def _run_opencode(
                 break
             except subprocess.TimeoutExpired:
                 kind = getattr(stop_request, "kind", None)
-                if kind in {"operator_abort", "service_shutdown"}:
+                if kind == "operator_abort":
                     interrupt(kind)
                     returncode = finish_interrupted()
                     break
@@ -463,6 +467,20 @@ class WorkerSupervisor:
         self.opencode_agent = agent
         self._active: dict[str, object] = {}
         self._lock = threading.Lock()
+        self._draining = False
+
+    def begin_drain(self) -> bool:
+        """Close admission once and return whether this call changed it."""
+        with self._lock:
+            if self._draining:
+                return False
+            self._draining = True
+            return True
+
+    @property
+    def draining(self) -> bool:
+        with self._lock:
+            return self._draining
 
     @property
     def active_count(self) -> int:
@@ -540,6 +558,8 @@ export default tool({
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
         environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, sort_keys=True)
         with self._lock:
+            if self._draining:
+                raise WorkerAdmissionClosed("worker admission is closed")
             self._active[execution_id] = object()
         try:
             opencode_result = _run_opencode(

@@ -58,6 +58,7 @@ from devlegate.worker_prompt import (
     build_worker_prompt,
 )
 from devlegate.worker_supervisor import (
+    WorkerAdmissionClosed,
     WorkerProcessIdentity,
     WorkerSupervisor,
 )
@@ -610,7 +611,7 @@ class ServiceEngine:
         self._iteration_diagnostic: str | None = None
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
-        self._operator_command_lock = threading.Lock()
+        self._operator_command_lock = threading.RLock()
         self._receipt_lock = threading.Lock()
         self._operator_command: OperatorCommand | None = None
         self._operator_active = False
@@ -620,6 +621,11 @@ class ServiceEngine:
         self._service_wake = threading.Event()
         self._service_shutdown = threading.Event()
         self._foreground_abort_requested = False
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_intent: str | None = None
+        self._lifecycle_phase = "running"
+        self._lifecycle_request_id: str | None = None
+        self._service_ready = False
         self._workers = WorkerSupervisor(
             self.opencode_bin, self.opencode_model, self.opencode_agent
         )
@@ -669,6 +675,63 @@ class ServiceEngine:
     def wake(self) -> None:
         """Wake the owner loop for an internal command or shutdown request."""
         self._service_wake.set()
+
+    def request_lifecycle(self, intent: str, request_id: str) -> dict[str, object]:
+        """Accept one process-local lifecycle intent and close worker admission."""
+        if intent not in {"stop", "restart"}:
+            raise DevlegateError(f"unsupported lifecycle intent: {intent}")
+        with self._operator_command_lock:
+            with self._lifecycle_lock:
+                if self._lifecycle_intent is not None:
+                    if self._lifecycle_intent != intent:
+                        raise DevlegateError(
+                            f"service {self._lifecycle_intent} is already accepted"
+                        )
+                    return self.lifecycle_status_payload()
+                self._workers.begin_drain()
+                self._lifecycle_intent = intent
+                self._lifecycle_phase = "draining"
+                self._lifecycle_request_id = request_id
+        self.wake()
+        return self.lifecycle_status_payload()
+
+    def lifecycle_status_payload(self) -> dict[str, object]:
+        with self._lifecycle_lock:
+            intent = self._lifecycle_intent
+            phase = self._lifecycle_phase
+        return {
+            "intent": intent or "none",
+            "phase": phase,
+            "ready": self._service_ready,
+            "request_id": self._lifecycle_request_id,
+            "workers": {"active": self._workers.active_count},
+        }
+
+    def mark_service_ready(self) -> None:
+        with self._lifecycle_lock:
+            self._service_ready = True
+
+    def lifecycle_intent(self) -> str | None:
+        with self._lifecycle_lock:
+            return self._lifecycle_intent
+
+    def _lifecycle_drain_pending(self) -> bool:
+        with self._lifecycle_lock:
+            return self._lifecycle_intent is not None
+
+    def _lifecycle_exit_ready(self) -> bool:
+        if not self._lifecycle_drain_pending() or self._workers.active_count:
+            return False
+        if self._owned_execution_id is None:
+            return True
+        if self._state.get("phase") != "agent_running":
+            return True
+        return self._state.get("execution_stage") in {
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        }
 
     def begin_hosted_owner(self) -> None:
         owner = threading.get_ident()
@@ -785,6 +848,10 @@ class ServiceEngine:
             ):
                 raise DevlegateError(
                     "service is shutting down; runtime command was not admitted"
+                )
+            if self._lifecycle_drain_pending():
+                raise DevlegateError(
+                    "service is draining; runtime command was not admitted"
                 )
             receipt = self._mutable_receipt(request_id)
             if receipt is not None:
@@ -1081,15 +1148,24 @@ class ServiceEngine:
 
     def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
-            if command.cancelled.is_set():
-                raise DevlegateError("service busy; mutable request was not admitted")
-            self._validate_operator_admission(command)
-            if command.cancelled.is_set():
-                raise DevlegateError("service busy; mutable request was not admitted")
-            self._record_operator_admission(command)
-            command.admission_result = self._operator_ack(
-                command.method, command.ticket_id, command.onto
-            )
+            with self._operator_command_lock:
+                if command.cancelled.is_set():
+                    raise DevlegateError(
+                        "service busy; mutable request was not admitted"
+                    )
+                if self._lifecycle_drain_pending():
+                    raise DevlegateError(
+                        "service is draining; runtime command was not admitted"
+                    )
+                self._validate_operator_admission(command)
+                if command.cancelled.is_set():
+                    raise DevlegateError(
+                        "service busy; mutable request was not admitted"
+                    )
+                self._record_operator_admission(command)
+                command.admission_result = self._operator_ack(
+                    command.method, command.ticket_id, command.onto
+                )
         except DevlegateError as error:
             command.admission_error = error
             raise
@@ -1363,7 +1439,6 @@ class ServiceEngine:
         kind = getattr(self._stop_event, "kind", None)
         expected_signal = {
             "operator_abort": signal.SIGINT,
-            "service_shutdown": signal.SIGTERM,
         }.get(kind)
         if (
             self._stop_requested()
@@ -1391,7 +1466,7 @@ class ServiceEngine:
 
     def _stop_before_admission(self) -> bool:
         """Return whether a new mutable operation must not be committed."""
-        return self._stop_requested()
+        return self._stop_requested() or self._lifecycle_drain_pending()
 
     def _ticket_store(self) -> TicketStore:
         self._assert_repository_owner()
@@ -3011,20 +3086,29 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         worker_returned = False
         try:
-            worker_run = self._workers.run(
-                workspace,
-                prompt,
-                execution_id=execution_id,
-                stop_request=self._stop_event,
-                identity_handler=lambda identity: self._save_state(
-                    "agent_running",
-                    execution_stage="worker-running",
-                    worker_identity=identity.as_dict(),
-                ),
-                interruption_handler=lambda kind: self._save_state(
-                    "agent_running", execution_interruption_kind=kind
-                ),
-            )
+            try:
+                worker_run = self._workers.run(
+                    workspace,
+                    prompt,
+                    execution_id=execution_id,
+                    stop_request=self._stop_event,
+                    identity_handler=lambda identity: self._save_state(
+                        "agent_running",
+                        execution_stage="worker-running",
+                        worker_identity=identity.as_dict(),
+                    ),
+                    interruption_handler=lambda kind: self._save_state(
+                        "agent_running", execution_interruption_kind=kind
+                    ),
+                )
+            except WorkerAdmissionClosed:
+                self._save_state(
+                    "idle",
+                    execution_stage=None,
+                    pending_execution_report=None,
+                    worker_identity=None,
+                )
+                return 0
             worker_returned = True
         finally:
             if worker_returned and worker_run.worker_group_retired:
@@ -3101,6 +3185,16 @@ class ServiceEngine:
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
             f"{checkpoint.after_head[:12]}"
         )
+        if self._lifecycle_drain_pending():
+            self._publish_service_snapshot(
+                lifecycle=(
+                    "restarting"
+                    if self.lifecycle_intent() == "restart"
+                    else "stopping"
+                ),
+                worker_running=False,
+            )
+            return 0
         product = self._observe_product_generation(workspace.base_head)
         current_product_remote = product["remote_head"]
         if not product["stable"]:
@@ -4573,6 +4667,18 @@ class ServiceEngine:
                     except DevlegateError:
                         pass
             while True:
+                if self._lifecycle_exit_ready():
+                    self._service_shutdown.set()
+                    self._reject_pending_operator_command_on_shutdown()
+                    self._publish_service_snapshot(
+                        lifecycle=(
+                            "restarting"
+                            if self.lifecycle_intent() == "restart"
+                            else "stopping"
+                        ),
+                        worker_running=False,
+                    )
+                    return 0
                 if (
                     stop_event is not None
                     and stop_event.is_set()

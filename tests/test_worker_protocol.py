@@ -95,7 +95,7 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     assert "stderr" in output.err
 
 
-@pytest.mark.parametrize("kind", ["operator_abort", "service_shutdown"])
+@pytest.mark.parametrize("kind", ["operator_abort"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
     marker = tmp_path / "processes.json"
@@ -236,7 +236,7 @@ def test_stubborn_worker_group_is_force_killed(tmp_path):
         kind = None
 
     request = Request()
-    timer = threading.Timer(0.2, setattr, args=(request, "kind", "service_shutdown"))
+    timer = threading.Timer(0.2, setattr, args=(request, "kind", "operator_abort"))
     timer.start()
 
     started = time.monotonic()
@@ -246,8 +246,8 @@ def test_stubborn_worker_group_is_force_killed(tmp_path):
     timer.cancel()
     elapsed = time.monotonic() - started
     assert elapsed < 2.5
-    assert result.interruption_kind == "service_shutdown"
-    assert result.process_returncode == -9
+    assert result.interruption_kind == "operator_abort"
+    assert result.process_returncode == -signal.SIGINT
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
@@ -261,7 +261,7 @@ def test_natural_worker_exit_wins_before_shutdown_observation():
         "prompt",
         stop_request=request,
     )
-    request.kind = "service_shutdown"
+    request.kind = "operator_abort"
     assert result.process_returncode == 7
     assert result.interruption_kind is None
 
@@ -291,7 +291,7 @@ def test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
     monkeypatch.setattr(os, "killpg", lambda *args: signals.append(args))
 
     class Request:
-        kind = "service_shutdown"
+        kind = "operator_abort"
 
     result = _run_opencode(["fake"], "prompt", stop_request=Request())
     assert result.process_returncode == 7

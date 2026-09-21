@@ -93,6 +93,7 @@ class LiveService:
                     if (
                         response.get("service") == "devlegate"
                         and response.get("protocol_version") == 1
+                        and response.get("ready") is True
                     ):
                         return
             time.sleep(0.02)

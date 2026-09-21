@@ -24,6 +24,7 @@ from git_support import clone_world
 from runtime_helpers import run_test_iteration
 from service_harness import LiveService
 
+import devlegate.cli as cli
 from devlegate import __version__
 from devlegate._vendor import nanoyaml
 from devlegate.cli import (
@@ -616,13 +617,13 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
     while time.monotonic() < deadline:
         log = log_path.read_text()
         if (
-            "shutdown explicitly requested through devlegate stop" in log
-            and "orderly shutdown complete (stop_command)" in log
+            "lifecycle stop accepted through devlegate stop" in log
+            and "orderly stop complete" in log
         ):
             break
         time.sleep(0.02)
-    assert "shutdown explicitly requested through devlegate stop" in log
-    assert "orderly shutdown complete (stop_command)" in log
+    assert "lifecycle stop accepted through devlegate stop" in log
+    assert "orderly stop complete" in log
     assert log.count("---< D E V L E G A T E >---") == 1
     assert "mode    : background" in log
     assert "version :" in log
@@ -631,6 +632,198 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
     assert "control :" in log
     assert "mode    :" in log
     assert "pid     :" in log
+
+
+def test_bare_cli_restart_waits_for_ready_replacement(git_fixture, monkeypatch):
+    monkeypatch.chdir(git_fixture["working"])
+    started = invoke(git_fixture)
+    assert started.returncode == 0, started.stderr
+    before = json.loads(invoke(git_fixture, "status", "--json").stdout)
+    old_instance = before["service"]["instance_id"]
+
+    restarted = invoke(git_fixture, "restart")
+    log_path = RuntimeLocator.from_env(git_fixture["config"]).state_dir / "logs" / (
+        f"{RuntimeLocator.from_env(git_fixture['config']).state_key}.log"
+    )
+    assert restarted.returncode == 0, (
+        f"{restarted.stderr}\n{log_path.read_text() if log_path.exists() else ''}"
+    )
+    after = json.loads(invoke(git_fixture, "status", "--json").stdout)
+    assert after["service"]["instance_id"] != old_instance
+    assert after["service"]["ready"] is True
+    assert invoke(git_fixture, "stop").returncode == 0
+
+
+def test_stop_wait_requires_matching_completion_receipt(monkeypatch):
+    class Locator:
+        def daemon_authority_present(self):
+            return False
+
+    locator = Locator()
+    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: None)
+    with pytest.raises(DevlegateError, match="without graceful stop completion"):
+        cli._wait_for_service_stop(locator, "request", "instance")
+
+
+def test_restart_wait_requires_ready_replacement(monkeypatch):
+    class Locator:
+        socket_path = Path("/tmp/devlegate-test-restart.sock")
+
+        def daemon_authority_present(self):
+            return True
+
+    receipt = {
+        "request_id": "request",
+        "instance_id": "old",
+        "replacement_instance_id": "new",
+        "action": "restart",
+        "state": "completed",
+    }
+    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: receipt)
+    monkeypatch.setattr(
+        cli,
+        "request",
+        lambda *_args, **_kwargs: {
+            "service": "devlegate",
+            "instance_id": "new",
+            "ready": False,
+        },
+    )
+    clock = iter((0.0, 11.0))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
+    with pytest.raises(DevlegateError, match="did not become ready"):
+        cli._wait_for_service_restart(Locator(), "request", "old")
+
+
+@pytest.mark.parametrize("command", ["stop", "restart", "signal", "sigint"])
+def test_real_service_graceful_lifecycle_waits_for_active_worker(
+    git_fixture, monkeypatch, command
+):
+    monkeypatch.chdir(git_fixture["working"])
+    if command == "restart":
+        monkeypatch.setenv("DEVLEGATE_SELF_MANAGED", "1")
+    worker = git_fixture["tmp"] / f"graceful-{command}-worker.py"
+    pid_file = git_fixture["tmp"] / f"graceful-{command}-worker.pid"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(2)\n"
+        "(workspace / 'graceful-worker.txt').write_text('completed\\n')\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'graceful', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    worker.chmod(0o755)
+    config = _h1_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    service = LiveService(git_fixture["working"], config)
+    client = None
+    try:
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and pid_file.exists()
+            ),
+            timeout=30,
+        )
+        action = "stop" if command == "signal" else command
+        worker_pid = int(pid_file.read_text())
+        if command in {"signal", "sigint"}:
+            assert service.process is not None
+            service.process.send_signal(
+                signal.SIGINT if command == "sigint" else signal.SIGTERM
+            )
+            if command == "signal":
+                os.kill(worker_pid, 0)
+        else:
+            client = service.start_cli(command)
+        status_text = ""
+
+        def lifecycle_status_visible():
+            nonlocal status_text
+            observed = service.cli("status")
+            status_text = observed.stdout
+            return (
+                observed.returncode == 0
+                and f"will {action} at checkpoint" in status_text
+            )
+
+        if command in {"signal", "sigint"}:
+            assert service.process is not None
+            service.process.wait(timeout=30)
+            if command == "sigint":
+                assert service.process.returncode == 130
+        else:
+            service.wait_for(lifecycle_status_visible, timeout=10)
+            assert "a worker is active" in status_text
+        if client is not None:
+            assert client.poll() is None
+            if command in {"stop", "restart"}:
+                os.kill(worker_pid, 0)
+        if command == "restart":
+            handoff_path = service.locator.state_dir / "lifecycle" / (
+                f"{service.locator.state_key}.json"
+            )
+            service.wait_for(
+                lambda: (
+                    handoff_path.exists()
+                    and json.loads(handoff_path.read_text())["state"] == "handoff"
+                ),
+                timeout=10,
+            )
+            contender = service.start_cli()
+            contender_stdout, contender_stderr = contender.communicate(timeout=10)
+            assert "service started" not in contender_stdout
+            assert "service started" not in contender_stderr
+        if client is not None:
+            stdout, stderr = client.communicate(timeout=30)
+            assert client.returncode == 0, (stdout, stderr)
+        if command == "restart":
+            service.wait_for(
+                lambda: (
+                    service.process is not None
+                    and service.process.poll() is None
+                    and _disk_state(config)["phase"] == "idle"
+                )
+            )
+            receipt_path = service.locator.state_dir / "lifecycle" / (
+                f"{service.locator.state_key}.json"
+            )
+            receipt = json.loads(receipt_path.read_text())
+            assert receipt["action"] == "restart"
+            assert receipt["state"] == "completed"
+        else:
+            if command == "signal":
+                assert service.process is not None
+                service.process.wait(timeout=30)
+            assert not service.locator.daemon_authority_present()
+            if command == "stop":
+                receipt_path = service.locator.state_dir / "lifecycle" / (
+                    f"{service.locator.state_key}.json"
+                )
+                receipt = json.loads(receipt_path.read_text())
+                assert receipt["action"] == "stop"
+                assert receipt["state"] == "completed"
+    finally:
+        if client is not None and client.poll() is None:
+            client.kill()
+            client.wait(timeout=5)
+        if service.process is not None and service.process.poll() is None:
+            service.stop()
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
 
 
 def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
@@ -1794,7 +1987,7 @@ def test_real_service_sigkill_restarts_without_mutation(git_fixture, monkeypatch
         assert plan.returncode == 0, plan.stderr
         assert _disk_state(config) == before
     finally:
-        service.stop()
+        service.kill()
 
 
 @pytest.mark.parametrize("point", ["merge_pending", "merge_after_effect"])
@@ -2357,17 +2550,17 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             ),
             timeout=30,
         )
-        service.stop()
-        interrupted = _disk_state(config)
-        assert interrupted["phase"] == "idle"
-        assert interrupted["failed_executions"]["T-1"]["interrupted"] is True
-        assert (
-            interrupted["failed_executions"]["T-1"]["interruption_kind"]
-            == "service_shutdown"
-        )
-
+        service.kill()
+        os.kill(int(pid_file.read_text()), signal.SIGKILL)
         service.start()
         service.wait_ready()
+        service.wait_for(
+            lambda: (
+                _disk_state(config)["phase"] == "idle"
+                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
+            ),
+            timeout=30,
+        )
         service.wait_for(
             lambda: (
                 _disk_state(config)["phase"] == "idle"

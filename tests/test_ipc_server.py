@@ -111,21 +111,17 @@ def test_ping_status_and_plan_work_over_unix_socket(running_server):
     status = request(path, "2", "status")
     plan = request(path, "3", "plan")
 
-    assert ping.ok and ping.result == {
-        "service": "devlegate",
-        "version": ipc_server.__version__,
-        "protocol_version": 1,
-        "pid": os.getpid(),
-    }
+    assert ping.ok
+    assert ping.result["service"] == "devlegate"
+    assert ping.result["version"] == ipc_server.__version__
+    assert ping.result["protocol_version"] == 1
+    assert ping.result["pid"] == os.getpid()
+    assert isinstance(ping.result["instance_id"], str)
+    assert ping.result["lifecycle"]["phase"] == "running"
     assert status.ok
     assert status.result == {
         **engine.status_view().as_dict(),
-        "service": {
-            "service": "devlegate",
-            "version": ipc_server.__version__,
-            "protocol_version": 1,
-            "pid": os.getpid(),
-        },
+        "service": ping.result,
     }
     assert plan.ok and plan.result == engine.plan_view().as_dict()
 
@@ -362,14 +358,19 @@ def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
     assert not owner.is_alive()
 
 
-def test_stop_dispatch_invokes_host_shutdown_callback(running_server):
+def test_stop_dispatch_requests_service_lifecycle(running_server):
     engine, _state, server = running_server
     called = []
     response = dispatch_mutation(
-        engine, _request("stop"), shutdown=lambda: called.append(True)
+        engine,
+        _request("stop"),
+        lifecycle=lambda intent, request_id: called.append((intent, request_id))
+        or {"phase": "draining", "request_id": request_id},
     )
-    assert response == {"accepted": True}
-    assert called == [True]
+    assert response["accepted"] is True
+    assert response["phase"] == "draining"
+    assert isinstance(response["instance_id"], str)
+    assert called == [("stop", "id")]
 
 
 def test_control_reconciliation_dispatch_preserves_both_identities(running_server):
