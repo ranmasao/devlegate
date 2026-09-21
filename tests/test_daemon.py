@@ -1309,10 +1309,13 @@ def test_once_operator_abort_stops_after_one_iteration(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch):
-    working, config, state = control_fixture(tmp_path)
-    state = Path("/tmp") / f"c-f2-{tmp_path.name}"
-    config.write_text(config.read_text().replace(str(tmp_path / "state"), str(state)))
+def test_explicit_retry_sigterm_owns_worker_process_group(
+    tmp_path, monkeypatch, short_state_dir
+):
+    working, config, _state = control_fixture(tmp_path)
+    config.write_text(
+        config.read_text().replace(str(tmp_path / "state"), str(short_state_dir))
+    )
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     marker = tmp_path / "retry-processes.json"
@@ -1409,10 +1412,13 @@ def test_explicit_retry_sigterm_owns_worker_process_group(tmp_path, monkeypatch)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_sigkill_parent_and_retry_refuses_duplicate_worker(tmp_path, monkeypatch):
-    working, config, state = control_fixture(tmp_path)
-    state = Path("/tmp") / f"c-f2-{tmp_path.name}"
-    config.write_text(config.read_text().replace(str(tmp_path / "state"), str(state)))
+def test_sigkill_parent_and_retry_refuses_duplicate_worker(
+    tmp_path, monkeypatch, short_state_dir
+):
+    working, config, _state = control_fixture(tmp_path)
+    config.write_text(
+        config.read_text().replace(str(tmp_path / "state"), str(short_state_dir))
+    )
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     marker = tmp_path / "retry-processes.jsonl"

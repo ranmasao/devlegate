@@ -4,6 +4,11 @@ This document is the maintained test-proof map for the current Devlegate 0.5
 architecture. It describes what a test proves, not merely the behavioral
 scenario in its name.
 
+Test resources created outside pytest's normal temporary tree must have an
+explicit owner with deterministic teardown. Resources retained during a crash
+or recovery test are still owned by that test and must be removed when it
+finishes.
+
 ## Proof Model
 
 The suite uses three runtime proof layers:

@@ -55,7 +55,7 @@ def git(cwd, *args):
 
 
 @pytest.fixture
-def git_fixture(tmp_path, request):
+def git_fixture(tmp_path, request, short_state_dir):
     state = Path("/tmp") / (
         "devlegate-test-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]
     )
@@ -110,6 +110,7 @@ def git_fixture(tmp_path, request):
         "publisher_control": publisher_control,
         "config": config,
         "state": state,
+        "short_state": short_state_dir,
         "tmp": tmp_path,
     }
 
@@ -147,12 +148,12 @@ def cli_daemon(git_fixture, monkeypatch):
 
 
 def _short_runtime_config(git_fixture):
-    suffix = hashlib.sha256(str(git_fixture["tmp"]).encode()).hexdigest()[:8]
-    state = Path("/tmp") / f"devlegate-f1-{suffix}"
-    config = git_fixture["tmp"] / "devlegate-f1.env"
-    config.write_text(git_fixture["config"].read_text().replace(
-        str(git_fixture["state"]), str(state)
-    ))
+    config = git_fixture["tmp"] / "devlegate-short.env"
+    config.write_text(
+        git_fixture["config"].read_text().replace(
+            str(git_fixture["state"]), str(git_fixture["short_state"])
+        )
+    )
     return config
 
 

@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: EUPL-1.2
 import json
 import os
-import shutil
 import socket
 import stat
 import struct
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from resource_helpers import owned_short_state_dir
 from runtime_helpers import run_test_iteration
 from test_control_plane import control_fixture, git, invoke, persist_agent_running
 
@@ -58,15 +57,6 @@ def make_engine(tmp_path, monkeypatch, state_override=None):
     return ServiceEngine(config), state
 
 
-@pytest.fixture
-def short_state_dir():
-    path = Path(tempfile.mkdtemp(prefix="c-state-", dir="/tmp"))
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
-
-
 def request(socket_path, request_id, method, payload=None):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(5)
@@ -77,6 +67,12 @@ def request(socket_path, request_id, method, payload=None):
     stream.close()
     connection.close()
     return response
+
+
+def test_short_state_directory_context_cleans_external_resource():
+    with owned_short_state_dir() as path:
+        assert path.is_dir()
+    assert not path.exists()
 
 
 @pytest.fixture
@@ -692,6 +688,52 @@ def test_excessively_long_socket_path_fails_as_devlegate_error(
 
     with pytest.raises(DevlegateError, match="IPC socket path is too long"):
         server.start()
+
+
+def test_fallback_socket_directory_is_removed_after_owned_socket_stop(
+    tmp_path, monkeypatch
+):
+    long_state = tmp_path / ("state-" + "x" * 80)
+    engine, _state = make_engine(tmp_path, monkeypatch, long_state)
+    fallback_directory = engine.ipc_socket_path.parent
+    assert fallback_directory.parent == Path("/tmp")
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+
+    server.start()
+    try:
+        assert engine.ipc_socket_path.is_socket()
+        assert fallback_directory.is_dir()
+    finally:
+        server.stop()
+
+    assert not engine.ipc_socket_path.exists()
+    assert not fallback_directory.exists()
+
+
+def test_fallback_socket_directory_keeps_unrelated_entry(
+    tmp_path, monkeypatch
+):
+    long_state = tmp_path / ("state-" + "y" * 80)
+    engine, _state = make_engine(tmp_path, monkeypatch, long_state)
+    fallback_directory = engine.ipc_socket_path.parent
+    unrelated = fallback_directory / "unrelated-entry"
+    fallback_directory.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("keep\n")
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+
+    try:
+        server.start()
+        assert engine.ipc_socket_path.is_socket()
+    finally:
+        server.stop()
+
+    try:
+        assert not engine.ipc_socket_path.exists()
+        assert unrelated.read_text() == "keep\n"
+        assert fallback_directory.is_dir()
+    finally:
+        unrelated.unlink(missing_ok=True)
+        fallback_directory.rmdir()
 
 
 @pytest.mark.parametrize("host", [daemon.run_service])

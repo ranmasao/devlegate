@@ -32,6 +32,7 @@ UNIX_SOCKET_PATH_MAX_BYTES = 107
 _SOCKET_DIRECTORY_MODE = 0o700
 _SOCKET_MODE = 0o600
 _PEER_CREDENTIALS = struct.Struct("3i")
+_FALLBACK_DIRECTORY_PREFIX = f".devlegate-sockets-{os.getuid()}-"
 
 
 def _service_identity() -> dict[str, object]:
@@ -304,6 +305,7 @@ class UnixIPCServer:
             info = os.lstat(self.path)
         except FileNotFoundError:
             self._bound_identity = None
+            self._remove_empty_fallback_directory()
             return
         except OSError:
             return
@@ -316,7 +318,28 @@ class UnixIPCServer:
                 self.path.unlink()
             except OSError:
                 return
+            self._remove_empty_fallback_directory()
         self._bound_identity = None
+
+    def _remove_empty_fallback_directory(self) -> None:
+        parent = self.path.parent
+        if parent.parent != Path("/tmp") or not parent.name.startswith(
+            _FALLBACK_DIRECTORY_PREFIX
+        ):
+            return
+        suffix = parent.name.removeprefix(_FALLBACK_DIRECTORY_PREFIX)
+        if len(suffix) != 8 or any(char not in "0123456789abcdef" for char in suffix):
+            return
+        try:
+            info = os.lstat(parent)
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+            ):
+                return
+            parent.rmdir()
+        except OSError:
+            pass
 
     def _serve(self) -> None:
         listener = self._listener
