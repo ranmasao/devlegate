@@ -5,11 +5,14 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
-## Unreleased
+## 0.5.2 -- 2026-09-21
+
+Service runtime consolidation, diagnostics, and authority hardening.
 
 ### Added
 
 - Exposed the loaded version and informational PID of the running service in ping and status output, including client/service mismatch warnings.
+- Persisted the latest terminal service failure for offline status reporting.
 
 ### Changed
 
@@ -17,9 +20,12 @@ release are not separate product changes.
 - Scoped retry and automatic-resume authorization to individual scheduler iterations.
 - Simplified status projections to expose scheduler eligibility and one structured blocking reason per todo ticket.
 - Routed hosted repository authority through the service owner thread and published read-only IPC views.
-- Hardened the background service bootstrap against managed-checkout import shadowing.
-- Persisted the latest observed terminal service failure for offline status reporting.
 - Declared Linux as the supported platform for hosted 0.5 execution.
+
+### Fixed
+
+- Hardened background service startup against managed-checkout import shadowing.
+- Removed obsolete runtime and compatibility seams after the service-host refactor.
 
 ## 0.5.1 -- 2026-09-20
 
