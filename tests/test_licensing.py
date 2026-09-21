@@ -17,6 +17,18 @@ from pathlib import Path
 from devlegate import __version__
 
 ROOT = Path(__file__).parents[1]
+DEFAULT_TEMPLATE_FILES = {
+    "default_templates/.env.example",
+    "default_templates/artifacts.toml",
+    "default_templates/generated_marker.txt",
+    "default_templates/project_context.md",
+    "default_templates/prompts/core_contract.txt",
+    "default_templates/prompts/fresh.txt",
+    "default_templates/prompts/resume.txt",
+    "default_templates/prompts/rework.txt",
+    "default_templates/skills/architect/SKILL.md.tmpl",
+    "default_templates/skills/reviewer/SKILL.md.tmpl",
+}
 HEADER = (
     "# Copyright (c) 2026 Daniil Romanov\n"
     "# Licensed under the EUPL-1.2.\n"
@@ -121,7 +133,7 @@ def _build_distribution_artifacts(root: Path) -> tuple[Path, Path]:
             "--no-cache-dir",
             "--target",
             str(backend),
-            "setuptools>=77.0.3",
+            "setuptools==77.0.3",
             "packaging>=24.2",
         ],
         check=True,
@@ -196,14 +208,15 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
             "devlegate/_vendor/nanoyaml/LICENSE"
         ).decode()
         template_names = {
-            name for name in names if name.startswith("devlegate/default_templates/")
+            name.removeprefix("devlegate/")
+            for name in names
+            if name.startswith("devlegate/default_templates/")
         }
-        assert "devlegate/default_templates/project_context.md" in template_names
-        assert "devlegate/default_templates/generated_marker.txt" in template_names
-        assert "devlegate/default_templates/prompts/core_contract.txt" in template_names
+        assert template_names == DEFAULT_TEMPLATE_FILES
         assert not any(
             "SPDX-License-Identifier: EUPL-1.2" in archive.read(name).decode("utf-8")
-            for name in template_names
+            for name in names
+            if name.startswith("devlegate/default_templates/")
             if not name.endswith("/")
         )
 
@@ -224,6 +237,12 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
             f"{root}/src/devlegate/default_templates/prompts/core_contract.txt",
         }
         assert expected <= names
+        assert {
+            member.name.removeprefix(f"{root}/src/devlegate/")
+            for member in archive.getmembers()
+            if member.isfile()
+            and member.name.startswith(f"{root}/src/devlegate/default_templates/")
+        } == DEFAULT_TEMPLATE_FILES
         member = archive.extractfile(
             f"{root}/src/devlegate/_vendor/nanoyaml/LICENSE"
         )
