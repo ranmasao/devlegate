@@ -151,12 +151,12 @@ limited to seams with no supported production caller.
 | `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
 | `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
-| `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
+| `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` canonical `status_view()` / `plan_view()` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
-| `ServiceEngine.retry()` / `reconcile_update_base()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py:5339-5425`; owner command handling at `src/devlegate/runtime.py:4642-4649` |
-| `ServiceEngine.run()` / `run_once()` | No production callers; direct loop entry was replaced by `serve()` hosted through `run_service()` | REMOVE - test-only compatibility seams | `tests/runtime_helpers.py` provides the test-only iteration boundary |
-| `ServiceHost._run_with_signals()` | No production callers after host signal handling was consolidated in `run()` | REMOVE - test-only helper seam | `src/devlegate/daemon.py` |
-| `ServiceHost` incomplete-engine `state_dir` branch | Supported only fake engines missing the real engine contract | REMOVE - unsupported fake topology | `src/devlegate/daemon.py` always acquires the real engine lock |
+| `ServiceEngine.retry()` / `reconcile_update_base()` / `reconcile_resume()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py`; owner command handling routes through the corresponding owned methods |
+| `runtime.Devlegate` alias | No supported callers or documented contract | REMOVED in 0.5.2 - obsolete alias | `src/devlegate/runtime.py` no longer defines the alias |
+| `ServiceEngine.status()` / `plan()` | No supported callers; canonical views are `status_view()` and `plan_view()` | REMOVED in 0.5.2 - obsolete spellings | `src/devlegate/runtime.py`, `src/devlegate/cli.py` |
+| Historical helper reexports from `devlegate.cli` | Tests now import runtime-owned helpers directly; `_git` remains a current CLI dependency | REMOVED in 0.5.2 - private test compatibility | `tests/test_cli.py`, `tests/test_terminal.py`, `tests/test_worker_protocol.py` |
 
 ### Construction Map
 
@@ -205,7 +205,7 @@ remain valid after I4:
   canonical engine view contract.
 - `test_cli_status_and_plan_render_fake_engine_without_runtime` checks cheap
   rendering without claiming production topology.
-- Historical helper imports and private methods in `test_control_plane.py`,
+- Runtime-owned private helpers and methods in `test_control_plane.py`,
   `test_daemon.py`, and `test_worker_protocol.py` are direct semantic seams.
 
 These tests are not production topology proof. The production reachability

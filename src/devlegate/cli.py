@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import NoReturn
 
 from devlegate import __version__
-from devlegate import runtime as _runtime
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
 from devlegate.daemon import run_service
 from devlegate.ipc_client import (
@@ -38,6 +37,7 @@ from devlegate.runtime import (
     ExecutionPlan,
     StatusSnapshot,
     WorkflowBlockedError,
+    _git,
 )
 from devlegate.runtime_locator import (
     RuntimeAuthorityPresent,
@@ -46,17 +46,6 @@ from devlegate.runtime_locator import (
 )
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
-
-
-def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
-    return _runtime._todo_fingerprint(repo, todo_path)
-
-
-# Keep the historical helper imports available to callers of devlegate.cli.
-_preserve_terminal = _runtime._preserve_terminal
-_run_opencode = _runtime._run_opencode
-MAX_STDOUT_EVENT_BYTES = _runtime.MAX_STDOUT_EVENT_BYTES
-_git = _runtime._git
 
 
 def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine:
@@ -90,9 +79,9 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
         with guard:
             engine = _service_engine(env_file, read_only=True)
             if method == "status":
-                view = getattr(engine, "status_view", engine.status)
+                view = engine.status_view
             else:
-                view = getattr(engine, "plan_view", engine.plan)
+                view = engine.plan_view
             value = view()
             diagnostic, corrupt = read_service_failure(locator)
             failure = (

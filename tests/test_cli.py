@@ -30,7 +30,6 @@ from devlegate.cli import (
     Devlegate,
     DevlegateError,
     ReadOnlyView,
-    _todo_fingerprint,
     build_parser,
     main,
 )
@@ -42,6 +41,7 @@ from devlegate.runtime import (
     ExecutionPlan,
     GitObservation,
     StatusSnapshot,
+    _todo_fingerprint,
 )
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
 from devlegate.service import ServiceEngine
@@ -1518,8 +1518,8 @@ def test_service_engine_status_and_plan_return_immutable_views(
     monkeypatch.chdir(git_fixture["working"])
     application = ServiceEngine(git_fixture["config"], read_only=True)
 
-    status = application.status()
-    plan = application.plan()
+    status = application.status_view()
+    plan = application.plan_view()
 
     assert status.plan == plan
     assert status.code.local_head
@@ -3193,10 +3193,10 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
         def __init__(self, env_file, *, read_only=False):
             assert read_only
 
-        def status(self):
+        def status_view(self):
             return snapshot
 
-        def plan(self):
+        def plan_view(self):
             return plan
 
     monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)

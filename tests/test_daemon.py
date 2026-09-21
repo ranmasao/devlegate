@@ -1194,8 +1194,8 @@ def test_daemon_holds_project_lock_while_service_is_active(tmp_path, monkeypatch
     before = dict(second._state)
     with pytest.raises(DevlegateError, match="another devlegate instance"):
         daemon.run_service(second, once=True)
-    assert second.status().phase == "idle"
-    assert second.plan().action == "run-worker"
+    assert second.status_view().phase == "idle"
+    assert second.plan_view().action == "run-worker"
     assert second._state == before
 
     release.set()

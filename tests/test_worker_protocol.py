@@ -16,8 +16,8 @@ import pytest
 
 import devlegate.cli as cli
 import devlegate.runtime as runtime
-from devlegate.cli import MAX_STDOUT_EVENT_BYTES, _run_opencode
 from devlegate.execution_workspace import ExecutionWorkspace
+from devlegate.runtime import MAX_STDOUT_EVENT_BYTES, _run_opencode
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerClaim,

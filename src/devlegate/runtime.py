@@ -5965,10 +5965,6 @@ export default tool({
         self._publish_status_snapshot(snapshot)
         return snapshot
 
-    def status(self) -> StatusSnapshot:
-        """Compatibility spelling for the read-only status projection."""
-        return self.status_view()
-
     def _retry_candidates(self) -> tuple[tuple[str, str, str], ...]:
         for _attempt in range(3):
             try:
@@ -6985,10 +6981,6 @@ export default tool({
         )
         return snapshot.plan
 
-    def plan(self) -> ExecutionPlan:
-        """Compatibility spelling for the read-only plan projection."""
-        return self.plan_view()
-
     def check_result(
         self, *, emit_output: bool = False
     ) -> tuple[int, dict[str, object]]:
@@ -7238,7 +7230,3 @@ export default tool({
     def check(self) -> int:
         result, _details = self.check_result(emit_output=True)
         return result
-
-
-# Compatibility import for callers of the pre-ServiceEngine runtime surface.
-Devlegate = ServiceEngine

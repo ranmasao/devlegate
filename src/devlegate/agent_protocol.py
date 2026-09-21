@@ -434,4 +434,3 @@ __all__ = [
     "render_project",
     "seed_project_env",
 ]
- # Copyright (c) 2026 Daniil Romanov
