@@ -117,9 +117,31 @@ def test_ping_status_and_plan_work_over_unix_socket(running_server):
     status = request(path, "2", "status")
     plan = request(path, "3", "plan")
 
-    assert ping.ok and ping.result == {"service": "devlegate", "protocol_version": 1}
-    assert status.ok and status.result == engine.status_view().as_dict()
+    assert ping.ok and ping.result == {
+        "service": "devlegate",
+        "version": ipc_server.__version__,
+        "protocol_version": 1,
+        "pid": os.getpid(),
+    }
+    assert status.ok
+    assert status.result == {
+        **engine.status_view().as_dict(),
+        "service": {
+            "service": "devlegate",
+            "version": ipc_server.__version__,
+            "protocol_version": 1,
+            "pid": os.getpid(),
+        },
+    }
     assert plan.ok and plan.result == engine.plan_view().as_dict()
+
+
+def test_ping_reports_loaded_service_module_version(monkeypatch):
+    monkeypatch.setattr(ipc_server, "__version__", "0.5.2.dev0-loaded")
+
+    ping = dispatch_read_only(object(), _request("ping"))
+
+    assert ping["version"] == "0.5.2.dev0-loaded"
 
 
 def test_unknown_method_returns_structured_error(running_server):
@@ -992,7 +1014,9 @@ def test_dispatch_uses_service_views_without_persistence_access():
         def published_plan_view(self):
             return View()
 
-    assert dispatch_read_only(FakeEngine(), _request("status")) == {"view": True}
+    status = dispatch_read_only(FakeEngine(), _request("status"))
+    assert status["view"] is True
+    assert status["service"]["service"] == "devlegate"
     assert dispatch_read_only(FakeEngine(), _request("plan")) == {"view": True}
 
 

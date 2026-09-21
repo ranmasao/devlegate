@@ -81,10 +81,14 @@ it is not a replacement for Git history.
 ## Current 0.5 Limitations
 
 - Devlegate 0.5 is the current release.
+- Development builds use the PEP 440 version form `X.Y.Z.dev0`.
 
 The current implementation has these practical limits:
 
 - Hosted Devlegate execution currently requires Linux.
+- `devlegate status` reports the client version and, when a service is running,
+  the version and informational PID of that service. A service keeps reporting
+  the version loaded when it started until it is stopped and started again.
 - Workflow execution is serial; general parallel worker execution is not
   implemented yet.
 - Active workflow execution is hosted by one persistent Devlegate service.

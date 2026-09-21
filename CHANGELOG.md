@@ -7,6 +7,10 @@ release are not separate product changes.
 
 ## Unreleased
 
+### Added
+
+- Exposed the loaded version and informational PID of the running service in ping and status output, including client/service mismatch warnings.
+
 ### Changed
 
 - Unified background, foreground, and single-iteration operation around one service-host execution model.

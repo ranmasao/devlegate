@@ -59,6 +59,21 @@ class ReadOnlyView:
     service_state: str
     live_execution: dict[str, object] | None = None
     service_failure: dict[str, object] | None = None
+    service_metadata: dict[str, object] | None = None
+
+
+def _service_metadata(response: dict[str, object]) -> dict[str, object]:
+    raw = response.get("service")
+    if not isinstance(raw, dict):
+        return {"version": "unknown"}
+    version = raw.get("version")
+    metadata: dict[str, object] = {
+        "version": version if isinstance(version, str) else "unknown"
+    }
+    pid = raw.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        metadata["pid"] = pid
+    return metadata
 
 
 def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
@@ -114,7 +129,12 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
                     for key, item in live_execution.items()
                     if key != "worker_identity"
                 }
-            return ReadOnlyView(value, "running", live_execution)
+            return ReadOnlyView(
+                value,
+                "running",
+                live_execution,
+                service_metadata=_service_metadata(response),
+            )
         except IPCClientError as decode_error:
             raise DevlegateError(str(decode_error)) from decode_error
     except RuntimeLocatorError as error:
@@ -300,19 +320,33 @@ def _stop_service(env_file: Path, output_format: str) -> int:
     return 0
 
 
-def _healthy_service(env_file: Path) -> bool:
+def _healthy_service(env_file: Path) -> dict[str, object] | None:
     locator = RuntimeLocator.from_env(env_file)
     if not locator.daemon_authority_present():
-        return False
+        return None
     try:
         response = request(locator.socket_path, "ping")
     except IPCClientError as error:
         raise DevlegateError(
             "service authority exists but its IPC endpoint is unavailable"
         ) from error
-    if response != {"service": "devlegate", "protocol_version": 1}:
+    if (
+        response.get("service") != "devlegate"
+        or response.get("protocol_version") != 1
+    ):
         raise DevlegateError("service authority exists but its IPC health is invalid")
-    return True
+    return response
+
+
+def _warn_service_version_mismatch(response: dict[str, object]) -> None:
+    service_version = _service_metadata(response)["version"]
+    if service_version == "unknown" or service_version == __version__:
+        return
+    print(
+        f"Warning: the running service uses Devlegate {service_version}; "
+        f"the current client is {__version__}.\n"
+        "Stop and start the service to load the current Devlegate version."
+    )
 
 
 def _startup_fd() -> int | None:
@@ -548,10 +582,26 @@ def _render_status_text(
     service_state: str,
     execution: dict[str, object],
     service_failure: dict[str, object] | None = None,
+    service_metadata: dict[str, object] | None = None,
 ) -> str:
     code = snapshot.code
     control = snapshot.control
     lines = [f"Devlegate {__version__}  •  service {service_state}"]
+    if service_state == "running" and service_metadata is not None:
+        lines.extend(["", f"Service version: {service_metadata['version']}"])
+        if "pid" in service_metadata:
+            lines.append(f"Service PID: {service_metadata['pid']}")
+        if (
+            service_metadata["version"] != "unknown"
+            and service_metadata["version"] != __version__
+        ):
+            lines.extend(
+                [
+                    "",
+                    "Warning: the running service uses a different Devlegate version.",
+                    "Stop and start the service to load the current Devlegate version.",
+                ]
+            )
     if service_failure is not None:
         if service_failure.get("state") == "unavailable":
             lines.extend(["", "Service failure:", "  Diagnostic unavailable/corrupt"])
@@ -1235,7 +1285,9 @@ def main() -> int:
     if args.command is None:
         env_file = args.service_env or Path.cwd() / ".env"
         try:
-            if _healthy_service(env_file):
+            health = _healthy_service(env_file)
+            if health is not None:
+                _warn_service_version_mismatch(health)
                 print("Devlegate service is already running.")
                 return 0
             return _start_background(env_file)
@@ -1261,7 +1313,9 @@ def main() -> int:
             parser.error("--env is only valid for bare background startup")
         env_file = args.env or Path.cwd() / ".env"
         try:
-            if _healthy_service(env_file):
+            health = _healthy_service(env_file)
+            if health is not None:
+                _warn_service_version_mismatch(health)
                 print("Devlegate service is already running.")
                 return 0
             engine = _service_engine(env_file)
@@ -1355,9 +1409,12 @@ def main() -> int:
                 snapshot, view.live_execution, view.service_state
             )
             payload = {
+                "client": {"version": __version__},
                 "service": {"state": view.service_state},
                 **snapshot.as_dict(),
             }
+            if view.service_metadata is not None:
+                payload["service"].update(view.service_metadata)
             if view.service_failure is not None:
                 payload["service"]["failure"] = view.service_failure
             payload["execution"] = {
@@ -1375,6 +1432,7 @@ def main() -> int:
                     view.service_state,
                     execution,
                     view.service_failure,
+                    view.service_metadata,
                 ),
             )
             return (

@@ -676,10 +676,11 @@ def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
     monkeypatch.chdir(git_fixture["working"])
     locator = RuntimeLocator.from_env(git_fixture["config"])
     assert locator.daemon_authority_present()
-    assert ipc_request(locator.socket_path, "ping") == {
-        "service": "devlegate",
-        "protocol_version": 1,
-    }
+    ping = ipc_request(locator.socket_path, "ping")
+    assert ping["service"] == "devlegate"
+    assert ping["version"] == __version__
+    assert ping["protocol_version"] == 1
+    assert isinstance(ping["pid"], int)
     stopped = subprocess.run(
         [
             sys.executable,
@@ -993,27 +994,80 @@ def test_status_uses_daemon_ipc_without_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--json", "--env", str(config)],
+        ["devlegate", "status", "--env", str(config)],
     )
 
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
+    human = capsys.readouterr().out
+    assert f"Service version: {__version__}" in human
+    assert "Warning: the running service uses a different" not in human
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--json", "--env", str(config)],
+    )
+    assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["service"] == {"state": "running"}
-    assert set(payload) == {"service", *expected}
+    assert payload["client"] == {"version": __version__}
+    assert payload["service"]["state"] == "running"
+    assert payload["service"]["version"] == __version__
+    assert isinstance(payload["service"]["pid"], int)
+    assert set(payload) == {"client", "service", *expected}
     assert payload["execution"] == {
         **expected["execution"],
         "state": "idle",
     }
     for key, value in expected.items():
-        if key != "execution":
+        if key not in {"execution", "service"}:
             assert payload[key] == value
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_version", "warning"),
+    [
+        ({"service": "devlegate", "protocol_version": 1}, "unknown", False),
+        (
+            {
+                "service": "devlegate",
+                "version": "0.5.1",
+                "protocol_version": 1,
+                "pid": 4321,
+            },
+            "0.5.1",
+            True,
+        ),
+    ],
+)
+def test_status_handles_service_version_metadata(
+    cli_daemon, git_fixture, monkeypatch, capsys, metadata, expected_version, warning
+):
+    config = _short_runtime_config(git_fixture)
+    expected = cli_daemon.status_view().as_dict()
+    monkeypatch.setattr(
+        "devlegate.cli.request",
+        lambda *_args: {**expected, "service": metadata},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "status", "--env", str(config)],
+    )
+
+    assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
+    output = capsys.readouterr().out
+
+    assert f"Service version: {expected_version}" in output
+    assert ("Warning: the running service uses a different" in output) is warning
 
 
 def test_status_without_service_reports_stopped_from_local_observation(git_fixture):
     result = invoke(git_fixture, "status", "--json")
 
     assert result.returncode == 0
-    assert json.loads(result.stdout)["service"] == {"state": "stopped"}
+    payload = json.loads(result.stdout)
+    assert payload["client"] == {"version": __version__}
+    assert payload["service"] == {"state": "stopped"}
 
 
 def test_plan_uses_daemon_ipc_without_fallback(

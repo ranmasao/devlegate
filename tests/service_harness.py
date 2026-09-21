@@ -90,7 +90,10 @@ class LiveService:
                 except IPCClientError:
                     pass
                 else:
-                    if response == {"service": "devlegate", "protocol_version": 1}:
+                    if (
+                        response.get("service") == "devlegate"
+                        and response.get("protocol_version") == 1
+                    ):
                         return
             time.sleep(0.02)
         self._collect_output()

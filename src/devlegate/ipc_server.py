@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from devlegate import __version__
 from devlegate.ipc_protocol import (
     IPCProtocolError,
     IPCRequest,
@@ -33,12 +34,23 @@ _SOCKET_MODE = 0o600
 _PEER_CREDENTIALS = struct.Struct("3i")
 
 
+def _service_identity() -> dict[str, object]:
+    return {
+        "service": "devlegate",
+        "version": __version__,
+        "protocol_version": 1,
+        "pid": os.getpid(),
+    }
+
+
 def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]:
     """Dispatch read-only methods through the service API."""
     if request.method == "ping":
-        return {"service": "devlegate", "protocol_version": 1}
+        return _service_identity()
     if request.method == "status":
-        return engine.published_status_payload()
+        result = engine.published_status_payload()
+        result["service"] = _service_identity()
+        return result
     if request.method == "plan":
         return engine.published_plan_view().as_dict()
     if request.method == "retry-candidates":
