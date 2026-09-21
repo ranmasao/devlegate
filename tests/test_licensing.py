@@ -65,6 +65,6 @@ def test_required_legal_files_and_version_exist() -> None:
     assert (ROOT / "LICENSING.md").is_file()
     assert (ROOT / "NOTICE").is_file()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert metadata["project"]["version"] == "0.5.2"
+    assert metadata["project"]["version"] == "0.5.3.dev0"
     assert __version__ == metadata["project"]["version"]
     assert metadata["project"]["license"]["text"] == "EUPL-1.2"
