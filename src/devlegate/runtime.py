@@ -373,6 +373,7 @@ class OperatorCommand:
     fingerprint: str
     ticket_id: str
     onto: str | None = None
+    execution_id: str | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -392,6 +393,12 @@ def _mutation_fingerprint(method: str, payload: dict[str, str]) -> str:
 
 def _retry_request_fingerprint(ticket_id: str) -> str:
     return _mutation_fingerprint("retry", {"ticket_id": ticket_id})
+
+
+def _drop_request_fingerprint(ticket_id: str, execution_id: str) -> str:
+    return _mutation_fingerprint(
+        "drop", {"ticket_id": ticket_id, "execution_id": execution_id}
+    )
 
 
 def _reconcile_request_fingerprint(ticket_id: str, onto: str) -> str:
@@ -488,10 +495,11 @@ def _read_env(path: Path) -> dict[str, str]:
 
 
 def _git(
-    repo: Path, *args: str, check: bool = True
+    repo: Path, *args: str, check: bool = True, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
+        input=input_text,
         text=True,
         capture_output=True,
         check=check,
@@ -636,6 +644,7 @@ class ServiceEngine:
         self._published_status_snapshot: StatusSnapshot | None = None
         self._published_live_execution: dict[str, object] | None = None
         self._published_retry_candidates: tuple[dict[str, str], ...] = ()
+        self._published_drop_candidates: tuple[dict[str, str], ...] = ()
         self._host_owner_thread_id: int | None = None
         self._published_snapshot = ServiceSnapshot(
             lifecycle="initialized",
@@ -784,9 +793,19 @@ class ServiceEngine:
                 dict(candidate) for candidate in self._published_retry_candidates
             )
 
+    def published_drop_candidates_view(self) -> tuple[dict[str, str], ...]:
+        with self._snapshot_lock:
+            return tuple(
+                dict(candidate) for candidate in self._drop_candidate_from_state()
+            )
+
     def retry_candidates_view(self) -> tuple[dict[str, str], ...]:
         """Return retry candidates from the current owner-published view."""
         return self.published_retry_candidates_view()
+
+    def drop_candidates_view(self) -> tuple[dict[str, str], ...]:
+        """Return drop candidates from the current owner-published view."""
+        return self.published_drop_candidates_view()
 
     def submit_retry(self, ticket_id: str, *, request_id: str) -> dict[str, object]:
         """Submit one retry intent and wait only for owner-side admission."""
@@ -795,6 +814,18 @@ class ServiceEngine:
             ticket_id=ticket_id,
             request_id=request_id,
             fingerprint=_retry_request_fingerprint(ticket_id),
+        )
+
+    def submit_drop(
+        self, ticket_id: str, execution_id: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit one exact execution disposition to the service owner."""
+        return self._submit_operator_command(
+            method="drop",
+            ticket_id=ticket_id,
+            execution_id=execution_id,
+            request_id=request_id,
+            fingerprint=_drop_request_fingerprint(ticket_id, execution_id),
         )
 
     def submit_reconcile_update_base(
@@ -840,6 +871,7 @@ class ServiceEngine:
         request_id: str,
         fingerprint: str,
         onto: str | None = None,
+        execution_id: str | None = None,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
@@ -863,7 +895,7 @@ class ServiceEngine:
                     raise DevlegateError(
                         f"request id collision: {method} request semantics differ"
                     )
-                return self._operator_ack(method, ticket_id, onto)
+                return self._operator_ack(method, ticket_id, onto, execution_id)
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
                 if existing.request_id == request_id:
@@ -882,7 +914,7 @@ class ServiceEngine:
                         "service busy; mutable request was not admitted"
                     )
                 command = OperatorCommand(
-                    request_id, method, fingerprint, ticket_id, onto
+                    request_id, method, fingerprint, ticket_id, onto, execution_id
                 )
                 self._operator_command = command
                 new_command = True
@@ -938,6 +970,73 @@ class ServiceEngine:
         }
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+
+    def _validate_drop_admission(
+        self, ticket_id: str, execution_id: str | None
+    ) -> None:
+        if not isinstance(execution_id, str) or not execution_id:
+            raise DevlegateError("drop requires an exact execution identity")
+        if self._drop_already_completed(ticket_id, execution_id):
+            return
+        state = self._state
+        if state.get("phase") != "agent_running":
+            raise DevlegateError("execution is not currently droppable")
+        if state.get("execution_ticket_id") != ticket_id:
+            raise DevlegateError("requested ticket does not match the active execution")
+        if state.get("execution_id") != execution_id:
+            raise DevlegateError("requested execution is no longer active")
+        if state.get("execution_stage") != "lifecycle":
+            raise DevlegateError(
+                "drop is currently limited to blocked lifecycle executions"
+            )
+        if state.get("worker_identity") is not None:
+            raise DevlegateError("cannot drop an execution with worker ownership")
+        if (
+            self._has_pending_reconciliation()
+            or self._has_pending_accepted_integration()
+        ):
+            raise DevlegateError(
+                "drop is unsafe while reconciliation or accepted integration is pending"
+            )
+        self._validate_drop_evidence(
+            ticket_id,
+            execution_id,
+            allow_missing_remote=(
+                self._read_drop_disposition(ticket_id, execution_id) is not None
+            ),
+        )
+
+    def _drop_candidate_from_state(self) -> tuple[dict[str, str], ...]:
+        state = self._state
+        ticket_id = state.get("execution_ticket_id")
+        execution_id = state.get("execution_id")
+        if (
+            state.get("phase") != "agent_running"
+            or state.get("execution_stage") != "lifecycle"
+            or state.get("worker_identity") is not None
+            or not isinstance(ticket_id, str)
+            or not isinstance(execution_id, str)
+        ):
+            return ()
+        pending = state.get("pending_execution_report")
+        try:
+            report = ExecutionReport.from_dict(pending)
+            self._report_matches_execution_binding(report)
+        except (ExecutionReportError, WorkflowBlockedError):
+            return ()
+        if report.workspace_head is None:
+            return ()
+        title = state.get("selected_ticket_title")
+        return (
+            {
+                "id": ticket_id,
+                "title": title if isinstance(title, str) and title else ticket_id,
+                "reason": "control authority withdrawn; lifecycle replay refused",
+                "kind": "lifecycle",
+                "execution_id": execution_id,
+                "stage": "lifecycle",
+            },
+        )
 
     def _validate_reconcile_admission(self, ticket_id: str, onto: str) -> None:
         if not onto:
@@ -1047,6 +1146,9 @@ class ServiceEngine:
         if command.method == "retry":
             self._validate_retry_admission(command.ticket_id)
             return
+        if command.method == "drop":
+            self._validate_drop_admission(command.ticket_id, command.execution_id)
+            return
         if command.method == "reconcile-update-base":
             if command.onto is None:
                 raise DevlegateError(
@@ -1068,10 +1170,21 @@ class ServiceEngine:
 
     @staticmethod
     def _operator_ack(
-        method: str, ticket_id: str, onto: str | None
+        method: str,
+        ticket_id: str,
+        onto: str | None,
+        execution_id: str | None = None,
     ) -> dict[str, object]:
         if method == "retry":
             return {"accepted": True, "ticket_id": ticket_id}
+        if method == "drop":
+            if execution_id is None:
+                raise DevlegateError("drop requires an exact execution identity")
+            return {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+            }
         if method == "reconcile-control":
             if onto is None:
                 raise DevlegateError(
@@ -1104,32 +1217,49 @@ class ServiceEngine:
             receipt = receipts.get(request_id)
             if receipt is None:
                 return None
-            if not isinstance(receipt, dict) or set(receipt) != {
+            if not isinstance(receipt, dict) or not set(receipt).issubset(
+                {
                 "method",
                 "fingerprint",
                 "ticket_id",
                 "accepted",
-            }:
+                "execution_id",
+                }
+            ) or set(receipt) not in (
+                {"method", "fingerprint", "ticket_id", "accepted"},
+                {"method", "fingerprint", "ticket_id", "accepted", "execution_id"},
+            ):
                 raise DevlegateError("invalid mutable request receipt")
             if not all(
                 isinstance(receipt[field], str) and receipt[field]
                 for field in ("method", "fingerprint", "ticket_id")
             ) or not isinstance(receipt["accepted"], bool):
                 raise DevlegateError("invalid mutable request receipt")
+            execution_id = receipt.get("execution_id")
+            if execution_id is not None and (
+                not isinstance(execution_id, str) or not execution_id
+            ):
+                raise DevlegateError("invalid mutable request receipt execution")
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
+        if command.method == "drop":
+            self._drop_owned(command.ticket_id, command.execution_id)
         with self._receipt_lock:
             receipts = self._state.get("mutable_receipts", {})
             if not isinstance(receipts, dict):
                 raise DevlegateError("invalid mutable request receipt state")
             updated = dict(receipts)
-            updated[command.request_id] = {
+            receipt = {
                 "method": command.method,
                 "fingerprint": command.fingerprint,
                 "ticket_id": command.ticket_id,
                 "accepted": True,
             }
+            execution_id = getattr(command, "execution_id", None)
+            if execution_id is not None:
+                receipt["execution_id"] = execution_id
+            updated[command.request_id] = receipt
             reconciliation = None
             if command.method == "reconcile-resume":
                 current = self._state.get("reconciliation")
@@ -1164,7 +1294,10 @@ class ServiceEngine:
                     )
                 self._record_operator_admission(command)
                 command.admission_result = self._operator_ack(
-                    command.method, command.ticket_id, command.onto
+                    command.method,
+                    command.ticket_id,
+                    command.onto,
+                    getattr(command, "execution_id", None),
                 )
         except DevlegateError as error:
             command.admission_error = error
@@ -1374,6 +1507,7 @@ class ServiceEngine:
                 else None
             )
             self._published_retry_candidates = tuple(retry_candidates)
+            self._published_drop_candidates = self._drop_candidate_from_state()
 
     def _publish_ticket_projection(
         self,
@@ -2167,15 +2301,31 @@ class ServiceEngine:
                 "invalid state: execution remote revision identity is invalid"
             )
 
-    def _save_state(self, phase: str, **fields: object) -> None:
+    def _save_state(
+        self, phase: str, *, clear_execution: bool = False, **fields: object
+    ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
+            state.pop("selected_ticket_title", None)
             state.pop("pending_execution_report", None)
             state.pop("execution_interruption_kind", None)
             state["worker_identity"] = None
+        if clear_execution:
+            for field in (
+                "execution_ticket_id",
+                "execution_base_head",
+                "execution_control_head",
+                "execution_branch",
+                "execution_path",
+                "execution_id",
+                "execution_remote_head",
+                "execution_start_head",
+                "resume_required",
+            ):
+                state.pop(field, None)
         self._validate_state_invariant(state)
         try:
             self._runtime_store.replace(state)
@@ -2386,6 +2536,15 @@ class ServiceEngine:
                 self._state.get("execution_stage") == "lifecycle"
                 and self._state.get("worker_identity") is None
             ):
+                dropped_ticket = self._state.get("execution_ticket_id")
+                dropped_execution = self._state.get("execution_id")
+                if isinstance(dropped_ticket, str) and isinstance(
+                    dropped_execution, str
+                ) and self._read_drop_disposition(
+                    dropped_ticket, dropped_execution
+                ) is not None:
+                    self._drop_owned(dropped_ticket, dropped_execution)
+                    return 0
                 report = self._recover_lifecycle_report()
                 control_head = self._apply_execution_lifecycle(report)
                 self._finalize_execution_lifecycle(report, control_head)
@@ -3009,6 +3168,7 @@ class ServiceEngine:
                 handled_todo_fingerprint=todo_fingerprint,
                 selected_ticket_id=selected_ticket.id,
                 selected_ticket_body=selected_ticket.body,
+                selected_ticket_title=selected_ticket.title,
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
                 execution_control_head=bound_execution_control,
@@ -3899,6 +4059,346 @@ class ServiceEngine:
     def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
         return f"refs/devlegate/reconciliation/{ticket_id}/{execution_id}"
 
+    @staticmethod
+    def _drop_evidence_ref(ticket_id: str, execution_id: str) -> str:
+        return f"refs/devlegate/executions/{ticket_id}/{execution_id}"
+
+    @staticmethod
+    def _drop_disposition_ref(ticket_id: str, execution_id: str) -> str:
+        return f"refs/devlegate/dispositions/{ticket_id}/{execution_id}"
+
+    def _read_drop_disposition(
+        self, ticket_id: str, execution_id: str
+    ) -> dict[str, object] | None:
+        ref = self._drop_disposition_ref(ticket_id, execution_id)
+        resolved = _git(self.repo, "rev-parse", "--verify", ref, check=False)
+        if resolved.returncode:
+            return None
+        object_id = resolved.stdout.strip()
+        object_type = _git(
+            self.repo, "cat-file", "-t", object_id, check=False
+        )
+        if object_type.returncode or object_type.stdout.strip() != "blob":
+            raise DevlegateError("drop disposition ref does not point to a blob")
+        content = _git(self.repo, "cat-file", "-p", object_id, check=False)
+        if content.returncode:
+            raise DevlegateError("drop disposition blob is unavailable")
+        try:
+            value = json.loads(content.stdout)
+        except json.JSONDecodeError as error:
+            raise DevlegateError("drop disposition blob is invalid") from error
+        if not isinstance(value, dict):
+            raise DevlegateError("drop disposition must be an object")
+        return value
+
+    def _drop_disposition_payload(
+        self, report: ExecutionReport, checkpoint: str
+    ) -> dict[str, object]:
+        return self._drop_disposition_payload_for(
+            report, checkpoint, disposition="dropped"
+        )
+
+    def _drop_disposition_payload_for(
+        self,
+        report: ExecutionReport,
+        checkpoint: str,
+        *,
+        disposition: str,
+    ) -> dict[str, object]:
+        return {
+            "schema": "devlegate.execution-disposition.v1",
+            "execution_id": report.execution_id,
+            "ticket_id": report.ticket_id,
+            "control_head": report.control_head,
+            "code_base_head": report.code_base_head,
+            "execution_branch": report.execution_branch,
+            "checkpoint": checkpoint,
+            "worker_conclusion": report.result.conclusion,
+            "execution_report": report.as_dict(),
+            "disposition": disposition,
+            "reason": "control authority withdrawn",
+        }
+
+    def _persist_drop_intent(self, report: ExecutionReport) -> None:
+        checkpoint = report.workspace_head
+        if not isinstance(checkpoint, str) or not checkpoint:
+            raise DevlegateError("drop execution checkpoint identity is missing")
+        payload = self._drop_disposition_payload_for(
+            report, checkpoint, disposition="dropping"
+        )
+        existing = self._read_drop_disposition(report.ticket_id, report.execution_id)
+        if existing is not None:
+            if existing.get("disposition") == "dropped":
+                return
+            if existing != payload:
+                raise DevlegateError("drop disposition intent is inconsistent")
+            return
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        blob = _git(
+            self.repo,
+            "hash-object",
+            "-w",
+            "--stdin",
+            input_text=encoded,
+            check=False,
+        )
+        if blob.returncode or not blob.stdout.strip():
+            raise DevlegateError("cannot persist drop disposition intent")
+        updated = _git(
+            self.repo,
+            "update-ref",
+            self._drop_disposition_ref(report.ticket_id, report.execution_id),
+            blob.stdout.strip(),
+            check=False,
+        )
+        if updated.returncode:
+            reread = self._read_drop_disposition(
+                report.ticket_id, report.execution_id
+            )
+            if reread != payload:
+                raise DevlegateError("cannot publish drop disposition intent")
+
+    def _pin_drop_evidence(
+        self, report: ExecutionReport
+    ) -> dict[str, object]:
+        checkpoint = report.workspace_head
+        if not isinstance(checkpoint, str) or not checkpoint:
+            raise DevlegateError("drop execution checkpoint identity is missing")
+        evidence_ref = self._drop_evidence_ref(report.ticket_id, report.execution_id)
+        observed = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{evidence_ref}^{{commit}}",
+            check=False,
+        )
+        if observed.returncode == 0 and observed.stdout.strip() != checkpoint:
+            raise DevlegateError("drop execution evidence ref is inconsistent")
+        if observed.returncode:
+            pinned = _git(
+                self.repo,
+                "update-ref",
+                evidence_ref,
+                checkpoint,
+                check=False,
+            )
+            if pinned.returncode:
+                reread = _git(
+                    self.repo,
+                    "rev-parse",
+                    "--verify",
+                    f"{evidence_ref}^{{commit}}",
+                    check=False,
+                )
+                if reread.returncode or reread.stdout.strip() != checkpoint:
+                    raise DevlegateError("cannot pin drop execution evidence")
+        payload = self._drop_disposition_payload(report, checkpoint)
+        existing = self._read_drop_disposition(report.ticket_id, report.execution_id)
+        if existing is not None:
+            if existing.get("disposition") == "dropped" and existing != payload:
+                raise DevlegateError("drop disposition evidence is inconsistent")
+            if existing.get("disposition") not in {"dropping", "dropped"}:
+                raise DevlegateError("drop disposition evidence is inconsistent")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        blob = _git(
+            self.repo,
+            "hash-object",
+            "-w",
+            "--stdin",
+            input_text=encoded,
+            check=False,
+        )
+        if blob.returncode or not blob.stdout.strip():
+            raise DevlegateError("cannot persist drop disposition evidence")
+        disposition_ref = self._drop_disposition_ref(
+            report.ticket_id, report.execution_id
+        )
+        updated = _git(
+            self.repo,
+            "update-ref",
+            disposition_ref,
+            blob.stdout.strip(),
+            check=False,
+        )
+        if updated.returncode:
+            reread = self._read_drop_disposition(
+                report.ticket_id, report.execution_id
+            )
+            if reread != payload:
+                raise DevlegateError("cannot publish drop disposition evidence")
+        return payload
+
+    def _drop_already_completed(self, ticket_id: str, execution_id: str) -> bool:
+        payload = self._read_drop_disposition(ticket_id, execution_id)
+        if payload is None:
+            return False
+        if (
+            payload.get("disposition") not in {"dropping", "dropped"}
+            or payload.get("ticket_id") != ticket_id
+            or payload.get("execution_id") != execution_id
+        ):
+            raise DevlegateError("execution disposition is invalid")
+        if payload.get("disposition") == "dropping":
+            return False
+        evidence = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{self._drop_evidence_ref(ticket_id, execution_id)}^{{commit}}",
+            check=False,
+        )
+        if evidence.returncode or evidence.stdout.strip() != payload.get("checkpoint"):
+            raise DevlegateError("completed drop has inconsistent checkpoint evidence")
+        return not (
+            self._state.get("phase") in {"agent_pending", "agent_running"}
+            and self._state.get("execution_id") == execution_id
+        )
+
+    def _validate_drop_evidence(
+        self, ticket_id: str, execution_id: str, *, allow_missing_remote: bool = False
+    ) -> tuple[ExecutionReport, ExecutionWorkspace]:
+        pending = self._state.get("pending_execution_report")
+        try:
+            report = ExecutionReport.from_dict(pending)
+        except ExecutionReportError as error:
+            raise DevlegateError(
+                "drop requires a valid pending execution report"
+            ) from error
+        if report.ticket_id != ticket_id or report.execution_id != execution_id:
+            raise DevlegateError("pending report does not match requested execution")
+        self._report_matches_execution_binding(report)
+        if report.workspace_head is None:
+            raise DevlegateError("drop requires a checkpoint identity")
+        workspace = self._drop_workspace_from_state(report)
+        if workspace.head != report.workspace_head:
+            raise DevlegateError("execution worktree does not match its checkpoint")
+        start_head = self._state.get("execution_start_head")
+        if not isinstance(start_head, str) or not start_head:
+            raise DevlegateError("drop execution start identity is incomplete")
+        if workspace.path.exists():
+            if not self._checkpoint_commit_is_exact(
+                workspace, report.workspace_head, start_head
+            ):
+                raise DevlegateError("execution checkpoint evidence is ambiguous")
+        elif not allow_missing_remote:
+            raise DevlegateError("execution worktree is missing")
+        else:
+            evidence = _git(
+                self.repo,
+                "rev-parse",
+                "--verify",
+                f"{self._drop_evidence_ref(ticket_id, execution_id)}^{{commit}}",
+                check=False,
+            )
+            if evidence.returncode or evidence.stdout.strip() != report.workspace_head:
+                raise DevlegateError("retired execution checkpoint evidence is invalid")
+        remote = self._execution_remote_head(report.execution_branch)
+        if remote != report.workspace_head and not (
+            allow_missing_remote and remote is None
+        ):
+            raise DevlegateError("execution remote checkpoint is not exact")
+        return report, workspace
+
+    def _drop_workspace_from_state(self, report: ExecutionReport) -> ExecutionWorkspace:
+        ticket_id = self._state.get("execution_ticket_id")
+        base_head = self._state.get("execution_base_head")
+        branch = self._state.get("execution_branch")
+        path = self._state.get("execution_path")
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, base_head, branch, path)
+        ):
+            raise DevlegateError("drop execution workspace binding is incomplete")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if branch != manager.branch or Path(path) != manager.path:
+            raise DevlegateError("drop execution workspace binding is invalid")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if registration is not None:
+            try:
+                return manager._validate_existing(registration, base_head)
+            except (ExecutionWorkspaceError, OSError) as error:
+                raise DevlegateError(str(error)) from error
+        branch_path = next(
+            (
+                registered
+                for registered, item in registrations.items()
+                if item.get("branch") == manager.branch
+            ),
+            None,
+        )
+        if branch_path is not None or manager.path.exists():
+            raise DevlegateError("drop execution workspace topology is ambiguous")
+        return ExecutionWorkspace(
+            report.ticket_id,
+            manager.branch,
+            manager.path,
+            report.workspace_head or "",
+            base_head,
+            False,
+        )
+
+    def _retire_drop_workspace(
+        self, report: ExecutionReport, workspace: ExecutionWorkspace
+    ) -> None:
+        expected = report.workspace_head
+        if expected is None:
+            raise DevlegateError("drop execution checkpoint identity is missing")
+        remote = self._execution_remote_head(report.execution_branch)
+        if remote is not None and remote != expected:
+            raise DevlegateError("execution remote changed before drop")
+        if remote == expected:
+            deleted = _git(
+                self.repo,
+                "push",
+                f"--force-with-lease=refs/heads/{report.execution_branch}:{expected}",
+                self.remote_name,
+                f":refs/heads/{report.execution_branch}",
+                check=False,
+            )
+            if deleted.returncode:
+                remaining = self._execution_remote_head(report.execution_branch)
+                if remaining is not None:
+                    raise DevlegateError(
+                        deleted.stderr.strip()
+                        or "cannot retire execution remote branch"
+                    )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, report.ticket_id
+        )
+        manager.retire(workspace, expected)
+        local_ref = f"refs/heads/{report.execution_branch}"
+        local = _git(self.repo, "rev-parse", "--verify", local_ref, check=False)
+        if local.returncode == 0 and local.stdout.strip() != expected:
+            raise DevlegateError("local execution branch changed before drop")
+        if local.returncode == 0:
+            removed = _git(
+                self.repo, "branch", "-D", report.execution_branch, check=False
+            )
+            if removed.returncode:
+                raise DevlegateError(
+                    removed.stderr.strip() or "cannot retire local execution branch"
+                )
+
+    def _drop_owned(self, ticket_id: str, execution_id: str | None) -> None:
+        if not isinstance(execution_id, str) or not execution_id:
+            raise DevlegateError("drop requires an exact execution identity")
+        if self._drop_already_completed(ticket_id, execution_id):
+            return
+        existing = self._read_drop_disposition(ticket_id, execution_id)
+        report, workspace = self._validate_drop_evidence(
+            ticket_id,
+            execution_id,
+            allow_missing_remote=existing is not None,
+        )
+        self._persist_drop_intent(report)
+        self._pin_drop_evidence(report)
+        self._retire_drop_workspace(report, workspace)
+        self._owned_execution_id = None
+        self._save_state("idle", clear_execution=True)
+
     def _observe_product_generation(self, admitted_head: str) -> dict[str, object]:
         branch_result = _git(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
@@ -4621,6 +5121,8 @@ class ServiceEngine:
     ) -> int:
         if command.method == "retry":
             return self._retry_owned(command.ticket_id, stop_event)
+        if command.method == "drop":
+            return 0
         if command.method == "reconcile-resume":
             return self._reconcile_resume_owned(command.ticket_id)
         if command.method == "reconcile-update-base":

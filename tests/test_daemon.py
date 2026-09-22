@@ -20,6 +20,7 @@ import devlegate.cli as cli
 import devlegate.daemon as daemon
 import devlegate.runtime as runtime
 from devlegate.cli import DevlegateError
+from devlegate.execution_result import build_execution_report
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
@@ -100,9 +101,277 @@ def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
     assert isinstance(submitted[0], DevlegateError)
 
 
+def test_drop_rejects_lifecycle_drain_before_owner_admission(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.request_lifecycle("stop", "stop-request")
+    with pytest.raises(DevlegateError, match="service is draining"):
+        engine.submit_drop("T-1", "execution-1", request_id="drop-request")
+
+
+def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine._state.update(
+        {
+            "phase": "agent_running",
+            "execution_ticket_id": "T-1",
+            "execution_id": "execution-1",
+            "execution_stage": "lifecycle",
+            "worker_identity": {"execution_id": "execution-1"},
+        }
+    )
+    with pytest.raises(DevlegateError, match="worker ownership"):
+        engine._validate_drop_admission("T-1", "execution-1")
+    engine._state["worker_identity"] = None
+    engine._state["execution_stage"] = "post-checkpoint"
+    with pytest.raises(DevlegateError, match="limited to blocked lifecycle"):
+        engine._validate_drop_admission("T-1", "execution-1")
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    ["after-evidence", "after-disposition", "after-remote", "after-worktree"],
+)
+def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
+    tmp_path, monkeypatch, fault_stage
+):
+    engine, config, state = make_engine(tmp_path, monkeypatch)
+    workspace, control = persist_agent_running(
+        engine,
+        state,
+        execution_id="drop-replay",
+        checkpointed=True,
+        record_start=True,
+        publish=True,
+    )
+    git(
+        workspace.path,
+        "commit",
+        "--amend",
+        "-m",
+        "Devlegate checkpoint T-1 drop-replay",
+    )
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    git(
+        workspace.path,
+        "push",
+        "--force",
+        "origin",
+        f"HEAD:refs/heads/{workspace.branch}",
+    )
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(workspace.base_head)
+    report = build_execution_report(
+        execution_id="drop-replay",
+        ticket_id="T-1",
+        code_base_head=workspace.base_head,
+        control_head=engine._state["execution_control_head"],
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        workspace_head=workspace.head,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        ),
+    )
+    engine._save_state(
+        "agent_running",
+        execution_stage="lifecycle",
+        worker_identity=None,
+        execution_start_head=workspace.base_head,
+        execution_remote_head=checkpoint,
+        pending_execution_report=report.as_dict(),
+    )
+    original_retire = engine._retire_drop_workspace
+    original_pin = engine._pin_drop_evidence
+
+    def crash_after_disposition(*args):
+        raise RuntimeError("simulated crash after disposition")
+
+    def crash_after_evidence(report):
+        git(
+            engine.repo,
+            "update-ref",
+            engine._drop_evidence_ref(report.ticket_id, report.execution_id),
+            report.workspace_head,
+        )
+        raise RuntimeError("simulated crash after evidence")
+
+    def crash_after_remote(report, workspace):
+        git(
+            engine.repo,
+            "push",
+            f"--force-with-lease=refs/heads/{report.execution_branch}:{report.workspace_head}",
+            "origin",
+            f":refs/heads/{report.execution_branch}",
+        )
+        if fault_stage == "after-worktree":
+            ExecutionWorkspaceManager(
+                engine.repo, engine.execution_worktree_root, report.ticket_id
+            ).retire(workspace, report.workspace_head)
+        raise RuntimeError(f"simulated crash {fault_stage}")
+
+    if fault_stage == "after-evidence":
+        monkeypatch.setattr(engine, "_pin_drop_evidence", crash_after_evidence)
+        expected_error = "after evidence"
+    elif fault_stage == "after-disposition":
+        monkeypatch.setattr(engine, "_retire_drop_workspace", crash_after_disposition)
+        expected_error = "after disposition"
+    else:
+        monkeypatch.setattr(engine, "_retire_drop_workspace", crash_after_remote)
+        expected_error = f"after-{fault_stage.removeprefix('after-')}"
+    with pytest.raises(RuntimeError, match=expected_error):
+        engine._drop_owned("T-1", "drop-replay")
+    evidence_ref = engine._drop_evidence_ref("T-1", "drop-replay")
+    disposition_ref = engine._drop_disposition_ref("T-1", "drop-replay")
+    assert git(engine.repo, "rev-parse", "--verify", evidence_ref).stdout.strip() == (
+        workspace.head
+    )
+    assert git(engine.repo, "cat-file", "-t", disposition_ref).stdout.strip() == "blob"
+    disposition = json.loads(
+        git(engine.repo, "cat-file", "-p", disposition_ref).stdout
+    )
+    assert disposition["disposition"] == (
+        "dropping" if fault_stage == "after-evidence" else "dropped"
+    )
+    assert engine._state["phase"] == "agent_running"
+
+    monkeypatch.setattr(engine, "_retire_drop_workspace", original_retire)
+    monkeypatch.setattr(engine, "_pin_drop_evidence", original_pin)
+    restarted = ServiceEngine(config)
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["phase"] == "idle"
+    assert "execution_id" not in restarted._state
+    assert not workspace.path.exists()
+    assert not list((control / "executions").glob("**/*.json"))
+
+
 def test_iteration_body_does_not_reenter_scheduler():
     source = inspect.getsource(ServiceEngine._run_iteration_body)
     assert "run_iteration(" not in source
+
+
+def _prepare_drop_owner_command(tmp_path, monkeypatch):
+    engine, config, state = make_engine(tmp_path, monkeypatch)
+    workspace, control = persist_agent_running(
+        engine,
+        state,
+        execution_id="drop-final-boundary",
+        checkpointed=True,
+        record_start=True,
+        publish=True,
+    )
+    git(
+        workspace.path,
+        "commit",
+        "--amend",
+        "-m",
+        "Devlegate checkpoint T-1 drop-final-boundary",
+    )
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    git(
+        workspace.path,
+        "push",
+        "--force",
+        "origin",
+        f"HEAD:refs/heads/{workspace.branch}",
+    )
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(workspace.base_head)
+    report = build_execution_report(
+        execution_id="drop-final-boundary",
+        ticket_id="T-1",
+        code_base_head=workspace.base_head,
+        control_head=engine._state["execution_control_head"],
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        workspace_head=workspace.head,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        ),
+    )
+    engine._save_state(
+        "agent_running",
+        execution_stage="lifecycle",
+        worker_identity=None,
+        execution_start_head=workspace.base_head,
+        execution_remote_head=checkpoint,
+        pending_execution_report=report.as_dict(),
+    )
+    command = OperatorCommand(
+        request_id="drop-final-boundary-request",
+        method="drop",
+        fingerprint=runtime._drop_request_fingerprint(
+            "T-1", "drop-final-boundary"
+        ),
+        ticket_id="T-1",
+        execution_id="drop-final-boundary",
+    )
+    return engine, config, control, workspace, command
+
+
+@pytest.mark.parametrize("boundary", ["after-clear", "before-receipt"])
+def test_drop_final_durable_boundaries_replay_without_active_state(
+    tmp_path, monkeypatch, boundary
+):
+    engine, config, control, workspace, command = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    original_save = engine._save_state
+
+    def faulted_save(phase, **fields):
+        if boundary == "before-receipt" and "mutable_receipts" in fields:
+            raise RuntimeError("simulated crash before receipt")
+        original_save(phase, **fields)
+        if boundary == "after-clear" and fields.get("clear_execution"):
+            raise RuntimeError("simulated crash after clear")
+
+    monkeypatch.setattr(engine, "_save_state", faulted_save)
+    with pytest.raises(RuntimeError, match=boundary.replace("-", " ")):
+        engine._admit_operator_command(command)
+
+    disposition_ref = engine._drop_disposition_ref("T-1", "drop-final-boundary")
+    disposition = json.loads(
+        git(engine.repo, "cat-file", "-p", disposition_ref).stdout
+    )
+    assert disposition["disposition"] == "dropped"
+    assert engine._state["phase"] == "idle"
+    assert "execution_id" not in engine._state
+    assert "drop-final-boundary-request" not in engine._state.get(
+        "mutable_receipts", {}
+    )
+
+    restarted = ServiceEngine(config)
+    assert restarted._state["phase"] == "idle"
+    assert "execution_id" not in restarted._state
+    assert not workspace.path.exists()
+    assert not list((control / "executions").glob("**/*.json"))
+
+    applied = []
+    monkeypatch.setattr(
+        restarted,
+        "_apply_execution_lifecycle",
+        lambda report: applied.append(report.execution_id),
+    )
+    replay = OperatorCommand(
+        request_id="drop-final-boundary-request",
+        method="drop",
+        fingerprint=runtime._drop_request_fingerprint(
+            "T-1", "drop-final-boundary"
+        ),
+        ticket_id="T-1",
+        execution_id="drop-final-boundary",
+    )
+    restarted._admit_operator_command(replay)
+    assert applied == []
+    assert replay.admission_result == {
+        "accepted": True,
+        "ticket_id": "T-1",
+        "execution_id": "drop-final-boundary",
+    }
+    assert restarted._state["mutable_receipts"][
+        "drop-final-boundary-request"
+    ]["accepted"] is True
 
 
 @pytest.mark.parametrize(

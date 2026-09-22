@@ -21,6 +21,8 @@ from devlegate.agent_protocol import AgentProtocolError, seed_project_env
 from devlegate.daemon import run_service
 from devlegate.ipc_client import (
     IPCClientError,
+    decode_drop_ack,
+    decode_drop_candidates,
     decode_plan,
     decode_reconcile_ack,
     decode_reconcile_control_ack,
@@ -158,6 +160,26 @@ def _interactive_terminal() -> bool:
         return False
 
 
+def _select_candidate(
+    candidates: tuple[dict[str, str], ...], heading: str, invalid_message: str
+) -> dict[str, str] | None:
+    print(f"{heading}:")
+    for index, candidate in enumerate(candidates, 1):
+        print(f"  {index}) {candidate['id']}  {candidate['title']}")
+        print(f"     {candidate['reason']}")
+    print("  0) Cancel")
+    answer = input("Select number (Enter = cancel): ").strip()
+    if not answer or answer == "0":
+        return None
+    try:
+        index = int(answer)
+        if not 1 <= index <= len(candidates):
+            raise ValueError
+    except ValueError as error:
+        raise DevlegateError(invalid_message) from error
+    return candidates[index - 1]
+
+
 def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -188,21 +210,12 @@ def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> 
                 raise DevlegateError(
                     "no current executions are retryable or recoverable"
                 )
-            print("Retry candidates:")
-            for index, candidate in enumerate(candidates, 1):
-                print(f"  {index}) {candidate['id']}  {candidate['title']}")
-                print(f"     {candidate['reason']}")
-            print("  0) Cancel")
-            answer = input("Select number (Enter = cancel): ").strip()
-            if not answer or answer == "0":
+            selected = _select_candidate(
+                candidates, "Retry candidates", "invalid retry selection"
+            )
+            if selected is None:
                 return 0
-            try:
-                index = int(answer)
-                if not 1 <= index <= len(candidates):
-                    raise ValueError
-            except ValueError as error:
-                raise DevlegateError("invalid retry selection") from error
-            ticket_id = candidates[index - 1]["id"]
+            ticket_id = selected["id"]
         if not locator.daemon_authority_present():
             raise DevlegateError(
                 "service stopped before retry was submitted"
@@ -222,6 +235,68 @@ def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> 
         output_format,
         f"retry accepted: {ticket_id}",
     )
+    return 0
+
+
+def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    if ticket_id is None and not _interactive_terminal():
+        raise DevlegateError(
+            "interactive drop requires a terminal; specify a ticket ID:\n"
+            "devlegate drop <ticket-id>"
+        )
+    if ticket_id is None and output_format != "table":
+        raise DevlegateError(
+            "machine-readable drop requires a ticket ID; "
+            "specify devlegate drop <ticket-id>"
+        )
+    if ticket_id is not None and not ticket_id:
+        raise DevlegateError("drop ticket ID must be non-empty")
+    try:
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "service is not running for this checkout; start `devlegate`"
+            )
+        candidates = decode_drop_candidates(
+            request(locator.socket_path, "drop-candidates")
+        )
+        if ticket_id is None:
+            if not candidates:
+                raise DevlegateError("no current executions are droppable")
+            selected = _select_candidate(
+                candidates, "Drop candidates", "invalid drop selection"
+            )
+            if selected is None:
+                return 0
+        else:
+            selected = next(
+                (candidate for candidate in candidates if candidate["id"] == ticket_id),
+                None,
+            )
+            if selected is None:
+                raise DevlegateError(f"ticket {ticket_id} is not currently droppable")
+        ticket_id = selected["id"]
+        execution_id = selected["execution_id"]
+        if not locator.daemon_authority_present():
+            raise DevlegateError("service stopped before drop was submitted")
+        result = request(
+            locator.socket_path,
+            "drop",
+            {"ticket_id": ticket_id, "execution_id": execution_id},
+            mutable=True,
+        )
+        decode_drop_ack(result, ticket_id, execution_id)
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    result = {
+        "result": "dropped",
+        "ticket_id": ticket_id,
+        "execution_id": execution_id,
+    }
+    emit(result, output_format, f"drop accepted: {ticket_id}")
     return 0
 
 
@@ -1110,6 +1185,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
             "Recovery",
             (
                 ("retry", "retry a failed or recoverable execution"),
+                ("drop", "retire a blocked execution without applying it"),
                 ("reconcile", "perform explicit reconciliation"),
             ),
         ),
@@ -1355,6 +1431,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(retry_parser)
+    drop_parser = commands.add_parser(
+        "drop",
+        help="retire a blocked execution without applying it",
+        description="Retire one blocked execution while preserving its evidence.",
+    )
+    drop_parser.add_argument(
+        "ticket_id",
+        nargs="?",
+        help="ticket to drop; omit it to choose from current candidates",
+    )
+    drop_parser.add_argument(
+        "--env",
+        metavar="FILE",
+        type=Path,
+        help="configuration file to use instead of $PWD/.env",
+    )
+    add_output_arguments(drop_parser)
     reconcile_parser = commands.add_parser(
         "reconcile",
         help="handle pending product-base changes",
@@ -1624,6 +1717,8 @@ def main() -> int:
             return _restart_service(env_file, args.output_format)
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id, args.output_format)
+        if args.command == "drop":
+            return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "reconcile":
             if args.reconcile_command == "control":
                 return _reconcile_control(

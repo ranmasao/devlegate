@@ -65,6 +65,8 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
         return engine.published_plan_view().as_dict()
     if request.method == "retry-candidates":
         return {"candidates": list(engine.published_retry_candidates_view())}
+    if request.method == "drop-candidates":
+        return {"candidates": list(engine.published_drop_candidates_view())}
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 
@@ -100,6 +102,24 @@ def dispatch_mutation(
                 "invalid_request", "retry ticket_id must be non-empty text"
             )
         return engine.submit_retry(ticket_id, request_id=request.request_id)
+    if request.method == "drop":
+        if set(request.payload) != {"ticket_id", "execution_id"}:
+            raise IPCProtocolError(
+                "invalid_request", "drop payload fields are invalid"
+            )
+        ticket_id = request.payload["ticket_id"]
+        execution_id = request.payload["execution_id"]
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise IPCProtocolError(
+                "invalid_request", "drop ticket_id must be non-empty text"
+            )
+        if not isinstance(execution_id, str) or not execution_id:
+            raise IPCProtocolError(
+                "invalid_request", "drop execution_id must be non-empty text"
+            )
+        return engine.submit_drop(
+            ticket_id, execution_id, request_id=request.request_id
+        )
     if request.method == "reconcile-update-base":
         if set(request.payload) != {"ticket_id", "onto"}:
             raise IPCProtocolError(

@@ -118,13 +118,14 @@ Useful read-only and recovery commands:
 devlegate status
 devlegate plan
 devlegate retry
+devlegate drop <ticket-id>
 ```
 
 Finite commands use concise operator-oriented human output by default. Tables
 are used where information is genuinely tabular. Add `--yaml` for canonical
 vendored NanoYAML or `--json` for deterministic pretty JSON; the two
 machine-readable flags are mutually exclusive. This applies to `version`,
-`init`, `render`, `check`, `status`, `plan`, `stop`, `retry`, `control init`,
+`init`, `render`, `check`, `status`, `plan`, `stop`, `retry`, `drop`, `control init`,
 and the `reconcile update-base`, `reconcile resume`, and `reconcile control`
 commands. Service and worker logs from `foreground` and the background daemon
 remain operational streams, not YAML or JSON documents.
@@ -145,7 +146,12 @@ scheduler-level meaning.
 project before work starts. Bare `devlegate` ensures the persistent background
 service is running; `devlegate foreground` attaches it to the current terminal
 and `devlegate once` performs one synchronization and execution pass. Use
-`devlegate stop` for orderly shutdown.
+`devlegate stop` for orderly shutdown. Use `devlegate drop <ticket-id>` to
+explicitly retire a blocked execution without applying it. Drop preserves the
+worker report and checkpoint provenance, removes the old execution ownership,
+and does not delete or rewrite the current ticket. A later ticket generation
+may reuse the same ID as fresh work. Without a ticket ID, `devlegate drop`
+offers an interactive candidate menu in a terminal.
 
 ## Workflow
 

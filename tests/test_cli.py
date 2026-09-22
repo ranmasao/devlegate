@@ -138,6 +138,8 @@ def cli_daemon(git_fixture, monkeypatch):
     engine.published_plan_view = engine.plan_view
     retry_candidates = engine.retry_candidates_view
     engine.published_retry_candidates_view = retry_candidates
+    drop_candidates = engine.drop_candidates_view
+    engine.published_drop_candidates_view = drop_candidates
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     try:
@@ -268,6 +270,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         "check",
         "control",
         "retry",
+        "drop",
         "reconcile",
         "version",
     ):
@@ -278,6 +281,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     )
     assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
+    assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
 
 
 @pytest.mark.parametrize("command", ["run", "daemon"])
@@ -832,6 +836,162 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
                 os.kill(int(pid_file.read_text()), signal.SIGKILL)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+@pytest.mark.parametrize("replacement_id", ["T-1", "T-2"])
+def test_real_service_drop_retire_old_lineage_and_runs_fresh(
+    git_fixture, monkeypatch, replacement_id
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _h1_config(git_fixture)
+    control = _service_engine_with_control(git_fixture, config).control_worktree
+    _add_service_ticket(ServiceEngine(config))
+    worker = git_fixture["tmp"] / "drop-worker.py"
+    marker = git_fixture["tmp"] / "drop-worker.jsonl"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "prompt = sys.stdin.read()\n"
+        f"pathlib.Path({str(marker)!r}).open('a').write(json.dumps(prompt) + '\\n')\n"
+        "time.sleep(1)\n"
+        "(workspace / 'drop-worker.txt').write_text('completed\\n')\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'drop', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    service = LiveService(git_fixture["working"], config)
+    client = None
+    try:
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "worker-running",
+            timeout=30,
+        )
+        old_state = _disk_state(config)
+        old_execution = old_state["execution_id"]
+        old_control = old_state["execution_control_head"]
+        old_path = control / "kanban/todo/T-1.md"
+        old_path.unlink()
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "withdraw old ticket")
+        replacement_path = control / f"kanban/todo/{replacement_id}.md"
+        replacement_path.write_text(ticket("Replacement ticket", "new work"))
+        git(control, "add", str(replacement_path.relative_to(control)))
+        git(control, "commit", "-m", "create replacement ticket")
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        control_before_restart = git(control, "rev-parse", "HEAD").stdout.strip()
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_stage") == "lifecycle",
+            timeout=30,
+        )
+        blocked_state = _disk_state(config)
+        assert blocked_state["phase"] == "agent_running"
+        assert blocked_state["execution_id"] == old_execution
+        assert blocked_state["execution_control_head"] == old_control
+        assert blocked_state["pending_execution_report"]["conclusion"] == "completed"
+        old_checkpoint = blocked_state["pending_execution_report"]["workspace_head"]
+        old_workspace = Path(blocked_state["execution_path"])
+        assert service.process is not None
+        service.process.send_signal(signal.SIGTERM)
+        service.wait_exited()
+        publisher = git_fixture["publisher_control"]
+        git(publisher, "fetch", "origin", "devlegate/control")
+        git(publisher, "reset", "--hard", "origin/devlegate/control")
+        publisher_ticket = publisher / f"kanban/todo/{replacement_id}.md"
+        publisher_ticket.write_text(ticket("Later generation", "later work"))
+        git(publisher, "add", str(publisher_ticket.relative_to(publisher)))
+        git(publisher, "commit", "-m", "advance replacement generation")
+        git(publisher, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        later_control = git(publisher, "rev-parse", "HEAD").stdout.strip()
+        assert (
+            git(control, "rev-parse", "origin/devlegate/control").stdout.strip()
+            == control_before_restart
+        )
+        service.start()
+        service.wait_ready()
+        time.sleep(2.2)
+        recovered = _disk_state(config)
+        assert (
+            git(control, "rev-parse", "HEAD").stdout.strip()
+            == control_before_restart
+        )
+        assert (
+            git(control, "rev-parse", "origin/devlegate/control").stdout.strip()
+            == later_control
+        )
+        assert recovered["execution_id"] == old_execution
+        assert recovered["execution_control_head"] == old_control
+        assert recovered["pending_execution_report"]["workspace_head"] == old_checkpoint
+        assert recovered["execution_stage"] == "lifecycle"
+        assert recovered["worker_identity"] is None
+        assert not list((control / "executions").glob("**/*.json"))
+        assert service.locator.daemon_authority_present()
+        candidates = ipc_request(service.locator.socket_path, "drop-candidates")
+        assert candidates["candidates"][0]["id"] == "T-1"
+        assert candidates["candidates"][0]["execution_id"] == old_execution
+        assert candidates["candidates"][0]["stage"] == "lifecycle"
+        drop = service.cli("drop", "T-1")
+        assert drop.returncode == 0, (drop.stdout, drop.stderr)
+        disposition_ref = f"refs/devlegate/dispositions/T-1/{old_execution}"
+        evidence_ref = f"refs/devlegate/executions/T-1/{old_execution}"
+        assert (
+            git(service.locator.repo, "rev-parse", "--verify", evidence_ref)
+            .stdout.strip()
+            == old_checkpoint
+        )
+        disposition = git(
+            service.locator.repo, "cat-file", "-p", disposition_ref
+        )
+        disposition_payload = json.loads(disposition.stdout)
+        assert disposition_payload["disposition"] == "dropped"
+        assert disposition_payload["worker_conclusion"] == "completed"
+        assert disposition_payload["execution_report"]["execution_id"] == old_execution
+        assert disposition_payload["execution_report"]["conclusion"] == "completed"
+        assert disposition_payload["checkpoint"] == old_checkpoint
+        assert git(
+            service.locator.repo,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/work/T-1",
+        ).stdout == ""
+        assert not old_workspace.exists()
+        after_drop = _disk_state(config)
+        assert after_drop["phase"] == "idle"
+        assert "execution_id" not in after_drop
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("phase") == "agent_running"
+                and _disk_state(config).get("execution_stage") == "worker-running"
+                and _disk_state(config).get("execution_id") != old_execution
+            ),
+            timeout=30,
+        )
+        fresh = _disk_state(config)
+        assert fresh["execution_id"] != old_execution
+        assert fresh["execution_ticket_id"] == replacement_id
+        assert fresh["execution_control_head"] != old_control
+        assert fresh["execution_base_head"] == fresh["local_head"]
+        assert "Continue the existing implementation" not in marker.read_text()
+        replay = ServiceEngine(config)
+        replay._drop_owned("T-1", old_execution)
+        assert _disk_state(config)["execution_id"] == fresh["execution_id"]
+        client = service.start_cli("stop")
+        stdout, stderr = client.communicate(timeout=30)
+        assert client.returncode == 0, (stdout, stderr)
+        service.wait_exited()
+    finally:
+        if client is not None and client.poll() is None:
+            client.kill()
+            client.wait(timeout=5)
+        if service.process is not None and service.process.poll() is None:
+            service.kill()
 
 
 def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
@@ -1587,6 +1747,83 @@ def test_retry_interactive_cancel_submits_no_mutation(
     assert main() == 0
     assert submitted == []
     capsys.readouterr()
+
+
+def test_drop_interactive_candidates_use_exact_execution_identity(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    submitted = []
+    candidate = {
+        "id": "T-1",
+        "title": "Ticket",
+        "reason": "control authority withdrawn",
+        "kind": "lifecycle",
+        "execution_id": "execution-1",
+        "stage": "lifecycle",
+    }
+    monkeypatch.setattr(
+        cli_daemon, "published_drop_candidates_view", lambda: (candidate,)
+    )
+    monkeypatch.setattr(
+        cli_daemon,
+        "submit_drop",
+        lambda ticket_id, execution_id, *, request_id: (
+            submitted.append((ticket_id, execution_id))
+            or {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+            }
+        ),
+    )
+    monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "drop", "--env", str(_short_runtime_config(git_fixture))],
+    )
+
+    assert main() == 0
+    assert submitted == [("T-1", "execution-1")]
+    assert "Drop candidates:" in capsys.readouterr().out
+
+
+def test_drop_without_ticket_rejects_noninteractive_invocation(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["devlegate", "drop", "--env", str(_short_runtime_config(git_fixture))],
+    )
+    assert main() == 1
+    assert "specify a ticket ID" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("answer", "selected"),
+    [("1", "T-1"), ("2", "T-2"), ("0", None), ("", None)],
+)
+def test_shared_candidate_selector_selection_and_cancel(
+    monkeypatch, answer, selected
+):
+    candidates = (
+        {"id": "T-1", "title": "One", "reason": "first", "kind": "x"},
+        {"id": "T-2", "title": "Two", "reason": "second", "kind": "x"},
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
+    result = cli._select_candidate(candidates, "Candidates", "invalid selection")
+    assert result is None if selected is None else result["id"] == selected
+
+
+@pytest.mark.parametrize("answer", ["not-a-number", "3"])
+def test_shared_candidate_selector_rejects_invalid_selection(monkeypatch, answer):
+    candidates = ({"id": "T-1", "title": "One", "reason": "first", "kind": "x"},)
+    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
+    with pytest.raises(DevlegateError, match="invalid selection"):
+        cli._select_candidate(candidates, "Candidates", "invalid selection")
 
 
 def test_daemon_application_error_is_authoritative(

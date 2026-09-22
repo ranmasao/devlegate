@@ -119,9 +119,9 @@ service is active. When no service authority exists, those commands can take a
 guarded read-only observation directly.
 
 If service authority exists but IPC cannot safely be used, the client fails
-closed rather than reading or writing around the service. `retry`, `reconcile
-resume`, and `reconcile update-base` are mutable operations and go through the service;
-they do not construct a separate mutable CLI runtime.
+closed rather than reading or writing around the service. `retry`, `drop`,
+`reconcile resume`, and `reconcile update-base` are mutable operations and go
+through the service; they do not construct a separate mutable CLI runtime.
 
 ## External Control Writers
 
@@ -201,6 +201,15 @@ Workers do not commit, push, merge, rebase, switch branches, move tickets,
 write reports, or integrate into the product branch. Reviewers decide whether
 work is accepted; Devlegate performs accepted product integration.
 
+An explicit `devlegate drop <ticket-id>` retires one blocked execution lineage
+when its exact execution ID, checkpoint, report, and absent worker ownership
+are proven. Drop preserves the worker conclusion as observed and records a
+separate `dropped` orchestration disposition. It pins the checkpoint under an
+execution-specific evidence ref, retires the validated execution worktree and
+per-ticket branch, and clears the active execution binding. It never deletes
+or rewrites the current ticket, retargets a report to a later ticket generation,
+or purges evidence. A later ticket with the same ID is therefore fresh work.
+
 ## Safety Rules
 
 - The product checkout and control worktree must be clean before synchronization
@@ -215,6 +224,8 @@ work is accepted; Devlegate performs accepted product integration.
   retains its planned product revision and bound control revision.
 - Ambiguous Git state, worker ownership, execution identity, or mutable delivery
   fails closed and leaves evidence for inspection.
+- Drop does not kill workers, drop live or ambiguous executions, or advance
+  handled control-generation markers for state it has not synchronized.
 
 ## Shutdown And Recovery
 

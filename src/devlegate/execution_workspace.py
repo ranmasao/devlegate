@@ -133,6 +133,50 @@ class ExecutionWorkspaceManager:
         self._validate_workspace(workspace)
         self._verify_submodules(workspace.path)
 
+    def retire(self, workspace: ExecutionWorkspace, expected_head: str) -> None:
+        """Remove one validated, clean execution worktree registration."""
+        if workspace.ticket_id != self.ticket_id or workspace.branch != self.branch:
+            raise ExecutionWorkspaceError("execution workspace identity is invalid")
+        if workspace.path != self.path or workspace.head != expected_head:
+            raise ExecutionWorkspaceError("execution workspace checkpoint is invalid")
+        if workspace.dirty:
+            raise ExecutionWorkspaceError("execution worktree is dirty")
+        if self.root.is_symlink() or (self.root / "work").is_symlink():
+            raise self._path_conflict("has a symlinked workspace root")
+        if self.path.is_symlink():
+            raise self._path_conflict("is a symlink")
+        registrations = self._registrations()
+        branch_path = next(
+            (
+                path
+                for path, item in registrations.items()
+                if item.get("branch") == self.branch
+            ),
+            None,
+        )
+        if branch_path is not None and branch_path != self.path.resolve():
+            raise self._path_conflict(
+                f"branch is attached to unexpected worktree {branch_path}"
+            )
+        registration = registrations.get(self.path.resolve())
+        if registration is None:
+            if self.path.exists():
+                raise self._path_conflict("is not a registered execution worktree")
+            return
+        validated = self._validate_existing(registration, workspace.base_head)
+        if validated.head != expected_head or validated.dirty:
+            raise ExecutionWorkspaceError("execution worktree changed before removal")
+        removed = _git(self.repo, "worktree", "remove", str(self.path), check=False)
+        if removed.returncode:
+            raise ExecutionWorkspaceError(
+                f"cannot remove execution worktree {self.path}: "
+                f"{removed.stderr.strip() or 'unknown git error'}"
+            )
+        if self.path.exists() or self.path.resolve() in self._registrations():
+            raise ExecutionWorkspaceError(
+                f"execution worktree {self.path} remains after removal"
+            )
+
     def _prepare_submodules(self, path: Path) -> None:
         try:
             self._validate_submodule_paths(path)

@@ -1549,6 +1549,47 @@ def test_retry_mutation_payload_is_strict(payload):
         dispatch_mutation(FakeEngine(), _request("retry", payload))
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"ticket_id": "T-1"},
+        {"ticket_id": "", "execution_id": "execution-1"},
+        {"ticket_id": "T-1", "execution_id": ""},
+        {"ticket_id": "T-1", "execution_id": "execution-1", "extra": 1},
+    ],
+)
+def test_drop_mutation_payload_is_strict(payload):
+    class FakeEngine:
+        def submit_drop(self, _ticket_id, _execution_id, *, request_id):
+            pytest.fail(f"invalid drop payload was queued: {request_id}")
+
+    with pytest.raises(IPCProtocolError):
+        dispatch_mutation(FakeEngine(), _request("drop", payload))
+
+
+def test_drop_mutation_binds_ticket_and_execution_id():
+    class FakeEngine:
+        def submit_drop(self, ticket_id, execution_id, *, request_id):
+            return {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+                "request_id": request_id,
+            }
+
+    result = dispatch_mutation(
+        FakeEngine(),
+        _request("drop", {"ticket_id": "T-1", "execution_id": "execution-1"}),
+    )
+    assert result == {
+        "accepted": True,
+        "ticket_id": "T-1",
+        "execution_id": "execution-1",
+        "request_id": "id",
+    }
+
+
 def test_matching_live_worker_rejects_retry_without_queueing(
     tmp_path, monkeypatch, short_state_dir
 ):

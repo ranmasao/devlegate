@@ -148,30 +148,36 @@ def _request_once(
     return response.result
 
 
-def decode_retry_candidates(value: dict[str, object]) -> tuple[dict[str, str], ...]:
+def _decode_candidates(
+    value: dict[str, object], label: str, extra_fields: set[str] | None = None
+) -> tuple[dict[str, str], ...]:
+    fields = {"id", "title", "reason", "kind"} | (extra_fields or set())
     try:
         candidates = value["candidates"]
         if not isinstance(candidates, list):
             raise ValueError("candidates must be a list")
         result = []
         for item in candidates:
-            if not isinstance(item, dict) or set(item) != {
-                "id",
-                "title",
-                "reason",
-                "kind",
-            }:
-                raise ValueError("retry candidate shape is invalid")
+            if not isinstance(item, dict) or set(item) != fields:
+                raise ValueError(f"{label} candidate shape is invalid")
             if not all(isinstance(item[key], str) and item[key] for key in item):
-                raise ValueError("retry candidate fields must be non-empty text")
+                raise ValueError(f"{label} candidate fields must be non-empty text")
             result.append({key: item[key] for key in item})
         if set(value) != {"candidates"}:
-            raise ValueError("retry candidate response fields are invalid")
+            raise ValueError(f"{label} candidate response fields are invalid")
         return tuple(result)
     except (KeyError, TypeError, ValueError) as error:
         raise IPCClientError(
-            f"service IPC returned invalid retry candidates: {error}"
+            f"service IPC returned invalid {label} candidates: {error}"
         ) from error
+
+
+def decode_retry_candidates(value: dict[str, object]) -> tuple[dict[str, str], ...]:
+    return _decode_candidates(value, "retry")
+
+
+def decode_drop_candidates(value: dict[str, object]) -> tuple[dict[str, str], ...]:
+    return _decode_candidates(value, "drop", {"execution_id", "stage"})
 
 
 def decode_retry_ack(value: dict[str, object], ticket_id: str) -> None:
@@ -181,6 +187,17 @@ def decode_retry_ack(value: dict[str, object], ticket_id: str) -> None:
         raise IPCClientError("service IPC returned invalid retry acknowledgement")
 
 
+def decode_drop_ack(
+    value: dict[str, object], ticket_id: str, execution_id: str
+) -> None:
+    if set(value) != {"accepted", "ticket_id", "execution_id"}:
+        raise IPCClientError("service IPC returned invalid drop acknowledgement")
+    if (
+        value["accepted"] is not True
+        or value["ticket_id"] != ticket_id
+        or value["execution_id"] != execution_id
+    ):
+        raise IPCClientError("service IPC returned invalid drop acknowledgement")
 def decode_reconcile_ack(
     value: dict[str, object], ticket_id: str, onto: str
 ) -> None:

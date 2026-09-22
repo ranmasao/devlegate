@@ -76,6 +76,7 @@ The counts are grouping counts, not test-case counts.
 | Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_server.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
 | Socket ownership and cleanup are safe | Locator and server component tests | Real Unix socket tests, endpoint replacement and shutdown families | `LiveService` readiness/stop/restart | KEEP; topology adds process lifetime |
 | Graceful lifecycle commands close admission before exit | `test_lifecycle_drain_rejects_submitted_command_before_owner_admission`, checkpoint-barrier tests | Lifecycle IPC dispatch and service identity tests | `test_real_service_graceful_lifecycle_waits_for_active_worker` | KEEP; SIGINT remains abort-only |
+| Explicit drop retires only a proven execution and preserves provenance | Drop admission, evidence-ref, and workspace-retirement tests | IPC/owner handoff and shared selector tests | `test_real_service_drop_retire_old_lineage_and_runs_fresh` | KEEP; same-ID and distinct-ID generations are fresh |
 
 No important mutation-authority claim is supported solely by a mocked lower
 layer. The production claims have corresponding `LiveService` evidence. The
