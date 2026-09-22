@@ -113,3 +113,48 @@ def test_wrong_submodule_head_is_preserved_and_rejected(
     with pytest.raises(ExecutionWorkspaceError, match="unexpected"):
         manager.prepare(base)
     assert git(dependency, "rev-parse", "HEAD").stdout.strip() == s2
+
+
+def test_clean_submodule_execution_worktree_can_be_retired(
+    linked_submodule_fixture,
+):
+    manager, base, _s1, _dependency_path = linked_submodule_fixture
+    workspace = manager.prepare(base)
+
+    manager.retire(workspace, workspace.head)
+
+    assert not workspace.path.exists()
+    assert all(
+        item.get("branch") != manager.branch
+        for item in manager._registrations().values()
+    )
+
+
+def test_dirty_submodule_cannot_be_force_retired(linked_submodule_fixture):
+    manager, base, _s1, dependency_path = linked_submodule_fixture
+    workspace = manager.prepare(base)
+    dependency = workspace.path / dependency_path
+    (dependency / "dependency.txt").write_text("uncommitted evidence\n")
+
+    with pytest.raises(ExecutionWorkspaceError, match="changed before removal"):
+        manager.retire(workspace, workspace.head)
+    assert workspace.path.exists()
+    assert any(
+        item.get("branch") == manager.branch
+        for item in manager._registrations().values()
+    )
+
+
+def test_wrong_submodule_head_cannot_be_force_retired(linked_submodule_fixture):
+    manager, base, _s1, dependency_path = linked_submodule_fixture
+    workspace = manager.prepare(base)
+    dependency = workspace.path / dependency_path
+    (dependency / "second.txt").write_text("S2\n")
+    git(dependency, "config", "user.email", "test@example.com")
+    git(dependency, "config", "user.name", "Test User")
+    git(dependency, "add", "second.txt")
+    git(dependency, "commit", "-m", "S2")
+
+    with pytest.raises(ExecutionWorkspaceError, match="changed before removal"):
+        manager.retire(workspace, workspace.head)
+    assert workspace.path.exists()

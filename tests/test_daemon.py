@@ -374,6 +374,189 @@ def test_drop_final_durable_boundaries_replay_without_active_state(
     ]["accepted"] is True
 
 
+def test_drop_retirement_workspace_error_does_not_kill_owner_loop(
+    tmp_path, monkeypatch
+):
+    engine, _config, _control, _workspace, command = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    engine.poll_interval = "1"
+    stop_event = threading.Event()
+    served = []
+    submitted = []
+
+    def fail_retirement(_manager, _workspace, _expected_head):
+        raise ExecutionWorkspaceError("submodule retirement is unsafe")
+
+    monkeypatch.setattr(ExecutionWorkspaceManager, "retire", fail_retirement)
+    service_thread = threading.Thread(
+        target=lambda: served.append(engine.serve(stop_event)), daemon=True
+    )
+    service_thread.start()
+
+    def submit():
+        try:
+            submitted.append(
+                engine.submit_drop(
+                    command.ticket_id,
+                    command.execution_id,
+                    request_id=command.request_id,
+                )
+            )
+        except DevlegateError as error:
+            submitted.append(error)
+
+    submit_thread = threading.Thread(target=submit, daemon=True)
+    submit_thread.start()
+    submit_thread.join(timeout=5)
+    assert not submit_thread.is_alive()
+    assert len(submitted) == 1
+    assert isinstance(submitted[0], DevlegateError)
+    assert "cannot retire execution worktree" in str(submitted[0])
+    assert service_thread.is_alive()
+    assert engine._state["phase"] == "agent_running"
+    assert engine._state["execution_stage"] == "lifecycle"
+    assert engine._read_drop_disposition("T-1", command.execution_id)[
+        "disposition"
+    ] == "dropped"
+
+    stop_event.set()
+    engine.wake()
+    service_thread.join(timeout=5)
+    assert not service_thread.is_alive()
+    assert served == [0]
+
+
+def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
+    tmp_path, monkeypatch
+):
+    engine, config, control, workspace, _command = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    sub_remote = tmp_path / "drop-submodule.git"
+    sub_seed = tmp_path / "drop-submodule-seed"
+    git(tmp_path, "init", "--bare", sub_remote)
+    git(tmp_path, "init", "-b", "main", sub_seed)
+    git(sub_seed, "config", "user.email", "test@example.com")
+    git(sub_seed, "config", "user.name", "Test User")
+    (sub_seed / "dependency.txt").write_text("submodule checkpoint\n")
+    git(sub_seed, "add", "dependency.txt")
+    git(sub_seed, "commit", "-m", "submodule checkpoint")
+    git(sub_seed, "push", sub_remote, "HEAD:main")
+    git(sub_remote, "symbolic-ref", "HEAD", "refs/heads/main")
+    checkpoint_parent = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+
+    git(
+        workspace.path,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-b",
+        "main",
+        sub_remote,
+        "dependency",
+    )
+    git(
+        workspace.path,
+        "commit",
+        "-am",
+        "Devlegate checkpoint T-1 drop-final-boundary",
+    )
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    git(
+        workspace.path,
+        "push",
+        "--force",
+        "origin",
+        f"HEAD:refs/heads/{workspace.branch}",
+    )
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(workspace.base_head)
+    report = build_execution_report(
+        execution_id="drop-final-boundary",
+        ticket_id="T-1",
+        code_base_head=workspace.base_head,
+        control_head=engine._state["execution_control_head"],
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        workspace_head=checkpoint,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        ),
+    )
+    engine._save_state(
+        "agent_running",
+        execution_stage="lifecycle",
+        worker_identity=None,
+        execution_start_head=checkpoint_parent,
+        execution_remote_head=checkpoint,
+        pending_execution_report=report.as_dict(),
+    )
+    engine._persist_drop_intent(report)
+    engine._pin_drop_evidence(report)
+    git(
+        engine.repo,
+        "push",
+        f"--force-with-lease=refs/heads/{workspace.branch}:{checkpoint}",
+        "origin",
+        f":refs/heads/{workspace.branch}",
+    )
+    assert workspace.path.exists()
+    assert any(
+        item.get("branch") == workspace.branch
+        for item in manager._registrations().values()
+    )
+    assert (
+        git(engine.repo, "show-ref", "--verify", f"refs/heads/{workspace.branch}")
+        .returncode
+        == 0
+    )
+
+    restarted = ServiceEngine(config)
+    assert (
+        git(workspace.path, "rev-parse", f"{checkpoint}^").stdout.strip()
+        == checkpoint_parent
+    )
+    assert (
+        git(workspace.path, "log", "-1", "--format=%s").stdout.strip()
+        == "Devlegate checkpoint T-1 drop-final-boundary"
+    )
+    assert git(workspace.path, "status", "--porcelain").stdout == ""
+    applied = []
+    monkeypatch.setattr(
+        restarted,
+        "_apply_execution_lifecycle",
+        lambda recovered: applied.append(recovered.execution_id),
+    )
+    assert run_test_iteration(restarted) == 0
+
+    assert applied == []
+    assert restarted._state["phase"] == "idle"
+    assert "execution_id" not in restarted._state
+    assert not workspace.path.exists()
+    assert not any(
+        item.get("branch") == workspace.branch
+        for item in manager._registrations().values()
+    )
+    assert git(engine.repo, "branch", "--list", workspace.branch).stdout == ""
+    assert engine._read_drop_disposition("T-1", report.execution_id)[
+        "disposition"
+    ] == "dropped"
+    assert (
+        git(
+            engine.repo,
+            "rev-parse",
+            "--verify",
+            f"{engine._drop_evidence_ref('T-1', report.execution_id)}^{{commit}}",
+        ).stdout.strip()
+        == checkpoint
+    )
+    assert not list((control / "executions").glob("**/*.json"))
+
+
 @pytest.mark.parametrize(
     ("kind", "returncode"),
     [

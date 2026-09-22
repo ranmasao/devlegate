@@ -4368,7 +4368,12 @@ class ServiceEngine:
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, report.ticket_id
         )
-        manager.retire(workspace, expected)
+        try:
+            manager.retire(workspace, expected)
+        except ExecutionWorkspaceError as error:
+            raise DevlegateError(
+                f"cannot retire execution worktree: {error}"
+            ) from error
         local_ref = f"refs/heads/{report.execution_branch}"
         local = _git(self.repo, "rev-parse", "--verify", local_ref, check=False)
         if local.returncode == 0 and local.stdout.strip() != expected:
