@@ -646,6 +646,7 @@ class ServiceEngine:
         self._published_retry_candidates: tuple[dict[str, str], ...] = ()
         self._published_drop_candidates: tuple[dict[str, str], ...] = ()
         self._host_owner_thread_id: int | None = None
+        self._automatic_drop_recovery_execution: str | None = None
         self._published_snapshot = ServiceSnapshot(
             lifecycle="initialized",
             phase=str(self._state["phase"]),
@@ -2543,7 +2544,19 @@ class ServiceEngine:
                 ) and self._read_drop_disposition(
                     dropped_ticket, dropped_execution
                 ) is not None:
+                    recovery_key = f"{dropped_ticket}:{dropped_execution}"
+                    if self._automatic_drop_recovery_execution != recovery_key:
+                        _log(
+                            f"recovering dropped execution {dropped_ticket} "
+                            f"({dropped_execution[:12]})"
+                        )
+                        self._automatic_drop_recovery_execution = recovery_key
                     self._drop_owned(dropped_ticket, dropped_execution)
+                    _log(
+                        f"dropped execution cleanup complete: {dropped_ticket} "
+                        f"({dropped_execution[:12]})"
+                    )
+                    self._automatic_drop_recovery_execution = None
                     return 0
                 report = self._recover_lifecycle_report()
                 control_head = self._apply_execution_lifecycle(report)

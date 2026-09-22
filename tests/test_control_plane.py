@@ -1371,6 +1371,8 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
     devlegate.poll_interval = "1"
     worker_calls = 0
     publication_calls = 0
+    first_publication = threading.Event()
+    second_publication = threading.Event()
 
     def worker(workspace, _prompt, **_kwargs):
         nonlocal worker_calls
@@ -1384,7 +1386,10 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
         nonlocal publication_calls
         publication_calls += 1
         if publication_calls == 1:
+            first_publication.set()
             raise DevlegateError("simulated publication outage")
+        if publication_calls == 2:
+            second_publication.set()
         return original_publish(*args)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
@@ -1393,12 +1398,11 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
     thread = threading.Thread(target=lambda: devlegate.serve(stop_event), daemon=True)
     thread.start()
 
-    for _ in range(300):
-        if publication_calls == 2:
-            stop_event.set()
-            devlegate.wake()
-            break
-        stop_event.wait(0.01)
+    assert first_publication.wait(10)
+    devlegate.wake()
+    assert second_publication.wait(10)
+    stop_event.set()
+    devlegate.wake()
     thread.join(timeout=5)
 
     assert not thread.is_alive()

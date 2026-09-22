@@ -132,7 +132,7 @@ def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
     ["after-evidence", "after-disposition", "after-remote", "after-worktree"],
 )
 def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
-    tmp_path, monkeypatch, fault_stage
+    tmp_path, monkeypatch, fault_stage, capsys
 ):
     engine, config, state = make_engine(tmp_path, monkeypatch)
     workspace, control = persist_agent_running(
@@ -243,6 +243,9 @@ def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
     assert "execution_id" not in restarted._state
     assert not workspace.path.exists()
     assert not list((control / "executions").glob("**/*.json"))
+    output = capsys.readouterr().out
+    assert "recovering dropped execution T-1 (drop-replay)" in output
+    assert "dropped execution cleanup complete: T-1 (drop-replay)" in output
 
 
 def test_iteration_body_does_not_reenter_scheduler():
@@ -375,7 +378,7 @@ def test_drop_final_durable_boundaries_replay_without_active_state(
 
 
 def test_drop_retirement_workspace_error_does_not_kill_owner_loop(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
     engine, _config, _control, _workspace, command = _prepare_drop_owner_command(
         tmp_path, monkeypatch
@@ -425,6 +428,13 @@ def test_drop_retirement_workspace_error_does_not_kill_owner_loop(
     service_thread.join(timeout=5)
     assert not service_thread.is_alive()
     assert served == [0]
+
+    engine._automatic_drop_recovery_execution = None
+    with pytest.raises(DevlegateError, match="cannot retire execution worktree"):
+        engine.run_iteration()
+    output = capsys.readouterr().out
+    assert "recovering dropped execution T-1 (drop-final-b)" in output
+    assert "dropped execution cleanup complete" not in output
 
 
 def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(

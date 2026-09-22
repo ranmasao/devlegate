@@ -1701,7 +1701,7 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
         cli_daemon,
         "published_retry_candidates_view",
         lambda: (
-            {"id": "T-1", "title": "Ticket", "reason": "failed", "kind": "failed"},
+            {"id": "T-1", "title": "T-1", "reason": "failed", "kind": "failed"},
         ),
     )
     monkeypatch.setattr(
@@ -1721,7 +1721,9 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
 
     assert main() == 0
     assert submitted == ["T-1"]
-    assert "Retry candidates:" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Retry candidates:" in output
+    assert "  1) T-1\n" in output
 
 
 def test_retry_interactive_cancel_submits_no_mutation(
@@ -1816,6 +1818,33 @@ def test_shared_candidate_selector_selection_and_cancel(
     monkeypatch.setattr("builtins.input", lambda _prompt: answer)
     result = cli._select_candidate(candidates, "Candidates", "invalid selection")
     assert result is None if selected is None else result["id"] == selected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_label"),
+    [
+        (
+            "Generalize nominal lexical readiness",
+            "T-1  Generalize nominal lexical readiness",
+        ),
+        ("T-1", "T-1"),
+        ("", "T-1"),
+    ],
+)
+def test_shared_candidate_selector_avoids_redundant_titles(
+    monkeypatch, capsys, title, expected_label
+):
+    monkeypatch.setattr("builtins.input", lambda _prompt: "0")
+
+    cli._select_candidate(
+        ({"id": "T-1", "title": title, "reason": "reason", "kind": "retry"},),
+        "Candidates",
+        "invalid selection",
+    )
+
+    output = capsys.readouterr().out
+    assert f"  1) {expected_label}\n" in output
+    assert "     reason\n" in output
 
 
 @pytest.mark.parametrize("answer", ["not-a-number", "3"])

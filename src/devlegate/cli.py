@@ -165,7 +165,14 @@ def _select_candidate(
 ) -> dict[str, str] | None:
     print(f"{heading}:")
     for index, candidate in enumerate(candidates, 1):
-        print(f"  {index}) {candidate['id']}  {candidate['title']}")
+        ticket_id = candidate["id"]
+        title = candidate.get("title", "").strip()
+        label = (
+            ticket_id
+            if not title or title == ticket_id
+            else f"{ticket_id}  {title}"
+        )
+        print(f"  {index}) {label}")
         print(f"     {candidate['reason']}")
     print("  0) Cancel")
     answer = input("Select number (Enter = cancel): ").strip()
