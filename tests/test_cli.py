@@ -725,6 +725,8 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
     _add_service_ticket(engine)
     service = LiveService(git_fixture["working"], config)
     client = None
+    stop_client_completed = False
+    natural_exit_completed = False
     try:
         service.start()
         service.wait_ready()
@@ -787,6 +789,7 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
         if client is not None:
             stdout, stderr = client.communicate(timeout=30)
             assert client.returncode == 0, (stdout, stderr)
+            stop_client_completed = command == "stop"
         if command == "restart":
             service.wait_for(
                 lambda: (
@@ -813,12 +816,17 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
                 receipt = json.loads(receipt_path.read_text())
                 assert receipt["action"] == "stop"
                 assert receipt["state"] == "completed"
+                service.wait_exited()
+                natural_exit_completed = True
     finally:
         if client is not None and client.poll() is None:
             client.kill()
             client.wait(timeout=5)
         if service.process is not None and service.process.poll() is None:
-            service.stop()
+            if stop_client_completed and not natural_exit_completed:
+                service.kill()
+            else:
+                service.stop()
         if pid_file.exists():
             try:
                 os.kill(int(pid_file.read_text()), signal.SIGKILL)

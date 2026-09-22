@@ -210,6 +210,26 @@ class LiveService:
         assert not self.locator.socket_path.exists()
         assert not self.locator.daemon_authority_present()
 
+    def wait_exited(self, timeout: float = 10) -> None:
+        """Wait for an already-stopping service to exit without signaling it."""
+        if self.process is None:
+            raise AssertionError("service was not started")
+        try:
+            self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            self._collect_output()
+            raise AssertionError(
+                f"service did not exit naturally\nstdout:\n{self.stdout}\n"
+                f"stderr:\n{self.stderr}"
+            ) from error
+        self._collect_output()
+        assert self.process.returncode == 0, (
+            f"service exited with {self.process.returncode}\n"
+            f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
+        )
+        assert not self.locator.socket_path.exists()
+        assert not self.locator.daemon_authority_present()
+
     def _collect_output(self) -> None:
         if self.process is None or self.process.poll() is None:
             return
