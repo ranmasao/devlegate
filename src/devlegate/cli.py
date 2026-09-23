@@ -419,12 +419,19 @@ def _wait_for_service_stop(
 ) -> None:
     while locator.daemon_authority_present():
         time.sleep(0.05)
-    if _matching_lifecycle_receipt(
-        locator, request_id, instance_id, "stop", "completed"
-    ) is None:
-        raise DevlegateError(
-            "service authority disappeared without graceful stop completion"
-        )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if (
+            _matching_lifecycle_receipt(
+                locator, request_id, instance_id, "stop", "completed"
+            )
+            is not None
+        ):
+            return
+        time.sleep(0.05)
+    raise DevlegateError(
+        "service authority disappeared without graceful stop completion"
+    )
 
 
 def _wait_for_service_restart(

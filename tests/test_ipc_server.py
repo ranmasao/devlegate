@@ -103,6 +103,67 @@ def test_daemon_owns_socket_under_state_dir_and_removes_it(
     assert not engine.ipc_socket_path.exists()
 
 
+def test_stop_completed_receipt_cannot_overtake_accepted_receipt(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
+    original_write = daemon.write_lifecycle_receipt
+    accepted_entered = threading.Event()
+    completion_attempted = threading.Event()
+    release_accepted = threading.Event()
+    ordering = []
+    client_result = []
+    helper_threads = []
+
+    def gated_write(locator, payload):
+        if payload.get("action") == "stop" and payload.get("state") == "accepted":
+            accepted_entered.set()
+            assert release_accepted.wait(timeout=5)
+        original_write(locator, payload)
+        if payload.get("action") == "stop" and payload.get("state") == "completed":
+            completion_attempted.set()
+
+    monkeypatch.setattr(daemon, "write_lifecycle_receipt", gated_write)
+    receipt_path = engine._locator.state_dir / "lifecycle" / (
+        f"{engine._locator.state_key}.json"
+    )
+    original_serve = daemon.ServiceHost._serve_engine
+
+    def host(service_host, stop_intent, **kwargs):
+        client = threading.Thread(
+            target=lambda: client_result.append(
+                request(engine.ipc_socket_path, "stop", "stop")
+            )
+        )
+
+        def release_after_owner_probe():
+            try:
+                assert accepted_entered.wait(timeout=5)
+                ordering.append(completion_attempted.wait(timeout=0.5))
+            finally:
+                release_accepted.set()
+
+        watcher = threading.Thread(target=release_after_owner_probe)
+        helper_threads.extend((client, watcher))
+        client.start()
+        watcher.start()
+        accepted_entered.wait(timeout=5)
+        return 0
+
+    monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", host)
+    try:
+        assert daemon.run_service(engine) == 0
+    finally:
+        release_accepted.set()
+        for helper in helper_threads:
+            helper.join(timeout=5)
+        monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", original_serve)
+
+    assert all(not helper.is_alive() for helper in helper_threads)
+    assert ordering == [False]
+    assert json.loads(receipt_path.read_text())["state"] == "completed"
+
+
 def test_ping_status_and_plan_work_over_unix_socket(running_server):
     engine, _state, _server = running_server
     path = engine.ipc_socket_path
@@ -430,6 +491,48 @@ def test_idle_connection_does_not_block_unrelated_client(running_server):
         idle.close()
 
 
+def test_stop_drains_admitted_response_before_closing_socket(
+    running_server, monkeypatch
+):
+    _engine, _state, server = running_server
+    original_send = ipc_server.send_frame
+    response_started = threading.Event()
+    release_response = threading.Event()
+
+    def blocked_send(stream, payload):
+        response_started.set()
+        assert release_response.wait(timeout=5)
+        return original_send(stream, payload)
+
+    monkeypatch.setattr(ipc_server, "send_frame", blocked_send)
+    client_result = []
+    client = threading.Thread(
+        target=lambda: client_result.append(request(server.path, "admitted", "ping"))
+    )
+    stopper_done = threading.Event()
+    stopper = threading.Thread(
+        target=lambda: (server.stop(), stopper_done.set())
+    )
+    try:
+        client.start()
+        assert response_started.wait(timeout=5)
+        stopper.start()
+        assert not stopper_done.wait(timeout=0.1)
+        release_response.set()
+        client.join(timeout=5)
+        stopper.join(timeout=5)
+    finally:
+        release_response.set()
+        if client.is_alive():
+            client.join(timeout=5)
+        if stopper.is_alive():
+            stopper.join(timeout=5)
+
+    assert not client.is_alive()
+    assert not stopper.is_alive()
+    assert client_result and client_result[0].ok
+
+
 def test_incomplete_frame_does_not_block_unrelated_client(running_server):
     _engine, _state, server = running_server
     partial = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -597,7 +700,7 @@ def test_shutdown_closes_multiple_active_connection_handlers(
             time.sleep(0.01)
         assert len(server._active_connections) == len(clients)
         handlers = tuple(
-            handler for _connection, handler in server._active_connections.values()
+            state.handler for state in server._active_connections.values()
         )
         server.stop()
         assert not server._active_connections

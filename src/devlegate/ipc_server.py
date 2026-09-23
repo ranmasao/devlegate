@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from devlegate import __version__
@@ -206,7 +207,7 @@ class UnixIPCServer:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._connection_lock = threading.Lock()
-        self._active_connections: dict[int, tuple[socket.socket, threading.Thread]] = {}
+        self._active_connections: dict[int, _ConnectionState] = {}
         self._bound_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
@@ -237,13 +238,43 @@ class UnixIPCServer:
         self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._connection_lock:
+            self._stop.set()
+            active = tuple(self._active_connections.values())
         listener = self._listener
         if listener is not None:
             listener.close()
         with self._connection_lock:
-            active = tuple(self._active_connections.values())
-        for connection, _thread in active:
+            idle = tuple(
+                state.connection
+                for state in active
+                if not state.pending_responses
+            )
+        self._close_connections(idle)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2)
+        deadline = time.monotonic() + 2
+        for state in active:
+            for response_settled in tuple(state.pending_responses):
+                response_settled.wait(timeout=max(0, deadline - time.monotonic()))
+        self._close_connections(self._connections_snapshot())
+        for state in active:
+            if state.handler is not None:
+                state.handler.join(timeout=max(0, deadline - time.monotonic()))
+        self._listener = None
+        self._thread = None
+        self._remove_owned_socket()
+
+    def _connections_snapshot(self) -> tuple[socket.socket, ...]:
+        with self._connection_lock:
+            return tuple(
+                state.connection for state in self._active_connections.values()
+            )
+
+    @staticmethod
+    def _close_connections(connections) -> None:
+        for connection in connections:
             try:
                 connection.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -252,15 +283,6 @@ class UnixIPCServer:
                 connection.close()
             except OSError:
                 pass
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout=2)
-        deadline = time.monotonic() + 2
-        for _connection, handler in active:
-            handler.join(timeout=max(0, deadline - time.monotonic()))
-        self._listener = None
-        self._thread = None
-        self._remove_owned_socket()
 
     def _prepare_socket_directory(self) -> None:
         parent = self.path.parent
@@ -403,7 +425,9 @@ class UnixIPCServer:
                 if self._stop.is_set():
                     connection.close()
                     continue
-                self._active_connections[id(connection)] = (connection, handler)
+                self._active_connections[id(connection)] = _ConnectionState(
+                    connection, handler
+                )
                 handler.start()
 
     def _handle_connection(self, connection: socket.socket) -> None:
@@ -414,15 +438,39 @@ class UnixIPCServer:
                 self._active_connections.pop(id(connection), None)
             connection.close()
 
+    def _admit_request(self, connection: socket.socket) -> threading.Event | None:
+        with self._connection_lock:
+            if self._stop.is_set():
+                return None
+            state = self._active_connections.get(id(connection))
+            if state is None:
+                return None
+            response_settled = threading.Event()
+            state.pending_responses.add(response_settled)
+            return response_settled
+
+    def _settle_response(
+        self, connection: socket.socket, response_settled: threading.Event
+    ) -> None:
+        with self._connection_lock:
+            state = self._active_connections.get(id(connection))
+            if state is not None:
+                state.pending_responses.discard(response_settled)
+        response_settled.set()
+
     def _serve_connection(self, connection: socket.socket) -> None:
         stream = connection.makefile("rwb")
         try:
             while not self._stop.is_set():
                 request: IPCRequest | None = None
+                response_settled: threading.Event | None = None
                 fatal = False
                 try:
                     payload = receive_frame(stream)
                     if payload is None:
+                        return
+                    response_settled = self._admit_request(connection)
+                    if response_settled is None:
                         return
                     request = parse_request(payload)
                     result = dispatch_request(
@@ -438,6 +486,8 @@ class UnixIPCServer:
                     fatal = error.fatal
                 except (DevlegateError, OSError) as error:
                     if self._stop.is_set():
+                        if response_settled is not None:
+                            self._settle_response(connection, response_settled)
                         return
                     response = encode_error_response(
                         request.request_id if request is not None else "",
@@ -449,6 +499,9 @@ class UnixIPCServer:
                     send_frame(stream, response)
                 except (IPCProtocolError, OSError):
                     return
+                finally:
+                    if response_settled is not None:
+                        self._settle_response(connection, response_settled)
                 if fatal:
                     return
         finally:
@@ -456,6 +509,13 @@ class UnixIPCServer:
                 stream.close()
             except OSError:
                 pass
+
+
+@dataclass
+class _ConnectionState:
+    connection: socket.socket
+    handler: threading.Thread
+    pending_responses: set[threading.Event] = field(default_factory=set)
 
 
 def _peer_credentials_are_current_user(connection: socket.socket) -> bool:

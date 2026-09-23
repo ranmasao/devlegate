@@ -605,7 +605,13 @@ def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkey
     assert json.loads(status.stdout)["execution"]["phase"] == "idle"
 
     stopped = invoke(git_fixture, "stop")
-    assert stopped.returncode == 0, stopped.stderr
+    log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+    receipt_path = locator.state_dir / "lifecycle" / f"{locator.state_key}.json"
+    assert stopped.returncode == 0, (
+        f"{stopped.stderr}\n"
+        f"receipt={receipt_path.read_text() if receipt_path.exists() else None}\n"
+        f"log={log_path.read_text() if log_path.exists() else None}"
+    )
     for _attempt in range(100):
         if not locator.daemon_authority_present():
             break
@@ -665,8 +671,33 @@ def test_stop_wait_requires_matching_completion_receipt(monkeypatch):
 
     locator = Locator()
     monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: None)
+    clock = iter((0.0, 11.0))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
     with pytest.raises(DevlegateError, match="without graceful stop completion"):
         cli._wait_for_service_stop(locator, "request", "instance")
+
+
+def test_stop_wait_accepts_receipt_published_after_authority_release(monkeypatch):
+    class Locator:
+        authority_states = iter((True, False))
+
+        def daemon_authority_present(self):
+            return next(self.authority_states)
+
+    locator = Locator()
+    receipt = {
+        "request_id": "request",
+        "instance_id": "instance",
+        "action": "stop",
+        "state": "completed",
+    }
+    receipts = iter((None, receipt))
+    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: next(receipts))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    clock = iter((0.0, 1.0, 2.0))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
+
+    cli._wait_for_service_stop(locator, "request", "instance")
 
 
 def test_restart_wait_requires_ready_replacement(monkeypatch):

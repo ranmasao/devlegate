@@ -102,6 +102,7 @@ class ServiceHost:
         stop_intent = ShutdownIntent()
         authority = self._acquire_authority()
         restart_requested = False
+        lifecycle_receipt_ready = threading.Event()
 
         def record_failure(error: BaseException, stage: str) -> None:
             try:
@@ -125,6 +126,7 @@ class ServiceHost:
                     "state": "accepted",
                 },
             )
+            lifecycle_receipt_ready.set()
             return result
 
         server = UnixIPCServer(
@@ -172,6 +174,14 @@ class ServiceHost:
                 restart_requested = self.engine.lifecycle_intent() == "restart"
                 if self.engine.lifecycle_intent() == "stop":
                     request_id = self.engine.lifecycle_status_payload()["request_id"]
+                    if not isinstance(request_id, str):
+                        raise DevlegateError(
+                            "stop lifecycle has no request identity"
+                        )
+                    if not lifecycle_receipt_ready.wait(timeout=10):
+                        raise DevlegateError(
+                            "stop lifecycle acceptance was not persisted"
+                        )
                     write_lifecycle_receipt(
                         self.engine._locator,
                         {
