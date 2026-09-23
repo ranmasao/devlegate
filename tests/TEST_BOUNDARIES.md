@@ -31,7 +31,7 @@ that is observation, not a production client bypass.
 | Pure/component | codecs, parsers, stores, helpers, private deterministic functions | Local input/output, validation, serialization, persistence mechanics | Service ownership, CLI/service process separation |
 | Engine semantic | `ServiceEngine`/`Devlegate` constructed directly; direct methods or `serve()` in a test thread | State-machine decisions, admission rules, recovery algorithms, Git/state invariants, worker-result handling | Independent CLI process lifetime or OS crash topology |
 | IPC/owner handoff | Real Unix socket and `UnixIPCServer`; for mutable claims, a real `ServiceEngine.serve()` owner thread | Framing, connection isolation, dispatch, owner-thread serialization, receipt behavior | Independent service process, SIGKILL/restart, CLI survival |
-| Production topology | `LiveService` starts `python -m devlegate foreground`, real CLI subprocesses use the real socket, or `h1_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
+| Production topology | `LiveService` starts `python -m devlegate foreground`, real CLI subprocesses use the real socket, or `recovery_driver.py` starts the real service engine | Service authority, independent CLI/service lifetime, real socket lifecycle, process identity, crash/restart and persisted recovery | Nothing beyond the scenario and assertions actually made |
 
 ## Suite Map
 
@@ -89,7 +89,7 @@ The recovery process boundary is real only in `test_cli.py` tests using `LiveSer
 `LiveService` launches an independent `python -m devlegate foreground` process, waits
 through the actual authority socket with `ping`, invokes the normal CLI path in
 separate subprocesses, captures output, and can SIGKILL/restart the service.
-`h1_driver.py` constructs the real `ServiceEngine` in that service process and
+`recovery_driver.py` constructs the real `ServiceEngine` in that service process and
 adds deterministic crash points around durable save/effect boundaries. It is a
 test driver, not a substitute engine.
 
@@ -102,7 +102,7 @@ test driver, not a substitute engine.
 | Absent worker uses explicit RESUME | `test_real_service_absent_worker_uses_process_loss_resume` | Subprocess | Kill service and worker; new identity and second attempt are proven |
 | Post-worker lost result requires RESUME and never fabricates a report | `test_real_service_post_worker_loss_requires_resume` | Subprocess | Crash after worker loss; new execution/report and review state |
 | Checkpoint/publication/lifecycle recovery is idempotent | `test_real_service_transaction_stage_restart_preserves_execution`, `test_real_service_product_movement_during_downtime_blocks_stale_publish` | Subprocess | Crash points, durable execution identity, Git refs, and stale publish blocking |
-| Accepted integration R/H/C recovery is exact | `test_real_service_accepted_integration_restart_is_idempotent` and the foreign, exact-local, remote, interleaving, and divergent-history tests | Subprocess | `h1_driver.py` crash points plus exact parent/remote SHA and fail-closed assertions |
+| Accepted integration R/H/C recovery is exact | `test_real_service_accepted_integration_restart_is_idempotent` and the foreign, exact-local, remote, interleaving, and divergent-history tests | Subprocess | `recovery_driver.py` crash points plus exact parent/remote SHA and fail-closed assertions |
 | Mutable receipt is admission evidence, not a queue | `test_real_service_receipt_restart_is_not_a_persistent_command_queue`, `test_real_service_reconcile_receipt_restart_is_not_a_queue` | Subprocess | Crash after receipt save; restart preserves receipt without dispatch, new request required |
 
 The direct/private tests in `test_control_plane.py` establish deterministic
@@ -181,7 +181,7 @@ python -m devlegate / console script
       -> stop -> authenticated Unix IPC -> service shutdown intent
 ```
 
-`h1_driver.py` is test-only and constructs `ServiceEngine` so it can inject
+`recovery_driver.py` is test-only and constructs `ServiceEngine` so it can inject
 deterministic crash points before calling the real `run_service()` host. It is
 not a production construction path. Test fixtures construct engines directly
 for semantic or IPC proof and are likewise not production paths.
@@ -294,7 +294,7 @@ client lifetime separation, not arbitrary client crash timing.
 
 The former GAP 2 is resolved by
 `test_real_service_crash_during_mutable_response_reports_uncertain_delivery`:
-The test-only `H1_CRASH_POINT=receipt_after_save` setting proves the owner saved
+The test-only `DEVLEGATE_TEST_CRASH_POINT=receipt_after_save` setting proves the owner saved
 an accepted retry
 receipt before SIGKILL, and the real CLI's same-ID replay reports uncertain
 delivery and directs the user to inspect status before retrying.

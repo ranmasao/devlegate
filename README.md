@@ -78,10 +78,7 @@ it is not a replacement for Git history.
   the admitted product base is unchanged; `reconcile update-base` remains the
   separate product-base transplant operation.
 
-## Current 0.5 Limitations
-
-- Devlegate 0.5 is the current release.
-- Development builds use the PEP 440 version form `X.Y.Z.dev0`.
+## Current Scope
 
 The current implementation has these practical limits:
 

@@ -21,14 +21,14 @@ def main() -> int:
 
     def mark_ready():
         original_ready()
-        if os.environ.get("H1_WAKE_AFTER_READY") == "1":
+        if os.environ.get("DEVLEGATE_TEST_WAKE_AFTER_READY") == "1":
             engine.wake()
 
     engine.mark_service_ready = mark_ready
-    point = os.environ.get("H1_CRASH_POINT")
-    marker_value = os.environ.get("H1_CRASH_MARKER")
+    point = os.environ.get("DEVLEGATE_TEST_CRASH_POINT")
+    marker_value = os.environ.get("DEVLEGATE_TEST_CRASH_MARKER")
     marker = Path(marker_value) if marker_value else None
-    release_marker_value = os.environ.get("H1_OPERATOR_RELEASE_MARKER")
+    release_marker_value = os.environ.get("DEVLEGATE_TEST_OPERATOR_RELEASE_MARKER")
     release_marker = Path(release_marker_value) if release_marker_value else None
 
     def crash() -> None:
