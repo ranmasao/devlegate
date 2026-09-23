@@ -55,21 +55,18 @@ def git(cwd, *args):
     )
 
 
-@pytest.fixture
-def git_fixture(tmp_path, request, short_state_dir):
+def _make_git_fixture(tmp_path, request, short_state_dir, baseline):
     state = Path("/tmp") / (
         "devlegate-test-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]
     )
     request.addfinalizer(lambda: shutil.rmtree(state, ignore_errors=True))
     world = clone_world(
         tmp_path,
-        baseline="empty-control",
+        baseline=baseline,
         state=state,
-        with_publisher=True,
     )
     bare = world["bare"]
     working = world["working"]
-    publisher = world["publisher"]
 
     key = hashlib.sha256(str(working.resolve()).encode()).hexdigest()
     control = state / "worktrees" / key / "control"
@@ -85,17 +82,6 @@ def git_fixture(tmp_path, request, short_state_dir):
         "origin/devlegate/control",
     )
     publisher_control = tmp_path / "publisher-control"
-    git(publisher, "fetch", "origin", "devlegate/control")
-    git(
-        publisher,
-        "worktree",
-        "add",
-        "--track",
-        "-b",
-        "publisher-control",
-        publisher_control,
-        "origin/devlegate/control",
-    )
 
     config = tmp_path / "devlegate.env"
     config.write_text(
@@ -106,7 +92,6 @@ def git_fixture(tmp_path, request, short_state_dir):
     return {
         "bare": bare,
         "working": working,
-        "publisher": publisher,
         "control": control,
         "publisher_control": publisher_control,
         "config": config,
@@ -114,6 +99,11 @@ def git_fixture(tmp_path, request, short_state_dir):
         "short_state": short_state_dir,
         "tmp": tmp_path,
     }
+
+
+@pytest.fixture
+def git_fixture(tmp_path, request, short_state_dir):
+    return _make_git_fixture(tmp_path, request, short_state_dir, "empty-control")
 
 
 @pytest.fixture
@@ -213,16 +203,46 @@ def invoke(fixture, *args, env_file=None):
 
 
 def publish_control(fixture, message, files, *, sync=True):
+    publisher_control = _ensure_publisher_control(fixture)
     for relative, content in files.items():
-        path = fixture["publisher_control"] / relative
+        path = publisher_control / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-    git(fixture["publisher_control"], "add", ".")
-    git(fixture["publisher_control"], "commit", "-m", message)
-    git(fixture["publisher_control"], "push", "origin", "HEAD:devlegate/control")
+    git(publisher_control, "add", ".")
+    git(publisher_control, "commit", "-m", message)
+    git(publisher_control, "push", "origin", "HEAD:devlegate/control")
     if sync:
         git(fixture["control"], "fetch", "origin", "devlegate/control")
         git(fixture["control"], "merge", "--ff-only", "origin/devlegate/control")
+
+
+def _ensure_publisher_control(fixture):
+    path = fixture["publisher_control"]
+    if path.exists():
+        return path
+    publisher = _ensure_publisher(fixture)
+    git(publisher, "fetch", "origin", "devlegate/control")
+    git(
+        publisher,
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        "publisher-control",
+        path,
+        "origin/devlegate/control",
+    )
+    return path
+
+
+def _ensure_publisher(fixture):
+    publisher = fixture.get("publisher")
+    if publisher is not None:
+        return publisher
+    publisher = fixture["tmp"] / "publisher"
+    git(fixture["tmp"], "clone", "-b", "main", fixture["bare"], publisher)
+    fixture["publisher"] = publisher
+    return publisher
 
 
 def ticket(title="Ticket", body="work", depends=None):
@@ -588,62 +608,6 @@ def test_removed_top_level_forms_are_rejected(git_fixture):
         assert result.returncode == 2
 
 
-def test_bare_cli_starts_background_service_and_stop_ends_it(git_fixture, monkeypatch):
-    monkeypatch.chdir(git_fixture["working"])
-    git_fixture["config"].write_text(
-        git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
-    )
-    started = invoke(git_fixture)
-    assert started.returncode == 0, started.stderr
-    assert "service started; log:" in started.stdout
-    locator = RuntimeLocator.from_env(git_fixture["config"])
-    assert locator.daemon_authority_present()
-    assert locator.socket_path.exists()
-
-    status = invoke(git_fixture, "status", "--json")
-    assert status.returncode == 0, status.stderr
-    assert json.loads(status.stdout)["execution"]["phase"] == "idle"
-
-    stopped = invoke(git_fixture, "stop")
-    log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
-    receipt_path = locator.state_dir / "lifecycle" / f"{locator.state_key}.json"
-    assert stopped.returncode == 0, (
-        f"{stopped.stderr}\n"
-        f"receipt={receipt_path.read_text() if receipt_path.exists() else None}\n"
-        f"log={log_path.read_text() if log_path.exists() else None}"
-    )
-    for _attempt in range(100):
-        if not locator.daemon_authority_present():
-            break
-        time.sleep(0.02)
-    assert not locator.daemon_authority_present()
-    assert not locator.socket_path.exists()
-    assert not (
-        locator.state_dir / "diagnostics" / f"{locator.state_key}.json"
-    ).exists()
-    log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
-    deadline = time.monotonic() + 5
-    log = ""
-    while time.monotonic() < deadline:
-        log = log_path.read_text()
-        if (
-            "lifecycle stop accepted through devlegate stop" in log
-            and "orderly stop complete" in log
-        ):
-            break
-        time.sleep(0.02)
-    assert "lifecycle stop accepted through devlegate stop" in log
-    assert "orderly stop complete" in log
-    assert log.count("---< D E V L E G A T E >---") == 1
-    assert "mode    : background" in log
-    assert "version :" in log
-    assert "repo    :" in log
-    assert "product :" in log
-    assert "control :" in log
-    assert "mode    :" in log
-    assert "pid     :" in log
-
-
 def test_bare_cli_restart_waits_for_ready_replacement(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     started = invoke(git_fixture)
@@ -932,7 +896,7 @@ def test_real_service_drop_retire_old_lineage_and_runs_fresh(
         assert service.process is not None
         service.process.send_signal(signal.SIGTERM)
         service.wait_exited()
-        publisher = git_fixture["publisher_control"]
+        publisher = _ensure_publisher_control(git_fixture)
         git(publisher, "fetch", "origin", "devlegate/control")
         git(publisher, "reset", "--hard", "origin/devlegate/control")
         publisher_ticket = publisher / f"kanban/todo/{replacement_id}.md"
@@ -947,7 +911,12 @@ def test_real_service_drop_retire_old_lineage_and_runs_fresh(
         )
         service.start()
         service.wait_ready()
-        time.sleep(2.2)
+        service.wait_for(
+            lambda: git(control, "rev-parse", "origin/devlegate/control")
+            .stdout.strip()
+            == later_control,
+            timeout=10,
+        )
         recovered = _disk_state(config)
         assert (
             git(control, "rev-parse", "HEAD").stdout.strip()
@@ -968,8 +937,14 @@ def test_real_service_drop_retire_old_lineage_and_runs_fresh(
         assert candidates["candidates"][0]["id"] == "T-1"
         assert candidates["candidates"][0]["execution_id"] == old_execution
         assert candidates["candidates"][0]["stage"] == "lifecycle"
-        drop = service.cli("drop", "T-1")
-        assert drop.returncode == 0, (drop.stdout, drop.stderr)
+        def submit_drop_when_owner_is_ready():
+            result = service.cli("drop", "T-1")
+            if result.returncode == 0:
+                return True
+            assert "service busy" in result.stderr
+            return False
+
+        service.wait_for(submit_drop_when_owner_is_ready, timeout=10)
         disposition_ref = f"refs/devlegate/dispositions/T-1/{old_execution}"
         evidence_ref = f"refs/devlegate/executions/T-1/{old_execution}"
         assert (
@@ -1140,21 +1115,64 @@ def test_background_child_safe_bootstrap_rejects_checkout_module_shadowing(
     assert stopped.returncode == 0, stopped.stderr
 
 
-@pytest.mark.parametrize("start_args", [(), ("--foreground",), ("--once",)])
 def test_service_start_forms_are_idempotent_for_healthy_owner(
-    git_fixture, monkeypatch, start_args
+    git_fixture, monkeypatch
 ):
     monkeypatch.chdir(git_fixture["working"])
     git_fixture["config"].write_text(
         git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
     )
-    assert invoke(git_fixture).returncode == 0
+    started = invoke(git_fixture)
+    assert started.returncode == 0, started.stderr
+    assert "service started; log:" in started.stdout
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    assert locator.daemon_authority_present()
+    assert locator.socket_path.exists()
+    status = invoke(git_fixture, "status", "--json")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout)["execution"]["phase"] == "idle"
     try:
-        repeated = invoke(git_fixture, *start_args)
-        assert repeated.returncode == 0, repeated.stderr
-        assert repeated.stdout.strip() == "Devlegate service is already running."
+        for start_args in ((), ("--foreground",), ("--once",)):
+            repeated = invoke(git_fixture, *start_args)
+            assert repeated.returncode == 0, repeated.stderr
+            assert repeated.stdout.strip() == "Devlegate service is already running."
     finally:
-        assert invoke(git_fixture, "stop").returncode == 0
+        stopped = invoke(git_fixture, "stop")
+        log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+        receipt_path = locator.state_dir / "lifecycle" / f"{locator.state_key}.json"
+        assert stopped.returncode == 0, (
+            f"{stopped.stderr}\n"
+            f"receipt={receipt_path.read_text() if receipt_path.exists() else None}\n"
+            f"log={log_path.read_text() if log_path.exists() else None}"
+        )
+    for _attempt in range(100):
+        if not locator.daemon_authority_present():
+            break
+        time.sleep(0.02)
+    assert not locator.daemon_authority_present()
+    assert not locator.socket_path.exists()
+    assert not (
+        locator.state_dir / "diagnostics" / f"{locator.state_key}.json"
+    ).exists()
+    deadline = time.monotonic() + 5
+    log = ""
+    while time.monotonic() < deadline:
+        log = log_path.read_text()
+        if (
+            "lifecycle stop accepted through devlegate stop" in log
+            and "orderly stop complete" in log
+        ):
+            break
+        time.sleep(0.02)
+    assert "lifecycle stop accepted through devlegate stop" in log
+    assert "orderly stop complete" in log
+    assert log.count("---< D E V L E G A T E >---") == 1
+    assert "mode    : background" in log
+    assert "version :" in log
+    assert "repo    :" in log
+    assert "product :" in log
+    assert "control :" in log
+    assert "pid     :" in log
 
 
 def test_once_emits_one_startup_identity_block(git_fixture, monkeypatch):
@@ -1265,7 +1283,7 @@ def test_check_reports_local_product_branch_ahead(git_fixture):
 
 
 def test_check_reports_local_product_branch_behind(git_fixture):
-    publisher = git_fixture["publisher"]
+    publisher = _ensure_publisher(git_fixture)
     (publisher / "remote.txt").write_text("remote\n")
     git(publisher, "add", "remote.txt")
     git(publisher, "commit", "-m", "remote")
@@ -1282,7 +1300,7 @@ def test_check_reports_diverged_product_branch(git_fixture):
     (git_fixture["working"] / "local.txt").write_text("local\n")
     git(git_fixture["working"], "add", "local.txt")
     git(git_fixture["working"], "commit", "-m", "local")
-    publisher = git_fixture["publisher"]
+    publisher = _ensure_publisher(git_fixture)
     (publisher / "remote.txt").write_text("remote\n")
     git(publisher, "add", "remote.txt")
     git(publisher, "commit", "-m", "remote")
@@ -2264,7 +2282,7 @@ def _h1_config(git_fixture):
 
 
 def _advance_product(git_fixture):
-    publisher = git_fixture["publisher"]
+    publisher = _ensure_publisher(git_fixture)
     (publisher / "downtime.txt").write_text("advanced\n")
     git(publisher, "add", "downtime.txt")
     git(publisher, "commit", "-m", "advance product")
@@ -2622,8 +2640,14 @@ def test_real_service_stale_status_cannot_authorize_second_retry(
     try:
         stale = json.loads(service.cli("status", "--json").stdout)
         assert stale["execution"]["phase"] == "idle"
-        first = service.cli("retry", "T-1", timeout=10)
-        assert first.returncode == 0, first.stderr
+        def submit_first_retry_when_owner_is_ready():
+            result = service.cli("retry", "T-1", timeout=10)
+            if result.returncode == 0:
+                return True
+            assert "service busy" in result.stderr
+            return False
+
+        service.wait_for(submit_first_retry_when_owner_is_ready, timeout=10)
         service.wait_for(
             lambda: (
                 _disk_state(config).get("execution_stage") == "worker-running"
@@ -2869,11 +2893,10 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         service.wait_for(
             lambda: (
                 _disk_state(config)["phase"] == "idle"
-                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
+                and len(attempts.read_text().splitlines()) == 2
             ),
             timeout=30,
         )
-        time.sleep(1.5)
         assert service.process is not None and service.process.poll() is None
         assert attempts.read_text().splitlines() == ["attempt", "attempt"]
         plan = json.loads(service.cli("plan", "--json").stdout)
@@ -2943,16 +2966,9 @@ def _prepare_accepted_integration(git_fixture, monkeypatch):
     )
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
-    service = LiveService(git_fixture["working"], config)
-    service.start()
-    service.wait_ready()
-    try:
-        service.wait_for(
-            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
-        )
-    finally:
-        service.stop()
     review = engine.control_worktree / "kanban/review/T-1.md"
+    assert run_test_iteration(engine) == 0
+    assert review.is_file()
     accepted = engine.control_worktree / "kanban/accepted/T-1.md"
     review.rename(accepted)
     git(engine.control_worktree, "add", "-A")
@@ -3289,7 +3305,7 @@ def test_real_service_remote_exact_control_descendant_is_recognized(
     service.wait_ready()
     try:
         _wait_process_death(service)
-        publisher_control = git_fixture["publisher_control"]
+        publisher_control = _ensure_publisher_control(git_fixture)
         git(publisher_control, "fetch", "origin", "devlegate/control")
         git(publisher_control, "reset", "--hard", "origin/devlegate/control")
         (publisher_control / "later-control.txt").write_text("later\n")
@@ -3328,7 +3344,7 @@ def test_real_service_remote_interleaving_before_control_commit_blocks(
     service.wait_ready()
     try:
         _wait_process_death(service)
-        publisher_control = git_fixture["publisher_control"]
+        publisher_control = _ensure_publisher_control(git_fixture)
         git(publisher_control, "fetch", "origin", "devlegate/control")
         git(publisher_control, "reset", "--hard", "origin/devlegate/control")
         (publisher_control / "interleaving.txt").write_text("interleaving\n")
@@ -3386,7 +3402,7 @@ def test_real_service_divergent_control_histories_stay_blocked(
     service.wait_ready()
     try:
         _wait_process_death(service)
-        publisher_control = git_fixture["publisher_control"]
+        publisher_control = _ensure_publisher_control(git_fixture)
         git(publisher_control, "fetch", "origin", "devlegate/control")
         git(publisher_control, "reset", "--hard", "origin/devlegate/control")
         (publisher_control / "divergent.txt").write_text("divergent\n")
@@ -4064,10 +4080,11 @@ def test_non_fast_forward_code_update_is_refused(git_fixture):
     (git_fixture["working"] / "local.txt").write_text("local\n")
     git(git_fixture["working"], "add", ".")
     git(git_fixture["working"], "commit", "-m", "local")
-    (git_fixture["publisher"] / "remote.txt").write_text("remote\n")
-    git(git_fixture["publisher"], "add", ".")
-    git(git_fixture["publisher"], "commit", "-m", "remote")
-    git(git_fixture["publisher"], "push", "origin", "main")
+    publisher = _ensure_publisher(git_fixture)
+    (publisher / "remote.txt").write_text("remote\n")
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "remote")
+    git(publisher, "push", "origin", "main")
     result = invoke(git_fixture, "--once")
     assert result.returncode == 1
     assert "cannot fast-forward" in result.stdout

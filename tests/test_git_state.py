@@ -6,17 +6,18 @@ import sqlite3
 
 import pytest
 from runtime_helpers import run_test_iteration
-from test_cli import git, invoke, publish_control, ticket
+from test_cli import _ensure_publisher, git, invoke, publish_control, ticket
 
 from devlegate.cli import Devlegate, DevlegateError
 
 
 def code_update(fixture, name="remote.txt", content="remote\n"):
-    path = fixture["publisher"] / name
+    publisher = _ensure_publisher(fixture)
+    path = publisher / name
     path.write_text(content)
-    git(fixture["publisher"], "add", name)
-    git(fixture["publisher"], "commit", "-m", "code update")
-    git(fixture["publisher"], "push", "origin", "HEAD:main")
+    git(publisher, "add", name)
+    git(publisher, "commit", "-m", "code update")
+    git(publisher, "push", "origin", "HEAD:main")
 
 
 def state_payload(fixture):
@@ -84,7 +85,7 @@ def test_descendant_control_revision_repairs_invalid_workflow(git_fixture):
 
 def test_interrupted_pre_sync_merge_pending_recovers(git_fixture, monkeypatch):
     code_update(git_fixture)
-    target = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()
+    target = git(_ensure_publisher(git_fixture), "rev-parse", "HEAD").stdout.strip()
     old = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
     monkeypatch.chdir(git_fixture["working"])
     devlegate = Devlegate(git_fixture["config"])
@@ -105,7 +106,7 @@ def test_post_sync_crash_state_is_cleared_without_second_merge(
     git_fixture, monkeypatch
 ):
     code_update(git_fixture)
-    target = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()
+    target = git(_ensure_publisher(git_fixture), "rev-parse", "HEAD").stdout.strip()
     old = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
     git(git_fixture["working"], "fetch", "origin", "main")
     git(git_fixture["working"], "merge", "--ff-only", "origin/main")
@@ -127,7 +128,7 @@ def test_post_sync_crash_state_is_cleared_without_second_merge(
 
 def test_merge_pending_divergence_fails_closed(git_fixture, monkeypatch):
     code_update(git_fixture)
-    target = git(git_fixture["publisher"], "rev-parse", "HEAD").stdout.strip()
+    target = git(_ensure_publisher(git_fixture), "rev-parse", "HEAD").stdout.strip()
     old = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
     (git_fixture["working"] / "local.txt").write_text("diverged\n")
     git(git_fixture["working"], "add", "local.txt")
