@@ -2960,6 +2960,7 @@ def _prepare_accepted_integration(git_fixture, monkeypatch):
     attempts = git_fixture["tmp"] / "h1-accepted-attempts.txt"
     _worker_script(worker)
     monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    monkeypatch.setenv("H1_WAKE_AFTER_READY", "1")
     config = _h1_config(git_fixture)
     config.write_text(
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")

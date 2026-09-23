@@ -17,6 +17,14 @@ def main() -> int:
     parser.add_argument("--env", type=Path, required=True)
     args = parser.parse_args()
     engine = ServiceEngine(args.env)
+    original_ready = engine.mark_service_ready
+
+    def mark_ready():
+        original_ready()
+        if os.environ.get("H1_WAKE_AFTER_READY") == "1":
+            engine.wake()
+
+    engine.mark_service_ready = mark_ready
     point = os.environ.get("H1_CRASH_POINT")
     marker_value = os.environ.get("H1_CRASH_MARKER")
     marker = Path(marker_value) if marker_value else None
