@@ -959,6 +959,58 @@ def test_daemon_signal_wakes_poll_wait_without_second_iteration(
     assert result == [0]
     assert len(calls) == 1
 
+    lifecycle_config = _config
+    lifecycle_config.write_text(lifecycle_config.read_text() + "POLL_INTERVAL=5\n")
+    lifecycle_engine = ServiceEngine(lifecycle_config)
+    lifecycle_stop = threading.Event()
+    lifecycle_entered = threading.Event()
+    lifecycle_release = threading.Event()
+    idle_wait_entered = threading.Event()
+
+    def lifecycle_iteration():
+        lifecycle_entered.set()
+        assert lifecycle_release.wait(5)
+        return 0
+
+    monkeypatch.setattr(lifecycle_engine, "run_iteration", lifecycle_iteration)
+
+    class WakeProbe:
+        def __init__(self):
+            self.event = threading.Event()
+
+        def clear(self):
+            self.event.clear()
+
+        def set(self):
+            self.event.set()
+
+        def wait(self, timeout=None):
+            if timeout == 5:
+                idle_wait_entered.set()
+            return self.event.wait(timeout)
+
+    monkeypatch.setattr(lifecycle_engine, "_service_wake", WakeProbe())
+    lifecycle_result = []
+    lifecycle_thread = threading.Thread(
+        target=lambda: lifecycle_result.append(
+            lifecycle_engine.serve(lifecycle_stop)
+        ),
+        daemon=True,
+    )
+    lifecycle_thread.start()
+    assert lifecycle_entered.wait(5)
+    accepted = lifecycle_engine.request_lifecycle("stop", "lost-wake-test")
+    assert accepted["intent"] == "stop"
+    lifecycle_release.set()
+    lifecycle_thread.join(0.5)
+    lifecycle_stop.set()
+    lifecycle_engine.wake()
+    lifecycle_thread.join(5)
+
+    assert not lifecycle_thread.is_alive()
+    assert lifecycle_result == [0]
+    assert not idle_wait_entered.is_set()
+
 
 def test_daemon_stop_already_requested_does_not_admit_iteration(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)

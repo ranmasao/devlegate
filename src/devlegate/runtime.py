@@ -5214,6 +5214,8 @@ class ServiceEngine:
                     self._startup_admission_window = False
                     self._service_wake.wait(OPERATOR_ADMISSION_TIMEOUT)
                     self._service_wake.clear()
+                    if self._lifecycle_exit_ready():
+                        continue
                 operator_command, scheduler_active = self._claim_owner_work(True)
                 workflow_blocked = False
                 self._iteration_diagnostic = None
@@ -5348,6 +5350,8 @@ class ServiceEngine:
     ) -> bool:
         """Wait for shutdown or an operator command without polling busy-work."""
         self._service_wake.clear()
+        if self._lifecycle_exit_ready():
+            return True
         if stop_event.is_set() or self._operator_command_pending():
             return stop_event.is_set()
         # Recheck after clearing the wake event so a command submitted during
