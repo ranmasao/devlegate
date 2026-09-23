@@ -36,7 +36,7 @@ that is observation, not a production client bypass.
 ## Suite Map
 
 This audit classifies 17 maintained test families, 8 major production
-invariant families, 8 H1 evidence families, and 7 H2 concurrency families.
+invariant families, 8 recovery evidence families, and 7 concurrency families.
 The counts are grouping counts, not test-case counts.
 
 | Test family/file | Layer | What it proves | Boundary caution |
@@ -57,14 +57,14 @@ The counts are grouping counts, not test-case counts.
 | `test_ipc_server.py` owner-thread tests | IPC/owner handoff | `test_retry_submission_runs_on_service_owner_thread`, read-only availability during owner retry, shutdown admission race, retry/reconcile receipt semantics | In-process owner thread proves handoff and serialization, not independent process lifetime |
 | `test_cli.py` parser/render/bootstrap tests | Pure/component/bootstrap | Argument parsing, formatting, command routing, `init`, `render`, `check`, repository-root and readiness rules | In-process `main()` and `invoke()` do not prove CLI/service separation |
 | `test_cli.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses service IPC, authority/socket fail-closed behavior, read-only projection selection | `cli_daemon` is an in-process socket server; it is not production topology |
-| `test_cli.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, H1/H2 behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
+| `test_cli.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, recovery and concurrency behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
 | `test_daemon.py` fake-host tests | Host component | Signal installation and return-code policy for `run_service` | Fake `ServiceEngine` is intentionally not service topology |
 
 ## Production Invariants
 
 | Invariant | Semantic proof | IPC/owner proof | Subprocess proof | Status |
 | --- | --- | --- | --- | --- |
-| Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in `test_control_plane.py`, `test_daemon.py`, and `test_cli.py` | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and H1 receipt tests | KEEP; intentional defense in depth |
+| Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in `test_control_plane.py`, `test_daemon.py`, and `test_cli.py` | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and recovery receipt tests | KEEP; intentional defense in depth |
 | CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-service failure | `test_ipc_server.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
 | Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, service view tests | IPC view/decoder and many-client tests | `test_run_hosts_real_ipc_status_and_plan_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
 | Matching/stale state is not mutation authority | Direct admission and validation tests in `test_control_plane.py` | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
@@ -72,7 +72,7 @@ The counts are grouping counts, not test-case counts.
 | Concurrent mutation is serialized and cannot duplicate work | Direct admission/retry semantics | Owner-thread and concurrent IPC tests | Real concurrent retry tests and observer-during-retry tests | KEEP cross-layer |
 | Acknowledged CLI lifetime does not own service lifetime | Owner admission semantics | Owner-thread admission tests | `test_real_service_admitted_retry_outlives_cli_process` | KEEP; normal client exit after ACK is the release invariant |
 | Lost mutable response after durable admission is uncertain | Client replay semantics and receipt persistence | Fake-peer uncertain delivery and receipt tests | `test_real_service_crash_during_mutable_response_reports_uncertain_delivery` | KEEP; real crash timing is proven |
-| Worker result/state transitions are durable and fail closed | `test_control_plane.py`, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and H1 process-loss tests | KEEP |
+| Worker result/state transitions are durable and fail closed | `test_control_plane.py`, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and recovery process-loss tests | KEEP |
 | Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_server.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
 | Socket ownership and cleanup are safe | Locator and server component tests | Real Unix socket tests, endpoint replacement and shutdown families | `LiveService` readiness/stop/restart | KEEP; topology adds process lifetime |
 | Graceful lifecycle commands close admission before exit | `test_lifecycle_drain_rejects_submitted_command_before_owner_admission`, checkpoint-barrier tests | Lifecycle IPC dispatch and service identity tests | `test_real_service_graceful_lifecycle_waits_for_active_worker` | KEEP; SIGINT remains abort-only |
@@ -83,9 +83,9 @@ layer. The production claims have corresponding `LiveService` evidence. The
 in-process tests remain useful because they isolate semantic and handoff
 failure modes and fail faster.
 
-## H1 Recovery Evidence
+## Recovery Evidence
 
-H1's process boundary is real only in `test_cli.py` tests using `LiveService`.
+The recovery process boundary is real only in `test_cli.py` tests using `LiveService`.
 `LiveService` launches an independent `python -m devlegate foreground` process, waits
 through the actual authority socket with `ping`, invokes the normal CLI path in
 separate subprocesses, captures output, and can SIGKILL/restart the service.
@@ -93,7 +93,7 @@ separate subprocesses, captures output, and can SIGKILL/restart the service.
 adds deterministic crash points around durable save/effect boundaries. It is a
 test driver, not a substitute engine.
 
-| H1 claim | Evidence location | Layer(s) | Evidence kind |
+| Recovery claim | Evidence location | Layer(s) | Evidence kind |
 | --- | --- | --- | --- |
 | Idle restart is inert; merge pending observes before effect | `test_real_service_sigkill_restarts_without_mutation`, `test_real_service_merge_pending_restart_is_observe_first` | Subprocess | SIGKILL, same SQLite/Git/worktrees, durable state and HEAD assertions |
 | Graceful stop/restart drains active workers and proves readiness | `test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary` | Subprocess | `test_real_service_graceful_lifecycle_waits_for_active_worker`, `test_bare_cli_restart_waits_for_ready_replacement` |
@@ -106,26 +106,26 @@ test driver, not a substitute engine.
 | Mutable receipt is admission evidence, not a queue | `test_real_service_receipt_restart_is_not_a_persistent_command_queue`, `test_real_service_reconcile_receipt_restart_is_not_a_queue` | Subprocess | Crash after receipt save; restart preserves receipt without dispatch, new request required |
 
 The direct/private tests in `test_control_plane.py` establish deterministic
-H1 semantics such as checkpoint rejection, lifecycle lineage, and exact R/H/C
-rules. They do not replace the corresponding real restart tests. The H1 matrix
-(`H1_RESTART_MATRIX.md`) is the durable-state/recovery contract; this map adds
+recovery semantics such as checkpoint rejection, lifecycle lineage, and exact R/H/C
+rules. They do not replace the corresponding real restart tests. The recovery
+matrix (`RECOVERY_MATRIX.md`) is the durable-state/recovery contract; this map adds
 the execution layer carrying each row.
 
-## H2 Concurrency Evidence
+## Concurrency Evidence
 
-The H2 matrix is split deliberately:
+The concurrency matrix is split deliberately:
 
-| H2 claim | IPC/component evidence | Production-topology evidence |
+| Concurrency claim | IPC/component evidence | Production-topology evidence |
 | --- | --- | --- |
 | Idle/incomplete/malformed clients do not block others | `test_idle_connection_does_not_block_unrelated_client`, `test_incomplete_frame_does_not_block_unrelated_client`, malformed/disconnect tests in `test_ipc_server.py` | Real socket is exercised, but no independent service process is required for this transport claim |
 | Many observers and read-only state remain available | `test_many_read_only_clients_overlap_without_mutating_runtime`, client round-trip tests | `test_real_service_many_observers_succeed_while_worker_runs`, `test_real_service_observers_succeed_during_owner_retry` |
 | Mutable submission crosses handler to owner thread | `test_retry_submission_runs_on_service_owner_thread`, reconcile owner-thread test | Real CLI retry/reconcile tests prove the same handoff through separate processes |
 | Same request ID executes once; collision is rejected | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | `test_real_service_same_request_id_retries_concurrently_once` |
-| Distinct concurrent requests cannot duplicate a worker | Owner/admission tests and H2 engine tests | `test_real_service_distinct_concurrent_retries_do_not_duplicate_worker` |
+| Distinct concurrent requests cannot duplicate a worker | Owner/admission tests and concurrency engine tests | `test_real_service_distinct_concurrent_retries_do_not_duplicate_worker` |
 | Stale observation is not authority | Direct admission tests and IPC owner revalidation | `test_real_service_stale_status_cannot_authorize_second_retry` |
 | Shutdown rejects pending mutation and cleans handlers | `test_shutdown_rejects_operator_command_waiting_for_owner_admission`, handler cleanup/shutdown tests | Service host lifecycle is additionally exercised by `LiveService` restart/stop tests |
 
-The H2 matrix's in-process owner tests prove transport plus handoff and are not
+The concurrency matrix's in-process owner tests prove transport plus handoff and are not
 weaker copies of the LiveService tests: they identify handler-thread versus
 owner-thread behavior directly, while LiveService adds independent process and
 CLI lifetime.
@@ -148,15 +148,16 @@ topology and is currently truthful.
 
 ## Compatibility And Direct Seams
 
-The I3/I4 reachability audits traced these seams through production code. They
-are not obsolete merely because the names are historical; removal below is
-limited to seams with no supported production caller.
+The architecture reachability audit traced these seams through production code.
+The classifications below describe the current supported paths; historical
+compatibility seams are listed only where their removal explains surviving
+coverage.
 
 | Symbol/path | Reachability | Classification | Evidence |
 | --- | --- | --- | --- |
 | `ServiceEngine` | `cli.main()` constructs it for persistent service modes through `_service_engine`; `run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
-| `Application` | No production references remain after I4; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
+| `Application` | No production references remain; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
 | `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
 | `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
@@ -204,7 +205,7 @@ they are owner-side algorithms and useful lower-layer regression seams. No
 production mutable bypass was found.
 
 The following tests exercise current bootstrap, semantic, or IPC seams and
-remain valid after I4:
+remain valid after the architecture cleanup:
 
 - `test_operational_cli_constructs_service_engine_directly` checks the canonical
   runtime construction contract.
@@ -225,9 +226,10 @@ proof.
 
 ## Cleanup Candidates
 
-I4 removed four compatibility-only tests and retargeted three tests to the
-canonical engine seam. Phase B removed the uncalled direct loop and signal
-helper seams; remaining direct engine tests use `tests/runtime_helpers.py`.
+The compatibility cleanup removed four compatibility-only tests and retargeted
+three tests to the canonical engine seam. The uncalled direct loop and signal
+helper seams were also removed; remaining direct engine tests use
+`tests/runtime_helpers.py`.
 
 ### KEEP - Unique Proof
 
@@ -237,7 +239,7 @@ helper seams; remaining direct engine tests use `tests/runtime_helpers.py`.
 - `test_ipc_server.py` incomplete-client, handler-cleanup, endpoint ownership,
   and owner-thread tests. Their transport and handoff failure modes are
   distinct from subprocess failures.
-- H1 and H2 matrix documents plus their exact recovery/concurrency assertions.
+- Recovery and concurrency matrix documents plus their exact assertions.
 
 ### KEEP - Intentional Cross-Layer Duplication
 
@@ -248,19 +250,18 @@ helper seams; remaining direct engine tests use `tests/runtime_helpers.py`.
 - Direct receipt/idempotency tests plus IPC receipt tests plus real concurrent
   and restart receipt tests.
 
-### I3/Phase B CANDIDATE - Obsolete Architecture/Path
+### Obsolete Architecture/Path
 
-None carried forward. I3 established reachability; I4 retired the unsupported
-Application injection seam, and Phase B retired the uncalled direct loop and
-signal helper seams.
+None carried forward. The reachability audit retired the unsupported
+Application injection seam, uncalled direct loop, and signal helper seams.
 
-### I4 CANDIDATE - Redundant Or Compatibility-Only
+### Redundant Or Compatibility-Only
 
 None remaining from the I2 candidate groups. The fake-engine rendering and
 `cli_daemon` routing tests were retained because they protect distinct cheap
 formatting, error-translation, and IPC-boundary behavior.
 
-### I4 Removed Tests And Replacements
+### Removed Tests And Replacements
 
 | Removed test | Removed contract | Surviving proof/reason |
 | --- | --- | --- |
@@ -293,7 +294,8 @@ client lifetime separation, not arbitrary client crash timing.
 
 The former GAP 2 is resolved by
 `test_real_service_crash_during_mutable_response_reports_uncertain_delivery`:
-`H1_CRASH_POINT=receipt_after_save` proves the owner saved an accepted retry
+The test-only `H1_CRASH_POINT=receipt_after_save` setting proves the owner saved
+an accepted retry
 receipt before SIGKILL, and the real CLI's same-ID replay reports uncertain
 delivery and directs the user to inspect status before retrying.
 
@@ -308,7 +310,7 @@ mutable acknowledgement is the uncertain-delivery boundary, proven by the
 real service crash test. A third exact-instruction CLI kill would not establish
 a distinct 0.5 semantic contract.
 
-## Audit Rules For I3/I4
+## Current Audit Rules
 
 Before removing a test, identify its invariant, actual boundary, and failure
 mode. A same-scenario test is not a replacement unless it crosses a materially

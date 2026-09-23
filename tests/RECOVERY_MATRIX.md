@@ -1,4 +1,4 @@
-# H1 Restart Matrix
+# Recovery Matrix
 
 The process boundary is real: the acceptance tests kill the foreground service
 with SIGKILL and start a new service against the same SQLite database, Git

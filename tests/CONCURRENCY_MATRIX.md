@@ -1,4 +1,4 @@
-# H2 Concurrent-client Matrix
+# Concurrent-client Matrix
 
 The service accepts multiple independent Unix IPC connections concurrently.
 Each connection has its own ordered handler; an idle, incomplete, malformed, or
