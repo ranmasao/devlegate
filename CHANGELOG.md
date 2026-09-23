@@ -5,6 +5,25 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
+## 0.5.3 -- 2026-09-23
+
+Checkpoint-aware service lifecycle, explicit execution retirement, and distribution hardening.
+
+### Added
+
+- Added checkpoint-aware `devlegate restart` for self-managed services, preserving service authority through graceful worker completion and replacement startup.
+- Added `devlegate drop` to explicitly retire blocked executions without applying them while preserving worker reports and checkpoint provenance.
+
+### Changed
+
+- Made graceful service stop and restart respect worker checkpoint boundaries and durable lifecycle ownership before relinquishing service authority.
+- Hardened licensing and package-distribution boundaries for Devlegate core, copyable default templates, and the vendored NanoYAML dependency.
+
+### Fixed
+
+- Fixed lifecycle response and wakeup ordering so completed lifecycle state cannot regress and accepted stop or restart requests cannot be delayed by a lost wakeup until the next polling interval.
+- Hardened execution-drop recovery and cleanup, including submodule worktrees and restart recovery after partially completed retirement.
+
 ## 0.5.2 -- 2026-09-21
 
 Service runtime consolidation, diagnostics, and authority hardening.
