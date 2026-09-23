@@ -10,6 +10,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from enum import Enum
 
 from devlegate.ipc_server import _INSTANCE_ID, UnixIPCServer
 from devlegate.lifecycle_receipt import write as write_lifecycle_receipt
@@ -42,6 +43,14 @@ class ShutdownIntent:
         return self._event.wait(timeout)
 
 
+class HostingMode(str, Enum):
+    """Process-lifetime ownership for the canonical service host."""
+
+    DIRECT = "direct"
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
 def _notify_startup(fd: int | None, message: str) -> None:
     if fd is None:
         return
@@ -59,6 +68,7 @@ def _notify_startup(fd: int | None, message: str) -> None:
 def run_service(
     engine: ServiceEngine,
     *,
+    host_mode: HostingMode | str = HostingMode.DIRECT,
     once: bool = False,
     startup_fd: int | None = None,
     startup_report: Callable[[], None] | None = None,
@@ -66,6 +76,7 @@ def run_service(
     """Run one service through the canonical process host."""
     return ServiceHost(
         engine,
+        host_mode=host_mode,
         once=once,
         startup_fd=startup_fd,
         startup_report=startup_report,
@@ -79,11 +90,19 @@ class ServiceHost:
         self,
         engine: ServiceEngine,
         *,
+        host_mode: HostingMode | str = HostingMode.DIRECT,
         once: bool = False,
         startup_fd: int | None = None,
         startup_report: Callable[[], None] | None = None,
     ) -> None:
         self.engine = engine
+        try:
+            self.host_mode = HostingMode(host_mode)
+        except (TypeError, ValueError) as error:
+            raise DevlegateError(f"unsupported hosting mode: {host_mode}") from error
+        workers = getattr(engine, "_workers", None)
+        if workers is not None and hasattr(workers, "show_worker_output"):
+            workers.show_worker_output = self.host_mode is HostingMode.DIRECT
         self.once = once
         self.startup_fd = startup_fd
         self.startup_report = startup_report
@@ -91,11 +110,13 @@ class ServiceHost:
         self._handoff_instance_id = os.environ.pop("DEVLEGATE_RESTART_INSTANCE", None)
         self._handoff_authority_fd = os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD")
         self._handoff_authority_key = os.environ.get("DEVLEGATE_RESTART_AUTHORITY_KEY")
-        self.self_managed = (
-            startup_fd is not None
-            or self._handoff_authority_fd is not None
-            or os.environ.get("DEVLEGATE_SELF_MANAGED") == "1"
-        )
+        if (
+            self._handoff_authority_fd is not None
+            and self.host_mode is not HostingMode.INTERNAL
+        ):
+            raise DevlegateError(
+                "restart authority handoff requires internal hosting mode"
+            )
 
     def run(self) -> int:
         if not hosted_runtime_supported():
@@ -114,9 +135,9 @@ class ServiceHost:
                 )
 
         def request_lifecycle(intent: str, request_id: str) -> dict[str, object]:
-            if intent == "restart" and not self.self_managed:
+            if intent == "restart" and self.host_mode is not HostingMode.INTERNAL:
                 raise DevlegateError(
-                    "restart is available only for a self-managed background service"
+                    "restart is available only for internally hosted services"
                 )
             service_log(f"lifecycle {intent} accepted through devlegate {intent}")
             result = self.engine.request_lifecycle(intent, request_id)
@@ -230,6 +251,10 @@ class ServiceHost:
             if end_owner is not None:
                 end_owner()
             if restart_requested:
+                if self.host_mode is not HostingMode.INTERNAL:
+                    raise DevlegateError(
+                        "non-internal hosting cannot self-reexec for restart"
+                    )
                 request_id = self._handoff_request_id or ""
                 try:
                     lifecycle_request_id = self.engine.lifecycle_status_payload()[
@@ -341,12 +366,14 @@ class ServiceHost:
                 signal.signal(signum, handler)
 
     def _reexec(self, authority: object, request_id: str) -> None:
-        """Replace the self-managed service with a fresh Python image."""
+        """Replace the internally hosted service with a fresh Python image."""
+        if self.host_mode is not HostingMode.INTERNAL:
+            raise DevlegateError("only internal hosting can self-reexec")
         fd = authority.fileno()
         os.set_inheritable(fd, True)
         environment = dict(os.environ)
         environment.pop("DEVLEGATE_STARTUP_FD", None)
-        environment["DEVLEGATE_SELF_MANAGED"] = "1"
+        environment["DEVLEGATE_HOST_MODE"] = HostingMode.INTERNAL.value
         environment["DEVLEGATE_RESTART_AUTHORITY_FD"] = str(fd)
         environment["DEVLEGATE_RESTART_AUTHORITY_KEY"] = self.engine._locator.state_key
         environment["DEVLEGATE_RESTART_REQUEST"] = request_id

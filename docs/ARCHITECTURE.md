@@ -67,6 +67,27 @@ foreground = attached + continuous
 once       = attached + one scheduler iteration
 ```
 
+Hosting ownership is a separate policy dimension:
+
+```text
+direct    = caller owns the attached service process
+internal  = Devlegate owns detached process hosting and self-restart
+external  = another supervisor owns process lifetime
+```
+
+The current forms map to these policies as follows:
+
+| Form | Ownership | Attachment | Lifetime |
+| --- | --- | --- | --- |
+| bare `devlegate` | internal | detached | continuous |
+| `devlegate foreground` | direct | attached | continuous |
+| `devlegate once` | direct | attached | one iteration |
+| future supervisor | external | inherited streams | continuous |
+
+The external policy is available to the canonical host for future integrations,
+but no external supervisor or systemd integration is shipped. Hosting ownership
+is not a project `.env` setting.
+
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow
 decisions, runs workers, and performs service operations.
@@ -103,13 +124,14 @@ STATE_DIR/logs/<state_key>/service.log
 STATE_DIR/logs/<state_key>/executions/<execution-id>.log
 ```
 
-The service host owns persistence of the service stream, while Devlegate owns
-execution-log persistence. Reports, checkpoints, disposition, runtime state,
-and Git provenance remain authoritative if an execution log is unavailable.
-Foreground operation may show and persist worker output; detached background
+The service host owns persistence of the service stream when internally hosted;
+direct and external hosting inherit that stream from the caller or supervisor.
+Devlegate owns execution-log persistence in all modes. Reports, checkpoints,
+disposition, runtime state, and Git provenance remain authoritative if an
+execution log is unavailable.
+Foreground operation may show and persist worker output; internal and external
 operation routes detailed worker output to the execution log instead of the
-service log. External supervision and systemd integration are future work, not
-part of this boundary.
+service stream. No external supervisor or systemd integration is shipped.
 
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.

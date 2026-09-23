@@ -698,7 +698,7 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
 ):
     monkeypatch.chdir(git_fixture["working"])
     if command == "restart":
-        monkeypatch.setenv("DEVLEGATE_SELF_MANAGED", "1")
+        monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
     worker = git_fixture["tmp"] / f"graceful-{command}-worker.py"
     pid_file = git_fixture["tmp"] / f"graceful-{command}-worker.pid"
     worker.write_text(
@@ -2166,8 +2166,16 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
 def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
     calls = []
 
-    def host(engine, *, once=False, startup_fd=None, startup_report=None):
+    def host(
+        engine,
+        *,
+        host_mode,
+        once=False,
+        startup_fd=None,
+        startup_report=None,
+    ):
         assert startup_fd is None
+        assert host_mode is cli.HostingMode.DIRECT
         calls.append((engine, once))
         return 0
 

@@ -708,6 +708,85 @@ def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, cap
     assert diagnostic is None
 
 
+def test_hosting_modes_are_explicit_and_startup_fd_is_only_transport(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    read_fd, write_fd = os.pipe()
+    try:
+        direct = daemon.ServiceHost(engine)
+        internal = daemon.ServiceHost(engine, host_mode=daemon.HostingMode.INTERNAL)
+        external = daemon.ServiceHost(engine, host_mode=daemon.HostingMode.EXTERNAL)
+        transported = daemon.ServiceHost(engine, startup_fd=write_fd)
+
+        assert direct.host_mode is daemon.HostingMode.DIRECT
+        assert internal.host_mode is daemon.HostingMode.INTERNAL
+        assert external.host_mode is daemon.HostingMode.EXTERNAL
+        assert transported.host_mode is daemon.HostingMode.DIRECT
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_internal_reexec_preserves_explicit_host_mode(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    captured = {}
+    read_fd, write_fd = os.pipe()
+    authority = os.fdopen(write_fd, "w")
+    monkeypatch.setattr(
+        os,
+        "execvpe",
+        lambda executable, command, environment: captured.update(
+            executable=executable, command=command, environment=environment
+        ),
+    )
+    try:
+        daemon.ServiceHost(
+            engine, host_mode=daemon.HostingMode.INTERNAL
+        )._reexec(authority, "request")
+    finally:
+        authority.close()
+        os.close(read_fd)
+
+    assert captured["environment"]["DEVLEGATE_HOST_MODE"] == "internal"
+
+
+@pytest.mark.parametrize(
+    "host_mode", [daemon.HostingMode.DIRECT, daemon.HostingMode.EXTERNAL]
+)
+def test_non_internal_host_cannot_self_reexec(tmp_path, monkeypatch, host_mode):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    with pytest.raises(DevlegateError, match="only internal hosting"):
+        daemon.ServiceHost(engine, host_mode=host_mode)._reexec(object(), "request")
+
+
+def test_external_host_uses_inherited_service_stream_and_no_service_log(
+    tmp_path, monkeypatch, capsys
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
+
+    assert daemon.run_service(
+        engine,
+        host_mode=daemon.HostingMode.EXTERNAL,
+        once=True,
+        startup_report=lambda: print("external service output"),
+    ) == 0
+
+    assert engine._workers.show_worker_output is False
+    assert not engine._locator.service_log_path.exists()
+    assert "external service output" in capsys.readouterr().out
+
+
+def test_restart_authority_handoff_requires_internal_hosting(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setenv("DEVLEGATE_RESTART_AUTHORITY_FD", "99")
+    with pytest.raises(DevlegateError, match="requires internal hosting mode"):
+        daemon.ServiceHost(engine, host_mode=daemon.HostingMode.EXTERNAL)
+
+
 def test_unhandled_host_failure_is_reported_by_offline_status(
     tmp_path, monkeypatch, capsys
 ):

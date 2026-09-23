@@ -18,7 +18,7 @@ from typing import NoReturn
 
 from devlegate import __version__
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
-from devlegate.daemon import run_service
+from devlegate.daemon import HostingMode, run_service
 from devlegate.ipc_client import (
     IPCClientError,
     decode_drop_ack,
@@ -585,6 +585,16 @@ def _startup_fd() -> int | None:
         return None
 
 
+def _host_mode() -> HostingMode:
+    value = os.environ.get("DEVLEGATE_HOST_MODE")
+    if value is None:
+        return HostingMode.DIRECT
+    try:
+        return HostingMode(value)
+    except ValueError as error:
+        raise DevlegateError(f"unsupported hosting mode: {value}") from error
+
+
 def _notify_startup_failure(error: BaseException) -> None:
     fd = _startup_fd()
     if fd is None:
@@ -617,6 +627,7 @@ def _start_background(env_file: Path) -> int:
     read_fd, write_fd = os.pipe()
     environment = {
         **os.environ,
+        "DEVLEGATE_HOST_MODE": HostingMode.INTERNAL.value,
         "DEVLEGATE_STARTUP_FD": str(write_fd),
     }
     # The child uses the attached entry only as a process-hosting shim.
@@ -1583,6 +1594,7 @@ def main() -> int:
             parser.error("--env is only valid for bare background startup")
         env_file = args.env or Path.cwd() / ".env"
         try:
+            host_mode = _host_mode()
             health = (
                 None
                 if os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD") is not None
@@ -1592,12 +1604,13 @@ def main() -> int:
                 _warn_service_version_mismatch(health)
                 print("Devlegate service is already running.")
                 return 0
-            if startup_fd is None:
+            if host_mode is HostingMode.DIRECT:
                 engine = _service_engine(env_file)
             else:
                 engine = _service_engine(env_file, show_worker_output=False)
             return run_service(
                 engine,
+                host_mode=host_mode,
                 once=args.command == "once",
                 startup_fd=startup_fd,
                 startup_report=lambda: _startup_report(

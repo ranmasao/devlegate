@@ -137,6 +137,18 @@ execution reports, checkpoints, runtime state, or Git provenance as authoritativ
 evidence. The boundary also leaves room for future externally supervised hosting;
 that integration is not part of this release.
 
+Service hosting ownership is explicit and separate from attachment and lifetime:
+
+| Form | Ownership | Attachment | Lifetime |
+| --- | --- | --- | --- |
+| bare `devlegate` | internal | detached | continuous |
+| `foreground` | direct | attached | continuous |
+| `once` | direct | attached | one iteration |
+| future supervisor | external | inherited streams | continuous |
+
+External hosting is a runtime policy boundary only. No external supervisor or
+systemd integration is shipped.
+
 Status reports service state (`running` or `stopped`) separately from the
 execution phase and operator execution state (`idle`, `preparing`, `starting`,
 `running`, `finalizing`, `unverified`, or `recovery-required`). Operator
