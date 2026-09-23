@@ -1843,6 +1843,7 @@ def test_drop_interactive_candidates_use_exact_execution_identity(
 def test_drop_without_ticket_rejects_noninteractive_invocation(
     git_fixture, monkeypatch, capsys
 ):
+    monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: False)
     monkeypatch.setattr(
         sys,
