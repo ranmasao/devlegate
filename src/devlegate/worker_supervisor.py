@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from devlegate.execution_workspace import ExecutionWorkspace
+from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerEgressParser,
@@ -153,14 +154,7 @@ def _preserve_terminal():
 
 
 def _log(message: str) -> None:
-    print(
-        f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}",
-        flush=True,
-    )
-    try:
-        os.fsync(sys.stdout.fileno())
-    except (OSError, ValueError):
-        pass
+    service_log(message)
 
 
 def _render_worker_text(text: str) -> str:
@@ -193,6 +187,10 @@ _OPENCODE_JSON_TYPES = {
 
 def _write_worker_text(text: str, stream) -> None:
     rendered = _render_worker_text(text)
+    _write_rendered_worker_text(rendered, stream)
+
+
+def _write_rendered_worker_text(rendered: str, stream) -> None:
     if not rendered:
         return
     stream.write(rendered)
@@ -237,6 +235,8 @@ def _run_opencode(
     execution_id: str | None = None,
     worker_identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
     interruption_handler: Callable[[str], None] | None = None,
+    execution_log: ExecutionLog | None = None,
+    show_worker_output: bool = True,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -251,10 +251,27 @@ def _run_opencode(
     output_lock = threading.Lock()
     transport_error: str | None = None
     prompt_error: str | None = None
+    log_error: str | None = None
 
     def write(text: str, stream) -> None:
+        nonlocal log_error
         with output_lock:
-            _write_worker_text(text, stream)
+            rendered = _render_worker_text(text)
+            if not rendered:
+                return
+            if execution_log is not None:
+                try:
+                    execution_log.write(rendered)
+                except Exception as error:
+                    log_error = f"execution log write failed: {error}"
+                    if process.poll() is None:
+                        try:
+                            process.terminate()
+                        except OSError:
+                            pass
+                    return
+            if show_worker_output:
+                _write_rendered_worker_text(rendered, stream)
 
     def consume_stdout() -> None:
         nonlocal transport_error
@@ -311,11 +328,11 @@ def _run_opencode(
                 if state.get("status") == "completed":
                     output = state.get("output")
                     if isinstance(output, str):
-                        _write_worker_line(output, sys.stdout)
+                        write(output, sys.stdout)
                 elif state.get("status") == "error":
                     error = _extract_error_message(state.get("error"))
                     if error:
-                        _write_worker_line(f"OpenCode tool failed: {error}", sys.stdout)
+                        write(f"OpenCode tool failed: {error}", sys.stdout)
             elif event_type == "error":
                 error = _extract_error_message(event.get("error"))
                 if error:
@@ -437,6 +454,8 @@ def _run_opencode(
     prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
     if identity_error is not None:
         transport_error = identity_error
+    elif log_error is not None:
+        transport_error = log_error
     elif interruption_error is not None:
         transport_error = interruption_error
     elif prompt_error is not None and interruption_kind is None:
@@ -461,10 +480,22 @@ def _run_opencode(
 class WorkerSupervisor:
     """Own live worker processes while the engine owns durable execution."""
 
-    def __init__(self, opencode_bin: str, model: str, agent: str) -> None:
+    def __init__(
+        self,
+        opencode_bin: str,
+        model: str,
+        agent: str,
+        *,
+        state_dir: Path | None = None,
+        state_key: str | None = None,
+        show_worker_output: bool = True,
+    ) -> None:
         self.opencode_bin = opencode_bin
         self.opencode_model = model
         self.opencode_agent = agent
+        self.state_dir = state_dir
+        self.state_key = state_key
+        self.show_worker_output = show_worker_output
         self._active: dict[str, object] = {}
         self._lock = threading.Lock()
         self._draining = False
@@ -561,7 +592,12 @@ export default tool({
             if self._draining:
                 raise WorkerAdmissionClosed("worker admission is closed")
             self._active[execution_id] = object()
+        execution_log = None
         try:
+            if self.state_dir is not None and self.state_key is not None:
+                execution_log = open_execution_log(
+                    self.state_dir, self.state_key, execution_id
+                )
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -572,6 +608,8 @@ export default tool({
                 execution_id=execution_id,
                 worker_identity_handler=identity_handler,
                 interruption_handler=interruption_handler,
+                execution_log=execution_log,
+                show_worker_output=self.show_worker_output,
             )
             claim, egress_error = parser.finish()
             return WorkerRunResult(
@@ -585,6 +623,11 @@ export default tool({
         except OSError as error:
             return WorkerRunResult(-1, str(error), None, None)
         finally:
+            if execution_log is not None:
+                try:
+                    execution_log.close()
+                except OSError:
+                    pass
             with self._lock:
                 self._active.pop(execution_id, None)
             shutil.rmtree(config_dir, ignore_errors=True)

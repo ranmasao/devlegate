@@ -115,6 +115,18 @@ class RuntimeLocator:
             f".devlegate-sockets-{os.getuid()}-{fallback_directory}"
         ) / f"{socket_key}.sock"
 
+    @property
+    def log_dir(self) -> Path:
+        return self.state_dir / "logs" / self.state_key
+
+    @property
+    def service_log_path(self) -> Path:
+        return self.log_dir / "service.log"
+
+    @property
+    def execution_log_dir(self) -> Path:
+        return self.log_dir / "executions"
+
     @contextlib.contextmanager
     def absence_guard(self) -> Iterator[object]:
         """Hold a shared lock while a direct read-only observation completes."""

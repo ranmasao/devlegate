@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from devlegate.execution_workspace import ExecutionWorkspace
+from devlegate.operational_log import open_execution_log
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerClaim,
@@ -38,10 +39,23 @@ class FakeProcess:
         return self.returncode
 
 
-def run_worker(monkeypatch, stdout=b"", stderr=b"", returncode=0):
+def run_worker(
+    monkeypatch,
+    stdout=b"",
+    stderr=b"",
+    returncode=0,
+    *,
+    execution_log=None,
+    show_worker_output=True,
+):
     process = FakeProcess(stdout, stderr, returncode)
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
-    return process, _run_opencode(["fake"], "prompt")
+    return process, _run_opencode(
+        ["fake"],
+        "prompt",
+        execution_log=execution_log,
+        show_worker_output=show_worker_output,
+    )
 
 
 def event(text):
@@ -93,6 +107,67 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     assert result.transport_ok
     assert "ordinary" in output.out
     assert "stderr" in output.err
+
+
+def test_worker_output_is_sanitized_and_persisted_without_service_duplication(
+    capsys, monkeypatch, tmp_path
+):
+    log_path = tmp_path / "state" / "logs" / "key" / "executions" / "execution-1.log"
+    with open_execution_log(tmp_path / "state", "key", "execution-1") as log:
+        _, result = run_worker(
+            monkeypatch,
+            event("ordinary\x1b[31m"),
+            b"stderr\x1b\n",
+            execution_log=log,
+            show_worker_output=False,
+        )
+
+    output = capsys.readouterr()
+    content = log_path.read_text()
+    assert result.transport_ok
+    assert output.out == ""
+    assert output.err == ""
+    assert "ordinary\\x1b[31m" in content
+    assert "stderr\\x1b" in content
+    assert "ordinary" not in output.out
+
+
+def test_execution_logs_are_distinct_and_survive_worker_completion(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(event("worker output")),
+    )
+    supervisor = WorkerSupervisor(
+        "opencode",
+        "provider/model",
+        "",
+        state_dir=tmp_path / "state",
+        state_key="state-key",
+        show_worker_output=False,
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    first = supervisor.run(workspace, "prompt", execution_id="execution-1")
+    second = supervisor.run(workspace, "prompt", execution_id="execution-2")
+
+    first_path = (
+        tmp_path
+        / "state/logs/state-key/executions/execution-1.log"
+    )
+    second_path = (
+        tmp_path
+        / "state/logs/state-key/executions/execution-2.log"
+    )
+    assert first.transport_error is None
+    assert second.transport_error is None
+    assert first_path.is_file()
+    assert second_path.is_file()
+    assert first_path != second_path
+    assert "worker output" in first_path.read_text()
+    assert "worker output" in second_path.read_text()
 
 
 @pytest.mark.parametrize("kind", ["operator_abort"])

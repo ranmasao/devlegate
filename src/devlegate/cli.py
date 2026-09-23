@@ -33,6 +33,7 @@ from devlegate.ipc_client import (
     request,
 )
 from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
+from devlegate.operational_log import service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.runtime import (
@@ -52,9 +53,14 @@ from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
 
 
-def _service_engine(env_file: Path, *, read_only: bool = False) -> ServiceEngine:
+def _service_engine(
+    env_file: Path, *, read_only: bool = False, show_worker_output: bool = True
+) -> ServiceEngine:
     """Construct the canonical service engine."""
-    return ServiceEngine(env_file, read_only=read_only)
+    options = {"read_only": read_only}
+    if not show_worker_output:
+        options["show_worker_output"] = False
+    return ServiceEngine(env_file, **options)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -599,7 +605,7 @@ def _start_background(env_file: Path) -> int:
         raise DevlegateError(HOSTED_RUNTIME_ERROR)
     try:
         locator = RuntimeLocator.from_env(env_file)
-        log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+        log_path = locator.service_log_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
@@ -1150,25 +1156,22 @@ def _startup_report(engine: ServiceEngine, mode: str) -> None:
         control = f"{control_branch} @ {control_head}"
     else:
         control = f"{engine.control_branch} @ <unavailable>"
-    print(
+    for line in (
         "=========================================================================",
-        flush=True,
-    )
-    print("           D | L", flush=True)
-    print("---< D E V L E G A T E >---", flush=True)
-    print("          S.P.Q.R.", flush=True)
-    print("", flush=True)
-    print(f"version : {__version__}", flush=True)
-    print(f"repo    : {engine.repo}", flush=True)
-    print(f"product : {product_branch} @ {product_head}", flush=True)
-    print(f"control : {control}", flush=True)
-    print(f"mode    : {mode}", flush=True)
-    print(f"pid     : {os.getpid()}", flush=True)
-    print(f"instance: {engine._state_key[:12]}", flush=True)
-    print(
+        "           D | L",
+        "---< D E V L E G A T E >---",
+        "          S.P.Q.R.",
+        "",
+        f"version : {__version__}",
+        f"repo    : {engine.repo}",
+        f"product : {product_branch} @ {product_head}",
+        f"control : {control}",
+        f"mode    : {mode}",
+        f"pid     : {os.getpid()}",
+        f"instance: {engine._state_key[:12]}",
         "=========================================================================",
-        flush=True,
-    )
+    ):
+        service_log(line)
 
 
 class DevlegateArgumentParser(argparse.ArgumentParser):
@@ -1589,7 +1592,10 @@ def main() -> int:
                 _warn_service_version_mismatch(health)
                 print("Devlegate service is already running.")
                 return 0
-            engine = _service_engine(env_file)
+            if startup_fd is None:
+                engine = _service_engine(env_file)
+            else:
+                engine = _service_engine(env_file, show_worker_output=False)
             return run_service(
                 engine,
                 once=args.command == "once",

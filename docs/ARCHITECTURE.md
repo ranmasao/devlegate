@@ -90,6 +90,27 @@ shutdown through the service IPC endpoint. The host is supervisor-neutral, but
 the service is managed directly by Devlegate and does not require an external
 service manager.
 
+### Operational Logging
+
+Operational output has an explicit service or execution scope. Service-scoped
+records describe the control plane and remain in the main service stream.
+Execution-scoped records are keyed by the durable `execution_id`; they contain
+sanitized worker output and execution-local diagnostics without becoming
+workflow evidence. The internally supervised layout is:
+
+```text
+STATE_DIR/logs/<state_key>/service.log
+STATE_DIR/logs/<state_key>/executions/<execution-id>.log
+```
+
+The service host owns persistence of the service stream, while Devlegate owns
+execution-log persistence. Reports, checkpoints, disposition, runtime state,
+and Git provenance remain authoritative if an execution log is unavailable.
+Foreground operation may show and persist worker output; detached background
+operation routes detailed worker output to the execution log instead of the
+service log. External supervision and systemd integration are future work, not
+part of this boundary.
+
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.
 

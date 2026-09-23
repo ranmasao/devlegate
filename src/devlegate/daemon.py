@@ -13,8 +13,9 @@ from contextlib import contextmanager
 
 from devlegate.ipc_server import _INSTANCE_ID, UnixIPCServer
 from devlegate.lifecycle_receipt import write as write_lifecycle_receipt
+from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
-from devlegate.runtime import DevlegateError, _log
+from devlegate.runtime import DevlegateError
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import clear, create, write
 
@@ -108,14 +109,16 @@ class ServiceHost:
             try:
                 write(self.engine._locator, create(stage, error))
             except BaseException as diagnostic_error:
-                _log(f"service failure diagnostic write failed: {diagnostic_error}")
+                service_log(
+                    f"service failure diagnostic write failed: {diagnostic_error}"
+                )
 
         def request_lifecycle(intent: str, request_id: str) -> dict[str, object]:
             if intent == "restart" and not self.self_managed:
                 raise DevlegateError(
                     "restart is available only for a self-managed background service"
                 )
-            _log(f"lifecycle {intent} accepted through devlegate {intent}")
+            service_log(f"lifecycle {intent} accepted through devlegate {intent}")
             result = self.engine.request_lifecycle(intent, request_id)
             write_lifecycle_receipt(
                 self.engine._locator,
@@ -167,7 +170,7 @@ class ServiceHost:
                 try:
                     clear(self.engine._locator)
                 except BaseException as error:
-                    _log(f"service failure diagnostic clear failed: {error}")
+                    service_log(f"service failure diagnostic clear failed: {error}")
                 result = self._serve_engine(
                     stop_intent, lock_handle=authority
                 )
@@ -193,9 +196,9 @@ class ServiceHost:
                     )
             if stop_intent.is_set():
                 source = stop_intent.source or "signal"
-                _log(f"orderly shutdown complete ({source})")
+                service_log(f"orderly shutdown complete ({source})")
             elif self.engine.lifecycle_intent() is not None:
-                _log(
+                service_log(
                     f"orderly {self.engine.lifecycle_intent()} complete"
                 )
             return result
@@ -323,7 +326,7 @@ class ServiceHost:
                 try:
                     request_lifecycle("stop", f"signal-{uuid.uuid4().hex}")
                 except DevlegateError as error:
-                    _log(f"graceful SIGTERM request failed: {error}")
+                    service_log(f"graceful SIGTERM request failed: {error}")
             if wake is not None:
                 wake()
 

@@ -13,7 +13,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
@@ -37,6 +36,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.runtime_locator import (
@@ -507,14 +507,7 @@ def _git(
 
 
 def _log(message: str) -> None:
-    print(
-        f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}",
-        flush=True,
-    )
-    try:
-        os.fsync(sys.stdout.fileno())
-    except (OSError, ValueError):
-        pass
+    service_log(message)
 
 
 OPERATOR_ADMISSION_TIMEOUT = 1.0
@@ -573,7 +566,13 @@ def _status_fingerprint(status: str) -> str:
 class ServiceEngine:
     """Own persistent workflow orchestration and mutable runtime operations."""
 
-    def __init__(self, env_file: Path, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        env_file: Path,
+        *,
+        read_only: bool = False,
+        show_worker_output: bool = True,
+    ) -> None:
         if not env_file.is_file():
             raise DevlegateError(
                 f"configuration file not found: {env_file} "
@@ -635,7 +634,12 @@ class ServiceEngine:
         self._lifecycle_request_id: str | None = None
         self._service_ready = False
         self._workers = WorkerSupervisor(
-            self.opencode_bin, self.opencode_model, self.opencode_agent
+            self.opencode_bin,
+            self.opencode_model,
+            self.opencode_agent,
+            state_dir=self.state_dir,
+            state_key=self._state_key,
+            show_worker_output=show_worker_output,
         )
         self._owned_execution_id: str | None = None
         self._validate()

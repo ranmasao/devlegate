@@ -127,6 +127,16 @@ and the `reconcile update-base`, `reconcile resume`, and `reconcile control`
 commands. Service and worker logs from `foreground` and the background daemon
 remain operational streams, not YAML or JSON documents.
 
+Operational logs have separate scopes. The internally supervised service log is
+`STATE_DIR/logs/<state-key>/service.log`; detailed output for one durable
+execution is stored at
+`STATE_DIR/logs/<state-key>/executions/<execution-id>.log`. Service logs describe
+the control plane, while execution logs contain sanitized worker output and
+execution-local diagnostics. Execution logs are diagnostic and do not replace
+execution reports, checkpoints, runtime state, or Git provenance as authoritative
+evidence. The boundary also leaves room for future externally supervised hosting;
+that integration is not part of this release.
+
 Status reports service state (`running` or `stopped`) separately from the
 execution phase and operator execution state (`idle`, `preparing`, `starting`,
 `running`, `finalizing`, `unverified`, or `recovery-required`). Operator

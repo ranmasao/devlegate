@@ -616,9 +616,7 @@ def test_bare_cli_restart_waits_for_ready_replacement(git_fixture, monkeypatch):
     old_instance = before["service"]["instance_id"]
 
     restarted = invoke(git_fixture, "restart")
-    log_path = RuntimeLocator.from_env(git_fixture["config"]).state_dir / "logs" / (
-        f"{RuntimeLocator.from_env(git_fixture['config']).state_key}.log"
-    )
+    log_path = RuntimeLocator.from_env(git_fixture["config"]).service_log_path
     assert restarted.returncode == 0, (
         f"{restarted.stderr}\n{log_path.read_text() if log_path.exists() else ''}"
     )
@@ -1126,6 +1124,7 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
     assert started.returncode == 0, started.stderr
     assert "service started; log:" in started.stdout
     locator = RuntimeLocator.from_env(git_fixture["config"])
+    assert f"service started; log: {locator.service_log_path}" in started.stdout
     assert locator.daemon_authority_present()
     assert locator.socket_path.exists()
     status = invoke(git_fixture, "status", "--json")
@@ -1138,7 +1137,7 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
             assert repeated.stdout.strip() == "Devlegate service is already running."
     finally:
         stopped = invoke(git_fixture, "stop")
-        log_path = locator.state_dir / "logs" / f"{locator.state_key}.log"
+        log_path = locator.service_log_path
         receipt_path = locator.state_dir / "lifecycle" / f"{locator.state_key}.json"
         assert stopped.returncode == 0, (
             f"{stopped.stderr}\n"
