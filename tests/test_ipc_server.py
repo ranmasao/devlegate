@@ -1621,9 +1621,15 @@ def test_interrupted_retry_candidate_is_admitted_and_recovered_end_to_end(
         if interactive:
             monkeypatch.setattr("devlegate.cli._interactive_terminal", lambda: True)
             monkeypatch.setattr("builtins.input", lambda _prompt: "1")
-            argv = ["devlegate", "retry", "--env", str(engine.env_file)]
+            argv = ["devlegate", "--env", str(engine.env_file), "retry"]
         else:
-            argv = ["devlegate", "retry", "T-1", "--env", str(engine.env_file)]
+            argv = [
+                "devlegate",
+                "--env",
+                str(engine.env_file),
+                "retry",
+                "T-1",
+            ]
         monkeypatch.setattr(sys, "argv", argv)
         assert cli.main() == 0
         assert "retry accepted: T-1" in capsys.readouterr().out

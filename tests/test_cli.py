@@ -37,6 +37,7 @@ from devlegate.cli import (
 from devlegate.ipc_client import IPCClientError
 from devlegate.ipc_client import request as ipc_request
 from devlegate.ipc_server import UnixIPCServer
+from devlegate.project_registry import ProjectRegistry, ProjectTarget
 from devlegate.runtime import (
     BlockedReason,
     ExecutionPlan,
@@ -83,12 +84,26 @@ def _make_git_fixture(tmp_path, request, short_state_dir, baseline):
     )
     publisher_control = tmp_path / "publisher-control"
 
-    config = tmp_path / "devlegate.env"
+    config = working / ".env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\nPOLL_INTERVAL=0\n"
         f"STATE_DIR={state}\n"
     )
+    (working / ".git" / "info" / "exclude").open("a").write(
+        "\n*.env\n.registry-config/\n"
+    )
+    registry_home = tmp_path / "registry-config"
+    previous_registry_home = os.environ.get("XDG_CONFIG_HOME")
+    os.environ["XDG_CONFIG_HOME"] = str(registry_home)
+    request.addfinalizer(
+        lambda: (
+            os.environ.__setitem__("XDG_CONFIG_HOME", previous_registry_home)
+            if previous_registry_home is not None
+            else os.environ.pop("XDG_CONFIG_HOME", None)
+        )
+    )
+    ProjectRegistry().register("test", config)
     return {
         "bare": bare,
         "working": working,
@@ -141,12 +156,13 @@ def cli_daemon(git_fixture, monkeypatch):
 
 
 def _short_runtime_config(git_fixture):
-    config = git_fixture["tmp"] / "devlegate-short.env"
+    config = git_fixture["working"] / "devlegate-short.env"
     config.write_text(
         git_fixture["config"]
         .read_text()
         .replace(str(git_fixture["state"]), str(git_fixture["short_state"]))
     )
+    ProjectRegistry().register("short", config)
     return config
 
 
@@ -170,7 +186,8 @@ def plain_project_fixture(tmp_path):
     git(tmp_path, "clone", "-b", "main", bare, working)
     git(working, "config", "user.email", "test@example.com")
     git(working, "config", "user.name", "Test User")
-    config = tmp_path / "devlegate.env"
+    (working / ".git" / "info" / "exclude").open("a").write("\n.env\n")
+    config = working / ".env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\nPOLL_INTERVAL=0\n"
@@ -185,15 +202,26 @@ def invoke(fixture, *args, env_file=None):
         args[args.index("--foreground")] = "foreground"
     elif "--once" in args:
         args[args.index("--once")] = "once"
-    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    selected_env = env_file or fixture["config"]
+    config_home = fixture.get("tmp", fixture["working"].parent) / "registry-config"
+    if not args or args[0] != "init":
+        alias = "test" if selected_env == fixture["config"] else selected_env.stem
+        ProjectRegistry(config_home / "devlegate" / "projects.json").register(
+            alias, selected_env
+        )
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+        "XDG_CONFIG_HOME": str(config_home),
+    }
     return subprocess.run(
         [
             sys.executable,
             "-m",
             "devlegate",
-            *args,
             "--env",
-            env_file or fixture["config"],
+            selected_env,
+            *args,
         ],
         cwd=fixture["working"],
         env=environment,
@@ -270,7 +298,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         main()
     assert error.value.code == 0
     output = capsys.readouterr().out
-    assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in output
+    assert "usage: devlegate [--env FILE | @ALIAS] COMMAND ..." in output
     assert "{init,render,retry,reconcile,check,status,plan,stop,control}" not in output
     assert "ensure the persistent background service is running" in output
     assert "Service:" in output
@@ -383,11 +411,11 @@ def test_reconcile_resume_routes_to_daemon_helper(
         "argv",
         [
             "devlegate",
+            "--env",
+            str(config),
             "reconcile",
             "resume",
             "LAB-111",
-            "--env",
-            str(config),
         ],
     )
     assert main() == 0
@@ -398,7 +426,7 @@ def test_reconcile_resume_routes_to_daemon_helper(
 def test_nested_command_help_uses_command_sections():
     parser = build_parser()
     top_level = parser.format_help()
-    assert "usage: devlegate [--env FILE]\n  devlegate COMMAND ..." in top_level
+    assert "usage: devlegate [--env FILE | @ALIAS] COMMAND ..." in top_level
     assert (
         "{init,render,retry,reconcile,check,status,plan,stop,control}" not in top_level
     )
@@ -456,16 +484,13 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
                 "check freshness without writing files",
             ],
         ),
-        (
-            ["stop", "--help"],
-            ["Request an orderly shutdown", "configuration file to use"],
+            (
+                ["stop", "--help"],
+                ["Request an orderly shutdown"],
         ),
         (
-            ["check", "--help"],
-            [
-                "Validate project setup without running a worker.",
-                "configuration file to use",
-            ],
+                ["check", "--help"],
+                ["Validate project setup without running a worker."],
         ),
         (
             ["status", "--help"],
@@ -484,11 +509,8 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
             ["Manage the separate Git history that stores workflow data."],
         ),
         (
-            ["control", "init", "--help"],
-            [
-                "Initialize or attach the separate workflow Git history.",
-                "configuration file to use",
-            ],
+                ["control", "init", "--help"],
+                ["Initialize or attach the separate workflow Git history."],
         ),
         (
             ["reconcile", "--help"],
@@ -578,7 +600,7 @@ def test_fresh_init_requires_external_adoption_before_control_check(
     before = (working / "README.md").read_bytes()
     assert git(working, "status", "--porcelain").stdout == ""
 
-    initialized = invoke(fixture, "init")
+    initialized = invoke(fixture, "init", "test")
 
     assert initialized.returncode == 0
     assert git(working, "status", "--porcelain").stdout != ""
@@ -1046,9 +1068,9 @@ def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
             "-P",
             "-m",
             "devlegate",
-            "stop",
             "--env",
             str(git_fixture["config"]),
+            "stop",
         ],
         cwd=git_fixture["working"],
         env=environment,
@@ -1101,9 +1123,9 @@ def test_background_child_safe_bootstrap_rejects_checkout_module_shadowing(
             "-P",
             "-m",
             "devlegate",
-            "stop",
             "--env",
             str(git_fixture["config"]),
+            "stop",
         ],
         cwd=git_fixture["working"],
         env=environment,
@@ -1224,15 +1246,15 @@ def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixt
 def test_init_and_render_use_effective_configuration_without_control_mutation(
     git_fixture,
 ):
-    config = git_fixture["tmp"] / "render.env"
+    config = git_fixture["working"] / "render.env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=automation/state\n"
         "BACKLOG_PATH=workflow/waiting\nTODO_PATH=workflow/ready\n"
         "REVIEW_PATH=workflow/inspection\nDONE_PATH=workflow/accepted\n"
     )
-    result = invoke(git_fixture, "init", env_file=config)
+    result = invoke(git_fixture, "init", "render", env_file=config)
     assert result.returncode == 0
-    assert not (git_fixture["working"] / ".env").exists()
+    assert config.exists()
     assert "rendered 2" in result.stdout
     architect = git_fixture["working"] / "skills/architect/SKILL.md"
     reviewer = git_fixture["working"] / "skills/reviewer/SKILL.md"
@@ -1242,7 +1264,7 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
 
 
 def test_check_rejects_invalid_poll_interval_without_creating_state(git_fixture):
-    config = git_fixture["tmp"] / "invalid-poll.env"
+    config = git_fixture["working"] / "invalid-poll.env"
     state = git_fixture["tmp"] / "invalid-poll-state"
     config.write_text(
         "REMOTE_BRANCH=main\nOPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
@@ -1315,7 +1337,7 @@ def test_check_reports_diverged_product_branch(git_fixture):
 def test_init_outside_git_does_not_seed_project_files(tmp_path):
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     result = subprocess.run(
-        [sys.executable, "-m", "devlegate", "init"],
+        [sys.executable, "-m", "devlegate", "init", "outside"],
         cwd=tmp_path,
         env=environment,
         text=True,
@@ -1333,24 +1355,26 @@ def test_init_from_repository_subdirectory_does_not_seed_project_files(git_fixtu
     subdirectory.mkdir()
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     result = subprocess.run(
-        [sys.executable, "-m", "devlegate", "init"],
+        [sys.executable, "-m", "devlegate", "init", "subdir"],
         cwd=subdirectory,
         env=environment,
         text=True,
         capture_output=True,
     )
 
-    assert result.returncode == 1
-    assert "run devlegate from repository root" in result.stderr
-    assert not (subdirectory / ".env").exists()
-    assert not (subdirectory / ".devlegate").exists()
+    assert result.returncode == 0
+    assert (subdirectory / ".env").exists()
+    assert (git_fixture["working"] / ".devlegate").exists()
 
 
 def test_init_seeds_missing_project_env_from_package(git_fixture):
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     env = git_fixture["working"] / ".env"
+    env.unlink()
+    registry_path = Path(environment["XDG_CONFIG_HOME"]) / "devlegate" / "projects.json"
+    registry_path.unlink()
     result = subprocess.run(
-        [sys.executable, "-m", "devlegate", "init"],
+        [sys.executable, "-m", "devlegate", "init", "seeded"],
         cwd=git_fixture["working"],
         env=environment,
         text=True,
@@ -1361,20 +1385,20 @@ def test_init_seeds_missing_project_env_from_package(git_fixture):
     before = env.read_bytes()
     assert (
         subprocess.run(
-            [sys.executable, "-m", "devlegate", "init"],
+            [sys.executable, "-m", "devlegate", "init", "seeded"],
             cwd=git_fixture["working"],
             env=environment,
             text=True,
             capture_output=True,
         ).returncode
-        == 0
+        == 1
     )
     assert env.read_bytes() == before
 
 
 def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture):
     state = git_fixture["tmp"] / "read-only-state"
-    config = git_fixture["tmp"] / "read-only.env"
+    config = git_fixture["working"] / "read-only.env"
     config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={state}\n")
     before = git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
     result = invoke(git_fixture, "plan", "--json", env_file=config)
@@ -1397,7 +1421,7 @@ def test_status_uses_daemon_ipc_without_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status"],
     )
 
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
@@ -1408,7 +1432,7 @@ def test_status_uses_daemon_ipc_without_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status", "--json"],
     )
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
     payload = json.loads(capsys.readouterr().out)
@@ -1454,7 +1478,7 @@ def test_status_handles_service_version_metadata(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status"],
     )
 
     assert main() == (1 if expected["plan"]["action"] == "blocked" else 0)
@@ -1485,7 +1509,7 @@ def test_plan_uses_daemon_ipc_without_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "plan", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "plan", "--json"],
     )
 
     assert main() == 0
@@ -1513,7 +1537,7 @@ def test_blocked_dependency_status_uses_daemon_semantics(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status"],
     )
 
     assert main() == 0
@@ -1540,7 +1564,13 @@ def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "retry", "T-1", "--env", str(_short_runtime_config(git_fixture))],
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "retry",
+            "T-1",
+        ],
     )
 
     assert main() == 0
@@ -1568,13 +1598,13 @@ def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
         "argv",
         [
             "devlegate",
+            "--env",
+            str(config),
             "reconcile",
             "update-base",
             "T-1",
             "--onto",
             "abc123",
-            "--env",
-            str(config),
         ],
     )
 
@@ -1597,13 +1627,13 @@ def test_reconcile_refuses_without_daemon_without_constructing_engine(
         "argv",
         [
             "devlegate",
+            "--env",
+            str(config),
             "reconcile",
             "update-base",
             "T-1",
             "--onto",
             "abc123",
-            "--env",
-            str(config),
         ],
     )
 
@@ -1632,13 +1662,13 @@ def test_reconcile_refuses_connectable_socket_without_authority(
         "argv",
         [
             "devlegate",
+            "--env",
+            str(config),
             "reconcile",
             "update-base",
             "T-1",
             "--onto",
             "abc123",
-            "--env",
-            str(config),
         ],
     )
     try:
@@ -1670,13 +1700,13 @@ def test_reconcile_fails_closed_when_authority_exists_without_socket(
         "argv",
         [
             "devlegate",
+            "--env",
+            str(config),
             "reconcile",
             "update-base",
             "T-1",
             "--onto",
             "abc123",
-            "--env",
-            str(config),
         ],
     )
     try:
@@ -1703,7 +1733,7 @@ def test_retry_refuses_connectable_socket_without_authority(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "retry", "T-1", "--env", str(config)],
+        ["devlegate", "--env", str(config), "retry", "T-1"],
     )
     try:
         assert main() == 1
@@ -1732,7 +1762,7 @@ def test_retry_fails_closed_when_authority_exists_but_socket_is_unavailable(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "retry", "T-1", "--env", str(config)],
+        ["devlegate", "--env", str(config), "retry", "T-1"],
     )
     try:
         assert main() == 1
@@ -1764,7 +1794,12 @@ def test_retry_interactive_candidates_are_rendered_and_selected_locally(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "retry", "--env", str(_short_runtime_config(git_fixture))],
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "retry",
+        ],
     )
 
     assert main() == 0
@@ -1791,7 +1826,12 @@ def test_retry_interactive_cancel_submits_no_mutation(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "retry", "--env", str(_short_runtime_config(git_fixture))],
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "retry",
+        ],
     )
 
     assert main() == 0
@@ -1831,7 +1871,12 @@ def test_drop_interactive_candidates_use_exact_execution_identity(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "drop", "--env", str(_short_runtime_config(git_fixture))],
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "drop",
+        ],
     )
 
     assert main() == 0
@@ -1847,7 +1892,12 @@ def test_drop_without_ticket_rejects_noninteractive_invocation(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "drop", "--env", str(_short_runtime_config(git_fixture))],
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "drop",
+        ],
     )
     assert main() == 1
     assert "specify a ticket ID" in capsys.readouterr().err
@@ -1919,7 +1969,7 @@ def test_daemon_application_error_is_authoritative(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status"],
     )
 
     assert main() == 1
@@ -1943,7 +1993,7 @@ def test_daemon_protocol_error_is_not_bypassed(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "plan", "--env", str(config)],
+        ["devlegate", "--env", str(config), "plan"],
     )
 
     assert main() == 1
@@ -1997,7 +2047,7 @@ def test_ipc_unavailable_with_authority_fails_closed(
         monkeypatch.setattr(
             sys,
             "argv",
-            ["devlegate", "status", "--env", str(config)],
+            ["devlegate", "--env", str(config), "status"],
         )
 
         assert main() == 1
@@ -2026,7 +2076,7 @@ def test_stale_socket_without_authority_uses_guarded_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "plan", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "plan", "--json"],
     )
 
     try:
@@ -2038,7 +2088,7 @@ def test_stale_socket_without_authority_uses_guarded_fallback(
 
 
 @pytest.mark.parametrize("command", ["status", "plan"])
-def test_subdirectory_requires_repository_root_without_daemon(
+def test_explicit_project_works_from_subdirectory_without_daemon(
     git_fixture, monkeypatch, capsys, command
 ):
     config = _short_runtime_config(git_fixture)
@@ -2048,15 +2098,15 @@ def test_subdirectory_requires_repository_root_without_daemon(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", command, "--env", str(config)],
+        ["devlegate", "--env", str(config), command],
     )
 
-    assert main() == 1
-    assert "run devlegate from repository root" in capsys.readouterr().err
+    assert main() in (0, 1)
+    assert "run devlegate from repository root" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("command", ["status", "plan"])
-def test_subdirectory_requires_repository_root_with_daemon(
+def test_explicit_project_works_from_subdirectory_with_daemon(
     cli_daemon, git_fixture, monkeypatch, capsys, command
 ):
     config = _short_runtime_config(git_fixture)
@@ -2070,11 +2120,11 @@ def test_subdirectory_requires_repository_root_with_daemon(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", command, "--env", str(config)],
+        ["devlegate", "--env", str(config), command],
     )
 
-    assert main() == 1
-    assert "run devlegate from repository root" in capsys.readouterr().err
+    assert main() in (0, 1)
+    assert "run devlegate from repository root" not in capsys.readouterr().err
 
 
 def test_service_engine_status_and_plan_return_immutable_views(
@@ -2143,7 +2193,7 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
     calls = []
 
     class FakeServiceEngine:
-        def __init__(self, env_file, *, read_only=False):
+        def __init__(self, env_file, *, read_only=False, repository=None):
             calls.append(("init", env_file, read_only))
 
     monkeypatch.setattr("devlegate.cli.ServiceEngine", FakeServiceEngine)
@@ -2152,7 +2202,9 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
         lambda engine, **kwargs: calls.append(("host", engine, kwargs)) or 8,
     )
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "once", "--env", str(git_fixture["config"])]
+        sys,
+        "argv",
+        ["devlegate", "--env", str(git_fixture["config"]), "once"],
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -2183,7 +2235,7 @@ def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "once", "--env", str(git_fixture["config"])],
+        ["devlegate", "--env", str(git_fixture["config"]), "once"],
     )
     monkeypatch.chdir(git_fixture["working"])
 
@@ -3801,7 +3853,7 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
     )
 
     class FakeServiceEngine:
-        def __init__(self, env_file, *, read_only=False):
+        def __init__(self, env_file, *, read_only=False, repository=None):
             assert read_only
 
         def status_view(self):
@@ -3813,7 +3865,9 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
     monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "status", "--env", str(git_fixture["config"])]
+        sys,
+        "argv",
+        ["devlegate", "--env", str(git_fixture["config"]), "status"],
     )
     assert main() == 0
     assert "Repositories" in capsys.readouterr().out
@@ -3821,13 +3875,15 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "status", "--json", "--env", str(git_fixture["config"])],
+        ["devlegate", "--env", str(git_fixture["config"]), "status", "--json"],
     )
     assert main() == 0
     assert json.loads(capsys.readouterr().out)["plan"]["action"] == "none"
 
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "plan", "--env", str(git_fixture["config"])]
+        sys,
+        "argv",
+        ["devlegate", "--env", str(git_fixture["config"]), "plan"],
     )
     assert main() == 0
     assert "Execution plan:" in capsys.readouterr().out
@@ -3835,7 +3891,7 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "plan", "--json", "--env", str(git_fixture["config"])],
+        ["devlegate", "--env", str(git_fixture["config"]), "plan", "--json"],
     )
     assert main() == 0
     assert json.loads(capsys.readouterr().out)["action"] == "none"
@@ -3847,7 +3903,7 @@ def test_retry_refuses_without_daemon_without_constructing_engine(
     calls = []
 
     class FakeServiceEngine:
-        def __init__(self, env_file, *, read_only=False):
+        def __init__(self, env_file, *, read_only=False, repository=None):
             calls.append(("init", env_file, read_only))
 
         def retry(self, ticket_id=None, _stop_event=None):
@@ -3856,7 +3912,9 @@ def test_retry_refuses_without_daemon_without_constructing_engine(
 
     monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)
     monkeypatch.setattr(
-        sys, "argv", ["devlegate", "retry", "T-1", "--env", str(git_fixture["config"])]
+        sys,
+        "argv",
+        ["devlegate", "--env", str(git_fixture["config"]), "retry", "T-1"],
     )
     assert main() == 1
     assert calls == []
@@ -3895,6 +3953,17 @@ def test_status_table_and_machine_formats_share_service_state(monkeypatch, capsy
         "devlegate.cli._read_only_view",
         lambda _env, method: ReadOnlyView(
             plan if method == "plan" else snapshot, "running"
+        ),
+    )
+    monkeypatch.setattr(
+        "devlegate.cli._project_target",
+        lambda **_kwargs: ProjectTarget(
+            "test",
+            Path("/tmp/test-project/.env"),
+            Path("/tmp/test-project"),
+            RuntimeLocator(
+                Path("/tmp/test-project"), Path("/tmp/test-state"), "a" * 64
+            ),
         ),
     )
 

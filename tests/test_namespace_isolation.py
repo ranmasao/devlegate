@@ -66,9 +66,9 @@ def test_console_check_ignores_hostile_consumer_nanoyaml(git_fixture) -> None:
     result = subprocess.run(
         [
             os.fspath(ROOT / ".venv/bin/devlegate"),
-            "check",
             "--env",
             os.fspath(git_fixture["config"]),
+            "check",
         ],
         cwd=working,
         env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},

@@ -389,9 +389,9 @@ class ServiceHost:
             "-P",
             "-m",
             "devlegate",
-            "foreground",
             "--env",
             str(self.engine.env_file),
+            "foreground",
         ]
         os.execvpe(sys.executable, command, environment)
 

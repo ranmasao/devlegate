@@ -64,9 +64,9 @@ def render_unit(
             "-P",
             "-m",
             "devlegate",
-            "foreground",
             "--env",
             _systemd_quote(str(env_file.resolve())),
+            "foreground",
         )
     )
     return "\n".join(

@@ -30,6 +30,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime import BlockedReason, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import (
@@ -143,18 +144,30 @@ def control_fixture(tmp_path):
         baseline="ticket-control",
         state=state,
     )
-    config = tmp_path / "devlegate.env"
+    config = world["working"] / ".env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
         f"STATE_DIR={state}\n"
     )
+    (world["working"] / ".git" / "info" / "exclude").open("a").write(
+        "\n.env\n.registry-config/\n"
+    )
+    os.environ["XDG_CONFIG_HOME"] = str(world["working"] / ".registry-config")
+    ProjectRegistry().register("test", config)
     return world["working"], config, state
 
 
 def divergent_control_heads(working, config, tmp_path):
     assert invoke(working, "control", "init", config=config).returncode == 0
-    control = next((config.parent / "state" / "worktrees").glob("*/control"))
+    state = Path(
+        next(
+            line.split("=", 1)[1]
+            for line in config.read_text().splitlines()
+            if line.startswith("STATE_DIR=")
+        )
+    )
+    control = next((state / "worktrees").glob("*/control"))
     base = git(control, "rev-parse", "HEAD").stdout.strip()
     (control / "local-only.txt").write_text("local\n")
     git(control, "add", "local-only.txt")
@@ -184,7 +197,7 @@ def divergent_control_heads(working, config, tmp_path):
 def fresh_control_fixture(tmp_path):
     state = tmp_path / "state"
     world = clone_world(tmp_path, baseline="product", state=state)
-    config = tmp_path / "devlegate.env"
+    config = world["working"] / ".env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
         "BACKLOG_PATH=workflow/backlog\nTODO_PATH=workflow/todo\n"
@@ -192,6 +205,9 @@ def fresh_control_fixture(tmp_path):
         "ACCEPTED_PATH=workflow/accepted\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
         f"STATE_DIR={state}\n"
+    )
+    (world["working"] / ".git" / "info" / "exclude").open("a").write(
+        "\n.env\n.registry-config/\n"
     )
     return world["working"], config, state
 
@@ -202,10 +218,18 @@ def invoke(working, *args, config):
         args[args.index("--foreground")] = "foreground"
     elif "--once" in args:
         args[args.index("--once")] = "once"
+    config_home = working / ".registry-config"
+    ProjectRegistry(config_home / "devlegate" / "projects.json").register(
+        "test", config
+    )
     return subprocess.run(
-        [sys.executable, "-m", "devlegate", *args, "--env", config],
+        [sys.executable, "-m", "devlegate", "--env", config, *args],
         cwd=working,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            "XDG_CONFIG_HOME": str(config_home),
+        },
         text=True,
         capture_output=True,
     )

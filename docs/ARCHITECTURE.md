@@ -85,7 +85,7 @@ The current forms map to these policies as follows:
 | systemd user service | external | inherited streams | continuous |
 
 The external policy is implemented by the explicit systemd user-service backend.
-`devlegate service install --supervisor systemd --env FILE` writes an atomic,
+`devlegate @ALIAS service install --supervisor systemd` writes an atomic,
 project-specific unit under the XDG user-unit directory and reloads the user
 manager. `start`, `stop`, `restart`, and `status` route through `systemctl --user`;
 the backend never falls back to Devlegate's internal detached host. Removal
@@ -98,6 +98,15 @@ The generated unit uses `Type=notify`, `KillMode=mixed`,
 startup. systemd owns inherited service output and journal routing, while
 Devlegate owns execution-log persistence. Hosting ownership is not a project
 `.env` setting.
+
+Project selection is resolved before runtime construction. `@ALIAS` is the
+preferred local handle; `--env FILE` is the explicit path form; and an
+unqualified command uses exactly `$PWD/.env`. All forms must identify a
+registered project, and explicit env paths resolve their Git repository from
+the env file's location rather than the caller's current directory. The
+registry is versioned user configuration under the XDG configuration hierarchy.
+Aliases do not enter runtime or systemd identity. Fleet-wide orchestration is
+outside this release.
 
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow

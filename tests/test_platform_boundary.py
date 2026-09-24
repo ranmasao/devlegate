@@ -60,7 +60,7 @@ def test_hosted_commands_reject_unsupported_platform(
     _working, config, _state = prepared_project(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(
-        cli.sys, "argv", ["devlegate", command, "--env", str(config)]
+        cli.sys, "argv", ["devlegate", "--env", str(config), command]
     )
 
     assert cli.main() == 1
@@ -88,7 +88,7 @@ def test_check_reports_unsupported_platform_in_human_and_json(
     monkeypatch.setattr(sys, "platform", "darwin")
 
     monkeypatch.setattr(
-        cli.sys, "argv", ["devlegate", "check", "--env", str(config)]
+        cli.sys, "argv", ["devlegate", "--env", str(config), "check"]
     )
     assert cli.main() == 1
     human = capsys.readouterr().out
@@ -98,7 +98,7 @@ def test_check_reports_unsupported_platform_in_human_and_json(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "check", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "check", "--json"],
     )
     assert cli.main() == 1
     payload = json.loads(capsys.readouterr().out)

@@ -627,7 +627,7 @@ def test_foreground_service_command_constructs_one_service_engine(
     calls = []
 
     class FakeServiceEngine:
-        def __init__(self, env_file, *, read_only=False):
+        def __init__(self, env_file, *, read_only=False, repository=None):
             calls.append(("init", env_file, read_only))
 
     def host(engine, **_kwargs):
@@ -639,7 +639,7 @@ def test_foreground_service_command_constructs_one_service_engine(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "foreground", "--env", str(config)],
+        ["devlegate", "--env", str(config), "foreground"],
     )
     monkeypatch.chdir(working)
 
@@ -842,7 +842,7 @@ def test_unhandled_host_failure_is_reported_by_offline_status(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "status", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status", "--json"],
     )
     assert cli.main() == 1
     payload = json.loads(capsys.readouterr().out)
@@ -851,7 +851,7 @@ def test_unhandled_host_failure_is_reported_by_offline_status(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "status", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status"],
     )
     assert cli.main() == 1
     human = capsys.readouterr().out
@@ -944,7 +944,7 @@ def test_corrupt_service_diagnostic_is_reported_without_blocking_status(
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "status", "--json", "--env", str(config)],
+        ["devlegate", "--env", str(config), "status", "--json"],
     )
     assert cli.main() == 1
     payload = json.loads(capsys.readouterr().out)
@@ -1015,7 +1015,7 @@ def test_foreground_cli_remains_attached_until_host_returns(tmp_path, monkeypatc
     result = []
 
     class FakeServiceEngine:
-        def __init__(self, _env_file, *, read_only=False):
+        def __init__(self, _env_file, *, read_only=False, repository=None):
             assert not read_only
 
     def host(_engine, **_kwargs):
@@ -1028,7 +1028,7 @@ def test_foreground_cli_remains_attached_until_host_returns(tmp_path, monkeypatc
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["devlegate", "foreground", "--env", str(config)],
+        ["devlegate", "--env", str(config), "foreground"],
     )
     monkeypatch.chdir(working)
     thread = threading.Thread(target=lambda: result.append(cli.main()), daemon=True)
@@ -2016,7 +2016,14 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "foreground", "--env", str(config)],
+        [
+            sys.executable,
+            "-m",
+            "devlegate",
+            "--env",
+            str(config),
+            "foreground",
+        ],
         cwd=working,
         env=environment,
         text=True,
@@ -2029,7 +2036,15 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(
             break
         time.sleep(0.01)
     first = subprocess.Popen(
-        [sys.executable, "-m", "devlegate", "retry", "T-1", "--env", str(config)],
+        [
+            sys.executable,
+            "-m",
+            "devlegate",
+            "--env",
+            str(config),
+            "retry",
+            "T-1",
+        ],
         cwd=working,
         env=environment,
         text=True,
@@ -2052,10 +2067,10 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(
                 sys.executable,
                 "-m",
                 "devlegate",
-                "retry",
-                "T-1",
                 "--env",
                 str(config),
+                "retry",
+                "T-1",
             ],
             cwd=working,
             env=environment,

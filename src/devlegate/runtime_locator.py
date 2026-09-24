@@ -70,15 +70,15 @@ class RuntimeLocator:
     socket_key_length: int = 32
 
     @classmethod
-    def from_env(cls, env_file: Path) -> "RuntimeLocator":
+    def from_env(
+        cls, env_file: Path, *, repository: Path | None = None
+    ) -> "RuntimeLocator":
         if not env_file.is_file():
             raise RuntimeLocatorError(
                 f"configuration file not found: {env_file} "
                 f"(copy devlegate's .env.example to $PWD/.env)"
             )
-        repo = repository_root()
-        if Path.cwd().resolve() != repo:
-            raise RuntimeLocatorError(f"run devlegate from repository root: {repo}")
+        repo = (repository or repository_root(env_file.parent)).resolve()
         return cls.from_config(env_file, repo, read_env(env_file))
 
     @classmethod

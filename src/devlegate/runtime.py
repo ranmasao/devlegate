@@ -572,6 +572,7 @@ class ServiceEngine:
         *,
         read_only: bool = False,
         show_worker_output: bool = True,
+        repository: Path | None = None,
     ) -> None:
         if not env_file.is_file():
             raise DevlegateError(
@@ -580,11 +581,12 @@ class ServiceEngine:
             )
         if not read_only and not hosted_runtime_supported():
             raise DevlegateError(HOSTED_RUNTIME_ERROR)
-        self.env_file = env_file
-        config = _read_env(env_file)
-        self.repo = self._repository_root()
-        if Path.cwd().resolve() != self.repo:
-            raise DevlegateError(f"run devlegate from repository root: {self.repo}")
+        self.env_file = env_file.expanduser().resolve()
+        config = _read_env(self.env_file)
+        try:
+            self.repo = (repository or repository_root()).resolve()
+        except RuntimeLocatorError as error:
+            raise DevlegateError(str(error)) from error
 
         def setting(name: str, default: str) -> str:
             return config.get(name, os.environ.get(name, default))
@@ -602,7 +604,7 @@ class ServiceEngine:
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
         self.read_only = read_only
-        self._locator = RuntimeLocator.from_config(env_file, self.repo, config)
+        self._locator = RuntimeLocator.from_config(self.env_file, self.repo, config)
         self.state_dir = self._locator.state_dir
         self._state_key = self._locator.state_key
         self._runtime_store = SQLiteRuntimeStore(self.state_dir, self._state_key)

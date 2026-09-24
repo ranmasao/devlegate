@@ -53,7 +53,13 @@ def test_exec_start_is_absolute_and_safe_path_protected(tmp_path: Path) -> None:
         python_executable=Path("/opt/devlegate/bin/python"),
     )
 
-    assert "ExecStart=/opt/devlegate/bin/python -P -m devlegate foreground" in value
+    assert "ExecStart=/opt/devlegate/bin/python -P -m devlegate --env" in value
+    assert (
+        "--env " + str((tmp_path / "repo" / ".env").resolve()) + " foreground"
+        in value
+    )
+    assert "--env \"/tmp" not in value
+    assert "foreground --" not in value
     assert "WorkingDirectory=" + str(tmp_path / "repo") in value
     assert "DEVLEGATE_HOST_MODE=external" in value
 

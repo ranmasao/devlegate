@@ -36,6 +36,13 @@ from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
 from devlegate.operational_log import service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
+from devlegate.project_registry import (
+    ProjectRegistry,
+    ProjectRegistryError,
+    ProjectTarget,
+    canonical_env_path,
+    validate_alias,
+)
 from devlegate.runtime import (
     BlockedReason,
     DevlegateError,
@@ -59,12 +66,18 @@ from devlegate.systemd_supervisor import (
 
 
 def _service_engine(
-    env_file: Path, *, read_only: bool = False, show_worker_output: bool = True
+    env_file: Path,
+    *,
+    repository: Path | None = None,
+    read_only: bool = False,
+    show_worker_output: bool = True,
 ) -> ServiceEngine:
     """Construct the canonical service engine."""
     options = {"read_only": read_only}
     if not show_worker_output:
         options["show_worker_output"] = False
+    if repository is not None:
+        options["repository"] = repository
     return ServiceEngine(env_file, **options)
 
 
@@ -600,6 +613,131 @@ def _host_mode() -> HostingMode:
         raise DevlegateError(f"unsupported hosting mode: {value}") from error
 
 
+def _project_target(
+    *, alias: str | None, env_file: Path | None, required: bool = True
+) -> ProjectTarget | None:
+    registry = ProjectRegistry()
+    try:
+        if alias is not None:
+            return registry.target_for_alias(alias)
+        selected_env = env_file or Path.cwd() / ".env"
+        registered_alias = registry.alias_for_env(selected_env)
+        if registered_alias is None:
+            if required:
+                raise ProjectRegistryError(
+                    "project is not registered; assign an alias with "
+                    "`devlegate project alias <name> [path]`"
+                )
+            return None
+        return registry.target_for_alias(registered_alias)
+    except ProjectRegistryError as error:
+        raise DevlegateError(str(error)) from error
+
+
+def _init_target(alias: str, env_file: Path) -> tuple[str, Path, Path]:
+    try:
+        validate_alias(alias)
+        env = canonical_env_path(env_file)
+        registry = ProjectRegistry()
+        projects = registry.projects()
+        existing = projects.get(alias)
+        if existing is not None:
+            raise ProjectRegistryError(
+                f"project alias @{alias} is already registered for {existing}"
+            )
+        for registered_alias, registered_env in projects.items():
+            if (
+                registered_alias != alias
+                and canonical_env_path(Path(registered_env)) == env
+            ):
+                raise ProjectRegistryError(
+                    f"project is already registered as @{registered_alias}"
+                )
+        from devlegate.project_registry import repository_root_for_env
+
+        repo = repository_root_for_env(env)
+        return alias, env, repo
+    except ProjectRegistryError as error:
+        raise DevlegateError(str(error)) from error
+
+
+def _project_path(path: Path | None) -> Path:
+    selected = path or Path.cwd()
+    if selected.is_dir():
+        selected = selected / ".env"
+    return canonical_env_path(selected)
+
+
+def _project_command(args: argparse.Namespace) -> int:
+    registry = ProjectRegistry()
+    try:
+        if args.project_action == "list":
+            projects = registry.projects()
+            rows = [
+                {
+                    "alias": alias,
+                    "env": env,
+                    "state": "ok" if Path(env).is_file() else "missing",
+                }
+                for alias, env in sorted(projects.items())
+            ]
+            if args.output_format != "table":
+                emit({"projects": rows}, args.output_format, "")
+            else:
+                print("ALIAS       ENV                                      STATE")
+                for row in rows:
+                    print(
+                        f"{row['alias']:<11} {row['env']:<40} {row['state']}"
+                    )
+            return 0
+        if args.project_action == "resolve":
+            if not args.alias.startswith("@"):
+                raise ProjectRegistryError("project resolve requires @ALIAS")
+            alias = args.alias.removeprefix("@")
+            target = registry.target_for_alias(alias)
+            value = {
+                "alias": f"@{alias}",
+                "env": str(target.env_file),
+                "repo": str(target.repo),
+            }
+            emit(value, args.output_format, str(target.env_file))
+            return 0
+        if args.project_action == "identify":
+            env = _project_path(args.path)
+            alias = registry.alias_for_env(env)
+            if alias is None:
+                raise ProjectRegistryError(f"project is not registered: {env}")
+            emit(
+                {"alias": f"@{alias}", "env": str(env)},
+                args.output_format,
+                f"@{alias}",
+            )
+            return 0
+        if args.project_action == "alias":
+            target = registry.register(args.alias, _project_path(args.path))
+            emit(
+                {
+                    "alias": f"@{target.alias}",
+                    "env": str(target.env_file),
+                    "repo": str(target.repo),
+                },
+                args.output_format,
+                f"registered @{target.alias}: {target.env_file}",
+            )
+            return 0
+        if args.project_action == "rename":
+            registry.rename(args.old_alias, args.new_alias)
+            emit(
+                {"alias": f"@{args.new_alias}"},
+                args.output_format,
+                f"renamed @{args.old_alias} to @{args.new_alias}",
+            )
+            return 0
+        raise ProjectRegistryError("unsupported project command")
+    except ProjectRegistryError as error:
+        raise DevlegateError(str(error)) from error
+
+
 def _systemd_readiness_report() -> Callable[[], None] | None:
     if (
         _host_mode() is HostingMode.EXTERNAL
@@ -609,28 +747,52 @@ def _systemd_readiness_report() -> Callable[[], None] | None:
     return None
 
 
+def _selector_argv(
+    argv: list[str], parser: argparse.ArgumentParser
+) -> tuple[list[str], str | None]:
+    values = list(argv)
+    alias: str | None = None
+    if values and values[0].startswith("@"):
+        alias = values.pop(0)[1:]
+        try:
+            validate_alias(alias)
+        except ProjectRegistryError as error:
+            parser.error(str(error))
+        if values and values[0] == "--env":
+            parser.error("project selectors --env and @ALIAS are mutually exclusive")
+    if values and values[0] == "--env":
+        if len(values) < 2:
+            parser.error("argument --env: expected one path")
+        if len(values) > 2 and values[2].startswith("@"):
+            parser.error("project selectors --env and @ALIAS are mutually exclusive")
+    return values, alias
+
+
 def _systemd_service_command(args: argparse.Namespace) -> int:
-    env_file = args.env or Path.cwd() / ".env"
     try:
-        locator = RuntimeLocator.from_env(env_file)
+        target = _project_target(
+            alias=getattr(args, "project_alias", None),
+            env_file=args.service_env,
+        )
+        assert target is not None
         supervisor = SystemdSupervisor()
         if args.service_action == "install":
-            path = supervisor.install(locator, env_file)
+            path = supervisor.install(target.locator, target.env_file)
             print(f"systemd user unit installed: {path}")
         elif args.service_action == "remove":
-            path = supervisor.remove(locator)
+            path = supervisor.remove(target.locator)
             print(f"systemd user unit removed: {path}")
         elif args.service_action == "start":
-            supervisor.start(locator)
+            supervisor.start(target.locator)
             print("Devlegate systemd service started.")
         elif args.service_action == "stop":
-            supervisor.stop(locator)
+            supervisor.stop(target.locator)
             print("Devlegate systemd service stopped.")
         elif args.service_action == "restart":
-            supervisor.restart(locator)
+            supervisor.restart(target.locator)
             print("Devlegate systemd service restarted.")
         elif args.service_action == "status":
-            active = supervisor.status(locator)
+            active = supervisor.status(target.locator)
             print("active" if active else "inactive")
             return 0 if active else 3
         else:
@@ -681,9 +843,9 @@ def _start_background(env_file: Path) -> int:
         "-P",
         "-m",
         "devlegate",
-        "foreground",
         "--env",
         str(env_file),
+        "foreground",
     ]
     child: subprocess.Popen[bytes] | None = None
     try:
@@ -1253,6 +1415,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
                 ("render", "render project-local workflow files"),
                 ("check", "validate setup readiness"),
                 ("control", "manage workflow history"),
+                ("project", "inspect and register local projects"),
             ),
         ),
         (
@@ -1268,7 +1431,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
 
     def format_usage(self) -> str:
         if self.prog == "devlegate":
-            return "usage: devlegate [--env FILE]\n  devlegate COMMAND ...\n"
+            return "usage: devlegate [--env FILE | @ALIAS] COMMAND ...\n"
         return super().format_usage()
 
     def add_subparsers(self, **kwargs):
@@ -1279,15 +1442,15 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
     def format_help(self) -> str:
         if self.prog == "devlegate":
             lines = [
-                "usage: devlegate [--env FILE]",
-                "  devlegate COMMAND ...",
+                "usage: devlegate [--env FILE | @ALIAS] COMMAND ...",
                 "",
                 "Run ticket-driven coding workflows in a Git repository. With no "
                 "command,",
                 "ensure the persistent background service is running.",
                 "",
                 "Options:",
-                "  --env FILE       configuration file for bare background startup",
+                "  --env FILE       explicit project configuration file",
+                "  @ALIAS           registered project alias",
             ]
             for title, commands in self._top_level_groups:
                 lines.extend(["", f"{title}:"])
@@ -1380,18 +1543,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="COMMAND",
         parser_class=DevlegateArgumentParser,
     )
-    foreground_parser = commands.add_parser(
+    commands.add_parser(
         "foreground",
         help="run the persistent service attached to this terminal",
         description="Run the persistent service attached to this terminal.",
     )
-    foreground_parser.add_argument("--env", metavar="FILE", type=Path)
-    once_parser = commands.add_parser(
+    commands.add_parser(
         "once",
         help="run one service pass attached to this terminal",
         description="Run one service pass attached to this terminal, then exit.",
     )
-    once_parser.add_argument("--env", metavar="FILE", type=Path)
     version_parser = commands.add_parser(
         "version",
         help="show program version",
@@ -1403,12 +1564,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="initialize project-local agent workflow files",
         description="Create missing project-local agent workflow files.",
     )
-    init_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
+    init_parser.add_argument("alias", help="local project alias without @")
     init_parser.add_argument(
         "--conflicts",
         choices=("abort", "backup", "replace"),
@@ -1424,23 +1580,11 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument(
         "--check", action="store_true", help="check freshness without writing files"
     )
-    render_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(render_parser)
     stop_parser = commands.add_parser(
         "stop",
         help="orderly stop the persistent workflow service",
         description="Request an orderly shutdown of the persistent service.",
-    )
-    stop_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(stop_parser)
     restart_parser = commands.add_parser(
@@ -1448,23 +1592,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="restart the persistent workflow service at a checkpoint",
         description="Restart the self-managed service after a graceful checkpoint.",
     )
-    restart_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(restart_parser)
     check_parser = commands.add_parser(
         "check",
         help="validate setup readiness",
         description="Validate project setup without running a worker.",
-    )
-    check_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(check_parser)
     for name in ("status", "plan"):
@@ -1482,12 +1614,58 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         add_output_arguments(command_parser)
-        command_parser.add_argument(
-            "--env",
-            metavar="FILE",
-            type=Path,
-            help="configuration file to use instead of $PWD/.env",
+    service_parser = commands.add_parser(
+        "service",
+        help="manage an explicitly registered external service",
+        description="Register and control a Devlegate external supervisor service.",
+    )
+    service_commands = service_parser.add_subparsers(
+        dest="service_action", required=True, parser_class=DevlegateArgumentParser
+    )
+    for action in ("install", "remove", "start", "stop", "restart", "status"):
+        action_parser = service_commands.add_parser(
+            action,
+            help=f"{action} the systemd user service",
+            description=f"{action.capitalize()} the Devlegate systemd user service.",
         )
+        action_parser.add_argument(
+            "--supervisor",
+            choices=("systemd",),
+            default="systemd",
+            help="external supervisor backend",
+        )
+    project_parser = commands.add_parser(
+        "project",
+        help="inspect and register local projects",
+        description="Manage the local Devlegate project registry.",
+    )
+    project_commands = project_parser.add_subparsers(
+        dest="project_action", required=True, parser_class=DevlegateArgumentParser
+    )
+    list_parser = project_commands.add_parser("list", help="list registered projects")
+    add_output_arguments(list_parser)
+    resolve_parser = project_commands.add_parser(
+        "resolve", help="resolve a registered alias"
+    )
+    resolve_parser.add_argument("alias", help="registered alias, including @")
+    add_output_arguments(resolve_parser)
+    identify_parser = project_commands.add_parser(
+        "identify", help="identify the registered project for a path"
+    )
+    identify_parser.add_argument("path", nargs="?", type=Path)
+    add_output_arguments(identify_parser)
+    alias_parser = project_commands.add_parser(
+        "alias", help="register an existing project"
+    )
+    alias_parser.add_argument("alias", help="local project alias without @")
+    alias_parser.add_argument("path", nargs="?", type=Path)
+    add_output_arguments(alias_parser)
+    rename_parser = project_commands.add_parser(
+        "rename", help="rename a local project alias"
+    )
+    rename_parser.add_argument("old_alias")
+    rename_parser.add_argument("new_alias")
+    add_output_arguments(rename_parser)
     retry_parser = commands.add_parser(
         "retry",
         help="retry a failed or recoverable execution",
@@ -1497,12 +1675,6 @@ def build_parser() -> argparse.ArgumentParser:
         "ticket_id",
         nargs="?",
         help="ticket to retry; omit it to choose from current candidates",
-    )
-    retry_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(retry_parser)
     drop_parser = commands.add_parser(
@@ -1514,12 +1686,6 @@ def build_parser() -> argparse.ArgumentParser:
         "ticket_id",
         nargs="?",
         help="ticket to drop; omit it to choose from current candidates",
-    )
-    drop_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
     )
     add_output_arguments(drop_parser)
     reconcile_parser = commands.add_parser(
@@ -1547,19 +1713,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     resume_parser.add_argument("ticket_id", help="ticket execution to resume")
-    resume_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(resume_parser)
-    update_base_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(update_base_parser)
     control_reconcile_parser = reconcile_commands.add_parser(
         "control",
@@ -1575,12 +1729,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="expected fetched remote control HEAD",
     )
-    control_reconcile_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(control_reconcile_parser)
     control_parser = commands.add_parser(
         "control",
@@ -1595,23 +1743,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="initialize workflow history",
         description="Initialize or attach the separate workflow Git history.",
     )
-    init_parser.add_argument(
-        "--env",
-        metavar="FILE",
-        type=Path,
-        help="configuration file to use instead of $PWD/.env",
-    )
     add_output_arguments(init_parser)
     return parser
 
 
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args(sys.argv[1:])
+    argv, project_alias = _selector_argv(sys.argv[1:], parser)
+    args = parser.parse_args(argv)
+    args.project_alias = project_alias
     startup_fd = _startup_fd()
     if args.command is None:
-        env_file = args.service_env or Path.cwd() / ".env"
         try:
+            target = _project_target(
+                alias=project_alias,
+                env_file=args.service_env,
+            )
+            assert target is not None
+            env_file = target.env_file
             health = _healthy_service(env_file)
             if health is not None:
                 _warn_service_version_mismatch(health)
@@ -1626,8 +1775,8 @@ def main() -> int:
             print(f"devlegate: {error}", file=sys.stderr)
             return 1
     if args.command == "version":
-        if args.service_env is not None:
-            parser.error("--env is only valid for bare background startup")
+        if project_alias is not None or args.service_env is not None:
+            parser.error("project selectors are not valid for version")
         value = {"program": "devlegate", "version": __version__}
         emit(
             value,
@@ -1636,10 +1785,13 @@ def main() -> int:
         )
         return 0
     if args.command in {"foreground", "once"}:
-        if args.service_env is not None:
-            parser.error("--env is only valid for bare background startup")
-        env_file = args.env or Path.cwd() / ".env"
         try:
+            target = _project_target(
+                alias=project_alias,
+                env_file=args.service_env,
+            )
+            assert target is not None
+            env_file = target.env_file
             host_mode = _host_mode()
             health = (
                 None
@@ -1651,9 +1803,13 @@ def main() -> int:
                 print("Devlegate service is already running.")
                 return 0
             if host_mode is HostingMode.DIRECT:
-                engine = _service_engine(env_file)
+                engine = _service_engine(env_file, repository=target.repo)
             else:
-                engine = _service_engine(env_file, show_worker_output=False)
+                engine = _service_engine(
+                    env_file,
+                    repository=target.repo,
+                    show_worker_output=False,
+                )
             run_arguments = dict(
                 host_mode=host_mode,
                 once=args.command == "once",
@@ -1682,8 +1838,6 @@ def main() -> int:
             "a control command is required"
         )
     if args.command == "service":
-        if args.service_env is not None:
-            parser.error("--env is only valid for bare background startup")
         try:
             return _systemd_service_command(args)
         except DevlegateError as error:
@@ -1693,35 +1847,51 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"
         )
-    if args.service_env is not None:
-        parser.error("--env before a command is only valid for bare background startup")
-    env_file = args.env or Path.cwd() / ".env"
-    try:
-        project_env = Path.cwd() / ".env"
-        if args.command == "init":
-            repository_root = ServiceEngine._repository_root()
-            if repository_root != Path.cwd().resolve():
-                raise DevlegateError(
-                    f"run devlegate from repository root: {repository_root}"
-                )
-        if args.command == "init" and args.env is None and not project_env.exists():
-            try:
-                seed_project_env(project_env)
-            except AgentProtocolError as error:
-                raise DevlegateError(str(error)) from error
-        devlegate = None
-        if args.command in {"init", "render", "check", "control"}:
-            devlegate = Devlegate(env_file, read_only=True)
-        if args.command == "init":
+    if args.command == "project":
+        if project_alias is not None or args.service_env is not None:
+            parser.error("project selectors are not valid for project commands")
+        try:
+            return _project_command(args)
+        except DevlegateError as error:
+            print(f"devlegate: {error}", file=sys.stderr)
+            return 1
+    if args.command == "init":
+        if project_alias is not None:
+            parser.error("@ALIAS is not valid for init; provide a new alias")
+        try:
+            selected_env = args.service_env or Path.cwd() / ".env"
+            alias, env_file, repo = _init_target(args.alias, selected_env)
+            if not env_file.exists():
+                try:
+                    seed_project_env(env_file)
+                except AgentProtocolError as error:
+                    raise DevlegateError(str(error)) from error
+            devlegate = Devlegate(env_file, read_only=True, repository=repo)
             value = devlegate.init_project_result(args.conflicts)
-            value = {**value, "command": "init"}
+            target = ProjectRegistry().register(alias, env_file)
+            value = {
+                **value,
+                "command": "init",
+                "alias": f"@{target.alias}",
+            }
             emit(
                 value,
                 args.output_format,
-                "Initialized Devlegate project; "
-                f"rendered {value['rendered']} artifacts.",
+                "Initialized and registered Devlegate project; "
+                f"rendered {value['rendered']} artifacts as @{target.alias}.",
             )
             return 0
+        except (DevlegateError, ProjectRegistryError) as error:
+            print(f"devlegate: {error}", file=sys.stderr)
+            return 1
+    env_file = (args.service_env or Path.cwd() / ".env").expanduser().resolve()
+    try:
+        target = _project_target(alias=project_alias, env_file=args.service_env)
+        assert target is not None
+        env_file = target.env_file
+        devlegate = None
+        if args.command in {"render", "check", "control"}:
+            devlegate = Devlegate(env_file, read_only=True, repository=target.repo)
         if args.command == "render":
             value = devlegate.render_result(args.check)
             value = {**value, "command": "render"}

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from devlegate.ipc_client import IPCClientError, request
+from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime_locator import RuntimeLocator, read_env
 
 
@@ -25,6 +26,12 @@ class LiveService:
     ) -> None:
         self.cwd = cwd
         self.env_file = env_file
+        self.registry_home = env_file.parent / ".registry-config"
+        ProjectRegistry(
+            self.registry_home / "devlegate" / "projects.json"
+        ).register(
+            "test", env_file
+        )
         self.locator = RuntimeLocator.from_config(
             env_file, cwd, read_env(env_file)
         )
@@ -46,14 +53,15 @@ class LiveService:
         environment = {
             **os.environ,
             "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            "XDG_CONFIG_HOME": str(self.registry_home),
         }
         command = self.command or (
             sys.executable,
             "-m",
             "devlegate",
-            "foreground",
             "--env",
             str(self.env_file),
+            "foreground",
         )
         self._output_dir = tempfile.TemporaryDirectory(prefix="devlegate-service-")
         self._stdout_file = open(
@@ -107,15 +115,16 @@ class LiveService:
         environment = {
             **os.environ,
             "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            "XDG_CONFIG_HOME": str(self.registry_home),
         }
         return subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "devlegate",
-                *args,
                 "--env",
                 str(self.env_file),
+                *args,
             ],
             cwd=self.cwd,
             env=environment,
@@ -129,15 +138,16 @@ class LiveService:
         environment = {
             **os.environ,
             "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+            "XDG_CONFIG_HOME": str(self.registry_home),
         }
         return subprocess.Popen(
             [
                 sys.executable,
                 "-m",
                 "devlegate",
-                *args,
                 "--env",
                 str(self.env_file),
+                *args,
             ],
             cwd=self.cwd,
             env=environment,

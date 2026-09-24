@@ -97,12 +97,12 @@ The current implementation has these practical limits:
 
 ## Quick Start
 
-Install this checkout, then configure it in the target project:
+Install this checkout, then initialize and register it in the target project:
 
 ```sh
 python -m pip install -e /path/to/devlegate
 cd /path/to/project
-devlegate init
+devlegate init rslab2
 # configure .env and project context
 devlegate control init
 devlegate check
@@ -116,7 +116,39 @@ devlegate status
 devlegate plan
 devlegate retry
 devlegate drop <ticket-id>
+devlegate @rslab2 status
+devlegate @rslab2 service restart
 ```
+
+Project addressing has three equivalent forms:
+
+```text
+@rslab2                         preferred registered alias
+--env /path/to/rslab2/.env      explicit configuration path
+PWD/.env                        current-directory convenience form
+```
+
+The `--env` selector is global and belongs before the command. `@ALIAS` also
+belongs before the command, and the two selectors are mutually exclusive. An
+ordinary project command requires the selected project to be registered. Use
+`devlegate project alias <name> [PATH]` to register an existing project.
+
+The registry is local user configuration at
+`$XDG_CONFIG_HOME/devlegate/projects.json` or
+`~/.config/devlegate/projects.json`. Aliases are not stored in the project and
+do not affect repository identity, runtime state, or systemd unit names.
+
+Inspect the registry with:
+
+```sh
+devlegate project list
+devlegate project resolve @rslab2
+devlegate project identify /path/to/rslab2
+devlegate project rename rslab2 ratil
+```
+
+Multiple independent projects can have independent systemd units. Fleet-wide
+orchestration is not implemented.
 
 Finite commands use concise operator-oriented human output by default. Tables
 are used where information is genuinely tabular. Add `--yaml` for canonical
@@ -150,11 +182,11 @@ Register a Linux systemd user service explicitly when detached lifetime should b
 owned by systemd instead of Devlegate:
 
 ```sh
-devlegate service install --supervisor systemd --env .env
-devlegate service start --supervisor systemd --env .env
-devlegate service status --supervisor systemd --env .env
-devlegate service stop --supervisor systemd --env .env
-devlegate service remove --supervisor systemd --env .env
+devlegate @rslab2 service install --supervisor systemd
+devlegate @rslab2 service start --supervisor systemd
+devlegate @rslab2 service status --supervisor systemd
+devlegate @rslab2 service stop --supervisor systemd
+devlegate @rslab2 service remove --supervisor systemd
 ```
 
 The generated unit is project-specific, uses `systemctl --user`, and starts the
