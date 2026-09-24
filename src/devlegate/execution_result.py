@@ -92,7 +92,7 @@ class ExecutionReport:
         return json.dumps(self.as_dict(), indent=2, sort_keys=True) + "\n"
 
     @classmethod
-    def from_dict(cls, payload: object) -> "ExecutionReport":
+    def from_dict(cls, payload: object) -> ExecutionReport:
         if not isinstance(payload, dict):
             raise ExecutionReportError("execution report must be an object")
         expected = {

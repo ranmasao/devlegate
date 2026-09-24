@@ -13,8 +13,9 @@ import sys
 import textwrap
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import NoReturn
 
 from devlegate import __version__
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
@@ -671,69 +672,71 @@ def _project_path(path: Path | None) -> Path:
 def _project_command(args: argparse.Namespace) -> int:
     registry = ProjectRegistry()
     try:
-        if args.project_action == "list":
-            projects = registry.projects()
-            rows = [
-                {
-                    "alias": alias,
-                    "env": env,
-                    "state": "ok" if Path(env).is_file() else "missing",
-                }
-                for alias, env in sorted(projects.items())
-            ]
-            if args.output_format != "table":
-                emit({"projects": rows}, args.output_format, "")
-            else:
-                print("ALIAS       ENV                                      STATE")
-                for row in rows:
-                    print(
-                        f"{row['alias']:<11} {row['env']:<40} {row['state']}"
-                    )
-            return 0
-        if args.project_action == "resolve":
-            if not args.alias.startswith("@"):
-                raise ProjectRegistryError("project resolve requires @ALIAS")
-            alias = args.alias.removeprefix("@")
-            target = registry.target_for_alias(alias)
-            value = {
-                "alias": f"@{alias}",
-                "env": str(target.env_file),
-                "repo": str(target.repo),
-            }
-            emit(value, args.output_format, str(target.env_file))
-            return 0
-        if args.project_action == "identify":
-            env = _project_path(args.path)
-            alias = registry.alias_for_env(env)
-            if alias is None:
-                raise ProjectRegistryError(f"project is not registered: {env}")
-            emit(
-                {"alias": f"@{alias}", "env": str(env)},
-                args.output_format,
-                f"@{alias}",
-            )
-            return 0
-        if args.project_action == "alias":
-            target = registry.register(args.alias, _project_path(args.path))
-            emit(
-                {
-                    "alias": f"@{target.alias}",
+        match args.project_action:
+            case "list":
+                projects = registry.projects()
+                rows = [
+                    {
+                        "alias": alias,
+                        "env": env,
+                        "state": "ok" if Path(env).is_file() else "missing",
+                    }
+                    for alias, env in sorted(projects.items())
+                ]
+                if args.output_format != "table":
+                    emit({"projects": rows}, args.output_format, "")
+                else:
+                    print("ALIAS       ENV                                      STATE")
+                    for row in rows:
+                        print(
+                            f"{row['alias']:<11} {row['env']:<40} {row['state']}"
+                        )
+                return 0
+            case "resolve":
+                if not args.alias.startswith("@"):
+                    raise ProjectRegistryError("project resolve requires @ALIAS")
+                alias = args.alias.removeprefix("@")
+                target = registry.target_for_alias(alias)
+                value = {
+                    "alias": f"@{alias}",
                     "env": str(target.env_file),
                     "repo": str(target.repo),
-                },
-                args.output_format,
-                f"registered @{target.alias}: {target.env_file}",
-            )
-            return 0
-        if args.project_action == "rename":
-            registry.rename(args.old_alias, args.new_alias)
-            emit(
-                {"alias": f"@{args.new_alias}"},
-                args.output_format,
-                f"renamed @{args.old_alias} to @{args.new_alias}",
-            )
-            return 0
-        raise ProjectRegistryError("unsupported project command")
+                }
+                emit(value, args.output_format, str(target.env_file))
+                return 0
+            case "identify":
+                env = _project_path(args.path)
+                alias = registry.alias_for_env(env)
+                if alias is None:
+                    raise ProjectRegistryError(f"project is not registered: {env}")
+                emit(
+                    {"alias": f"@{alias}", "env": str(env)},
+                    args.output_format,
+                    f"@{alias}",
+                )
+                return 0
+            case "alias":
+                target = registry.register(args.alias, _project_path(args.path))
+                emit(
+                    {
+                        "alias": f"@{target.alias}",
+                        "env": str(target.env_file),
+                        "repo": str(target.repo),
+                    },
+                    args.output_format,
+                    f"registered @{target.alias}: {target.env_file}",
+                )
+                return 0
+            case "rename":
+                registry.rename(args.old_alias, args.new_alias)
+                emit(
+                    {"alias": f"@{args.new_alias}"},
+                    args.output_format,
+                    f"renamed @{args.old_alias} to @{args.new_alias}",
+                )
+                return 0
+            case _:
+                raise ProjectRegistryError("unsupported project command")
     except ProjectRegistryError as error:
         raise DevlegateError(str(error)) from error
 
@@ -776,27 +779,28 @@ def _systemd_service_command(args: argparse.Namespace) -> int:
         )
         assert target is not None
         supervisor = SystemdSupervisor()
-        if args.service_action == "install":
-            path = supervisor.install(target.locator, target.env_file)
-            print(f"systemd user unit installed: {path}")
-        elif args.service_action == "remove":
-            path = supervisor.remove(target.locator)
-            print(f"systemd user unit removed: {path}")
-        elif args.service_action == "start":
-            supervisor.start(target.locator)
-            print("Devlegate systemd service started.")
-        elif args.service_action == "stop":
-            supervisor.stop(target.locator)
-            print("Devlegate systemd service stopped.")
-        elif args.service_action == "restart":
-            supervisor.restart(target.locator)
-            print("Devlegate systemd service restarted.")
-        elif args.service_action == "status":
-            active = supervisor.status(target.locator)
-            print("active" if active else "inactive")
-            return 0 if active else 3
-        else:
-            raise DevlegateError("unsupported systemd service action")
+        match args.service_action:
+            case "install":
+                path = supervisor.install(target.locator, target.env_file)
+                print(f"systemd user unit installed: {path}")
+            case "remove":
+                path = supervisor.remove(target.locator)
+                print(f"systemd user unit removed: {path}")
+            case "start":
+                supervisor.start(target.locator)
+                print("Devlegate systemd service started.")
+            case "stop":
+                supervisor.stop(target.locator)
+                print("Devlegate systemd service stopped.")
+            case "restart":
+                supervisor.restart(target.locator)
+                print("Devlegate systemd service restarted.")
+            case "status":
+                active = supervisor.status(target.locator)
+                print("active" if active else "inactive")
+                return 0 if active else 3
+            case _:
+                raise DevlegateError("unsupported systemd service action")
     except (RuntimeLocatorError, SystemdSupervisorError) as error:
         raise DevlegateError(str(error)) from error
     return 0
@@ -807,7 +811,7 @@ def _notify_startup_failure(error: BaseException) -> None:
     if fd is None:
         return
     try:
-        os.write(fd, f"FAILED {error}\n".encode("utf-8"))
+        os.write(fd, f"FAILED {error}\n".encode())
     except OSError:
         pass
     finally:
@@ -1747,92 +1751,116 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_default_command(
+    *,
+    project_alias: str | None,
+    service_env: Path | None,
+    startup_fd: int | None,
+) -> int:
+    try:
+        target = _project_target(alias=project_alias, env_file=service_env)
+        assert target is not None
+        env_file = target.env_file
+        health = _healthy_service(env_file)
+        if health is not None:
+            _warn_service_version_mismatch(health)
+            print("Devlegate service is already running.")
+            return 0
+        return _start_background(env_file)
+    except KeyboardInterrupt:
+        _notify_startup_failure(KeyboardInterrupt())
+        return 130
+    except DevlegateError as error:
+        _notify_startup_failure(error)
+        print(f"devlegate: {error}", file=sys.stderr)
+        return 1
+
+
+def _run_attached_command(
+    args: argparse.Namespace,
+    *,
+    project_alias: str | None,
+    startup_fd: int | None,
+) -> int:
+    try:
+        target = _project_target(
+            alias=project_alias,
+            env_file=args.service_env,
+        )
+        assert target is not None
+        env_file = target.env_file
+        host_mode = _host_mode()
+        health = (
+            None
+            if os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD") is not None
+            else _healthy_service(env_file)
+        )
+        if health is not None:
+            _warn_service_version_mismatch(health)
+            print("Devlegate service is already running.")
+            return 0
+        if host_mode is HostingMode.DIRECT:
+            engine = _service_engine(env_file, repository=target.repo)
+        else:
+            engine = _service_engine(
+                env_file,
+                repository=target.repo,
+                show_worker_output=False,
+            )
+        run_arguments = dict(
+            host_mode=host_mode,
+            once=args.command == "once",
+            startup_fd=startup_fd,
+            startup_report=lambda: _startup_report(
+                engine,
+                "background" if startup_fd is not None else args.command,
+            ),
+        )
+        readiness_report = _systemd_readiness_report()
+        if readiness_report is not None:
+            run_arguments["readiness_report"] = readiness_report
+        return run_service(
+            engine,
+            **run_arguments,
+        )
+    except KeyboardInterrupt:
+        _notify_startup_failure(KeyboardInterrupt())
+        return 130
+    except DevlegateError as error:
+        _notify_startup_failure(error)
+        print(f"devlegate: {error}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = build_parser()
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
     args = parser.parse_args(argv)
     args.project_alias = project_alias
     startup_fd = _startup_fd()
-    if args.command is None:
-        try:
-            target = _project_target(
-                alias=project_alias,
-                env_file=args.service_env,
-            )
-            assert target is not None
-            env_file = target.env_file
-            health = _healthy_service(env_file)
-            if health is not None:
-                _warn_service_version_mismatch(health)
-                print("Devlegate service is already running.")
-                return 0
-            return _start_background(env_file)
-        except KeyboardInterrupt:
-            _notify_startup_failure(KeyboardInterrupt())
-            return 130
-        except DevlegateError as error:
-            _notify_startup_failure(error)
-            print(f"devlegate: {error}", file=sys.stderr)
-            return 1
-    if args.command == "version":
-        if project_alias is not None or args.service_env is not None:
-            parser.error("project selectors are not valid for version")
-        value = {"program": "devlegate", "version": __version__}
-        emit(
-            value,
-            args.output_format,
-            f"Devlegate {__version__}",
-        )
-        return 0
-    if args.command in {"foreground", "once"}:
-        try:
-            target = _project_target(
-                alias=project_alias,
-                env_file=args.service_env,
-            )
-            assert target is not None
-            env_file = target.env_file
-            host_mode = _host_mode()
-            health = (
-                None
-                if os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD") is not None
-                else _healthy_service(env_file)
-            )
-            if health is not None:
-                _warn_service_version_mismatch(health)
-                print("Devlegate service is already running.")
-                return 0
-            if host_mode is HostingMode.DIRECT:
-                engine = _service_engine(env_file, repository=target.repo)
-            else:
-                engine = _service_engine(
-                    env_file,
-                    repository=target.repo,
-                    show_worker_output=False,
-                )
-            run_arguments = dict(
-                host_mode=host_mode,
-                once=args.command == "once",
+    match args.command:
+        case None:
+            return _run_default_command(
+                project_alias=project_alias,
+                service_env=args.service_env,
                 startup_fd=startup_fd,
-                startup_report=lambda: _startup_report(
-                    engine,
-                    "background" if startup_fd is not None else args.command,
-                ),
             )
-            readiness_report = _systemd_readiness_report()
-            if readiness_report is not None:
-                run_arguments["readiness_report"] = readiness_report
-            return run_service(
-                engine,
-                **run_arguments,
+        case "version":
+            if project_alias is not None or args.service_env is not None:
+                parser.error("project selectors are not valid for version")
+            value = {"program": "devlegate", "version": __version__}
+            emit(
+                value,
+                args.output_format,
+                f"Devlegate {__version__}",
             )
-        except KeyboardInterrupt:
-            _notify_startup_failure(KeyboardInterrupt())
-            return 130
-        except DevlegateError as error:
-            _notify_startup_failure(error)
-            print(f"devlegate: {error}", file=sys.stderr)
-            return 1
+            return 0
+        case "foreground" | "once":
+            return _run_attached_command(
+                args,
+                project_alias=project_alias,
+                startup_fd=startup_fd,
+            )
     if args.command == "control" and args.control_command != "init":
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"

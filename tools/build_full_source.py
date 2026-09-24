@@ -35,8 +35,7 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     if check and result.returncode:
@@ -49,8 +48,7 @@ def resolve_commit(repo: Path, ref: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--verify", f"{ref}^{{commit}}"],
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     if result.returncode:
@@ -91,8 +89,7 @@ def checkout_source(repo: Path, commit: str, destination: Path) -> None:
             str(destination),
         ],
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     if result.returncode:
@@ -126,8 +123,7 @@ def checkout_source(repo: Path, commit: str, destination: Path) -> None:
             "--recursive",
         ],
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     if result.returncode:

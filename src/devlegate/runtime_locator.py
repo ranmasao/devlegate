@@ -10,9 +10,9 @@ import fcntl
 import hashlib
 import os
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 
 class RuntimeLocatorError(Exception):
@@ -72,7 +72,7 @@ class RuntimeLocator:
     @classmethod
     def from_env(
         cls, env_file: Path, *, repository: Path | None = None
-    ) -> "RuntimeLocator":
+    ) -> RuntimeLocator:
         if not env_file.is_file():
             raise RuntimeLocatorError(
                 f"configuration file not found: {env_file} "
@@ -84,7 +84,7 @@ class RuntimeLocator:
     @classmethod
     def from_config(
         cls, env_file: Path, repo: Path, config: dict[str, str]
-    ) -> "RuntimeLocator":
+    ) -> RuntimeLocator:
         del env_file
         state_default = (
             Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))

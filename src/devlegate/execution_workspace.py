@@ -9,7 +9,6 @@ import dataclasses
 import re
 import subprocess
 from pathlib import Path
-from typing import TypeAlias
 
 from devlegate.tickets import is_canonical_ticket_name
 
@@ -35,7 +34,7 @@ class ExecutionCheckpoint:
     commit_created: bool
 
 
-WorktreeRegistration: TypeAlias = dict[str, str | None]
+type WorktreeRegistration = dict[str, str | None]
 
 
 def _git(

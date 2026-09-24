@@ -43,7 +43,7 @@ class ShutdownIntent:
         return self._event.wait(timeout)
 
 
-class HostingMode(str, Enum):
+class HostingMode(str, Enum):  # noqa: UP042 - preserve legacy string behavior
     """Process-lifetime ownership for the canonical service host."""
 
     DIRECT = "direct"
@@ -55,7 +55,7 @@ def _notify_startup(fd: int | None, message: str) -> None:
     if fd is None:
         return
     try:
-        os.write(fd, f"{message}\n".encode("utf-8"))
+        os.write(fd, f"{message}\n".encode())
     except OSError:
         pass
     finally:

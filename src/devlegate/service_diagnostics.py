@@ -53,7 +53,7 @@ def create(stage: str, error: BaseException) -> ServiceFailureDiagnostic:
         stage=stage,
         exception_type=type(error).__name__,
         message=str(error) or type(error).__name__,
-        occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        occurred_at=datetime.datetime.now(datetime.UTC).isoformat(),
         pid=os.getpid(),
     )
 

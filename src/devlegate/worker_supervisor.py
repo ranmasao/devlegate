@@ -14,9 +14,9 @@ import tempfile
 import termios
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
 
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log

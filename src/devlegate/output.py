@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from devlegate._vendor import nanoyaml
 

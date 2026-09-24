@@ -7,8 +7,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from devlegate.ipc_client import IPCClientError, request
 from devlegate.project_registry import ProjectRegistry

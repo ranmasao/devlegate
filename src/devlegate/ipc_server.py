@@ -342,7 +342,7 @@ class UnixIPCServer:
             return True
         except (ConnectionRefusedError, FileNotFoundError):
             return False
-        except socket.timeout:
+        except TimeoutError:
             return None
         except OSError as error:
             if error.errno == errno.ECONNREFUSED:
@@ -406,7 +406,7 @@ class UnixIPCServer:
         while not self._stop.is_set():
             try:
                 connection, _address = listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 if self._stop.is_set():

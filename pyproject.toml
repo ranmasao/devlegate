@@ -56,4 +56,4 @@ line-length = 88
 exclude = ["src/devlegate/_vendor/nanoyaml"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "UP"]

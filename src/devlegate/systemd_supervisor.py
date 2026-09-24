@@ -10,8 +10,8 @@ import socket
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from devlegate.ipc_client import IPCClientError, request
 from devlegate.runtime_locator import RuntimeLocator

@@ -82,7 +82,7 @@ class ExecutionLog:
                 f"cannot close execution log {self.path}: {error}"
             ) from error
 
-    def __enter__(self) -> "ExecutionLog":
+    def __enter__(self) -> ExecutionLog:
         return self
 
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
