@@ -43,6 +43,7 @@ from devlegate.ipc_client import (
     decode_status,
     request,
 )
+from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
 from devlegate.operational_log import service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
@@ -580,8 +581,11 @@ def _wait_for_runtime_stop(locator: RuntimeLocator) -> None:
 
 def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
     supervisor = SystemdSupervisor()
-    if not supervisor.inspect(locator) or not supervisor.status(locator):
-        return None
+    try:
+        if not supervisor.inspect(locator) or not supervisor.status(locator):
+            return None
+    except SystemdSupervisorError as error:
+        raise DevlegateError(str(error)) from error
     return supervisor
 
 
@@ -1124,7 +1128,17 @@ def _notify_startup_failure(error: BaseException) -> None:
             pass
 
 
-def _start_background(env_file: Path) -> int:
+def _background_command(
+    env_file: Path, launcher: LaunchCommand | None = None
+) -> list[str]:
+    return (launcher or product_launcher()).argv(
+        "--env", str(env_file), "foreground"
+    )
+
+
+def _start_background(
+    env_file: Path, *, launcher: LaunchCommand | None = None
+) -> int:
     if not hosted_runtime_supported():
         raise DevlegateError(HOSTED_RUNTIME_ERROR)
     try:
@@ -1145,15 +1159,7 @@ def _start_background(env_file: Path) -> int:
         "DEVLEGATE_STARTUP_FD": str(write_fd),
     }
     # The child uses the attached entry only as a process-hosting shim.
-    command = [
-        sys.executable,
-        "-P",
-        "-m",
-        "devlegate",
-        "--env",
-        str(env_file),
-        "foreground",
-    ]
+    command = _background_command(env_file, launcher)
     child: subprocess.Popen[bytes] | None = None
     try:
         with log_path.open("a", encoding="utf-8") as log:

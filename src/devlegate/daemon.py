@@ -5,7 +5,6 @@
 
 import os
 import signal
-import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -13,6 +12,7 @@ from contextlib import contextmanager
 from enum import Enum
 
 from devlegate.ipc_server import _INSTANCE_ID, UnixIPCServer
+from devlegate.launcher import product_launcher
 from devlegate.lifecycle_receipt import write as write_lifecycle_receipt
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
@@ -384,16 +384,10 @@ class ServiceHost:
         environment["DEVLEGATE_RESTART_AUTHORITY_KEY"] = self.engine._locator.state_key
         environment["DEVLEGATE_RESTART_REQUEST"] = request_id
         environment["DEVLEGATE_RESTART_INSTANCE"] = _INSTANCE_ID
-        command = [
-            sys.executable,
-            "-P",
-            "-m",
-            "devlegate",
-            "--env",
-            str(self.engine.env_file),
-            "foreground",
-        ]
-        os.execvpe(sys.executable, command, environment)
+        command = product_launcher().argv(
+            "--env", str(self.engine.env_file), "foreground"
+        )
+        os.execvpe(command[0], command, environment)
 
     def _serve_engine(
         self,

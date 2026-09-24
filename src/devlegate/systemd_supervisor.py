@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.ipc_client import IPCClientError, request
+from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.runtime_locator import RuntimeLocator
 
 
@@ -53,21 +54,16 @@ def render_unit(
     locator: RuntimeLocator,
     env_file: Path,
     *,
-    python_executable: Path | None = None,
+    launcher: LaunchCommand | None = None,
 ) -> str:
-    python = (python_executable or Path(os.sys.executable)).resolve()
     repository = locator.repo.resolve()
     environment = "DEVLEGATE_HOST_MODE=external"
     require_notify = "DEVLEGATE_REQUIRE_NOTIFY=1"
+    selected_launcher = launcher or product_launcher()
     command = " ".join(
-        (
-            _systemd_quote(str(python)),
-            "-P",
-            "-m",
-            "devlegate",
-            "--env",
-            _systemd_quote(str(env_file.resolve())),
-            "foreground",
+        _systemd_quote(argument)
+        for argument in selected_launcher.argv(
+            "--env", str(env_file.resolve()), "foreground"
         )
     )
     return "\n".join(
@@ -128,11 +124,13 @@ class SystemdSupervisor:
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        launcher: LaunchCommand | None = None,
     ) -> None:
         self.unit_directory = unit_directory or user_unit_dir()
         self._runner = runner or subprocess.run
         self._sleep = sleep
         self._monotonic = monotonic
+        self.launcher = launcher or product_launcher()
 
     def _run(
         self, *arguments: str, allow_failure: bool = False
@@ -167,7 +165,7 @@ class SystemdSupervisor:
         if path.exists():
             self.inspect(locator)
         try:
-            _write_atomic(path, render_unit(locator, env_file))
+            _write_atomic(path, render_unit(locator, env_file, launcher=self.launcher))
         except OSError as error:
             raise SystemdSupervisorError(
                 f"cannot write systemd unit {path}: {error}"

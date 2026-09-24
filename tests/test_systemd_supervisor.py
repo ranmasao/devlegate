@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from devlegate.launcher import LaunchCommand
 from devlegate.runtime_locator import RuntimeLocator
 from devlegate.systemd_supervisor import (
     MANAGED_MARKER,
@@ -50,7 +51,7 @@ def test_exec_start_is_absolute_and_safe_path_protected(tmp_path: Path) -> None:
     value = render_unit(
         locator(tmp_path),
         tmp_path / "repo" / ".env",
-        python_executable=Path("/opt/devlegate/bin/python"),
+        launcher=LaunchCommand.current_python(Path("/opt/devlegate/bin/python")),
     )
 
     assert "ExecStart=/opt/devlegate/bin/python -P -m devlegate --env" in value
@@ -62,6 +63,23 @@ def test_exec_start_is_absolute_and_safe_path_protected(tmp_path: Path) -> None:
     assert "foreground --" not in value
     assert "WorkingDirectory=" + str(tmp_path / "repo") in value
     assert "DEVLEGATE_HOST_MODE=external" in value
+
+
+def test_render_unit_accepts_standalone_launcher_with_spaces(tmp_path: Path) -> None:
+    launcher = LaunchCommand.executable(Path("/opt/Devlegate Product/devlegate"))
+
+    value = render_unit(
+        locator(tmp_path),
+        tmp_path / "repo" / ".env",
+        launcher=launcher,
+    )
+
+    assert (
+        'ExecStart="/opt/Devlegate Product/devlegate" --env '
+        f"{tmp_path / 'repo' / '.env'} foreground"
+    ) in value
+    assert "-P" not in value
+    assert "-m devlegate" not in value
 
 
 def test_install_is_atomic_and_uses_user_manager(tmp_path: Path) -> None:
