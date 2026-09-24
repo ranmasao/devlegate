@@ -72,6 +72,7 @@ def run_service(
     once: bool = False,
     startup_fd: int | None = None,
     startup_report: Callable[[], None] | None = None,
+    readiness_report: Callable[[], None] | None = None,
 ) -> int:
     """Run one service through the canonical process host."""
     return ServiceHost(
@@ -80,6 +81,7 @@ def run_service(
         once=once,
         startup_fd=startup_fd,
         startup_report=startup_report,
+        readiness_report=readiness_report,
     ).run()
 
 
@@ -94,6 +96,7 @@ class ServiceHost:
         once: bool = False,
         startup_fd: int | None = None,
         startup_report: Callable[[], None] | None = None,
+        readiness_report: Callable[[], None] | None = None,
     ) -> None:
         self.engine = engine
         try:
@@ -106,6 +109,7 @@ class ServiceHost:
         self.once = once
         self.startup_fd = startup_fd
         self.startup_report = startup_report
+        self.readiness_report = readiness_report
         self._handoff_request_id = os.environ.pop("DEVLEGATE_RESTART_REQUEST", None)
         self._handoff_instance_id = os.environ.pop("DEVLEGATE_RESTART_INSTANCE", None)
         self._handoff_authority_fd = os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD")
@@ -185,6 +189,8 @@ class ServiceHost:
                 mark_ready = getattr(self.engine, "mark_service_ready", None)
                 if mark_ready is not None:
                     mark_ready()
+                if self.readiness_report is not None:
+                    self.readiness_report()
                 _notify_startup(self.startup_fd, "READY")
                 self.startup_fd = None
                 ready = True

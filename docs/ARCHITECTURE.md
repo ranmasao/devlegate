@@ -82,11 +82,22 @@ The current forms map to these policies as follows:
 | bare `devlegate` | internal | detached | continuous |
 | `devlegate foreground` | direct | attached | continuous |
 | `devlegate once` | direct | attached | one iteration |
-| future supervisor | external | inherited streams | continuous |
+| systemd user service | external | inherited streams | continuous |
 
-The external policy is available to the canonical host for future integrations,
-but no external supervisor or systemd integration is shipped. Hosting ownership
-is not a project `.env` setting.
+The external policy is implemented by the explicit systemd user-service backend.
+`devlegate service install --supervisor systemd --env FILE` writes an atomic,
+project-specific unit under the XDG user-unit directory and reloads the user
+manager. `start`, `stop`, `restart`, and `status` route through `systemctl --user`;
+the backend never falls back to Devlegate's internal detached host. Removal
+refuses units that do not contain the Devlegate identity marker, then stops,
+disables, removes, and reloads the exact unit.
+
+The generated unit uses `Type=notify`, `KillMode=mixed`,
+`TimeoutStopSec=infinity`, and `Restart=no`. The external canonical host sends
+`READY=1` through the inherited `NOTIFY_SOCKET`; a missing required socket fails
+startup. systemd owns inherited service output and journal routing, while
+Devlegate owns execution-log persistence. Hosting ownership is not a project
+`.env` setting.
 
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow
@@ -131,7 +142,7 @@ disposition, runtime state, and Git provenance remain authoritative if an
 execution log is unavailable.
 Foreground operation may show and persist worker output; internal and external
 operation routes detailed worker output to the execution log instead of the
-service stream. No external supervisor or systemd integration is shipped.
+service stream.
 
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.

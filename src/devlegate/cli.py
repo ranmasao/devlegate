@@ -14,7 +14,7 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 from devlegate import __version__
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
@@ -51,6 +51,11 @@ from devlegate.runtime_locator import (
 )
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
+from devlegate.systemd_supervisor import (
+    SystemdSupervisor,
+    SystemdSupervisorError,
+    notify_ready,
+)
 
 
 def _service_engine(
@@ -593,6 +598,46 @@ def _host_mode() -> HostingMode:
         return HostingMode(value)
     except ValueError as error:
         raise DevlegateError(f"unsupported hosting mode: {value}") from error
+
+
+def _systemd_readiness_report() -> Callable[[], None] | None:
+    if (
+        _host_mode() is HostingMode.EXTERNAL
+        and os.environ.get("DEVLEGATE_REQUIRE_NOTIFY") == "1"
+    ):
+        return lambda: notify_ready(required=True)
+    return None
+
+
+def _systemd_service_command(args: argparse.Namespace) -> int:
+    env_file = args.env or Path.cwd() / ".env"
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        supervisor = SystemdSupervisor()
+        if args.service_action == "install":
+            path = supervisor.install(locator, env_file)
+            print(f"systemd user unit installed: {path}")
+        elif args.service_action == "remove":
+            path = supervisor.remove(locator)
+            print(f"systemd user unit removed: {path}")
+        elif args.service_action == "start":
+            supervisor.start(locator)
+            print("Devlegate systemd service started.")
+        elif args.service_action == "stop":
+            supervisor.stop(locator)
+            print("Devlegate systemd service stopped.")
+        elif args.service_action == "restart":
+            supervisor.restart(locator)
+            print("Devlegate systemd service restarted.")
+        elif args.service_action == "status":
+            active = supervisor.status(locator)
+            print("active" if active else "inactive")
+            return 0 if active else 3
+        else:
+            raise DevlegateError("unsupported systemd service action")
+    except (RuntimeLocatorError, SystemdSupervisorError) as error:
+        raise DevlegateError(str(error)) from error
+    return 0
 
 
 def _notify_startup_failure(error: BaseException) -> None:
@@ -1196,6 +1241,7 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
                 ("once", "run one service pass, then exit"),
                 ("stop", "stop the persistent service"),
                 ("restart", "restart the persistent service"),
+                ("service", "manage an explicitly registered external service"),
                 ("status", "show current workflow status"),
                 ("plan", "show the next workflow plan"),
             ),
@@ -1608,8 +1654,7 @@ def main() -> int:
                 engine = _service_engine(env_file)
             else:
                 engine = _service_engine(env_file, show_worker_output=False)
-            return run_service(
-                engine,
+            run_arguments = dict(
                 host_mode=host_mode,
                 once=args.command == "once",
                 startup_fd=startup_fd,
@@ -1617,6 +1662,13 @@ def main() -> int:
                     engine,
                     "background" if startup_fd is not None else args.command,
                 ),
+            )
+            readiness_report = _systemd_readiness_report()
+            if readiness_report is not None:
+                run_arguments["readiness_report"] = readiness_report
+            return run_service(
+                engine,
+                **run_arguments,
             )
         except KeyboardInterrupt:
             _notify_startup_failure(KeyboardInterrupt())
@@ -1629,6 +1681,14 @@ def main() -> int:
         DevlegateArgumentParser(prog="devlegate control").error(
             "a control command is required"
         )
+    if args.command == "service":
+        if args.service_env is not None:
+            parser.error("--env is only valid for bare background startup")
+        try:
+            return _systemd_service_command(args)
+        except DevlegateError as error:
+            print(f"devlegate: {error}", file=sys.stderr)
+            return 1
     if args.command == "reconcile" and args.reconcile_command is None:
         DevlegateArgumentParser(prog="devlegate reconcile").error(
             "a reconcile command is required"

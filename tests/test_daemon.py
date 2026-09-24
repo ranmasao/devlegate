@@ -778,6 +778,37 @@ def test_external_host_uses_inherited_service_stream_and_no_service_log(
     assert "external service output" in capsys.readouterr().out
 
 
+def test_systemd_readiness_callback_follows_canonical_ready_boundary(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(engine, "run_iteration", lambda: 0)
+    events = []
+
+    def startup_report():
+        events.append(
+            ("startup", engine._service_ready, engine.ipc_socket_path.exists())
+        )
+
+    def readiness_report():
+        events.append(
+            ("systemd-ready", engine._service_ready, engine.ipc_socket_path.exists())
+        )
+
+    assert daemon.run_service(
+        engine,
+        host_mode=daemon.HostingMode.EXTERNAL,
+        once=True,
+        startup_report=startup_report,
+        readiness_report=readiness_report,
+    ) == 0
+
+    assert events == [
+        ("startup", False, True),
+        ("systemd-ready", True, True),
+    ]
+
+
 def test_restart_authority_handoff_requires_internal_hosting(
     tmp_path, monkeypatch
 ):

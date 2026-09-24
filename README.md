@@ -144,10 +144,24 @@ Service hosting ownership is explicit and separate from attachment and lifetime:
 | bare `devlegate` | internal | detached | continuous |
 | `foreground` | direct | attached | continuous |
 | `once` | direct | attached | one iteration |
-| future supervisor | external | inherited streams | continuous |
+| systemd user service | external | inherited streams | continuous |
 
-External hosting is a runtime policy boundary only. No external supervisor or
-systemd integration is shipped.
+Register a Linux systemd user service explicitly when detached lifetime should be
+owned by systemd instead of Devlegate:
+
+```sh
+devlegate service install --supervisor systemd --env .env
+devlegate service start --supervisor systemd --env .env
+devlegate service status --supervisor systemd --env .env
+devlegate service stop --supervisor systemd --env .env
+devlegate service remove --supervisor systemd --env .env
+```
+
+The generated unit is project-specific, uses `systemctl --user`, and starts the
+same canonical host in explicit external mode. systemd owns the service stream;
+Devlegate continues to own execution logs under
+`STATE_DIR/logs/<state-key>/executions/`. Registration is explicit and does not
+enable lingering or install a system-wide unit.
 
 Status reports service state (`running` or `stopped`) separately from the
 execution phase and operator execution state (`idle`, `preparing`, `starting`,
