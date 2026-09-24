@@ -863,6 +863,8 @@ def test_execution_log_handoff_markers_follow_sink_and_worker_order(
         events.append(("service", message))
 
     def run_opencode(*_args, **kwargs):
+        events.append(("popen", "worker"))
+        kwargs["worker_started_handler"]()
         events.append(("worker", kwargs["execution_id"]))
         return OpenCodeRunResult(0)
 
@@ -884,6 +886,7 @@ def test_execution_log_handoff_markers_follow_sink_and_worker_order(
     assert [event[0] for event in events] == [
         "open",
         "service",
+        "popen",
         "worker",
         "service",
         "close",
@@ -892,8 +895,8 @@ def test_execution_log_handoff_markers_follow_sink_and_worker_order(
     assert "execution=execution-1" in events[1][1]
     assert f"log={log_path}" in events[1][1]
     assert events[1][1].startswith("execution starting: ")
-    assert events[3][1].startswith("execution finished: ")
-    assert f"log={log_path}" in events[3][1]
+    assert events[4][1].startswith("execution finished: ")
+    assert f"log={log_path}" in events[4][1]
 
 
 def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
@@ -925,3 +928,100 @@ def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
     assert result.process_returncode == -1
     assert "cannot open" in result.transport_error
     assert events == []
+
+
+def test_popen_failure_has_start_but_no_completion_marker(
+    monkeypatch, tmp_path
+):
+    events: list[tuple[str, str]] = []
+    log_path = (
+        tmp_path / "state" / "logs" / "key" / "executions" / "execution-1.log"
+    )
+
+    class FakeLog:
+        path = log_path
+
+        def close(self):
+            events.append(("close", str(self.path)))
+
+    def open_log(*_args):
+        events.append(("open", str(log_path)))
+        return FakeLog()
+
+    def fail_to_launch(*_args, **_kwargs):
+        events.append(("popen", "worker"))
+        raise OSError("cannot launch")
+
+    monkeypatch.setattr(worker_supervisor, "open_execution_log", open_log)
+    monkeypatch.setattr(
+        worker_supervisor,
+        "service_log",
+        lambda message: events.append(("service", message)),
+    )
+    monkeypatch.setattr(worker_supervisor.subprocess, "Popen", fail_to_launch)
+    supervisor = WorkerSupervisor(
+        "opencode",
+        "provider/model",
+        "",
+        state_dir=tmp_path / "state",
+        state_key="key",
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = supervisor.run(workspace, "prompt", execution_id="execution-1")
+
+    assert result.process_returncode == -1
+    assert "cannot launch" in result.transport_error
+    assert [event[0] for event in events] == ["open", "service", "popen", "close"]
+    assert events[1][1].startswith("execution starting: ")
+
+
+def test_successful_popen_precedes_completion_marker_and_log_close(
+    monkeypatch, tmp_path
+):
+    events: list[tuple[str, str]] = []
+    log_path = (
+        tmp_path / "state" / "logs" / "key" / "executions" / "execution-1.log"
+    )
+
+    class FakeLog:
+        path = log_path
+
+        def close(self):
+            events.append(("close", str(self.path)))
+
+    def open_log(*_args):
+        events.append(("open", str(log_path)))
+        return FakeLog()
+
+    def popen(*_args, **_kwargs):
+        events.append(("popen", "worker"))
+        return FakeProcess()
+
+    def log(message):
+        events.append(("service", message))
+
+    monkeypatch.setattr(worker_supervisor, "open_execution_log", open_log)
+    monkeypatch.setattr(worker_supervisor, "service_log", log)
+    monkeypatch.setattr(worker_supervisor.subprocess, "Popen", popen)
+    supervisor = WorkerSupervisor(
+        "opencode",
+        "provider/model",
+        "",
+        state_dir=tmp_path / "state",
+        state_key="key",
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = supervisor.run(workspace, "prompt", execution_id="execution-1")
+
+    assert result.process_returncode == 0
+    assert [event[0] for event in events] == [
+        "open",
+        "service",
+        "popen",
+        "service",
+        "close",
+    ]
+    assert events[3][1].startswith("execution finished: ")
+    assert f"log={log_path}" in events[3][1]

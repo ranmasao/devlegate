@@ -237,6 +237,7 @@ def _run_opencode(
     interruption_handler: Callable[[str], None] | None = None,
     execution_log: ExecutionLog | None = None,
     show_worker_output: bool = True,
+    worker_started_handler: Callable[[], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     process = subprocess.Popen(
@@ -248,6 +249,8 @@ def _run_opencode(
         env=env,
         start_new_session=True,
     )
+    if worker_started_handler is not None:
+        worker_started_handler()
     output_lock = threading.Lock()
     transport_error: str | None = None
     prompt_error: str | None = None
@@ -595,6 +598,11 @@ export default tool({
         execution_log = None
         worker_started = False
         completion_logged = False
+
+        def mark_worker_started() -> None:
+            nonlocal worker_started
+            worker_started = True
+
         try:
             if self.state_dir is not None and self.state_key is not None:
                 execution_log = open_execution_log(
@@ -605,7 +613,6 @@ export default tool({
                     f"ticket={workspace.ticket_id} execution={execution_id} "
                     f"log={execution_log.path}"
                 )
-            worker_started = True
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -618,6 +625,7 @@ export default tool({
                 interruption_handler=interruption_handler,
                 execution_log=execution_log,
                 show_worker_output=self.show_worker_output,
+                worker_started_handler=mark_worker_started,
             )
             claim, egress_error = parser.finish()
             result = WorkerRunResult(
