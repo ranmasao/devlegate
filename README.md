@@ -179,6 +179,10 @@ Host uninstall preserves repositories, project files, runtime state, and
 evidence. It does not invoke pip, pipx, uv, apt, or another package manager.
 Remove installed software separately with the mechanism that provided it.
 
+The current standalone Linux x86_64 proof is documented in
+[`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md). It builds the canonical wheel
+into a PEX eager scie; it does not publish or install a release artifact.
+
 The registry is local user configuration at
 `$XDG_CONFIG_HOME/devlegate/projects.json` or
 `~/.config/devlegate/projects.json`. Aliases are not stored in the project and

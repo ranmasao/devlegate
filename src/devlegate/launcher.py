@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,4 +31,18 @@ class LaunchCommand:
 
 def product_launcher() -> LaunchCommand:
     """Return the launcher for the currently installed product form."""
+    pex = os.environ.get("PEX")
+    scie = os.environ.get("SCIE")
+    if pex and scie and pex == scie:
+        candidate = Path(pex)
+        try:
+            if not candidate.is_file() or candidate.stat().st_mode & 0o111 == 0:
+                is_executable_elf = False
+            else:
+                with candidate.open("rb") as executable:
+                    is_executable_elf = executable.read(4) == b"\x7fELF"
+        except OSError:
+            is_executable_elf = False
+        if is_executable_elf:
+            return LaunchCommand.executable(candidate)
     return LaunchCommand.current_python()

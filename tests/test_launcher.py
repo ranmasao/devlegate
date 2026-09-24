@@ -7,15 +7,46 @@ from pathlib import Path
 
 import devlegate.cli as cli
 from devlegate.host_installation import HostInstallation
-from devlegate.launcher import LaunchCommand
+from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.project_registry import ProjectTarget
 from devlegate.runtime_locator import RuntimeLocator
 
 
 def test_current_python_launcher_keeps_source_invocation(monkeypatch):
+    monkeypatch.delenv("PEX", raising=False)
+    monkeypatch.delenv("SCIE", raising=False)
     monkeypatch.setattr("devlegate.launcher.sys.executable", "/python/bin/python")
 
     assert LaunchCommand.current_python().argv() == [
+        "/python/bin/python",
+        "-P",
+        "-m",
+        "devlegate",
+    ]
+
+
+def test_proven_eager_scie_metadata_selects_outer_executable(monkeypatch, tmp_path):
+    executable = tmp_path / "Devlegate Product 100%" / "$build" / "devlegate"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"\x7fELFstandalone")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PEX", str(executable))
+    monkeypatch.setenv("SCIE", str(executable))
+
+    assert product_launcher().argv() == [str(executable)]
+
+
+def test_spoofed_or_ambiguous_scie_metadata_keeps_python_launcher(
+    monkeypatch, tmp_path
+):
+    executable = tmp_path / "not-an-elf"
+    executable.write_text("not standalone")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PEX", str(executable))
+    monkeypatch.setenv("SCIE", str(executable))
+    monkeypatch.setattr("devlegate.launcher.sys.executable", "/python/bin/python")
+
+    assert product_launcher().argv() == [
         "/python/bin/python",
         "-P",
         "-m",
