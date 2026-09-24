@@ -593,11 +593,19 @@ export default tool({
                 raise WorkerAdmissionClosed("worker admission is closed")
             self._active[execution_id] = object()
         execution_log = None
+        worker_started = False
+        completion_logged = False
         try:
             if self.state_dir is not None and self.state_key is not None:
                 execution_log = open_execution_log(
                     self.state_dir, self.state_key, execution_id
                 )
+                service_log(
+                    "execution starting: "
+                    f"ticket={workspace.ticket_id} execution={execution_id} "
+                    f"log={execution_log.path}"
+                )
+            worker_started = True
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -612,7 +620,7 @@ export default tool({
                 show_worker_output=self.show_worker_output,
             )
             claim, egress_error = parser.finish()
-            return WorkerRunResult(
+            result = WorkerRunResult(
                 opencode_result.process_returncode,
                 opencode_result.transport_error,
                 claim,
@@ -620,9 +628,27 @@ export default tool({
                 opencode_result.interruption_kind,
                 opencode_result.worker_group_retired,
             )
+            if execution_log is not None:
+                service_log(
+                    "execution finished: "
+                    f"ticket={workspace.ticket_id} execution={execution_id} "
+                    f"log={execution_log.path}"
+                )
+                completion_logged = True
+            return result
         except OSError as error:
             return WorkerRunResult(-1, str(error), None, None)
         finally:
+            if (
+                execution_log is not None
+                and worker_started
+                and not completion_logged
+            ):
+                service_log(
+                    "execution finished: "
+                    f"ticket={workspace.ticket_id} execution={execution_id} "
+                    f"log={execution_log.path}"
+                )
             if execution_log is not None:
                 try:
                     execution_log.close()

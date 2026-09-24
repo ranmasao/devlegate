@@ -195,6 +195,12 @@ execution reports, checkpoints, runtime state, or Git provenance as authoritativ
 evidence. The boundary also leaves room for future externally supervised hosting;
 that integration is not part of this release.
 
+When a worker execution log is opened, the service stream emits concise start
+and finish handoff records containing the ticket ID, execution ID, and absolute
+execution-log path. This makes `service.log` or the service journal navigable to
+the detailed worker output without making either log an authoritative workflow
+state source.
+
 Service hosting ownership is explicit and separate from attachment and lifetime:
 
 | Form | Ownership | Attachment | Lifetime |

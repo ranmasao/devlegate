@@ -715,6 +715,8 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
     git_fixture, monkeypatch, command
 ):
     monkeypatch.chdir(git_fixture["working"])
+    if command == "stop":
+        monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
     if command == "restart":
         monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
     worker = git_fixture["tmp"] / f"graceful-{command}-worker.py"
@@ -752,6 +754,7 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
             ),
             timeout=30,
         )
+        execution_id = _disk_state(config)["execution_id"]
         action = "stop" if command == "signal" else command
         worker_pid = int(pid_file.read_text())
         if command in {"signal", "sigint"}:
@@ -832,6 +835,19 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
                 assert receipt["action"] == "stop"
                 assert receipt["state"] == "completed"
                 service.wait_exited()
+                execution_path = (
+                    service.locator.execution_log_dir / f"{execution_id}.log"
+                )
+                service._collect_output()
+                service_log_text = service.stdout
+                assert (
+                    f"execution starting: ticket=T-1 execution={execution_id} "
+                    f"log={execution_path}"
+                ) in service_log_text
+                assert (
+                    f"execution finished: ticket=T-1 execution={execution_id} "
+                    f"log={execution_path}"
+                ) in service_log_text
                 natural_exit_completed = True
     finally:
         if client is not None and client.poll() is None:

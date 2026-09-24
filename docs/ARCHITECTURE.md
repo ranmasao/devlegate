@@ -167,6 +167,10 @@ execution log is unavailable.
 Foreground operation may show and persist worker output; internal and external
 operation routes detailed worker output to the execution log instead of the
 service stream.
+When a worker sink is opened, the service stream records start and finish
+handoff markers with the ticket ID, execution ID, and absolute execution-log
+path. These records are operator navigation only; runtime state, execution
+reports, checkpoints, dispositions, and Git provenance remain authoritative.
 
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.

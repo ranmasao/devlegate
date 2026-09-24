@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import devlegate.worker_supervisor as worker_supervisor
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import open_execution_log
 from devlegate.worker_egress import (
@@ -838,3 +839,89 @@ def test_worker_result_requires_report_and_keeps_exit_status_distinct(
     else:
         assert result.process_returncode == 0
         assert "exactly one" in result.egress_error
+
+
+def test_execution_log_handoff_markers_follow_sink_and_worker_order(
+    monkeypatch, tmp_path
+):
+    events: list[tuple[str, str]] = []
+    log_path = (
+        tmp_path / "state" / "logs" / "key" / "executions" / "execution-1.log"
+    )
+
+    class FakeLog:
+        path = log_path
+
+        def close(self):
+            events.append(("close", str(self.path)))
+
+    def open_log(*_args):
+        events.append(("open", str(log_path)))
+        return FakeLog()
+
+    def log(message):
+        events.append(("service", message))
+
+    def run_opencode(*_args, **kwargs):
+        events.append(("worker", kwargs["execution_id"]))
+        return OpenCodeRunResult(0)
+
+    monkeypatch.setattr(worker_supervisor, "open_execution_log", open_log)
+    monkeypatch.setattr(worker_supervisor, "service_log", log)
+    monkeypatch.setattr(worker_supervisor, "_run_opencode", run_opencode)
+    supervisor = WorkerSupervisor(
+        "opencode",
+        "provider/model",
+        "",
+        state_dir=tmp_path / "state",
+        state_key="key",
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = supervisor.run(workspace, "prompt", execution_id="execution-1")
+
+    assert result.process_returncode == 0
+    assert [event[0] for event in events] == [
+        "open",
+        "service",
+        "worker",
+        "service",
+        "close",
+    ]
+    assert "ticket=T-1" in events[1][1]
+    assert "execution=execution-1" in events[1][1]
+    assert f"log={log_path}" in events[1][1]
+    assert events[1][1].startswith("execution starting: ")
+    assert events[3][1].startswith("execution finished: ")
+    assert f"log={log_path}" in events[3][1]
+
+
+def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
+    monkeypatch, tmp_path
+):
+    events: list[str] = []
+
+    def open_log(*_args):
+        raise OSError("cannot open")
+
+    monkeypatch.setattr(worker_supervisor, "open_execution_log", open_log)
+    monkeypatch.setattr(worker_supervisor, "service_log", events.append)
+    monkeypatch.setattr(
+        worker_supervisor,
+        "_run_opencode",
+        lambda *_args, **_kwargs: pytest.fail("worker launched after log failure"),
+    )
+    supervisor = WorkerSupervisor(
+        "opencode",
+        "provider/model",
+        "",
+        state_dir=tmp_path / "state",
+        state_key="key",
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+
+    result = supervisor.run(workspace, "prompt", execution_id="execution-1")
+
+    assert result.process_returncode == -1
+    assert "cannot open" in result.transport_error
+    assert events == []
