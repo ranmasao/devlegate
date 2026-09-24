@@ -539,27 +539,49 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
         raise DevlegateError(str(error)) from error
     if not locator.daemon_authority_present():
         raise DevlegateError("service is not running")
-    request_id = uuid.uuid4().hex
-    try:
-        response = request(
-            locator.socket_path, intent, mutable=True, request_id=request_id
-        )
-    except IPCClientError as error:
-        raise DevlegateError(str(error)) from error
-    if response.get("accepted") is not True:
-        raise DevlegateError(f"service IPC returned invalid {intent} acknowledgement")
-    instance_id = response.get("instance_id")
-    if not isinstance(instance_id, str) or not instance_id:
-        raise DevlegateError("service IPC returned no service instance identity")
     if intent == "stop":
-        _wait_for_service_stop(locator, request_id, instance_id)
+        _stop_runtime(locator)
         result = {"result": "stopped", "service": "devlegate", "action": intent}
         emit(result, output_format, "service stopped")
     else:
+        if not locator.daemon_authority_present():
+            raise DevlegateError("service is not running")
+        request_id = uuid.uuid4().hex
+        try:
+            response = request(
+                locator.socket_path, intent, mutable=True, request_id=request_id
+            )
+        except IPCClientError as error:
+            raise DevlegateError(str(error)) from error
+        if response.get("accepted") is not True:
+            raise DevlegateError(
+                f"service IPC returned invalid {intent} acknowledgement"
+            )
+        instance_id = response.get("instance_id")
+        if not isinstance(instance_id, str) or not instance_id:
+            raise DevlegateError("service IPC returned no service instance identity")
         _wait_for_service_restart(locator, request_id, instance_id)
         result = {"result": "restarted", "service": "devlegate", "action": intent}
         emit(result, output_format, "service restarted")
     return 0
+
+
+def _stop_runtime(locator: RuntimeLocator) -> None:
+    if not locator.daemon_authority_present():
+        return
+    request_id = uuid.uuid4().hex
+    try:
+        response = request(
+            locator.socket_path, "stop", mutable=True, request_id=request_id
+        )
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    if response.get("accepted") is not True:
+        raise DevlegateError("service IPC returned invalid stop acknowledgement")
+    instance_id = response.get("instance_id")
+    if not isinstance(instance_id, str) or not instance_id:
+        raise DevlegateError("service IPC returned no service instance identity")
+    _wait_for_service_stop(locator, request_id, instance_id)
 
 
 def _stop_service(env_file: Path, output_format: str) -> int:
@@ -691,6 +713,54 @@ def _project_path(path: Path | None) -> Path:
     return canonical_env_path(selected)
 
 
+def _remove_project(args: argparse.Namespace) -> int:
+    if not args.alias.startswith("@"):
+        raise DevlegateError("project remove requires @ALIAS")
+    alias = args.alias.removeprefix("@")
+    registry = ProjectRegistry()
+    try:
+        target = registry.target_for_alias(alias)
+        supervisor = SystemdSupervisor()
+        managed_unit = supervisor.inspect(target.locator)
+        supervisor_removed = False
+        if target.locator.daemon_authority_present():
+            if managed_unit and supervisor.status(target.locator):
+                supervisor.remove(target.locator)
+                supervisor_removed = True
+            else:
+                _stop_runtime(target.locator)
+        if target.locator.daemon_authority_present():
+            raise DevlegateError(
+                f"cannot decommission @{alias}: service authority remains"
+            )
+        if managed_unit and not supervisor_removed:
+            supervisor.remove(target.locator)
+            supervisor_removed = True
+        if supervisor.inspect(target.locator):
+            raise DevlegateError(
+                f"cannot decommission @{alias}: systemd unit remains registered"
+            )
+        registry.unregister(alias, expected_env=target.env_file)
+    except (ProjectRegistryError, SystemdSupervisorError) as error:
+        raise DevlegateError(str(error)) from error
+    value = {
+        "result": "decommissioned",
+        "alias": f"@{alias}",
+        "env": str(target.env_file),
+        "repo": str(target.repo),
+        "runtime_stopped": True,
+        "supervisor_removed": supervisor_removed,
+        "project_data_preserved": True,
+    }
+    emit(
+        value,
+        args.output_format,
+        f"removed @{alias} from this Devlegate installation; "
+        "project data preserved",
+    )
+    return 0
+
+
 def _project_command(args: argparse.Namespace) -> int:
     registry = ProjectRegistry()
     try:
@@ -757,6 +827,8 @@ def _project_command(args: argparse.Namespace) -> int:
                     f"renamed @{args.old_alias} to @{args.new_alias}",
                 )
                 return 0
+            case "remove":
+                return _remove_project(args)
             case _:
                 raise ProjectRegistryError("unsupported project command")
     except ProjectRegistryError as error:
@@ -1692,6 +1764,11 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser.add_argument("old_alias")
     rename_parser.add_argument("new_alias")
     add_output_arguments(rename_parser)
+    remove_parser = project_commands.add_parser(
+        "remove", help="decommission a registered project without deleting it"
+    )
+    remove_parser.add_argument("alias", help="registered alias, including @")
+    add_output_arguments(remove_parser)
     retry_parser = commands.add_parser(
         "retry",
         help="retry a failed or recoverable execution",

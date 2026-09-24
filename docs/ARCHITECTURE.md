@@ -113,6 +113,16 @@ identity. Explicit addressing is independent of caller CWD, while relative
 `STATE_DIR` is resolved from the canonical repository root. `init <alias>`
 must be run from that root. Fleet-wide orchestration is outside this release.
 
+`project remove @ALIAS` is the reversible project decommissioning boundary. It
+resolves and retains the canonical target, gracefully stops the owning runtime,
+removes only a verified managed systemd registration, verifies runtime
+authority is gone, and removes the alias last with a compare-and-remove check.
+It preserves the repository, project configuration and workflow history,
+project documents and settings, and all retained `STATE_DIR` evidence. A later
+`project alias <name> /path/to/repository` restores addressing and the same
+runtime identity because `state_key` is derived from the canonical working-tree
+root. Project purge and host-wide uninstall remain outside this slice.
+
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow
 decisions, runs workers, and performs service operations.

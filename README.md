@@ -146,6 +146,18 @@ project, `project alias` accepts a directory anywhere inside the repository and
 registers the repository root's `.env`; an explicit file argument must itself
 be that canonical `.env`.
 
+`devlegate project remove @ALIAS` decommissions one project from this host
+without deleting project data. It stops the active Devlegate authority, removes
+that project's managed systemd registration when present, and removes only the
+local alias. The repository, `.env`, workflow files, documents, settings, and
+`STATE_DIR` retained runtime evidence remain available for later registration:
+
+```sh
+devlegate project alias new-name /path/to/project
+```
+
+Project purge and host-wide Devlegate uninstall are not implemented.
+
 The registry is local user configuration at
 `$XDG_CONFIG_HOME/devlegate/projects.json` or
 `~/.config/devlegate/projects.json`. Aliases are not stored in the project and
@@ -158,6 +170,7 @@ devlegate project list
 devlegate project resolve @rslab2
 devlegate project identify /path/to/rslab2
 devlegate project rename rslab2 ratil
+devlegate project remove @ratil
 ```
 
 Multiple independent projects can have independent systemd units. Fleet-wide

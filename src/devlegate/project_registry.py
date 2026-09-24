@@ -190,6 +190,21 @@ class ProjectRegistry:
             projects[new] = projects.pop(old)
             _atomic_write(self.path, _serialize(projects))
 
+    def unregister(self, alias: str, *, expected_env: Path) -> None:
+        validate_alias(alias)
+        expected = canonical_env_path(expected_env)
+        with self._lock(True):
+            projects = _read_registry(self.path)
+            current = projects.get(alias)
+            if current is None:
+                raise ProjectRegistryError(f"unknown project alias @{alias}")
+            if canonical_env_path(Path(current)) != expected:
+                raise ProjectRegistryError(
+                    f"project alias @{alias} no longer refers to {expected}"
+                )
+            del projects[alias]
+            _atomic_write(self.path, _serialize(projects))
+
     def target_for_alias(self, alias: str) -> ProjectTarget:
         validate_alias(alias)
         with self._lock(False):

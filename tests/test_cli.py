@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
@@ -2400,6 +2401,43 @@ def _recovery_config(git_fixture):
     config = _short_runtime_config(git_fixture)
     config.write_text(config.read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1"))
     return config
+
+
+def test_project_remove_stops_internal_service_and_preserves_project(
+    git_fixture, monkeypatch, capsys
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _recovery_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    service = LiveService(git_fixture["working"], config)
+    env_before = config.read_bytes()
+    readme_before = (git_fixture["working"] / "README.md").read_bytes()
+    service.start()
+    service.wait_ready()
+    locator = RuntimeLocator.from_env(config)
+    retained = locator.state_dir / "retained-evidence.txt"
+    retained.parent.mkdir(parents=True, exist_ok=True)
+    retained.write_text("keep\n")
+
+    try:
+        result = cli._project_command(
+            Namespace(
+                project_action="remove",
+                alias="@test",
+                output_format="table",
+            )
+        )
+        assert result == 0
+        service.wait_exited()
+    finally:
+        if service.process is not None and service.process.poll() is None:
+            service.stop()
+
+    assert not locator.daemon_authority_present()
+    assert config.read_bytes() == env_before
+    assert (git_fixture["working"] / "README.md").read_bytes() == readme_before
+    assert retained.read_text() == "keep\n"
+    assert "project data preserved" in capsys.readouterr().out
 
 
 def _advance_product(git_fixture):

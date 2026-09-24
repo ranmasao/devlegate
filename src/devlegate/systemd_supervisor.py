@@ -172,22 +172,30 @@ class SystemdSupervisor:
         self._run("daemon-reload")
         return path
 
+    def inspect(self, locator: RuntimeLocator) -> bool:
+        """Verify and report the exact managed unit registration."""
+        path = unit_path(locator, self.unit_directory)
+        if not path.exists():
+            return False
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise SystemdSupervisorError(
+                f"cannot read systemd unit {path}: {error}"
+            ) from error
+        if (
+            MANAGED_MARKER not in content
+            or f"# state_key={locator.state_key}" not in content
+        ):
+            raise SystemdSupervisorError(
+                f"refusing to operate on unmanaged systemd unit {path}"
+            )
+        return True
+
     def remove(self, locator: RuntimeLocator) -> Path:
         path = unit_path(locator, self.unit_directory)
         if path.exists():
-            try:
-                content = path.read_text(encoding="utf-8")
-            except OSError as error:
-                raise SystemdSupervisorError(
-                    f"cannot read systemd unit {path}: {error}"
-                ) from error
-            if (
-                MANAGED_MARKER not in content
-                or f"# state_key={locator.state_key}" not in content
-            ):
-                raise SystemdSupervisorError(
-                    f"refusing to remove unmanaged systemd unit {path}"
-                )
+            self.inspect(locator)
             self._run("stop", path.name, allow_failure=True)
             self._run("disable", path.name, allow_failure=True)
             try:

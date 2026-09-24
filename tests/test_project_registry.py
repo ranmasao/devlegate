@@ -18,6 +18,7 @@ from devlegate.project_registry import (
     canonical_env_path,
     validate_alias,
 )
+from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
 
 
 def git(cwd: Path, *arguments: str) -> None:
@@ -251,3 +252,133 @@ def test_project_rename_preserves_runtime_identity(tmp_path: Path, monkeypatch, 
         f"devlegate-{registered.locator.state_key}.service"
     )
     assert "renamed @rslab2 to @ratil" in capsys.readouterr().out
+
+
+def test_project_remove_preserves_project_and_retained_state(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    env = project(tmp_path, "decommission")
+    repo = env.parent
+    (repo / ".devlegate").mkdir()
+    (repo / ".devlegate" / "project.md").write_text("project\n")
+    before_env = env.read_bytes()
+    before_project = (repo / ".devlegate" / "project.md").read_bytes()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    registry = ProjectRegistry()
+    registered = registry.register("foo", env)
+    state_key = registered.locator.state_key
+    retained = registered.locator.state_dir / "runtime.sqlite3"
+    retained.parent.mkdir()
+    retained.write_text("retained\n")
+
+    assert cli._project_command(
+        Namespace(
+            project_action="remove",
+            alias="@foo",
+            output_format="table",
+        )
+    ) == 0
+
+    assert registry.projects() == {}
+    assert env.read_bytes() == before_env
+    assert (repo / ".devlegate" / "project.md").read_bytes() == before_project
+    assert retained.read_text() == "retained\n"
+    with pytest.raises(ProjectRegistryError, match="unknown project alias"):
+        registry.target_for_alias("foo")
+    assert "project data preserved" in capsys.readouterr().out
+
+    restored = registry.register("bar", env)
+    assert restored.locator.state_key == state_key
+    assert restored.locator.state_dir == registered.locator.state_dir
+
+
+def test_project_remove_compare_and_remove_preserves_replaced_alias(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = project(tmp_path, "compare-remove")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    registry = ProjectRegistry()
+    registry.register("foo", env)
+    registry.rename("foo", "bar")
+
+    with pytest.raises(ProjectRegistryError, match="unknown project alias"):
+        registry.unregister("foo", expected_env=env)
+    assert registry.target_for_alias("bar").env_file == canonical_env_path(env)
+
+
+def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = project(tmp_path, "unmanaged")
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    registry = ProjectRegistry()
+    target = registry.register("foo", env)
+    path = unit_path(target.locator)
+    path.parent.mkdir(parents=True)
+    path.write_text("[Service]\nExecStart=other\n")
+
+    with pytest.raises(cli.DevlegateError, match="unmanaged"):
+        cli._project_command(
+            Namespace(project_action="remove", alias="@foo", output_format="table")
+        )
+    assert registry.target_for_alias("foo").env_file == canonical_env_path(env)
+
+
+def test_project_remove_unit_failure_keeps_alias(tmp_path: Path, monkeypatch) -> None:
+    env = project(tmp_path, "unit-failure")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    registry = ProjectRegistry()
+    registry.register("foo", env)
+
+    class FailingSupervisor:
+        def inspect(self, _locator):
+            return True
+
+        def status(self, _locator):
+            return False
+
+        def remove(self, _locator):
+            raise cli.SystemdSupervisorError("remove failed")
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FailingSupervisor)
+    with pytest.raises(cli.DevlegateError, match="remove failed"):
+        cli._project_command(
+            Namespace(project_action="remove", alias="@foo", output_format="table")
+        )
+    assert registry.target_for_alias("foo").env_file == canonical_env_path(env)
+
+
+def test_project_remove_removes_only_managed_unit_and_keeps_other_project(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env_a = project(tmp_path, "unit-a")
+    env_b = project(tmp_path, "unit-b")
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    registry = ProjectRegistry()
+    target_a = registry.register("a", env_a)
+    target_b = registry.register("b", env_b)
+    unit_a = unit_path(target_a.locator)
+    unit_b = unit_path(target_b.locator)
+    unit_a.parent.mkdir(parents=True)
+    unit_a.write_text(render_unit(target_a.locator, env_a))
+    unit_b.write_text(render_unit(target_b.locator, env_b))
+
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_: object):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(
+        cli, "SystemdSupervisor", lambda: SystemdSupervisor(runner=runner)
+    )
+    assert cli._project_command(
+        Namespace(project_action="remove", alias="@a", output_format="table")
+    ) == 0
+
+    assert not unit_a.exists()
+    assert unit_b.exists()
+    assert registry.target_for_alias("b").env_file == canonical_env_path(env_b)
+    assert any(call[-1] == "daemon-reload" for call in calls)
