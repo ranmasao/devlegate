@@ -237,7 +237,7 @@ def create_wheel_build_environment(
 
 def download_packaging_tools(
     python: str, directory: Path
-) -> tuple[Path, Path, Path, dict[str, str]]:
+) -> tuple[Path, Path, list[Path]]:
     directory.mkdir(parents=True, exist_ok=True)
 
     def download(requirements: list[str]) -> None:
@@ -294,9 +294,6 @@ def download_packaging_tools(
     runtime.mkdir()
     with zipfile.ZipFile(pex_wheel) as archive:
         archive.extractall(runtime)
-    wheel_python, versions = create_wheel_build_environment(
-        python, directory, tool_wheels
-    )
     science = directory / SCIENCE_ASSET
     download_verified(
         f"https://github.com/a-scie/lift/releases/download/v{SCIENCE_VERSION}/{SCIENCE_ASSET}",
@@ -310,7 +307,16 @@ def download_packaging_tools(
             "Science version mismatch: expected "
             f"{SCIENCE_VERSION}, found {observed_science_version}"
         )
-    return pex_wheel, runtime, wheel_python, versions
+    return pex_wheel, runtime, tool_wheels
+
+
+def build_environment(build_root: Path, epoch: str) -> dict[str, str]:
+    return {
+        **os.environ,
+        "PEX_ROOT": str(build_root / "PEX_ROOT"),
+        "PYTHONHASHSEED": "0",
+        "SOURCE_DATE_EPOCH": epoch,
+    }
 
 
 def build_scie(
@@ -327,10 +333,7 @@ def build_scie(
     environment = {
         **os.environ,
         "PYTHONPATH": str(pex_runtime),
-        "HOME": str(build_root / "home"),
-        "XDG_CACHE_HOME": str(build_root / "cache"),
-        "PEX_ROOT": str(build_root.parent / "pex-root"),
-        "SOURCE_DATE_EPOCH": epoch,
+        **build_environment(build_root, epoch),
     }
     run(
         scie_command(
@@ -371,8 +374,6 @@ def scie_command(
         "--include-tools",
         "--no-compile",
         "--no-use-system-time",
-        "--runtime-pex-root",
-        str(tools_dir.parent / "pex-root"),
         "--scie",
         "eager",
         "--scie-only",
@@ -449,7 +450,9 @@ def inspect_wheel(wheel: Path) -> dict[str, object]:
 
 
 def inspect_scie(
-    artifact: Path, inputs: StandaloneInputs = INPUTS
+    artifact: Path,
+    inputs: StandaloneInputs = INPUTS,
+    forbidden_build_root: Path | None = None,
 ) -> dict[str, object]:
     file_result = subprocess.run(
         ["file", "-b", str(artifact)], text=True, capture_output=True, check=False
@@ -461,7 +464,17 @@ def inspect_scie(
     inspection = json.loads(
         run([str(artifact)], env={**os.environ, "SCIE": "inspect"}).stdout
     )
-    observed = validate_scie_inspection(inspection, inputs)
+    observed = validate_scie_inspection(
+        inspection, inputs, forbidden_build_root=forbidden_build_root
+    )
+    if (
+        forbidden_build_root is not None
+        and str(forbidden_build_root).encode() in artifact.read_bytes()
+    ):
+        raise BuildError(
+            "scie executable contains the temporary build root: "
+            f"{forbidden_build_root}"
+        )
     return {
         "filename": artifact.name,
         "size": artifact.stat().st_size,
@@ -494,9 +507,23 @@ def sanitize_inspection(value):
 
 
 def validate_scie_inspection(
-    inspection: dict[str, object], inputs: StandaloneInputs = INPUTS
+    inspection: dict[str, object],
+    inputs: StandaloneInputs = INPUTS,
+    forbidden_build_root: Path | None = None,
 ) -> dict[str, object]:
     lift = inspection["scie"]["lift"]
+    runtime_base = lift.get("base")
+    if runtime_base:
+        raise BuildError(
+            f"scie contains an unintended custom runtime base: {runtime_base}"
+        )
+    if forbidden_build_root is not None:
+        build_root_text = str(forbidden_build_root)
+        if build_root_text in json.dumps(inspection):
+            raise BuildError(
+                "scie inspection contains the temporary build root: "
+                f"{build_root_text}"
+            )
     files = lift["files"]
     archive = next(
         (entry for entry in files if entry["name"] == inputs.pbs_archive), None
@@ -528,6 +555,7 @@ def validate_scie_inspection(
         "target": inputs.target,
         "scie_jump_version": jump.get("version"),
         "ptex_runtime_included": ptex_present,
+        "custom_runtime_base": runtime_base,
         "scie_eager": archive["name"] in [entry["name"] for entry in files],
         "inspect": sanitize_inspection(inspection),
     }
@@ -719,48 +747,87 @@ def build(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="devlegate-standalone-") as temporary:
         root = Path(temporary)
         tools = root / "tools"
-        pex_wheel, pex_runtime, wheel_python, wheel_toolchain = (
-            download_packaging_tools(args.python, tools)
+        pex_wheel, pex_runtime, tool_wheels = download_packaging_tools(
+            args.python, tools
         )
-        wheel_a = build_wheel(repo, root / "wheel-a", str(wheel_python), epoch)
-        wheel_b = build_wheel(repo, root / "wheel-b", str(wheel_python), epoch)
+        build_a_root = root / "build-a"
+        build_b_root = root / "build-b"
+        wheel_python_a, wheel_toolchain_a = create_wheel_build_environment(
+            args.python, build_a_root, tool_wheels
+        )
+        wheel_python_b, wheel_toolchain_b = create_wheel_build_environment(
+            args.python, build_b_root, tool_wheels
+        )
+        if wheel_toolchain_a != wheel_toolchain_b:
+            raise BuildError("independent wheel build environments differ")
+        wheel_a = build_wheel(
+            repo, build_a_root / "wheel", str(wheel_python_a), epoch
+        )
+        wheel_b = build_wheel(
+            repo, build_b_root / "wheel", str(wheel_python_b), epoch
+        )
         wheel_a_info = inspect_wheel(wheel_a)
         wheel_b_info = inspect_wheel(wheel_b)
         if wheel_a_info["sha256"] != wheel_b_info["sha256"]:
             raise BuildError("repeated wheel builds are not byte-identical")
-        wheel_input_dir = root / "wheel-input"
-        wheel_input_dir.mkdir()
-        wheel_input = wheel_input_dir / wheel_a.name
-        shutil.copy2(wheel_a, wheel_input)
-        verify_file(wheel_input, wheel_a_info["sha256"])
-        artifact_a_dir = root / "scie-a"
-        artifact_b_dir = root / "scie-b"
+        wheel_input_a = build_a_root / "wheel-input"
+        wheel_input_b = build_b_root / "wheel-input"
+        wheel_input_a.mkdir()
+        wheel_input_b.mkdir()
+        wheel_a_copy = wheel_input_a / wheel_a.name
+        wheel_b_copy = wheel_input_b / wheel_b.name
+        shutil.copy2(wheel_a, wheel_a_copy)
+        shutil.copy2(wheel_b, wheel_b_copy)
+        verify_file(wheel_a_copy, wheel_a_info["sha256"])
+        verify_file(wheel_b_copy, wheel_b_info["sha256"])
+        artifact_a_dir = build_a_root / "scie"
+        artifact_b_dir = build_b_root / "scie"
         artifact_a_dir.mkdir()
         artifact_b_dir.mkdir()
         artifact_a = build_scie(
             wheel_a,
-            wheel_input_dir,
+            wheel_input_a,
             tools,
             pex_runtime,
             args.python,
             artifact_a_dir / f"devlegate-{version}-linux-x86_64",
             tools / SCIENCE_ASSET,
-            artifact_a_dir,
+            build_a_root,
             epoch,
         )
         artifact_b = build_scie(
             wheel_b,
-            wheel_input_dir,
+            wheel_input_b,
             tools,
             pex_runtime,
             args.python,
             artifact_b_dir / f"devlegate-{version}-linux-x86_64",
             tools / SCIENCE_ASSET,
-            artifact_b_dir,
+            build_b_root,
             epoch,
         )
-        scie_a = inspect_scie(artifact_a)
-        scie_b = inspect_scie(artifact_b)
+        scie_a = inspect_scie(artifact_a, forbidden_build_root=build_a_root)
+        scie_b = inspect_scie(artifact_b, forbidden_build_root=build_b_root)
+        print("BUILD A")
+        print(f"build_root: {build_a_root}")
+        print(f"PEX_ROOT: {build_a_root / 'PEX_ROOT'}")
+        print(f"wheel_sha256: {wheel_a_info['sha256']}")
+        print(f"scie_sha256: {scie_a['sha256']}")
+        print("BUILD B")
+        print(f"build_root: {build_b_root}")
+        print(f"PEX_ROOT: {build_b_root / 'PEX_ROOT'}")
+        print(f"wheel_sha256: {wheel_b_info['sha256']}")
+        print(f"scie_sha256: {scie_b['sha256']}")
+        print("COMPARE")
+        print(f"build_roots_differ: {build_a_root != build_b_root}")
+        pex_roots_differ = build_environment(build_a_root, epoch)["PEX_ROOT"] != (
+            build_environment(build_b_root, epoch)["PEX_ROOT"]
+        )
+        print(f"PEX_ROOT_values_differ: {pex_roots_differ}")
+        print("wheel_identical: " f"{wheel_a_info['sha256'] == wheel_b_info['sha256']}")
+        print("scie_identical: " f"{scie_a['sha256'] == scie_b['sha256']}")
+        print("custom_runtime_base_embedded: False")
+        print("temporary_build_path_found_in_inspection: False")
         output.mkdir(parents=True, exist_ok=True)
         final_artifact = output / f"devlegate-{version}-linux-x86_64"
         shutil.copy2(artifact_a, final_artifact)
@@ -786,7 +853,7 @@ def build(args: argparse.Namespace) -> int:
                 "sha256": sha256(tools / SCIENCE_ASSET),
             },
             "wheel_build_toolchain": {
-                "versions": wheel_toolchain,
+                "versions": wheel_toolchain_a,
                 "artifacts": {
                     name: {"filename": filename, "sha256": expected_hash}
                     for name, (filename, expected_hash) in WHEEL_BUILD_TOOLS.items()
@@ -798,6 +865,16 @@ def build(args: argparse.Namespace) -> int:
             "scie": scie_a,
             "scie_reproducible": scie_a["sha256"] == scie_b["sha256"],
             "scie_second_sha256": scie_b["sha256"],
+            "reproducibility_scope": (
+                "byte-reproducible on the tested Linux x86_64 build environment "
+                "from the pinned immutable inputs"
+            ),
+            "independent_build_roots": build_a_root != build_b_root,
+            "independent_pex_roots": build_environment(build_a_root, epoch)[
+                "PEX_ROOT"
+            ]
+            != build_environment(build_b_root, epoch)["PEX_ROOT"],
+            "temporary_build_path_embedded": False,
         }
     report_path = output / "standalone-build.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

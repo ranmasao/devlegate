@@ -34,6 +34,17 @@ its own isolated bootstrap wheels, pip `23.2`, setuptools `68.0.0`, and wheel
 wheel build backend or runtime dependencies. It does not modify the normal
 runtime dependency set or invoke package managers at runtime.
 
+The reproducibility proof assembles wheel and scie A/B independently under
+distinct temporary build roots, wheel-build environments, and PEX_ROOT caches.
+They share only immutable, hash-verified downloaded inputs. PEX_ROOT is
+build-time cache state only. The canonical scie assembly deliberately does not
+override HOME or XDG cache variables, because doing so would turn a build cache
+location into the generated runtime default. The generated executable does not
+receive a build-machine runtime-pex-root or a Devlegate-owned runtime cache
+policy. The proof scope is byte equality on the tested Linux x86_64 build
+environment from these pinned inputs, not universal reproducibility across
+arbitrary systems.
+
 ## Runtime Contract
 
 Python-based distributions require compatible Python 3.12 or newer. Devlegate
@@ -72,10 +83,12 @@ the unit boundary and escapes literal `%` and `$` as required by systemd.
 
 ## Build and Runtime Layers
 
-The source compatibility floor is Python `>=3.12`. The standalone builder may
-run on a compatible Python version at or above that floor; it is not coupled to
-the bundled runtime minor version. The current bundled runtime is independently
-pinned to CPython `3.12.14` from PBS release `20260901`.
+The source compatibility floor is Python `>=3.12`. The standalone builder
+acceptance rule is also Python `>=3.12`, but the currently validated build host
+is CPython; acceptance by the version predicate is not a tested interpreter
+support matrix. The builder is not coupled to the bundled runtime minor
+version. The current bundled runtime is independently pinned to CPython
+`3.12.14` from PBS release `20260901`.
 
 Science is build-time tooling and is not part of the eager runtime payload.
 The eager runtime contains the Devlegate wheel, PEX bootstrap/runtime material,

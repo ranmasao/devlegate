@@ -31,10 +31,6 @@ def test_builder_python_version_floor(major, minor, accepted):
             BUILDER.validate_builder_version("CPython", major, minor)
 
 
-def test_builder_python_is_not_coupled_to_bundled_minor():
-    BUILDER.validate_builder_version("PyPy", 3, 13)
-
-
 def test_verified_artifact_rejects_wrong_hash(tmp_path):
     artifact = tmp_path / "artifact"
     artifact.write_bytes(b"actual")
@@ -65,10 +61,57 @@ def test_scie_command_pins_runtime_inputs(tmp_path):
     assert ["--scie-python-version", "3.12.14"] == command[
         python_pin : python_pin + 2
     ]
+    assert "--runtime-pex-root" not in command
     science_pin = command.index("--scie-science-binary")
     assert ["--scie-science-binary", str(tmp_path / "science")] == command[
         science_pin : science_pin + 2
     ]
+
+
+def test_build_environment_uses_isolated_pex_root(tmp_path):
+    first = BUILDER.build_environment(tmp_path / "build-a", "123")
+    second = BUILDER.build_environment(tmp_path / "build-b", "123")
+
+    assert first["PEX_ROOT"] != second["PEX_ROOT"]
+    assert first["PEX_ROOT"] == str(tmp_path / "build-a" / "PEX_ROOT")
+    assert first["PYTHONHASHSEED"] == second["PYTHONHASHSEED"] == "0"
+
+
+def test_scie_inspection_rejects_custom_runtime_base(tmp_path):
+    inspection = {
+        "scie": {
+            "lift": {
+                "base": str(tmp_path),
+                "files": [
+                    {"name": BUILDER.PBS_ARCHIVE, "hash": BUILDER.PBS_SHA256}
+                ],
+            },
+            "jump": {"version": BUILDER.SCIE_JUMP_VERSION},
+        }
+    }
+
+    with pytest.raises(BUILDER.BuildError, match="custom runtime base"):
+        BUILDER.validate_scie_inspection(inspection, forbidden_build_root=tmp_path)
+
+
+def test_scie_inspection_rejects_build_root_in_raw_metadata(tmp_path):
+    inspection = {
+        "scie": {
+            "lift": {
+                "files": [
+                    {
+                        "name": BUILDER.PBS_ARCHIVE,
+                        "hash": BUILDER.PBS_SHA256,
+                        "path": str(tmp_path),
+                    }
+                ]
+            },
+            "jump": {"version": BUILDER.SCIE_JUMP_VERSION},
+        }
+    }
+
+    with pytest.raises(BUILDER.BuildError, match="temporary build root"):
+        BUILDER.validate_scie_inspection(inspection, forbidden_build_root=tmp_path)
 
 
 def test_scie_inspection_rejects_pbs_hash_mismatch():
@@ -87,6 +130,22 @@ def test_scie_inspection_rejects_pbs_hash_mismatch():
     }
 
     with pytest.raises(BUILDER.BuildError, match="PBS archive hash mismatch"):
+        BUILDER.validate_scie_inspection(inspection)
+
+
+def test_scie_inspection_rejects_scie_jump_mismatch():
+    inspection = {
+        "scie": {
+            "lift": {
+                "files": [
+                    {"name": BUILDER.PBS_ARCHIVE, "hash": BUILDER.PBS_SHA256}
+                ]
+            },
+            "jump": {"version": "0.0.0"},
+        }
+    }
+
+    with pytest.raises(BUILDER.BuildError, match="scie-jump version mismatch"):
         BUILDER.validate_scie_inspection(inspection)
 
 
