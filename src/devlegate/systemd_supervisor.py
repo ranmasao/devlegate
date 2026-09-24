@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -163,6 +164,8 @@ class SystemdSupervisor:
 
     def install(self, locator: RuntimeLocator, env_file: Path) -> Path:
         path = unit_path(locator, self.unit_directory)
+        if path.exists():
+            self.inspect(locator)
         try:
             _write_atomic(path, render_unit(locator, env_file))
         except OSError as error:
@@ -171,6 +174,9 @@ class SystemdSupervisor:
             ) from error
         self._run("daemon-reload")
         return path
+
+    def probe_user_manager(self) -> None:
+        self._run("show-environment")
 
     def inspect(self, locator: RuntimeLocator) -> bool:
         """Verify and report the exact managed unit registration."""
@@ -241,6 +247,25 @@ class SystemdSupervisor:
         raise SystemdSupervisorError(
             f"systemd service did not become ready: {last_error}"
         )
+
+
+def managed_unit_paths(directory: Path | None = None) -> list[Path]:
+    root = user_unit_dir() if directory is None else directory
+    if not root.is_dir():
+        return []
+    paths = []
+    for path in sorted(root.glob("devlegate-*.service")):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise SystemdSupervisorError(
+                f"cannot read systemd unit {path}: {error}"
+            ) from error
+        if MANAGED_MARKER in content and re.search(
+            r"^# state_key=[0-9a-f]{64}$", content, re.MULTILINE
+        ):
+            paths.append(path)
+    return paths
 
 
 def notify_ready(*, required: bool = False) -> None:

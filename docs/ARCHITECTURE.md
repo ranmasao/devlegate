@@ -99,6 +99,14 @@ startup. systemd owns inherited service output and journal routing, while
 Devlegate owns execution-log persistence. Hosting ownership is not a project
 `.env` setting.
 
+Per-user host policy is separate from software distribution. After a runnable
+Devlegate artifact is provided by a wheel, self-contained executable, or future
+distro package, `devlegate host install --supervisor internal|systemd` records
+the default detached supervisor at
+`$XDG_CONFIG_HOME/devlegate/installation.json`. It does not invoke a package
+manager, create a Python environment, or install a global unit. Systemd host
+policy provisions project units lazily at detached start.
+
 Project selection is resolved before runtime construction. `@ALIAS` is the
 preferred local handle; `--env FILE` is the explicit path form; and an
 unqualified command uses exactly `$PWD/.env`. All forms must identify a
@@ -121,7 +129,10 @@ It preserves the repository, project configuration and workflow history,
 project documents and settings, and all retained `STATE_DIR` evidence. A later
 `project alias <name> /path/to/repository` restores addressing and the same
 runtime identity because `state_key` is derived from the canonical working-tree
-root. Project purge and host-wide uninstall remain outside this slice.
+root. `devlegate host uninstall` requires an empty registry and no residual
+managed project units, then removes only the host policy record. It preserves
+projects and runtime evidence; removal of the software artifact remains the
+responsibility of its distribution mechanism.
 
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow
@@ -138,13 +149,12 @@ published immutable views and enqueue mutable commands. The owner thread
 validates and dispatches commands at scheduler boundaries, while duplicate
 request identities are resolved through durable receipts.
 
-Bare `devlegate` starts the detached form of the canonical service host.
-`devlegate foreground` runs that host attached to the current terminal, and
-`devlegate once` runs it for one complete scheduler iteration. All three modes
-use the same authority and IPC boundary. `devlegate stop` requests orderly
-shutdown through the service IPC endpoint. The host is supervisor-neutral, but
-the service is managed directly by Devlegate and does not require an external
-service manager.
+Bare `devlegate` starts the detached form selected by the installed host policy:
+internal policy uses Devlegate's detached subprocess, while systemd policy uses
+the exact managed project unit. `devlegate foreground` runs that host attached
+to the current terminal, and `devlegate once` runs it for one complete scheduler
+iteration. All three modes use the same authority and IPC boundary.
+`devlegate stop` requests orderly shutdown through the actual runtime owner.
 
 ### Operational Logging
 

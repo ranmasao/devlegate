@@ -35,6 +35,8 @@ from devlegate.cli import (
     build_parser,
     main,
 )
+from devlegate.host_installation import HostInstallation
+from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import IPCClientError
 from devlegate.ipc_client import request as ipc_request
 from devlegate.ipc_server import UnixIPCServer
@@ -103,6 +105,10 @@ def _make_git_fixture(tmp_path, request, short_state_dir, baseline):
             if previous_registry_home is not None
             else os.environ.pop("XDG_CONFIG_HOME", None)
         )
+    )
+    write_installation(
+        registry_home / "devlegate" / "installation.json",
+        HostInstallation("internal"),
     )
     ProjectRegistry().register("test", config)
     return {
@@ -214,6 +220,11 @@ def invoke(fixture, *args, env_file=None):
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
         "XDG_CONFIG_HOME": str(config_home),
     }
+    if args[:2] not in (["host", "install"], ["host", "uninstall"]):
+        write_installation(
+            config_home / "devlegate" / "installation.json",
+            HostInstallation("internal"),
+        )
     command = [sys.executable, "-m", "devlegate", *args]
     if not args or args[0] != "init":
         command[3:3] = ["--env", str(selected_env)]
@@ -1360,7 +1371,7 @@ def test_init_outside_git_does_not_seed_project_files(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "not a git repository" in result.stderr
+    assert "host is not installed" in result.stderr
     assert not (tmp_path / ".env").exists()
     assert not (tmp_path / ".devlegate").exists()
 

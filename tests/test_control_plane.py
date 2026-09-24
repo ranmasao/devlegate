@@ -30,6 +30,8 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     parse_worktree_porcelain,
 )
+from devlegate.host_installation import HostInstallation
+from devlegate.host_installation import write as write_installation
 from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime import BlockedReason, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
@@ -154,6 +156,10 @@ def control_fixture(tmp_path):
         "\n.env\n.registry-config/\n"
     )
     os.environ["XDG_CONFIG_HOME"] = str(world["working"] / ".registry-config")
+    write_installation(
+        Path(os.environ["XDG_CONFIG_HOME"]) / "devlegate" / "installation.json",
+        HostInstallation("internal"),
+    )
     ProjectRegistry().register("test", config)
     return world["working"], config, state
 
@@ -219,6 +225,10 @@ def invoke(working, *args, config):
     elif "--once" in args:
         args[args.index("--once")] = "once"
     config_home = working / ".registry-config"
+    write_installation(
+        config_home / "devlegate" / "installation.json",
+        HostInstallation("internal"),
+    )
     ProjectRegistry(config_home / "devlegate" / "projects.json").register(
         "test", config
     )

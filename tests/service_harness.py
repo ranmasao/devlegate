@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from devlegate.host_installation import HostInstallation
+from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import IPCClientError, request
 from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime_locator import RuntimeLocator, read_env
@@ -31,6 +33,10 @@ class LiveService:
             self.registry_home / "devlegate" / "projects.json"
         ).register(
             "test", env_file
+        )
+        write_installation(
+            self.registry_home / "devlegate" / "installation.json",
+            HostInstallation("internal"),
         )
         self.locator = RuntimeLocator.from_config(
             env_file, cwd, read_env(env_file)

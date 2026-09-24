@@ -97,10 +97,13 @@ The current implementation has these practical limits:
 
 ## Quick Start
 
-Install this checkout, then initialize and register it in the target project:
+Install this checkout with the package or distribution mechanism appropriate for
+your environment. Then install Devlegate's per-user host policy and initialize
+the target project:
 
 ```sh
 python -m pip install -e /path/to/devlegate
+devlegate host install --supervisor internal
 cd /path/to/project
 devlegate init rslab2
 # configure .env and project context
@@ -156,7 +159,25 @@ local alias. The repository, `.env`, workflow files, documents, settings, and
 devlegate project alias new-name /path/to/project
 ```
 
-Project purge and host-wide Devlegate uninstall are not implemented.
+Host installation is separate from software installation. The host record is at
+`$XDG_CONFIG_HOME/devlegate/installation.json` or
+`~/.config/devlegate/installation.json` and stores only the detached supervisor
+policy. `internal` uses Devlegate's detached subprocess; `systemd` provisions
+the exact project unit lazily for detached starts. `foreground` and `once`
+remain direct attached modes.
+
+To remove host integration without removing the software artifact, decommission
+all projects first:
+
+```sh
+devlegate project list
+devlegate project remove @rslab2
+devlegate host uninstall
+```
+
+Host uninstall preserves repositories, project files, runtime state, and
+evidence. It does not invoke pip, pipx, uv, apt, or another package manager.
+Remove installed software separately with the mechanism that provided it.
 
 The registry is local user configuration at
 `$XDG_CONFIG_HOME/devlegate/projects.json` or
@@ -226,6 +247,10 @@ same canonical host in explicit external mode. systemd owns the service stream;
 Devlegate continues to own execution logs under
 `STATE_DIR/logs/<state-key>/executions/`. Registration is explicit and does not
 enable lingering or install a system-wide unit.
+
+A future distribution package may place the runnable executable system-wide, but
+package scripts must not perform per-user host installation for an arbitrary
+user. Host installation remains an explicit per-user command.
 
 Status reports service state (`running` or `stopped`) separately from the
 execution phase and operator execution state (`idle`, `preparing`, `starting`,

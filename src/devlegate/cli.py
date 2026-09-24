@@ -20,6 +20,16 @@ from typing import NoReturn
 from devlegate import __version__
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
 from devlegate.daemon import HostingMode, run_service
+from devlegate.host_installation import (
+    HostInstallation,
+    HostInstallationError,
+    installation_path,
+)
+from devlegate.host_installation import lock as installation_lock
+from devlegate.host_installation import read as read_installation
+from devlegate.host_installation import read_locked as read_installation_locked
+from devlegate.host_installation import remove as remove_installation
+from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import (
     IPCClientError,
     decode_drop_ack,
@@ -63,7 +73,9 @@ from devlegate.service_diagnostics import read as read_service_failure
 from devlegate.systemd_supervisor import (
     SystemdSupervisor,
     SystemdSupervisorError,
+    managed_unit_paths,
     notify_ready,
+    unit_path,
 )
 
 
@@ -532,11 +544,64 @@ def _wait_for_service_restart(
         time.sleep(0.05)
 
 
+def _host_installation(*, required: bool = True) -> HostInstallation | None:
+    try:
+        installation = read_installation()
+    except HostInstallationError as error:
+        raise DevlegateError(str(error)) from error
+    if installation is None and required:
+        raise DevlegateError(
+            "Devlegate host is not installed; run `devlegate host install "
+            "--supervisor internal` or `--supervisor systemd`"
+        )
+    return installation
+
+
+def _host_installation_locked(*, required: bool = True) -> HostInstallation | None:
+    try:
+        installation = read_installation_locked()
+    except HostInstallationError as error:
+        raise DevlegateError(str(error)) from error
+    if installation is None and required:
+        raise DevlegateError(
+            "Devlegate host is not installed; run `devlegate host install "
+            "--supervisor internal` or `--supervisor systemd`"
+        )
+    return installation
+
+
+def _wait_for_runtime_stop(locator: RuntimeLocator) -> None:
+    deadline = time.monotonic() + 10
+    while locator.daemon_authority_present():
+        if time.monotonic() >= deadline:
+            raise DevlegateError("service authority remains after systemd stop")
+        time.sleep(0.05)
+
+
+def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
+    supervisor = SystemdSupervisor()
+    if not supervisor.inspect(locator) or not supervisor.status(locator):
+        return None
+    return supervisor
+
+
 def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
+    owner = _managed_systemd_owner(locator)
+    if owner is not None:
+        if intent == "stop":
+            owner.stop(locator)
+            _wait_for_runtime_stop(locator)
+            result = {"result": "stopped", "service": "devlegate", "action": intent}
+            emit(result, output_format, "service stopped")
+            return 0
+        owner.restart(locator)
+        result = {"result": "restarted", "service": "devlegate", "action": intent}
+        emit(result, output_format, "service restarted")
+        return 0
     if not locator.daemon_authority_present():
         raise DevlegateError("service is not running")
     if intent == "stop":
@@ -662,6 +727,144 @@ def _project_target(
         raise DevlegateError(str(error)) from error
 
 
+def _validate_registered_projects(registry: ProjectRegistry) -> None:
+    try:
+        aliases = sorted(registry.projects())
+        targets = [registry.target_for_alias(alias) for alias in aliases]
+    except (ProjectRegistryError, RuntimeLocatorError) as error:
+        raise DevlegateError(
+            f"cannot validate registered project inventory: {error}"
+        ) from error
+    active = [
+        target.alias
+        for target in targets
+        if target.locator.daemon_authority_present()
+    ]
+    if active:
+        formatted = ", ".join(f"@{alias}" for alias in active)
+        raise DevlegateError(
+            "cannot install host supervision while projects are active: "
+            f"{formatted}; stop them first"
+        )
+
+
+def _install_host(args: argparse.Namespace) -> int:
+    path = installation_path()
+    requested = HostInstallation(args.supervisor)
+    registry = ProjectRegistry()
+    # Cross-resource mutations acquire the host lock before the registry lock.
+    with installation_lock(exclusive=True, path=path):
+        current = _host_installation_locked(required=False)
+        if current is not None:
+            if current.supervisor != requested.supervisor:
+                raise DevlegateError(
+                    "Devlegate host is already installed with "
+                    f"{current.supervisor} supervision; uninstall it before "
+                    f"installing {requested.supervisor} supervision"
+                )
+            result = {
+                "result": "already_installed",
+                "supervisor": current.supervisor,
+                "installation_file": str(path),
+            }
+            emit(
+                result,
+                args.output_format,
+                "Devlegate host is already installed with "
+                f"{current.supervisor} supervision.",
+            )
+            return 0
+    if requested.supervisor == "systemd":
+        try:
+            SystemdSupervisor().probe_user_manager()
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
+    with installation_lock(exclusive=True, path=path):
+        current = _host_installation_locked(required=False)
+        if current is not None:
+            if current.supervisor != requested.supervisor:
+                raise DevlegateError(
+                    "Devlegate host is already installed with "
+                    f"{current.supervisor} supervision; uninstall it before "
+                    f"installing {requested.supervisor} supervision"
+                )
+            result = {
+                "result": "already_installed",
+                "supervisor": current.supervisor,
+                "installation_file": str(path),
+            }
+            emit(
+                result,
+                args.output_format,
+                "Devlegate host is already installed with "
+                f"{current.supervisor} supervision.",
+            )
+            return 0
+        _validate_registered_projects(registry)
+        try:
+            write_installation(path, requested)
+        except HostInstallationError as error:
+            raise DevlegateError(str(error)) from error
+    result = {
+        "result": "installed",
+        "supervisor": requested.supervisor,
+        "installation_file": str(path),
+    }
+    emit(
+        result,
+        args.output_format,
+        f"Devlegate host installed with {requested.supervisor} supervision.",
+    )
+    return 0
+
+
+def _uninstall_host(args: argparse.Namespace) -> int:
+    path = installation_path()
+    registry = ProjectRegistry()
+    with installation_lock(exclusive=True, path=path):
+        current = _host_installation_locked(required=False)
+        try:
+            projects = registry.projects()
+            residual = managed_unit_paths()
+        except (ProjectRegistryError, SystemdSupervisorError) as error:
+            raise DevlegateError(str(error)) from error
+        if projects:
+            aliases = ", ".join(f"@{alias}" for alias in sorted(projects))
+            raise DevlegateError(
+                "cannot uninstall Devlegate host integration while projects "
+                f"are registered: {aliases}; decommission them with "
+                "`devlegate project remove @ALIAS`"
+            )
+        if residual:
+            names = ", ".join(str(item) for item in residual)
+            raise DevlegateError(
+                "cannot uninstall Devlegate host integration; residual managed "
+                f"systemd units remain: {names}"
+            )
+        try:
+            remove_installation(path)
+        except HostInstallationError as error:
+            if current is not None:
+                try:
+                    write_installation(path, current)
+                except HostInstallationError:
+                    pass
+            raise DevlegateError(str(error)) from error
+    result = {
+        "result": "removed",
+        "host_integration_removed": True,
+        "software_removed": False,
+        "project_data_preserved": True,
+    }
+    emit(
+        result,
+        args.output_format,
+        "Devlegate host integration removed; software package/artifact "
+        "remains installed.",
+    )
+    return 0
+
+
 def _init_target(alias: str) -> tuple[str, Path, Path]:
     try:
         validate_alias(alias)
@@ -740,7 +943,8 @@ def _remove_project(args: argparse.Namespace) -> int:
             raise DevlegateError(
                 f"cannot decommission @{alias}: systemd unit remains registered"
             )
-        registry.unregister(alias, expected_env=target.env_file)
+        with installation_lock(exclusive=True):
+            registry.unregister(alias, expected_env=target.env_file)
     except (ProjectRegistryError, SystemdSupervisorError) as error:
         raise DevlegateError(str(error)) from error
     value = {
@@ -808,7 +1012,9 @@ def _project_command(args: argparse.Namespace) -> int:
                 )
                 return 0
             case "alias":
-                target = registry.register(args.alias, _project_path(args.path))
+                with installation_lock(exclusive=True):
+                    _host_installation_locked()
+                    target = registry.register(args.alias, _project_path(args.path))
                 emit(
                     {
                         "alias": f"@{target.alias}",
@@ -820,7 +1026,8 @@ def _project_command(args: argparse.Namespace) -> int:
                 )
                 return 0
             case "rename":
-                registry.rename(args.old_alias, args.new_alias)
+                with installation_lock(exclusive=True):
+                    registry.rename(args.old_alias, args.new_alias)
                 emit(
                     {"alias": f"@{args.new_alias}"},
                     args.output_format,
@@ -867,6 +1074,8 @@ def _selector_argv(
 
 def _systemd_service_command(args: argparse.Namespace) -> int:
     try:
+        if args.service_action in {"install", "start", "restart"}:
+            _host_installation()
         target = _project_target(
             alias=getattr(args, "project_alias", None),
             env_file=args.service_env,
@@ -995,6 +1204,21 @@ def _start_background(env_file: Path) -> int:
         raise DevlegateError(f"service startup failed: {detail}; log: {log_path}")
     finally:
         os.close(read_fd)
+
+
+def _start_systemd(target: ProjectTarget) -> int:
+    supervisor = SystemdSupervisor()
+    try:
+        path = unit_path(target.locator, supervisor.unit_directory)
+        if path.exists():
+            supervisor.inspect(target.locator)
+        else:
+            path = supervisor.install(target.locator, target.env_file)
+        supervisor.start(target.locator)
+    except SystemdSupervisorError as error:
+        raise DevlegateError(str(error)) from error
+    print(f"service started; systemd unit: {path}")
+    return 0
 
 
 def _execution_projection(
@@ -1657,6 +1881,25 @@ def build_parser() -> argparse.ArgumentParser:
         description="Show the concise program and version identity.",
     )
     add_output_arguments(version_parser)
+    host_parser = commands.add_parser(
+        "host",
+        help="manage per-user Devlegate host integration",
+        description="Install or remove per-user host supervision policy.",
+    )
+    host_commands = host_parser.add_subparsers(
+        dest="host_action", required=True, parser_class=DevlegateArgumentParser
+    )
+    host_install_parser = host_commands.add_parser(
+        "install", help="install per-user host integration"
+    )
+    host_install_parser.add_argument(
+        "--supervisor", choices=("internal", "systemd"), required=True
+    )
+    add_output_arguments(host_install_parser)
+    host_uninstall_parser = host_commands.add_parser(
+        "uninstall", help="remove per-user host integration"
+    )
+    add_output_arguments(host_uninstall_parser)
     init_parser = commands.add_parser(
         "init",
         help="initialize project-local agent workflow files",
@@ -1857,6 +2100,7 @@ def _run_default_command(
     startup_fd: int | None,
 ) -> int:
     try:
+        installation = _host_installation()
         target = _project_target(alias=project_alias, env_file=service_env)
         assert target is not None
         env_file = target.env_file
@@ -1865,6 +2109,8 @@ def _run_default_command(
             _warn_service_version_mismatch(health)
             print("Devlegate service is already running.")
             return 0
+        if installation is not None and installation.supervisor == "systemd":
+            return _start_systemd(target)
         return _start_background(env_file)
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())
@@ -1882,6 +2128,7 @@ def _run_attached_command(
     startup_fd: int | None,
 ) -> int:
     try:
+        _host_installation()
         target = _project_target(
             alias=project_alias,
             env_file=args.service_env,
@@ -1954,6 +2201,18 @@ def main() -> int:
                 f"Devlegate {__version__}",
             )
             return 0
+        case "host":
+            if project_alias is not None or args.service_env is not None:
+                parser.error("project selectors are not valid for host commands")
+            try:
+                if args.host_action == "install":
+                    return _install_host(args)
+                if args.host_action == "uninstall":
+                    return _uninstall_host(args)
+                raise DevlegateError("unsupported host command")
+            except DevlegateError as error:
+                print(f"devlegate: {error}", file=sys.stderr)
+                return 1
         case "foreground" | "once":
             return _run_attached_command(
                 args,
@@ -1988,6 +2247,7 @@ def main() -> int:
         if args.service_env is not None:
             parser.error("--env is not valid for init; run it from the repository root")
         try:
+            _host_installation()
             alias, env_file, repo = _init_target(args.alias)
             if not env_file.exists():
                 try:
@@ -1996,7 +2256,9 @@ def main() -> int:
                     raise DevlegateError(str(error)) from error
             devlegate = Devlegate(env_file, read_only=True, repository=repo)
             value = devlegate.init_project_result(args.conflicts)
-            target = ProjectRegistry().register(alias, env_file)
+            with installation_lock(exclusive=True):
+                _host_installation_locked()
+                target = ProjectRegistry().register(alias, env_file)
             value = {
                 **value,
                 "command": "init",
@@ -2014,6 +2276,15 @@ def main() -> int:
             return 1
     env_file = (args.service_env or Path.cwd() / ".env").expanduser().resolve()
     try:
+        if args.command in {
+            "render",
+            "restart",
+            "retry",
+            "drop",
+            "reconcile",
+            "control",
+        }:
+            _host_installation()
         target = _project_target(alias=project_alias, env_file=args.service_env)
         assert target is not None
         env_file = target.env_file
