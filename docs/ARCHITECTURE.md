@@ -107,6 +107,20 @@ the default detached supervisor at
 manager, create a Python environment, or install a global unit. Systemd host
 policy provisions project units lazily at detached start.
 
+### Runtime and Distribution Contract
+
+Python-based Devlegate distributions require a compatible Python 3.12 or newer;
+a virtual environment is not a Devlegate runtime requirement. An installer may
+choose an isolated Python environment, but that environment belongs to the
+installer. `./dev` is a source-tree development interface, not an installed
+product runtime interface. A future self-contained distribution may bundle its
+own Python runtime and need no host Python or virtual environment.
+
+Host installation remains separate from software or package installation.
+Supervisors consume the centralized product launch identity rather than
+assuming Python, module, or virtual-environment details. Concrete distribution
+formats and their installation procedures are outside this release.
+
 Project selection is resolved before runtime construction. `@ALIAS` is the
 preferred local handle; `--env FILE` is the explicit path form; and an
 unqualified command uses exactly `$PWD/.env`. All forms must identify a

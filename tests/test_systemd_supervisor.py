@@ -66,20 +66,26 @@ def test_exec_start_is_absolute_and_safe_path_protected(tmp_path: Path) -> None:
 
 
 def test_render_unit_accepts_standalone_launcher_with_spaces(tmp_path: Path) -> None:
-    launcher = LaunchCommand.executable(Path("/opt/Devlegate Product/devlegate"))
+    launcher = LaunchCommand.executable(
+        Path("/opt/Devlegate 100%/$build/devlegate")
+    )
+    env_file = tmp_path / "repo" / "%i" / "$project" / ".env"
+    repository = tmp_path / "repo-%u-$HOME"
+    item = RuntimeLocator(repository, tmp_path / "state", "a" * 64)
 
     value = render_unit(
-        locator(tmp_path),
-        tmp_path / "repo" / ".env",
+        item,
+        env_file,
         launcher=launcher,
     )
 
     assert (
-        'ExecStart="/opt/Devlegate Product/devlegate" --env '
-        f"{tmp_path / 'repo' / '.env'} foreground"
+        'ExecStart="/opt/Devlegate 100%%/$$build/devlegate" --env '
+        f'"{str(env_file).replace("%", "%%").replace("$", "$$")}" foreground'
     ) in value
     assert "-P" not in value
     assert "-m devlegate" not in value
+    assert f'WorkingDirectory="{repository.as_posix().replace("%", "%%")}"' in value
 
 
 def test_install_is_atomic_and_uses_user_manager(tmp_path: Path) -> None:

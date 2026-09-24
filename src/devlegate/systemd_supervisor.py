@@ -50,6 +50,14 @@ def _systemd_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _systemd_unit_value(value: str) -> str:
+    return _systemd_quote(value.replace("%", "%%"))
+
+
+def _systemd_exec_argument(value: str) -> str:
+    return _systemd_quote(value.replace("%", "%%").replace("$", "$$"))
+
+
 def render_unit(
     locator: RuntimeLocator,
     env_file: Path,
@@ -61,7 +69,7 @@ def render_unit(
     require_notify = "DEVLEGATE_REQUIRE_NOTIFY=1"
     selected_launcher = launcher or product_launcher()
     command = " ".join(
-        _systemd_quote(argument)
+        _systemd_exec_argument(argument)
         for argument in selected_launcher.argv(
             "--env", str(env_file.resolve()), "foreground"
         )
@@ -77,7 +85,7 @@ def render_unit(
             "[Service]",
             "Type=notify",
             "NotifyAccess=main",
-            f"WorkingDirectory={_systemd_quote(str(repository))}",
+            f"WorkingDirectory={_systemd_unit_value(str(repository))}",
             f"ExecStart={command}",
             f"Environment={environment}",
             f"Environment={require_notify}",
