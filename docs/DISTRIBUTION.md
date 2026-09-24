@@ -23,10 +23,16 @@ python3 tools/build_standalone.py prove \
   --artifact /tmp/devlegate-standalone/devlegate-0.5.4.dev0-linux-x86_64
 ```
 
-The build pins PEX `2.103.2`, builds the wheel first, resolves the local wheel
-without PyPI for the Devlegate payload, selects eager scie, and targets
-CPython 3.12 on Linux x86_64. It does not modify the normal runtime dependency
-set or invoke package managers at runtime.
+The build pins PEX `2.103.2`, Science `0.21.0`, Python Standalone Builds release
+`20260901`, and bundled CPython `3.12.14`. The PBS archive target is
+`x86_64-unknown-linux-gnu`, `install_only`. The wheel is built in an ephemeral
+environment containing exact, hash-verified pip `24.3.1`, setuptools `77.0.3`,
+and wheel `0.45.1`. The local wheel is resolved without PyPI for the Devlegate
+payload, and the scie is assembled with eager mode. PEX 2.103.2 also requires
+its own isolated bootstrap wheels, pip `23.2`, setuptools `68.0.0`, and wheel
+`0.40.0`; these are build-tool inputs for PEX resolution, not the Devlegate
+wheel build backend or runtime dependencies. It does not modify the normal
+runtime dependency set or invoke package managers at runtime.
 
 ## Runtime Contract
 
@@ -64,13 +70,29 @@ Internal detached hosting, daemon self-restart, and systemd unit generation all
 consume this same product launch identity. Systemd serializes the final argv at
 the unit boundary and escapes literal `%` and `$` as required by systemd.
 
+## Build and Runtime Layers
+
+The source compatibility floor is Python `>=3.12`. The standalone builder may
+run on a compatible Python version at or above that floor; it is not coupled to
+the bundled runtime minor version. The current bundled runtime is independently
+pinned to CPython `3.12.14` from PBS release `20260901`.
+
+Science is build-time tooling and is not part of the eager runtime payload.
+The eager runtime contains the Devlegate wheel, PEX bootstrap/runtime material,
+scie-jump, and the PBS-produced CPython runtime and bundled libraries. ptex is
+not included or declared in the eager artifact; it is relevant only to lazy
+scie flows.
+
 ## Legal Inventory
 
 The wheel carries Devlegate's EUPL material, CC0 template material, and
 NanoYAML MIT material through its PEP 639 metadata and license files. The eager
-scie additionally contains PEX bootstrap code, a Science/scie launcher, and a
-Python Standalone Builds CPython distribution. The proof records PEX metadata
-and the bundled CPython version; final standalone publication still requires a
-separate review of the Science/scie and CPython notice/license material.
+scie additionally contains PEX bootstrap code, scie-jump, and a Python
+Standalone Builds CPython distribution. Science is used to build the artifact,
+not redistributed by the eager runtime. PBS build machinery and its MPL-2.0
+project license are provenance facts; they are not by themselves a conclusion
+that the entire standalone executable is MPL-2.0. Final standalone publication
+still requires a separate review and packaging of the PEX, scie-jump, CPython,
+and bundled-library notice/license material.
 
 This proof does not claim that the single-file executable is publication-ready.
