@@ -133,6 +133,19 @@ belongs before the command, and the two selectors are mutually exclusive. An
 ordinary project command requires the selected project to be registered. Use
 `devlegate project alias <name> [PATH]` to register an existing project.
 
+Each canonical Git working-tree root has at most one registered Devlegate
+project, and its canonical configuration is `<repository-root>/.env`. An alias
+is only a local human-facing name; it does not affect the repository root,
+`state_key`, runtime paths, or systemd unit. Explicit `@ALIAS` and `--env`
+addressing work from an unrelated current directory. Without an explicit
+selector, `$PWD/.env` is used exactly as written. Relative `STATE_DIR` values
+are resolved relative to the canonical repository root.
+
+Run `devlegate init <alias>` from the repository root. To adopt an existing
+project, `project alias` accepts a directory anywhere inside the repository and
+registers the repository root's `.env`; an explicit file argument must itself
+be that canonical `.env`.
+
 The registry is local user configuration at
 `$XDG_CONFIG_HOME/devlegate/projects.json` or
 `~/.config/devlegate/projects.json`. Aliases are not stored in the project and

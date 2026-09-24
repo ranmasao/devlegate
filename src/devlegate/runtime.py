@@ -584,7 +584,9 @@ class ServiceEngine:
         self.env_file = env_file.expanduser().resolve()
         config = _read_env(self.env_file)
         try:
-            self.repo = (repository or repository_root()).resolve()
+            self.repo = (
+                repository or repository_root(self.env_file.parent)
+            ).resolve()
         except RuntimeLocatorError as error:
             raise DevlegateError(str(error)) from error
 

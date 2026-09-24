@@ -11,7 +11,7 @@ def read_only(fixture, monkeypatch, name):
     config = fixture["tmp"] / f"{name}.env"
     config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={fixture['state']}\n")
     monkeypatch.chdir(fixture["working"])
-    return Devlegate(config, read_only=True)
+    return Devlegate(config, read_only=True, repository=fixture["working"])
 
 
 def commit_control(fixture, files, message):

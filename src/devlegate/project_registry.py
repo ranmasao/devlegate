@@ -150,12 +150,27 @@ class ProjectRegistry:
                     f"project alias @{alias} is already registered for {existing}"
                 )
             for registered_alias, registered_env in projects.items():
-                if (
-                    registered_alias != alias
-                    and canonical_env_path(Path(registered_env)) == env
-                ):
+                if registered_alias == alias:
+                    continue
+                registered_path = canonical_env_path(Path(registered_env))
+                if registered_path == env:
                     raise ProjectRegistryError(
                         f"project is already registered as @{registered_alias}"
+                    )
+                try:
+                    registered_repo, _ = _resolve_runtime(registered_path)
+                except ProjectRegistryError:
+                    if registered_path.is_file():
+                        raise ProjectRegistryError(
+                            "cannot validate existing project "
+                            f"@{registered_alias}: {registered_path}"
+                        ) from None
+                    continue
+                if registered_repo == repo:
+                    raise ProjectRegistryError(
+                        "repository is already registered as "
+                        f"@{registered_alias}; canonical configuration is "
+                        f"{repo / '.env'}"
                     )
             projects[alias] = str(env)
             _atomic_write(self.path, _serialize(projects))
@@ -192,6 +207,12 @@ class ProjectRegistry:
 
     def alias_for_env(self, env_file: Path) -> str | None:
         env = canonical_env_path(env_file)
+        try:
+            repo = repository_root_for_env(env)
+        except RuntimeLocatorError:
+            return None
+        if env != repo / ".env":
+            return None
         with self._lock(False):
             projects = _read_registry(self.path)
         for alias, registered_env in projects.items():
@@ -224,6 +245,11 @@ class _LockContext:
 def _resolve_runtime(env_file: Path) -> tuple[Path, RuntimeLocator]:
     try:
         repo = repository_root_for_env(env_file)
+        expected = repo / ".env"
+        if env_file != expected:
+            raise ProjectRegistryError(
+                f"project configuration must be {expected}, not {env_file}"
+            )
         locator = RuntimeLocator.from_env(env_file, repository=repo)
     except RuntimeLocatorError as error:
         raise ProjectRegistryError(str(error)) from error

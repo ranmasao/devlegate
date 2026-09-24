@@ -105,8 +105,13 @@ unqualified command uses exactly `$PWD/.env`. All forms must identify a
 registered project, and explicit env paths resolve their Git repository from
 the env file's location rather than the caller's current directory. The
 registry is versioned user configuration under the XDG configuration hierarchy.
-Aliases do not enter runtime or systemd identity. Fleet-wide orchestration is
-outside this release.
+There is at most one registered project per canonical Git working-tree root,
+and its canonical project configuration is `<repository-root>/.env`. Directory
+adoption resolves to that repository root; alternate env filenames and env
+files below the root are rejected. Aliases do not enter runtime or systemd
+identity. Explicit addressing is independent of caller CWD, while relative
+`STATE_DIR` is resolved from the canonical repository root. `init <alias>`
+must be run from that root. Fleet-wide orchestration is outside this release.
 
 The production runtime is one persistent service hosting one `ServiceEngine`.
 `ServiceEngine` is the single mutable workflow engine: it makes workflow

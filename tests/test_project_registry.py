@@ -87,6 +87,67 @@ def test_symlink_env_spellings_share_one_registration(tmp_path: Path) -> None:
         registry.register("link", link)
 
 
+def test_registry_rejects_second_env_in_one_repository(tmp_path: Path) -> None:
+    env = project(tmp_path, "collision")
+    nested = env.parent / "subdir"
+    nested.mkdir()
+    nested_env = nested / ".env"
+    nested_env.write_text("STATE_DIR=" + str(tmp_path / "nested-state"))
+    registry = ProjectRegistry(tmp_path / "config" / "projects.json")
+    registry.register("root", env)
+
+    with pytest.raises(ProjectRegistryError, match="must be"):
+        registry.register("nested", nested_env)
+
+
+def test_registry_rejects_alternate_configuration_filename(tmp_path: Path) -> None:
+    env = project(tmp_path, "alternate")
+    alternate = env.parent / "other.env"
+    alternate.write_text(env.read_text())
+    registry = ProjectRegistry(tmp_path / "config" / "projects.json")
+
+    with pytest.raises(ProjectRegistryError, match=r"must be .*\.env"):
+        registry.register("alternate", alternate)
+
+
+def test_directory_adoption_uses_repository_root_env(tmp_path: Path) -> None:
+    env = project(tmp_path, "adopt")
+    nested = env.parent / "subdir"
+    nested.mkdir()
+    registry = ProjectRegistry(tmp_path / "config" / "projects.json")
+
+    target = registry.register("adopted", cli._project_path(nested))
+
+    assert target.env_file == canonical_env_path(env)
+    assert target.repo == env.parent.resolve()
+
+
+def test_relative_state_dir_is_repository_relative_from_any_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = project(tmp_path, "relative-state")
+    env.write_text("STATE_DIR=.devlegate-state\n")
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    registry = ProjectRegistry()
+    registered = registry.register("relative", env)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    by_alias = registry.target_for_alias("relative")
+    by_path = cli._project_target(alias=None, env_file=env)
+    monkeypatch.chdir(env.parent)
+    by_root = cli._project_target(alias=None, env_file=None)
+
+    assert by_path is not None and by_root is not None
+    assert by_alias.locator.state_dir == env.parent / ".devlegate-state"
+    assert by_alias.locator.state_dir == by_path.locator.state_dir
+    assert by_alias.locator.state_dir == by_root.locator.state_dir
+    assert by_alias.locator.state_key == registered.locator.state_key
+    assert by_alias.locator.socket_path == by_path.locator.socket_path
+
+
 def test_global_selector_and_command_local_env_are_distinct() -> None:
     parser = cli.build_parser()
     args = parser.parse_args(["--env", "/tmp/project.env", "status"])
@@ -180,7 +241,12 @@ def test_project_rename_preserves_runtime_identity(tmp_path: Path, monkeypatch, 
     ) == 0
     renamed = registry.target_for_alias("ratil")
     assert renamed.env_file == registered.env_file
+    assert renamed.repo == registered.repo
     assert renamed.locator.state_key == registered.locator.state_key
+    assert renamed.locator.state_dir == registered.locator.state_dir
+    assert renamed.locator.lock_path == registered.locator.lock_path
+    assert renamed.locator.socket_path == registered.locator.socket_path
+    assert renamed.locator.log_dir == registered.locator.log_dir
     assert f"devlegate-{renamed.locator.state_key}.service" == (
         f"devlegate-{registered.locator.state_key}.service"
     )

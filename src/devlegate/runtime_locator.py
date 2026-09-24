@@ -86,15 +86,17 @@ class RuntimeLocator:
         cls, env_file: Path, repo: Path, config: dict[str, str]
     ) -> RuntimeLocator:
         del env_file
+        repo = repo.resolve()
         state_default = (
             Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
             / "devlegate"
         )
+        configured = Path(
+            config.get("STATE_DIR", os.environ.get("STATE_DIR", state_default))
+        ).expanduser()
         state_dir = (
-            Path(config.get("STATE_DIR", os.environ.get("STATE_DIR", state_default)))
-            .expanduser()
-            .resolve()
-        )
+            configured if configured.is_absolute() else repo / configured
+        ).resolve()
         state_key = hashlib.sha256(str(repo).encode()).hexdigest()
         return cls(repo, state_dir, state_key)
 

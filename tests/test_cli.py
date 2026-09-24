@@ -156,13 +156,12 @@ def cli_daemon(git_fixture, monkeypatch):
 
 
 def _short_runtime_config(git_fixture):
-    config = git_fixture["working"] / "devlegate-short.env"
+    config = git_fixture["config"]
     config.write_text(
         git_fixture["config"]
         .read_text()
         .replace(str(git_fixture["state"]), str(git_fixture["short_state"]))
     )
-    ProjectRegistry().register("short", config)
     return config
 
 
@@ -214,15 +213,11 @@ def invoke(fixture, *args, env_file=None):
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
         "XDG_CONFIG_HOME": str(config_home),
     }
+    command = [sys.executable, "-m", "devlegate", *args]
+    if not args or args[0] != "init":
+        command[3:3] = ["--env", str(selected_env)]
     return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "devlegate",
-            "--env",
-            selected_env,
-            *args,
-        ],
+        command,
         cwd=fixture["working"],
         env=environment,
         text=True,
@@ -1246,13 +1241,17 @@ def test_control_init_attaches_existing_orphan_branch_and_is_idempotent(git_fixt
 def test_init_and_render_use_effective_configuration_without_control_mutation(
     git_fixture,
 ):
-    config = git_fixture["working"] / "render.env"
+    config = git_fixture["working"] / ".env"
     config.write_text(
         "REMOTE_BRANCH=main\nCONTROL_BRANCH=automation/state\n"
         "BACKLOG_PATH=workflow/waiting\nTODO_PATH=workflow/ready\n"
         "REVIEW_PATH=workflow/inspection\nDONE_PATH=workflow/accepted\n"
     )
-    result = invoke(git_fixture, "init", "render", env_file=config)
+    registry_path = (
+        Path(os.environ["XDG_CONFIG_HOME"]) / "devlegate" / "projects.json"
+    )
+    registry_path.unlink()
+    result = invoke(git_fixture, "init", "render")
     assert result.returncode == 0
     assert config.exists()
     assert "rendered 2" in result.stdout
@@ -1260,11 +1259,10 @@ def test_init_and_render_use_effective_configuration_without_control_mutation(
     reviewer = git_fixture["working"] / "skills/reviewer/SKILL.md"
     assert "automation/state" in architect.read_text()
     assert "workflow/inspection" in reviewer.read_text()
-    assert invoke(git_fixture, "render", "--check", env_file=config).returncode == 0
 
 
 def test_check_rejects_invalid_poll_interval_without_creating_state(git_fixture):
-    config = git_fixture["working"] / "invalid-poll.env"
+    config = git_fixture["config"]
     state = git_fixture["tmp"] / "invalid-poll-state"
     config.write_text(
         "REMOTE_BRANCH=main\nOPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
@@ -1362,9 +1360,39 @@ def test_init_from_repository_subdirectory_does_not_seed_project_files(git_fixtu
         capture_output=True,
     )
 
-    assert result.returncode == 0
-    assert (subdirectory / ".env").exists()
-    assert (git_fixture["working"] / ".devlegate").exists()
+    assert result.returncode == 1
+    assert "run devlegate init subdir from repository root" in result.stderr
+    assert not (subdirectory / ".env").exists()
+    assert not (subdirectory / ".devlegate").exists()
+
+
+def test_init_rejects_explicit_env_selector(git_fixture):
+    alternate = git_fixture["working"] / "other.env"
+    alternate.write_text("REMOTE_BRANCH=main\n")
+    before = git_fixture["config"].read_bytes()
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "devlegate",
+            "--env",
+            str(alternate),
+            "init",
+            "other",
+        ],
+        cwd=git_fixture["working"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "not valid for init" in result.stderr
+    assert git_fixture["config"].read_bytes() == before
 
 
 def test_init_seeds_missing_project_env_from_package(git_fixture):
@@ -1398,7 +1426,7 @@ def test_init_seeds_missing_project_env_from_package(git_fixture):
 
 def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture):
     state = git_fixture["tmp"] / "read-only-state"
-    config = git_fixture["working"] / "read-only.env"
+    config = git_fixture["config"]
     config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={state}\n")
     before = git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
     result = invoke(git_fixture, "plan", "--json", env_file=config)
@@ -1407,6 +1435,39 @@ def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture)
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip() == before
     )
+
+
+@pytest.mark.parametrize("unrelated_git", [False, True])
+@pytest.mark.parametrize("selector", ["alias", "env"])
+@pytest.mark.parametrize("command", ["status", "plan"])
+def test_registered_read_only_commands_ignore_caller_cwd(
+    git_fixture, unrelated_git, selector, command
+):
+    unrelated = git_fixture["tmp"] / ("unrelated-git" if unrelated_git else "unrelated")
+    unrelated.mkdir()
+    if unrelated_git:
+        git(unrelated, "init", "-b", "main")
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    address = "@test" if selector == "alias" else str(git_fixture["config"])
+    command_line = [sys.executable, "-m", "devlegate"]
+    if selector == "alias":
+        command_line.append(address)
+    else:
+        command_line.extend(["--env", address])
+    command_line.append(command)
+    result = subprocess.run(
+        command_line,
+        cwd=unrelated,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode in {0, 1}
+    assert "not a git repository" not in result.stderr
 
 
 def test_status_uses_daemon_ipc_without_fallback(

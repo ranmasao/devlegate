@@ -56,6 +56,7 @@ from devlegate.runtime_locator import (
     RuntimeAuthorityPresent,
     RuntimeLocator,
     RuntimeLocatorError,
+    repository_root,
 )
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
@@ -129,7 +130,11 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
     try:
         guard = locator.absence_guard()
         with guard:
-            engine = _service_engine(env_file, read_only=True)
+            engine = _service_engine(
+                env_file,
+                repository=locator.repo,
+                read_only=True,
+            )
             if method == "status":
                 view = engine.status_view
             else:
@@ -631,14 +636,19 @@ def _project_target(
                 )
             return None
         return registry.target_for_alias(registered_alias)
-    except ProjectRegistryError as error:
+    except (ProjectRegistryError, RuntimeLocatorError) as error:
         raise DevlegateError(str(error)) from error
 
 
-def _init_target(alias: str, env_file: Path) -> tuple[str, Path, Path]:
+def _init_target(alias: str) -> tuple[str, Path, Path]:
     try:
         validate_alias(alias)
-        env = canonical_env_path(env_file)
+        repo = repository_root()
+        if repo != Path.cwd().resolve():
+            raise ProjectRegistryError(
+                f"run devlegate init {alias} from repository root: {repo}"
+            )
+        env = repo / ".env"
         registry = ProjectRegistry()
         projects = registry.projects()
         existing = projects.get(alias)
@@ -647,25 +657,37 @@ def _init_target(alias: str, env_file: Path) -> tuple[str, Path, Path]:
                 f"project alias @{alias} is already registered for {existing}"
             )
         for registered_alias, registered_env in projects.items():
-            if (
-                registered_alias != alias
-                and canonical_env_path(Path(registered_env)) == env
-            ):
+            if registered_alias == alias:
+                continue
+            registered_path = canonical_env_path(Path(registered_env))
+            if registered_path == env:
                 raise ProjectRegistryError(
                     f"project is already registered as @{registered_alias}"
                 )
-        from devlegate.project_registry import repository_root_for_env
-
-        repo = repository_root_for_env(env)
+            if not registered_path.is_file():
+                continue
+            try:
+                registered_repo = repository_root(registered_path.parent)
+            except RuntimeLocatorError:
+                continue
+            if registered_repo == repo:
+                raise ProjectRegistryError(
+                    "repository is already registered as "
+                    f"@{registered_alias}; canonical configuration is "
+                    f"{repo / '.env'}"
+                )
         return alias, env, repo
-    except ProjectRegistryError as error:
+    except (ProjectRegistryError, RuntimeLocatorError) as error:
         raise DevlegateError(str(error)) from error
 
 
 def _project_path(path: Path | None) -> Path:
     selected = path or Path.cwd()
     if selected.is_dir():
-        selected = selected / ".env"
+        try:
+            return repository_root(selected) / ".env"
+        except RuntimeLocatorError as error:
+            raise ProjectRegistryError(str(error)) from error
     return canonical_env_path(selected)
 
 
@@ -1886,9 +1908,10 @@ def main() -> int:
     if args.command == "init":
         if project_alias is not None:
             parser.error("@ALIAS is not valid for init; provide a new alias")
+        if args.service_env is not None:
+            parser.error("--env is not valid for init; run it from the repository root")
         try:
-            selected_env = args.service_env or Path.cwd() / ".env"
-            alias, env_file, repo = _init_target(args.alias, selected_env)
+            alias, env_file, repo = _init_target(args.alias)
             if not env_file.exists():
                 try:
                     seed_project_env(env_file)
