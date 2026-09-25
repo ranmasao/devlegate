@@ -4,6 +4,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +95,33 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
     metadata = VALIDATOR.fields(package)
     assert int(metadata["Installed-Size"]) > 0
     assert not list((tmp_path / "extract/usr/share/doc/devlegate").glob("*.tar.gz*"))
+
+
+def test_installed_size_rounds_each_tiny_file(tmp_path):
+    (tmp_path / "first").write_bytes(b"1")
+    (tmp_path / "second").write_bytes(b"2")
+    assert VALIDATOR.installed_size_kib(tmp_path) == 2
+
+
+def test_installed_size_accounts_for_symlink_size(tmp_path):
+    (tmp_path / "target").write_bytes(b"x" * 1025)
+    (tmp_path / "link").symlink_to("target")
+    assert VALIDATOR.installed_size_kib(tmp_path) == 3
+
+
+def test_installed_size_counts_other_filesystem_objects(tmp_path):
+    (tmp_path / "directory").mkdir()
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    assert VALIDATOR.installed_size_kib(tmp_path) == 2
+
+
+def test_installed_size_excludes_debian_control_from_absolute_root(tmp_path):
+    control = tmp_path / "DEBIAN"
+    control.mkdir()
+    (control / "control").write_bytes(b"x" * 2048)
+    (tmp_path / "payload").write_bytes(b"x")
+    assert VALIDATOR.installed_size_kib(tmp_path) == 1
 
 
 def test_deb_validator_rejects_inconsistent_installed_size(tmp_path):

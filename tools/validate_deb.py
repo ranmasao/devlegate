@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -38,11 +39,15 @@ def installed_size_kib(root: Path) -> int:
     """Return deterministic Debian Installed-Size units for a data tree."""
     total = 0
     for path in root.rglob("*"):
-        if path.parts and path.parts[0] == "DEBIAN":
+        relative = path.relative_to(root)
+        if relative.parts and relative.parts[0] == "DEBIAN":
             continue
-        if path.is_file() or path.is_symlink():
-            total += path.lstat().st_size
-    return max(1, (total + 1023) // 1024)
+        mode = path.lstat().st_mode
+        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+            total += (path.lstat().st_size + 1023) // 1024
+        else:
+            total += 1
+    return max(1, total)
 
 
 def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
