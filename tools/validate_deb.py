@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from package_standalone import PackageError, sha256
+from package_standalone import PackageError
 
 
 def fields(package: Path) -> dict[str, str]:
@@ -34,6 +34,17 @@ def fields(package: Path) -> dict[str, str]:
     return values
 
 
+def installed_size_kib(root: Path) -> int:
+    """Return deterministic Debian Installed-Size units for a data tree."""
+    total = 0
+    for path in root.rglob("*"):
+        if path.parts and path.parts[0] == "DEBIAN":
+            continue
+        if path.is_file() or path.is_symlink():
+            total += path.lstat().st_size
+    return max(1, (total + 1023) // 1024)
+
+
 def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     metadata = fields(package)
     required = {
@@ -45,6 +56,12 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
             raise PackageError(f"unexpected Debian control field {key}")
     if "Depends" in metadata or "Pre-Depends" in metadata:
         raise PackageError("portable Debian package declares runtime dependencies")
+    try:
+        installed_size = int(metadata["Installed-Size"])
+    except (KeyError, ValueError) as error:
+        raise PackageError("Debian package has an invalid Installed-Size") from error
+    if installed_size <= 0:
+        raise PackageError("Debian package Installed-Size is not positive")
     with tempfile.TemporaryDirectory(prefix="devlegate-deb-control-") as control_dir:
         result = subprocess.run(
             ["dpkg-deb", "-e", str(package), control_dir],
@@ -83,13 +100,27 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     ):
         raise PackageError("Debian package contains a systemd unit")
     documentation = extract_dir / "usr/share/doc/devlegate"
-    archive = next(documentation.glob("devlegate-*.tar.gz"), None)
-    sidecar = next(documentation.glob("devlegate-*.tar.gz.sha256"), None)
-    if archive is None or sidecar is None:
-        raise PackageError("Debian package lacks standalone archive proof")
-    expected_sidecar = f"{sha256(archive)}  {archive.name}"
-    if sidecar.read_text(encoding="ascii").strip() != expected_sidecar:
-        raise PackageError("embedded standalone archive sidecar mismatch")
+    required_documentation = {
+        "LICENSE",
+        "NOTICE",
+        "LICENSING.md",
+        "THIRD_PARTY_NOTICES.md",
+        "BUILD-PROVENANCE.json",
+    }
+    missing = sorted(
+        name for name in required_documentation if not (documentation / name).is_file()
+    )
+    if missing or not (documentation / "LICENSES").is_dir():
+        raise PackageError(
+            f"Debian package lacks compact compliance material: {missing}"
+        )
+    embedded_archives = list(documentation.rglob("*.tar.gz")) + list(
+        documentation.rglob("*.tar.gz.sha256")
+    )
+    if embedded_archives:
+        raise PackageError("Debian package embeds standalone archive payload")
+    if installed_size != installed_size_kib(extract_dir):
+        raise PackageError("Debian Installed-Size does not match the data payload")
     return binary
 
 

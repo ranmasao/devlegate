@@ -16,6 +16,7 @@ from pathlib import Path
 
 from package_standalone import PackageError
 from package_standalone import run as package_run
+from validate_deb import installed_size_kib
 from validate_standalone_package import validate
 
 
@@ -80,18 +81,16 @@ def package(
         ):
             shutil.copy2(extracted / name, documentation / name)
         shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
-        shutil.copy2(archive, documentation / archive.name)
-        shutil.copy2(sidecar, documentation / sidecar.name)
         (package_root / "usr/bin").mkdir(parents=True)
-        (package_root / "usr/bin/devlegate").symlink_to(
-            "../lib/devlegate/devlegate"
-        )
+        (package_root / "usr/bin/devlegate").symlink_to("../lib/devlegate/devlegate")
+        installed_size = installed_size_kib(package_root)
         (control / "control").write_text(
             "Package: devlegate\n"
             f"Version: {version}\n"
             "Section: devel\n"
             "Priority: optional\n"
             "Architecture: amd64\n"
+            f"Installed-Size: {installed_size}\n"
             "Maintainer: Devlegate maintainers <maintainers@devlegate.invalid>\n"
             "Description: deterministic local agent orchestrator\n"
             " Dependency-free standalone Devlegate executable.\n",

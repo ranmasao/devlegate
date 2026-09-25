@@ -33,6 +33,8 @@ def make_package(
     *,
     depends: str | None = None,
     maintainer_script: bool = False,
+    installed_size: int | None = None,
+    include_installed_size: bool = True,
 ) -> tuple[Path, Path]:
     root = tmp_path / "root"
     control = root / "DEBIAN"
@@ -45,17 +47,27 @@ def make_package(
     binary.chmod(0o755)
     (root / "usr/bin").mkdir(parents=True)
     (root / "usr/bin/devlegate").symlink_to("../lib/devlegate/devlegate")
-    archive = doc / "devlegate-0.5.4.dev0-linux-x86_64.tar.gz"
-    archive.write_bytes(b"archive")
-    import hashlib
-
-    (doc / f"{archive.name}.sha256").write_text(
-        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
-        encoding="ascii",
+    for name in (
+        "LICENSE",
+        "NOTICE",
+        "LICENSING.md",
+        "THIRD_PARTY_NOTICES.md",
+        "BUILD-PROVENANCE.json",
+    ):
+        (doc / name).write_text(f"{name}\n", encoding="ascii")
+    licenses = doc / "LICENSES"
+    licenses.mkdir()
+    (licenses / "standalone-compliance-manifest.json").write_text(
+        "{}\n", encoding="ascii"
     )
     dependency = f"Depends: {depends}\n" if depends else ""
+    size = (
+        VALIDATOR.installed_size_kib(root) if installed_size is None else installed_size
+    )
+    installed_size_field = f"Installed-Size: {size}\n" if include_installed_size else ""
     (control / "control").write_text(
         "Package: devlegate\nVersion: 0.5.4.dev0\nArchitecture: amd64\n"
+        f"{installed_size_field}"
         f"{dependency}Description: test\n test\n",
         encoding="ascii",
     )
@@ -79,6 +91,27 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
     package, report = make_package(tmp_path)
     binary = VALIDATOR.validate(package, report, tmp_path / "extract")
     assert binary.is_file()
+    metadata = VALIDATOR.fields(package)
+    assert int(metadata["Installed-Size"]) > 0
+    assert not list((tmp_path / "extract/usr/share/doc/devlegate").glob("*.tar.gz*"))
+
+
+def test_deb_validator_rejects_inconsistent_installed_size(tmp_path):
+    package, report = make_package(tmp_path, installed_size=9999)
+    with pytest.raises(VALIDATOR.PackageError, match="does not match"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+def test_deb_validator_rejects_missing_installed_size(tmp_path):
+    package, report = make_package(tmp_path, include_installed_size=False)
+    with pytest.raises(VALIDATOR.PackageError, match="invalid Installed-Size"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+def test_deb_validator_rejects_invalid_installed_size(tmp_path):
+    package, report = make_package(tmp_path, installed_size=0)
+    with pytest.raises(VALIDATOR.PackageError, match="not positive"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
 
 
 def test_deb_validator_rejects_runtime_dependencies(tmp_path):
