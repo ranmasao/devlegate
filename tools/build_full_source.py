@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$")
 MANIFEST_NAME = "SOURCE-MANIFEST"
 
 
@@ -187,9 +187,7 @@ def normalized_tar(source: Path, archive: Path, timestamp: int, top_level: str) 
         files.sort()
         paths.extend(Path(current) / name for name in directories)
         paths.extend(Path(current) / name for name in files)
-    paths.sort(
-        key=lambda path: "" if path == source else str(path.relative_to(source))
-    )
+    paths.sort(key=lambda path: "" if path == source else str(path.relative_to(source)))
 
     with archive.open("wb") as output:
         with gzip.GzipFile(

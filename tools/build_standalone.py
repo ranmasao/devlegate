@@ -25,9 +25,7 @@ TARGET = "linux-x86_64"
 PBS_PROVIDER = "PythonBuildStandalone"
 PBS_RELEASE = "20260901"
 PBS_PYTHON_VERSION = "3.12.14"
-PBS_ARCHIVE = (
-    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
-)
+PBS_ARCHIVE = "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
 PBS_SHA256 = "936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22"
 SCIENCE_VERSION = "0.21.0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
@@ -98,9 +96,12 @@ def run(command: list[str], *, env=None, cwd=None) -> subprocess.CompletedProces
         command, cwd=cwd, env=env, text=True, capture_output=True, check=False
     )
     if result.returncode:
-        detail = "\n".join(
-            part for part in (result.stdout.strip(), result.stderr.strip()) if part
-        ) or "no output"
+        detail = (
+            "\n".join(
+                part for part in (result.stdout.strip(), result.stderr.strip()) if part
+            )
+            or "no output"
+        )
         raise BuildError(f"command failed ({' '.join(command)}): {detail}")
     return result
 
@@ -476,8 +477,7 @@ def inspect_scie(
         and str(forbidden_build_root).encode() in artifact.read_bytes()
     ):
         raise BuildError(
-            "scie executable contains the temporary build root: "
-            f"{forbidden_build_root}"
+            f"scie executable contains the temporary build root: {forbidden_build_root}"
         )
     return {
         "filename": artifact.name,
@@ -562,8 +562,7 @@ def validate_scie_inspection(
         build_root_text = str(forbidden_build_root)
         if build_root_text in json.dumps(inspection):
             raise BuildError(
-                "scie inspection contains the temporary build root: "
-                f"{build_root_text}"
+                f"scie inspection contains the temporary build root: {build_root_text}"
             )
     files = lift["files"]
     archive = next(
@@ -785,6 +784,16 @@ def build(args: argparse.Namespace) -> int:
     version = project_version(repo)
     commit = source_commit(repo)
     epoch = source_epoch(repo)
+    supplied_wheel = args.wheel.resolve() if args.wheel is not None else None
+    if supplied_wheel is not None:
+        if not supplied_wheel.is_file():
+            raise BuildError(f"canonical wheel not found: {supplied_wheel}")
+        supplied_info = inspect_wheel(supplied_wheel)
+        if supplied_info["version"] != version:
+            raise BuildError(
+                "canonical wheel version does not match the source project: "
+                f"{supplied_info['version']} != {version}"
+            )
     with tempfile.TemporaryDirectory(prefix="devlegate-standalone-") as temporary:
         root = Path(temporary)
         tools = root / "tools"
@@ -793,20 +802,29 @@ def build(args: argparse.Namespace) -> int:
         )
         build_a_root = root / "build-a"
         build_b_root = root / "build-b"
-        wheel_python_a, wheel_toolchain_a = create_wheel_build_environment(
-            args.python, build_a_root, tool_wheels
-        )
-        wheel_python_b, wheel_toolchain_b = create_wheel_build_environment(
-            args.python, build_b_root, tool_wheels
-        )
-        if wheel_toolchain_a != wheel_toolchain_b:
-            raise BuildError("independent wheel build environments differ")
-        wheel_a = build_wheel(
-            repo, build_a_root / "wheel", str(wheel_python_a), epoch
-        )
-        wheel_b = build_wheel(
-            repo, build_b_root / "wheel", str(wheel_python_b), epoch
-        )
+        if supplied_wheel is None:
+            wheel_python_a, wheel_toolchain_a = create_wheel_build_environment(
+                args.python, build_a_root, tool_wheels
+            )
+            wheel_python_b, wheel_toolchain_b = create_wheel_build_environment(
+                args.python, build_b_root, tool_wheels
+            )
+            if wheel_toolchain_a != wheel_toolchain_b:
+                raise BuildError("independent wheel build environments differ")
+            wheel_a = build_wheel(
+                repo, build_a_root / "wheel", str(wheel_python_a), epoch
+            )
+            wheel_b = build_wheel(
+                repo, build_b_root / "wheel", str(wheel_python_b), epoch
+            )
+        else:
+            wheel_toolchain_a = {
+                name: filename.split("-")[1]
+                for name, (filename, _digest) in WHEEL_BUILD_TOOLS.items()
+            }
+            wheel_toolchain_b = wheel_toolchain_a
+            wheel_a = supplied_wheel
+            wheel_b = supplied_wheel
         wheel_a_info = inspect_wheel(wheel_a)
         wheel_b_info = inspect_wheel(wheel_b)
         if wheel_a_info["sha256"] != wheel_b_info["sha256"]:
@@ -851,9 +869,9 @@ def build(args: argparse.Namespace) -> int:
         scie_b = inspect_scie(artifact_b, forbidden_build_root=root)
         split_a = split_scie(artifact_a, build_a_root / "split")
         split_b = split_scie(artifact_b, build_b_root / "split")
-        if {
-            name: sha256(path) for name, path in split_a.items()
-        } != {name: sha256(path) for name, path in split_b.items()}:
+        if {name: sha256(path) for name, path in split_a.items()} != {
+            name: sha256(path) for name, path in split_b.items()
+        }:
             raise BuildError("repeated scie split outputs are not identical")
         print("BUILD A")
         print(f"build_root: {build_a_root}")
@@ -867,12 +885,13 @@ def build(args: argparse.Namespace) -> int:
         print(f"scie_sha256: {scie_b['sha256']}")
         print("COMPARE")
         print(f"build_roots_differ: {build_a_root != build_b_root}")
-        pex_roots_differ = build_environment(build_a_root, epoch)["PEX_ROOT"] != (
-            build_environment(build_b_root, epoch)["PEX_ROOT"]
+        pex_roots_differ = (
+            build_environment(build_a_root, epoch)["PEX_ROOT"]
+            != (build_environment(build_b_root, epoch)["PEX_ROOT"])
         )
         print(f"PEX_ROOT_values_differ: {pex_roots_differ}")
-        print("wheel_identical: " f"{wheel_a_info['sha256'] == wheel_b_info['sha256']}")
-        print("scie_identical: " f"{scie_a['sha256'] == scie_b['sha256']}")
+        print(f"wheel_identical: {wheel_a_info['sha256'] == wheel_b_info['sha256']}")
+        print(f"scie_identical: {scie_a['sha256'] == scie_b['sha256']}")
         print("custom_runtime_base_embedded: False")
         print("temporary_build_path_found_in_inspection: False")
         output.mkdir(parents=True, exist_ok=True)
@@ -932,9 +951,7 @@ def build(args: argparse.Namespace) -> int:
                 "from the pinned immutable inputs"
             ),
             "independent_build_roots": build_a_root != build_b_root,
-            "independent_pex_roots": build_environment(build_a_root, epoch)[
-                "PEX_ROOT"
-            ]
+            "independent_pex_roots": build_environment(build_a_root, epoch)["PEX_ROOT"]
             != build_environment(build_b_root, epoch)["PEX_ROOT"],
             "temporary_build_path_embedded": False,
         }
@@ -953,6 +970,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--artifact", type=Path)
     command.add_argument("--report", type=Path, default=Path("standalone-proof.json"))
     command.add_argument("--python", default=sys.executable)
+    command.add_argument(
+        "--wheel", type=Path, help="use an already validated canonical wheel"
+    )
     return command
 
 

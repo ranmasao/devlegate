@@ -24,6 +24,7 @@ Repository = "https://github.com/ranmasao/devlegate"
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "coverage>=7.12",
     "pytest>=8",
     "pytest-xdist>=3.6",
