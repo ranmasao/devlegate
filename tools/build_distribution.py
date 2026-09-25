@@ -188,7 +188,7 @@ def validate_sdist(artifact: Artifact, source: Source) -> None:
             name.startswith("src/devlegate/") for name in names
         ):
             raise DistributionError("sdist source or license content is incomplete")
-        if any(".egg-info" in name or "/tmp/" in name for name in names):
+        if any("/tmp/" in name or name.startswith("build/") for name in names):
             raise DistributionError("sdist contains transient build paths")
 
 
