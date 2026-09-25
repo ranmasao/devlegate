@@ -84,6 +84,7 @@ from devlegate.systemd_supervisor import (
     SystemdSupervisorError,
     managed_unit_paths,
     notify_ready,
+    unit_name,
     unit_path,
 )
 
@@ -590,9 +591,23 @@ def _wait_for_runtime_stop(locator: RuntimeLocator) -> None:
 def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
     supervisor = SystemdSupervisor()
     try:
-        if not supervisor.inspect(locator) or not supervisor.status(locator):
+        store = SQLiteRuntimeStore(locator.state_dir, locator.state_key)
+        authority = store.supervision_authority()
+        name = (
+            authority["unit_name"]
+            if authority is not None and authority.get("authority") == "systemd"
+            else None
+        )
+        if name is None:
+            existing = supervisor.managed_unit_for(locator)
+            name = existing.name if existing is not None else None
+        if (
+            name is None
+            or not supervisor.inspect(locator, name=name)
+            or not supervisor.status(locator, name=name)
+        ):
             return None
-    except SystemdSupervisorError as error:
+    except (RuntimeStoreError, SystemdSupervisorError) as error:
         raise DevlegateError(str(error)) from error
     return supervisor
 
@@ -615,27 +630,84 @@ def _systemd_authority_established(
     except RuntimeStoreError as error:
         raise DevlegateError(str(error)) from error
     current = supervisor or SystemdSupervisor()
-    path = unit_path(target.locator, getattr(current, "unit_directory", None))
     if authority is not None:
         expected = {
             "authority": "systemd",
-            "unit_name": path.name,
             "state_key": target.locator.state_key,
             "env_file": str(target.env_file.resolve()),
             "repository": str(target.repo.resolve()),
         }
-        if authority != expected:
+        if any(authority.get(key) != value for key, value in expected.items()):
             raise DevlegateError(
                 "persisted systemd authority does not match the selected project"
             )
-        return store, True
-    if path.exists():
         try:
-            current.inspect(target.locator, env_file=target.env_file)
+            unit_path(
+                target.locator,
+                getattr(current, "unit_directory", None),
+                name=authority["unit_name"],
+            )
+            if current.inspect(
+                target.locator,
+                env_file=target.env_file,
+                name=authority["unit_name"],
+            ):
+                return store, True
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
+        return store, True
+    finder = getattr(current, "managed_unit_for", None)
+    if finder is None:
+        try:
+            if current.inspect(target.locator, env_file=target.env_file):
+                return store, True
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
+        existing = None
+    else:
+        try:
+            existing = finder(target.locator)
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
+    if existing is None:
+        preferred = unit_path(
+            target.locator, getattr(current, "unit_directory", None)
+        )
+        if preferred.exists():
+            try:
+                current.inspect(
+                    target.locator,
+                    env_file=target.env_file,
+                    name=preferred.name,
+                )
+            except SystemdSupervisorError as error:
+                raise DevlegateError(str(error)) from error
+            existing = preferred
+    if existing is not None:
+        try:
+            current.inspect(
+                target.locator, env_file=target.env_file, name=existing.name
+            )
         except SystemdSupervisorError as error:
             raise DevlegateError(str(error)) from error
         return store, True
     return store, False
+
+
+def _known_systemd_name(
+    target: ProjectTarget, supervisor: SystemdSupervisor, store: SQLiteRuntimeStore
+) -> str | None:
+    try:
+        authority = store.supervision_authority()
+        if authority is not None and authority.get("authority") == "systemd":
+            return authority["unit_name"]
+        finder = getattr(supervisor, "managed_unit_for", None)
+        if finder is None:
+            return unit_name(target.locator)
+        existing = finder(target.locator)
+    except (RuntimeStoreError, SystemdSupervisorError) as error:
+        raise DevlegateError(str(error)) from error
+    return existing.name if existing is not None else None
 
 
 def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
@@ -969,6 +1041,22 @@ def _project_path(path: Path | None) -> Path:
     return canonical_env_path(selected)
 
 
+def _project_list_unit(env: str) -> str:
+    path = canonical_env_path(Path(env))
+    if not path.is_file():
+        return "-"
+    try:
+        locator = RuntimeLocator.from_env(path)
+        authority = SQLiteRuntimeStore(
+            locator.state_dir, locator.state_key
+        ).supervision_authority()
+    except (RuntimeLocatorError, RuntimeStoreError):
+        return "-"
+    if authority is None or authority.get("authority") != "systemd":
+        return "-"
+    return authority.get("unit_name", "-")
+
+
 def _remove_project(args: argparse.Namespace) -> int:
     if not args.alias.startswith("@"):
         raise DevlegateError("project remove requires @ALIAS")
@@ -978,14 +1066,19 @@ def _remove_project(args: argparse.Namespace) -> int:
         target = registry.target_for_alias(alias)
         supervisor = SystemdSupervisor()
         store, systemd_authority = _systemd_authority_established(target, supervisor)
-        managed_unit = supervisor.inspect(target.locator, env_file=target.env_file)
+        unit = _known_systemd_name(target, supervisor, store)
+        managed_unit = (
+            supervisor.inspect(target.locator, env_file=target.env_file, name=unit)
+            if unit is not None
+            else False
+        )
         supervisor_removed = False
         if systemd_authority:
-            supervisor.remove(target.locator, env_file=target.env_file)
+            supervisor.remove(target.locator, env_file=target.env_file, name=unit)
             supervisor_removed = True
         elif target.locator.daemon_authority_present():
-            if managed_unit and supervisor.status(target.locator):
-                supervisor.remove(target.locator, env_file=target.env_file)
+            if managed_unit and supervisor.status(target.locator, name=unit):
+                supervisor.remove(target.locator, env_file=target.env_file, name=unit)
                 supervisor_removed = True
             else:
                 _stop_runtime(target.locator)
@@ -994,9 +1087,9 @@ def _remove_project(args: argparse.Namespace) -> int:
                 f"cannot decommission @{alias}: service authority remains"
             )
         if managed_unit and not supervisor_removed:
-            supervisor.remove(target.locator, env_file=target.env_file)
+            supervisor.remove(target.locator, env_file=target.env_file, name=unit)
             supervisor_removed = True
-        if supervisor.inspect(target.locator):
+        if unit is not None and supervisor.inspect(target.locator, name=unit):
             raise DevlegateError(
                 f"cannot decommission @{alias}: systemd unit remains registered"
             )
@@ -1038,16 +1131,21 @@ def _project_command(args: argparse.Namespace) -> int:
                         "alias": alias,
                         "env": env,
                         "state": "ok" if Path(env).is_file() else "missing",
+                        "unit": _project_list_unit(env),
                     }
                     for alias, env in sorted(projects.items())
                 ]
                 if args.output_format != "table":
                     emit({"projects": rows}, args.output_format, "")
                 else:
-                    print("ALIAS       ENV                                      STATE")
+                    print(
+                        "ALIAS       ENV                                      "
+                        "STATE   UNIT"
+                    )
                     for row in rows:
                         print(
-                            f"{row['alias']:<11} {row['env']:<40} {row['state']}"
+                            f"{row['alias']:<11} {row['env']:<40} "
+                            f"{row['state']:<7} {row['unit']}"
                         )
                 return 0
             case "resolve":
@@ -1142,24 +1240,30 @@ def _systemd_service_command(args: argparse.Namespace) -> int:
         )
         assert target is not None
         supervisor = SystemdSupervisor()
+        store, _established = _systemd_authority_established(target, supervisor)
+        unit = _known_systemd_name(target, supervisor, store)
         match args.service_action:
             case "install":
-                path = supervisor.install(target.locator, target.env_file)
+                path = supervisor.install(
+                    target.locator, target.env_file, name=unit
+                )
                 print(f"systemd user unit installed: {path}")
             case "remove":
-                path = supervisor.remove(target.locator, env_file=target.env_file)
+                path = supervisor.remove(
+                    target.locator, env_file=target.env_file, name=unit
+                )
                 print(f"systemd user unit removed: {path}")
             case "start":
-                supervisor.start(target.locator)
+                supervisor.start(target.locator, name=unit)
                 print("Devlegate systemd service started.")
             case "stop":
-                supervisor.stop(target.locator)
+                supervisor.stop(target.locator, name=unit)
                 print("Devlegate systemd service stopped.")
             case "restart":
-                supervisor.restart(target.locator)
+                supervisor.restart(target.locator, name=unit)
                 print("Devlegate systemd service restarted.")
             case "status":
-                active = supervisor.status(target.locator)
+                active = supervisor.status(target.locator, name=unit)
                 print("active" if active else "inactive")
                 return 0 if active else 3
             case _:
@@ -1271,9 +1375,15 @@ def _start_background(
 def _start_systemd(target: ProjectTarget) -> int:
     supervisor = SystemdSupervisor()
     try:
-        path = supervisor.install(target.locator, target.env_file)
-        supervisor.start(target.locator)
         store = _supervision_store(target)
+        authority = store.supervision_authority()
+        unit = (
+            authority["unit_name"]
+            if authority is not None and authority.get("authority") == "systemd"
+            else None
+        )
+        path = supervisor.install(target.locator, target.env_file, name=unit)
+        supervisor.start(target.locator, name=path.name)
         store.establish_systemd_authority(
             unit_name=path.name,
             state_key=target.locator.state_key,
@@ -2227,7 +2337,7 @@ def _run_default_command(
             print("Devlegate service is already running.")
             return 0
         supervisor = SystemdSupervisor()
-        _store, established = _systemd_authority_established(target, supervisor)
+        store, established = _systemd_authority_established(target, supervisor)
         if established:
             return _start_systemd(target)
         try:
@@ -2244,7 +2354,11 @@ def _run_default_command(
             return _start_systemd(target)
         except DevlegateError as error:
             try:
-                supervisor.remove(target.locator, env_file=target.env_file)
+                supervisor.remove(
+                    target.locator,
+                    env_file=target.env_file,
+                    name=_known_systemd_name(target, supervisor, store),
+                )
             except SystemdSupervisorError as cleanup_error:
                 raise DevlegateError(
                     "systemd startup failed and managed-unit cleanup failed: "

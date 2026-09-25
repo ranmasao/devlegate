@@ -187,11 +187,11 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
         def probe_user_manager(self):
             calls.append("probe")
 
-        def install(self, locator, env):
+        def install(self, locator, env, **_kwargs):
             calls.append("install")
             return self.unit_directory / unit_name(locator)
 
-        def start(self, locator):
+        def start(self, locator, **_kwargs):
             calls.append("start")
 
         def inspect(self, locator, **_kwargs):
@@ -214,4 +214,4 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
         )
         == 0
     )
-    assert calls == ["probe", "install", "start"]
+    assert calls == ["inspect", "probe", "install", "start"]

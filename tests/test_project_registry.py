@@ -18,6 +18,7 @@ from devlegate.project_registry import (
     canonical_env_path,
     validate_alias,
 )
+from devlegate.runtime_store import SQLiteRuntimeStore
 from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
 
 
@@ -200,8 +201,11 @@ def test_systemd_address_forms_share_the_same_state_key_and_unit(
     seen: list[str] = []
 
     class FakeSupervisor:
-        def status(self, locator):
-            seen.append(f"devlegate-{locator.state_key}.service")
+        def inspect(self, _locator, **_kwargs):
+            return False
+
+        def status(self, locator, *, name=None):
+            seen.append(name or f"devlegate-{locator.state_key[:8]}.service")
             return False
 
     monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
@@ -220,9 +224,9 @@ def test_systemd_address_forms_share_the_same_state_key_and_unit(
         assert cli._systemd_service_command(args) == 3
 
     assert seen == [
-        f"devlegate-{registered.locator.state_key}.service",
-        f"devlegate-{registered.locator.state_key}.service",
-        f"devlegate-{registered.locator.state_key}.service",
+        f"devlegate-{registered.locator.state_key[:8]}.service",
+        f"devlegate-{registered.locator.state_key[:8]}.service",
+        f"devlegate-{registered.locator.state_key[:8]}.service",
     ]
 
 
@@ -248,8 +252,8 @@ def test_project_rename_preserves_runtime_identity(tmp_path: Path, monkeypatch, 
     assert renamed.locator.lock_path == registered.locator.lock_path
     assert renamed.locator.socket_path == registered.locator.socket_path
     assert renamed.locator.log_dir == registered.locator.log_dir
-    assert f"devlegate-{renamed.locator.state_key}.service" == (
-        f"devlegate-{registered.locator.state_key}.service"
+    assert f"devlegate-{renamed.locator.state_key[:8]}.service" == (
+        f"devlegate-{registered.locator.state_key[:8]}.service"
     )
     assert "renamed @rslab2 to @ratil" in capsys.readouterr().out
 
@@ -304,6 +308,123 @@ def test_project_remove_compare_and_remove_preserves_replaced_alias(
     with pytest.raises(ProjectRegistryError, match="unknown project alias"):
         registry.unregister("foo", expected_env=env)
     assert registry.target_for_alias("bar").env_file == canonical_env_path(env)
+
+
+def test_project_list_reports_persisted_unit_names_and_missing_projects(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    env_short = project(tmp_path, "short-list")
+    env_old = project(tmp_path, "old-list")
+    env_plain = project(tmp_path, "plain-list")
+    env_missing = project(tmp_path, "missing-list")
+    registry = ProjectRegistry()
+    targets = {
+        alias: registry.register(alias, env)
+        for alias, env in (
+            ("short", env_short),
+            ("old", env_old),
+            ("plain", env_plain),
+            ("missing", env_missing),
+        )
+    }
+    short_name = f"devlegate-{targets['short'].locator.state_key[:8]}.service"
+    old_name = f"devlegate-{targets['old'].locator.state_key}.service"
+    for alias, name in (("short", short_name), ("old", old_name)):
+        target = targets[alias]
+        SQLiteRuntimeStore(
+            target.locator.state_dir, target.locator.state_key
+        ).establish_systemd_authority(
+            unit_name=name,
+            state_key=target.locator.state_key,
+            env_file=target.env_file,
+            repository=target.repo,
+        )
+    env_missing.unlink()
+
+    assert (
+        cli._project_command(
+            Namespace(project_action="list", output_format="table")
+        )
+        == 0
+    )
+    table = capsys.readouterr().out
+    assert short_name in table
+    assert old_name in table
+    assert "plain-list/.env" in table
+    assert "missing-list/.env" in table
+
+    assert (
+        cli._project_command(
+            Namespace(project_action="list", output_format="json")
+        )
+        == 0
+    )
+    rows = json.loads(capsys.readouterr().out)["projects"]
+    by_alias = {row["alias"]: row for row in rows}
+    assert by_alias["short"]["unit"] == short_name
+    assert by_alias["old"]["unit"] == old_name
+    assert by_alias["plain"]["unit"] == "-"
+    assert by_alias["missing"] == {
+        "alias": "missing",
+        "env": str(env_missing),
+        "state": "missing",
+        "unit": "-",
+    }
+
+
+def test_project_alias_rename_does_not_change_systemd_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = project(tmp_path, "rename-unit")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    registry = ProjectRegistry()
+    target = registry.register("rslab2", env)
+    unit = f"devlegate-{target.locator.state_key[:8]}.service"
+    store = SQLiteRuntimeStore(target.locator.state_dir, target.locator.state_key)
+    store.establish_systemd_authority(
+        unit_name=unit,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+
+    registry.rename("rslab2", "ratil")
+
+    assert (
+        registry.target_for_alias("ratil").locator.state_key
+        == target.locator.state_key
+    )
+    assert store.supervision_authority()["unit_name"] == unit
+
+
+def test_start_systemd_reprovisions_persisted_legacy_name(tmp_path, monkeypatch):
+    env = project(tmp_path, "legacy-reprovision")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = ProjectRegistry().register("legacy", env)
+    legacy = f"devlegate-{target.locator.state_key}.service"
+    store = SQLiteRuntimeStore(target.locator.state_dir, target.locator.state_key)
+    store.establish_systemd_authority(
+        unit_name=legacy,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeSupervisor:
+        def install(self, _locator, _env_file, *, name=None):
+            calls.append(("install", name))
+            return tmp_path / "units" / (name or "unexpected.service")
+
+        def start(self, _locator, *, name=None):
+            calls.append(("start", name))
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
+
+    assert cli._start_systemd(target) == 0
+    assert calls == [("install", legacy), ("start", legacy)]
+    assert store.supervision_authority()["unit_name"] == legacy
 
 
 def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(

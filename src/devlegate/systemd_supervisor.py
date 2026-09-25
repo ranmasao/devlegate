@@ -32,12 +32,27 @@ def user_unit_dir(environment: dict[str, str] | None = None) -> Path:
     return config_home / "systemd" / "user"
 
 
-def unit_name(locator: RuntimeLocator) -> str:
-    return f"devlegate-{locator.state_key}.service"
+_UNIT_NAME = re.compile(r"devlegate-[0-9a-f]{8,64}\.service\Z")
 
 
-def unit_path(locator: RuntimeLocator, directory: Path | None = None) -> Path:
-    return (user_unit_dir() if directory is None else directory) / unit_name(locator)
+def unit_name(locator: RuntimeLocator, prefix_length: int = 8) -> str:
+    return f"devlegate-{locator.state_key[:prefix_length]}.service"
+
+
+def _validate_unit_name(name: str) -> str:
+    if not _UNIT_NAME.fullmatch(name):
+        raise SystemdSupervisorError(f"unsafe systemd unit name: {name}")
+    return name
+
+
+def unit_path(
+    locator: RuntimeLocator,
+    directory: Path | None = None,
+    *,
+    name: str | None = None,
+) -> Path:
+    selected = unit_name(locator) if name is None else _validate_unit_name(name)
+    return (user_unit_dir() if directory is None else directory) / selected
 
 
 def _systemd_quote(value: str) -> str:
@@ -178,10 +193,23 @@ class SystemdSupervisor:
             )
         return result
 
-    def install(self, locator: RuntimeLocator, env_file: Path) -> Path:
-        path = unit_path(locator, self.unit_directory)
+    def install(
+        self,
+        locator: RuntimeLocator,
+        env_file: Path,
+        *,
+        name: str | None = None,
+    ) -> Path:
+        if name is None:
+            existing = self.managed_unit_for(locator)
+            name = (
+                existing.name
+                if existing is not None
+                else self.allocate_unit_name(locator)
+            )
+        path = unit_path(locator, self.unit_directory, name=name)
         if path.exists():
-            self.inspect(locator)
+            self.inspect(locator, name=path.name)
         self.probe_user_manager()
         try:
             _write_atomic(path, render_unit(locator, env_file, launcher=self.launcher))
@@ -206,9 +234,15 @@ class SystemdSupervisor:
                 "systemd user manager uses a different XDG_CONFIG_HOME"
             )
 
-    def inspect(self, locator: RuntimeLocator, *, env_file: Path | None = None) -> bool:
+    def inspect(
+        self,
+        locator: RuntimeLocator,
+        *,
+        env_file: Path | None = None,
+        name: str | None = None,
+    ) -> bool:
         """Verify and report the exact managed unit registration."""
-        path = unit_path(locator, self.unit_directory)
+        path = unit_path(locator, self.unit_directory, name=name)
         if not path.exists():
             return False
         try:
@@ -232,10 +266,16 @@ class SystemdSupervisor:
             )
         return True
 
-    def remove(self, locator: RuntimeLocator, *, env_file: Path | None = None) -> Path:
-        path = unit_path(locator, self.unit_directory)
+    def remove(
+        self,
+        locator: RuntimeLocator,
+        *,
+        env_file: Path | None = None,
+        name: str | None = None,
+    ) -> Path:
+        path = unit_path(locator, self.unit_directory, name=name)
         if path.exists():
-            self.inspect(locator, env_file=env_file)
+            self.inspect(locator, env_file=env_file, name=path.name)
         self.probe_user_manager()
         if path.exists():
             self._run("stop", path.name, allow_failure=True)
@@ -249,24 +289,80 @@ class SystemdSupervisor:
         self._run("daemon-reload")
         return path
 
-    def start(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
+    def start(
+        self,
+        locator: RuntimeLocator,
+        *,
+        name: str | None = None,
+        timeout: float = 15,
+    ) -> None:
         self.probe_user_manager()
-        self._run("start", unit_name(locator))
+        selected = unit_name(locator) if name is None else _validate_unit_name(name)
+        self._run("start", selected)
         self.wait_ready(locator, timeout=timeout)
 
-    def stop(self, locator: RuntimeLocator) -> None:
+    def stop(self, locator: RuntimeLocator, *, name: str | None = None) -> None:
         self.probe_user_manager()
-        self._run("stop", unit_name(locator))
+        selected = unit_name(locator) if name is None else _validate_unit_name(name)
+        self._run("stop", selected)
 
-    def restart(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
+    def restart(
+        self,
+        locator: RuntimeLocator,
+        *,
+        name: str | None = None,
+        timeout: float = 15,
+    ) -> None:
         self.probe_user_manager()
-        self._run("restart", unit_name(locator))
+        selected = unit_name(locator) if name is None else _validate_unit_name(name)
+        self._run("restart", selected)
         self.wait_ready(locator, timeout=timeout)
 
-    def status(self, locator: RuntimeLocator) -> bool:
+    def status(self, locator: RuntimeLocator, *, name: str | None = None) -> bool:
         self.probe_user_manager()
-        result = self._run("is-active", unit_name(locator), allow_failure=True)
+        selected = unit_name(locator) if name is None else _validate_unit_name(name)
+        result = self._run("is-active", selected, allow_failure=True)
         return result.returncode == 0
+
+    def allocate_unit_name(self, locator: RuntimeLocator) -> str:
+        prefix_lengths = (8, 16, *range(20, 65, 4))
+        for prefix_length in prefix_lengths:
+            candidate = unit_name(locator, prefix_length)
+            path = unit_path(locator, self.unit_directory, name=candidate)
+            if not path.exists():
+                return candidate
+            if self._managed_for_state(path, locator.state_key):
+                return candidate
+        raise SystemdSupervisorError(
+            f"no safe systemd unit name available for {locator.state_key}"
+        )
+
+    def managed_unit_for(self, locator: RuntimeLocator) -> Path | None:
+        matches = [
+            path
+            for path in managed_unit_paths(self.unit_directory)
+            if self._managed_for_state(path, locator.state_key)
+        ]
+        if len(matches) > 1:
+            names = ", ".join(path.name for path in matches)
+            raise SystemdSupervisorError(
+                f"multiple managed systemd units identify state key "
+                f"{locator.state_key}: {names}"
+            )
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _managed_for_state(path: Path, state_key: str) -> bool:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise SystemdSupervisorError(
+                f"cannot read systemd unit {path}: {error}"
+            ) from error
+        return (
+            MANAGED_MARKER in content
+            and f"# state_key={state_key}" in content
+        )
 
     def wait_ready(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
         deadline = self._monotonic() + timeout
