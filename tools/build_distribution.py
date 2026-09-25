@@ -274,17 +274,6 @@ def build_standalone(
     report = output / "standalone-build.json"
     if not report.is_file():
         raise DistributionError("standalone builder did not produce its build report")
-    run(
-        [
-            source.python,
-            str(source.repo / "tools/build_standalone.py"),
-            "prove",
-            "--artifact",
-            str(executable.path),
-            "--report",
-            str(work / "standalone-proof.json"),
-        ]
-    )
     package_output = work / "standalone-package"
     package_output.mkdir()
     run(
@@ -309,22 +298,46 @@ def build_standalone(
         archive.path.with_name(f"{archive.path.name}.sha256"), "standalone checksum"
     )
     validate_dir = work / "standalone-validated"
-    run(
-        [
-            source.python,
-            str(source.repo / "tools/validate_standalone_package.py"),
-            "--archive",
-            str(archive.path),
-            "--sidecar",
-            str(sidecar.path),
-            "--repo",
-            str(source.repo),
-            "--build-report",
-            str(report),
-            "--extract-dir",
-            str(validate_dir),
-        ]
+    validated_root = Path(
+        run(
+            [
+                source.python,
+                str(source.repo / "tools/validate_standalone_package.py"),
+                "--archive",
+                str(archive.path),
+                "--sidecar",
+                str(sidecar.path),
+                "--repo",
+                str(source.repo),
+                "--build-report",
+                str(report),
+                "--extract-dir",
+                str(validate_dir),
+            ]
+        )
+        .strip()
+        .splitlines()[-1]
     )
+    smoke_environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(work / "smoke-home"),
+        "XDG_CONFIG_HOME": str(work / "smoke-config"),
+        "XDG_STATE_HOME": str(work / "smoke-state"),
+        "XDG_CACHE_HOME": str(work / "smoke-cache"),
+        "PEX_ROOT": str(work / "smoke-pex-root"),
+    }
+    result = subprocess.run(
+        [str(validated_root / "devlegate"), "version"],
+        cwd=work,
+        env=smoke_environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise DistributionError(
+            f"standalone isolated execution proof failed:\n{result.stderr}"
+        )
     return {
         "archive": archive,
         "sidecar": sidecar,
@@ -520,8 +533,7 @@ def package(args: argparse.Namespace) -> int:
         if args.target in {"sdist", "python", "all"}:
             if args.target == "sdist":
                 print(
-                    f"[{len(order) + 1}/{len(order) + 1}] "
-                    "Proving Python installation"
+                    f"[{len(order) + 1}/{len(order) + 1}] Proving Python installation"
                 )
             prove_python_install(values["sdist"], source, workspace_path)
         final_files = publish(
