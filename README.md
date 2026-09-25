@@ -3,7 +3,7 @@
 ```text
            D | L
 ---< D E V L E G A T E >---
-          S.P.Q.R.
+         S.P.Q.R.
 
 State · Provenance · Quality · Recovery
 ```
@@ -11,13 +11,12 @@ State · Provenance · Quality · Recovery
 [![CI](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml/badge.svg)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ranmasao/devlegate/badges/coverage.json)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 
-Devlegate is a local deterministic control plane and orchestrator for coding
-agents. The agent implements changes; Devlegate owns the workflow around them:
-selecting work, preserving Git authority and provenance, validating transitions,
-and recovering only from durable evidence.
+Devlegate is a local orchestrator for coding agents.
 
-It is not another coding model or chat agent. It is the boundary that makes a
-nondeterministic worker operate inside a controlled development process.
+The agent writes the code. Devlegate chooses the work, prepares an isolated
+workspace, controls Git updates, records what happened, sends completed work to
+review, and integrates accepted changes. When it cannot safely determine the
+current state, it stops instead of guessing.
 
 ## How It Works
 
@@ -26,99 +25,124 @@ ticket
   ↓
 Devlegate selects work
   ↓
-agent edits an isolated workspace
+agent works in an isolated workspace
   ↓
-Devlegate preserves the result
+result goes to review
   ↓
-review
-  ↓
-accepted integration
+accepted work is integrated
   ↓
 done
 ```
 
-Product history, workflow control history, and active ticket work live in
-separate Git surfaces. Workers produce implementation and validated evidence;
-Devlegate performs publication, workflow movement, review handoff, and accepted
-integration. Ambiguous ownership or state fails closed instead of being guessed
-through.
+The agent produces implementation. Devlegate controls the workflow and Git
+operations around it. Review and integration are separate steps, and product
+history stays separate from workflow history.
 
 ## Why Devlegate / SPQR
 
-The useful distinction is simple:
-
 | Coding agent | Devlegate |
 | --- | --- |
-| Produces implementation | Selects and admits work |
-| Works in an assigned workspace | Owns durable state and exact provenance |
-| Returns a result | Controls Git publication and integration |
-| Supplies evidence | Validates transitions and recovery |
+| Writes implementation | Selects and tracks work |
+| Works in an assigned workspace | Controls Git updates and workflow state |
+| Returns a result | Records where the result came from |
+| Provides evidence | Validates review, recovery, and integration |
 
-SPQR names the four concrete design commitments:
+SPQR describes the four design commitments:
 
-- **State**: explicit durable workflow and runtime state.
-- **Provenance**: know which repository, control revision, workspace, and result produced work.
-- **Quality**: validation, review, and acceptance are explicit gates.
-- **Recovery**: known evidence may resume work; ambiguity stops for inspection.
+- **State**: workflow state is explicit and saved.
+- **Provenance**: Devlegate can trace where each result came from.
+- **Quality**: checks and review happen before integration.
+- **Recovery**: interrupted work resumes only when it is safe to do so.
 
-Git remains authoritative outside the worker. Worker output is input and
-evidence, not workflow authority. Review remains separate from product
-integration, and product history remains separate from workflow history.
+## Installation
+
+Choose the artifact that fits the environment. These are independent ways to
+install Devlegate; none requires a systemd package dependency.
+
+### Debian-family Linux
+
+Requirements: x86_64 / amd64 and a Debian-family Linux system.
+
+The package filename is `devlegate_<version>_amd64.deb`:
+
+```sh
+sudo apt install ./devlegate_*.deb
+```
+
+### Standalone Linux archive
+
+The self-contained archive targets Linux x86_64 with glibc. It bundles its own
+Python runtime and does not require host Python, pip, or a virtual environment.
+The archive contains `devlegate-<version>-linux-x86_64/devlegate`:
+
+```sh
+tar -xzf devlegate-<version>-linux-x86_64.tar.gz
+sudo install -m 755 \
+  devlegate-<version>-linux-x86_64/devlegate /usr/local/bin/devlegate
+```
+
+### Python wheel
+
+The Python distribution requires Python 3.12 or newer and has no third-party
+runtime Python dependencies. Install a built wheel directly:
+
+```sh
+python3 -m pip install ./dist/devlegate-<version>-py3-none-any.whl
+```
+
+The project does not assume PyPI publication.
+
+### Source checkout
+
+A source checkout is the contributor and development path. It includes the
+`./dev` development helper and the source needed to build the other artifacts.
+See [Development](docs/DEVELOPMENT.md).
 
 ## Quick Start
 
-Devlegate currently operates on Linux-hosted local Git repositories. From an
-existing repository root:
+After installing Devlegate, attach it to an existing Git project:
 
 ```sh
-python -m pip install -e /path/to/devlegate
+cd /path/to/project
 devlegate init my-project
-# configure .env and .devlegate/project.md
+# edit the generated .env and .devlegate/project.md
 devlegate control init
 devlegate check
 devlegate
 ```
 
-The normal `devlegate` command chooses automatic systemd supervision when the
-current user manager is usable; otherwise it runs attached to the terminal.
-Use `devlegate foreground` for an explicitly attached continuous service or
-`devlegate once` for one scheduler pass. See [Operations](docs/OPERATIONS.md)
-for project adoption, addressing, service control, and recovery commands.
+If the current user has access to a usable systemd user manager, Devlegate uses
+it automatically for the project service. If not, it runs attached to the
+terminal instead. See [Project Setup](docs/PROJECT_SETUP.md) and
+[Operations](docs/OPERATIONS.md) for details.
 
 ## What Works Today
 
-- Ticket-driven workflow with isolated per-ticket workspaces.
-- Persistent service ownership through local Unix IPC.
-- Automatic systemd-or-direct hosting, with fail-closed ownership checks.
-- Separate review and accepted integration boundaries.
-- SQLite operational state kept outside canonical Git history.
-- Explicit retry, drop, reconciliation, and evidence-based recovery.
+- Local Git repositories with ticket-driven work.
+- Isolated workspaces for agent changes.
+- Automatic systemd user supervision when available, with attached fallback.
+- Separate review and accepted integration steps.
+- Local SQLite runtime state outside Git history.
+- Explicit retry, drop, reconciliation, and recovery commands.
 
 Current limits:
 
 - Hosted execution requires Linux.
-- Execution is serial; there is no warm worker pool.
-- Workers are ephemeral and external integrations are not part of this release.
-- Standalone and Debian distribution proofs target Linux x86_64; public binary
-  publication begins with `0.6.0`.
-
-## Development
-
-```sh
-./dev setup
-./dev check
-./dev test-parallel
-```
+- Execution is serial and workers are ephemeral.
+- There is no warm worker pool or external integration layer.
+- Standalone and Debian artifacts target Linux x86_64.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md): ownership, runtime, worker, and recovery boundaries.
-- [Operations](docs/OPERATIONS.md): projects, services, status, logs, and recovery commands.
-- [Pre-install guide](preinst_readme.md): adoption and project-context preparation.
-- [Distribution](docs/DISTRIBUTION.md): wheel, standalone, and Debian contracts.
-- [Release packaging](docs/RELEASE_PACKAGING.md): artifact construction and publication policy.
-- [Roadmap](ROADMAP.md): future engineering direction.
-- [Changelog](CHANGELOG.md): shipped product changes.
+- [Project Setup](docs/PROJECT_SETUP.md): attach Devlegate to an existing project.
+- [Operations](docs/OPERATIONS.md): addressing, services, status, logs, and recovery.
+- [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
+- [Distribution](docs/DISTRIBUTION.md): wheel, standalone, and Debian details.
+- [Development](docs/DEVELOPMENT.md): source-tree setup and development commands.
+- [Release Packaging](docs/RELEASE_PACKAGING.md): maintainer artifact mechanics.
+- [Roadmap](ROADMAP.md): future Devlegate work.
+- [Changelog](CHANGELOG.md): shipped changes.
+- [Contributing](CONTRIBUTING.md): contribution, licensing, and DCO rules.
 
 ## Licensing
 

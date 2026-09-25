@@ -9,12 +9,12 @@ below are directional and undated unless explicitly stated otherwise.
 Devlegate currently separates product history, workflow control history, and
 per-ticket execution workspaces into distinct Git surfaces. A persistent
 service owns mutable workflow operations and communicates with local clients
-over Unix IPC, while SQLite stores operational runtime state outside canonical
-Git history. Explicit retry and reconciliation operations, execution lineage
-validation, process-loss and shutdown handling, and fail-closed recovery form
+over Unix IPC, while SQLite stores operational runtime state outside product
+and workflow Git history. Explicit retry and reconciliation operations,
+execution-record validation, process-loss and shutdown handling, and fail-closed recovery form
 the current safety model. Restricted NanoYAML flow sequences support applicable
-configuration and control data. CI, deterministic full-source packaging, and
-current dogfooding support provide the development and distribution baseline.
+configuration and control data. CI, deterministic source and binary packaging,
+and current dogfooding support provide the development and distribution baseline.
 The licensing baseline is EUPL-1.2 for Devlegate core, CC0-1.0 for copyable
 default templates, and the separate upstream MIT license for NanoYAML.
 
@@ -26,8 +26,7 @@ default templates, and the separate upstream MIT license for NanoYAML.
   adding new integrations.
 - Improve worker execution isolation and terminal behavior where real workloads
   require stronger boundaries or PTY semantics.
-- Extend packaging and distribution checks beyond the current source-release
-  infrastructure as concrete use cases emerge.
+- Extend packaging and distribution checks as concrete use cases emerge.
 
 ## Worker Isolation And Execution
 
@@ -45,7 +44,7 @@ General parallel worker execution remains deferred. Future designs may need
 bounded concurrency, explicit worker ownership and lifecycle policy, and clear
 tradeoffs between reusable warm processes and clean-session guarantees. Any
 warm worker process or worker pool must prevent cross-task state leakage and
-remain compatible with deterministic scheduling, lineage, cleanup, and
+remain compatible with deterministic scheduling, execution cleanup, and
 recovery.
 
 ## Integrations
@@ -58,13 +57,9 @@ product commitments.
 
 ## Packaging And Distribution
 
-Deterministic full-source release packaging already exists and includes the
-materialized source dependencies required by that artifact. A possible future
-standalone distribution could bundle application bytecode or a Python runtime,
-but no bundling technology has been selected. Such work would require an
-explicit inventory of third-party runtime licenses and generated notices, plus
-reproducible artifact construction where practical. It is separate from the
-current source-only release infrastructure.
+Deterministic full-source, standalone, and Debian package proofs now exist.
+Future work may extend platform coverage, distribution automation, and the
+third-party license inventory as concrete use cases emerge.
 
 ## Longer-Term / Exploratory
 
@@ -73,10 +68,3 @@ plugin or adapter API surfaces, warm-worker architecture, broader external
 integrations, and additional deployment or distribution forms. These topics
 are deferred and exploratory; they are not assigned to a release or promised
 as a specific implementation.
-
-## Separate Projects
-
-Transactional Git is a separate research and development project, not a
-Devlegate roadmap deliverable. Devlegate may consume an interface from that
-project in the future if one becomes useful and stable, but Transactional Git
-is not part of Devlegate's implementation scope.

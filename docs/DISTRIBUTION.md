@@ -11,7 +11,7 @@ The implemented path is:
 source -> wheel -> PEX eager scie standalone executable
 ```
 
-The wheel is the canonical Python payload. The standalone build is for Linux
+The wheel is the main Python payload. The standalone build is for Linux
 x86_64 with bundled CPython 3.12. No macOS, Windows, ARM64, or PyPI
 distribution is implemented here.
 
@@ -20,7 +20,7 @@ Build and proof commands are explicit and separate:
 ```sh
 python3 tools/build_standalone.py build --output /tmp/devlegate-standalone
 python3 tools/build_standalone.py prove \
-  --artifact /tmp/devlegate-standalone/devlegate-0.5.4.dev0-linux-x86_64
+  --artifact /tmp/devlegate-standalone/devlegate-<version>-linux-x86_64
 ```
 
 The build pins PEX `2.103.2`, Science `0.21.0`, Python Standalone Builds release
@@ -34,26 +34,24 @@ its own isolated bootstrap wheels, pip `23.2`, setuptools `68.0.0`, and wheel
 wheel build backend or runtime dependencies. It does not modify the normal
 runtime dependency set or invoke package managers at runtime.
 
-The standalone publication unit is a deterministic
+The standalone distribution unit is a deterministic
 `devlegate-<version>-linux-x86_64.tar.gz` archive containing the executable,
-Devlegate legal material, third-party notices and licenses, and stable build
-provenance. It is distinct from the full-source archive. The standalone pair is
-the supported release asset beginning with `0.6.0`:
+Devlegate legal material, third-party notices and licenses, and a stable build
+record. It is distinct from the full-source archive:
 
 ```text
 devlegate-X.Y.Z-linux-x86_64.tar.gz
 devlegate-X.Y.Z-linux-x86_64.tar.gz.sha256
 ```
 
-Beginning with `0.6.0`, the same validated archive can produce the portable
-Debian proof package:
+The same validated archive can produce the portable Debian proof package:
 
 ```text
-devlegate-X.Y.Z_amd64.deb
+devlegate_<version>_amd64.deb
 ```
 
-The package has no Python or systemd package dependencies, no maintainer
-scripts, and no systemd unit. It is not built or published for `0.5.4`.
+The package targets x86_64 / amd64 Debian-family Linux. It has no Python or
+systemd package dependencies, no maintainer scripts, and no systemd unit.
 
 The full-source pair remains separate:
 
@@ -69,7 +67,7 @@ existing release.
 The reproducibility proof assembles wheel and scie A/B independently under
 distinct temporary build roots, wheel-build environments, and PEX_ROOT caches.
 They share only immutable, hash-verified downloaded inputs. PEX_ROOT is
-build-time cache state only. The canonical scie assembly deliberately does not
+build-time cache state only. The main scie assembly deliberately does not
 override HOME or XDG cache variables, because doing so would turn a build cache
 location into the generated runtime default. The generated executable does not
 receive a build-machine runtime-pex-root or a Devlegate-owned runtime cache
@@ -138,7 +136,7 @@ NanoYAML MIT material through its PEP 639 metadata and license files. The eager
 scie additionally contains PEX bootstrap code, scie-jump, and a Python
 Standalone Builds CPython distribution. Science is used to build the artifact,
 not redistributed by the eager runtime. PBS build machinery and its MPL-2.0
-project license are provenance facts; they are not by themselves a conclusion
+project license is a build fact; it is not by itself a conclusion
 that the entire standalone executable is MPL-2.0. Final standalone publication
 still requires a separate review and packaging of the PEX, scie-jump, CPython,
 and bundled-library notice/license material.

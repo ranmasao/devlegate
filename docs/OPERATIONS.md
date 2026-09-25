@@ -1,6 +1,6 @@
 # Devlegate Operations
 
-This is the operator reference for using the current Devlegate 0.5 service.
+This is the operator reference for using the Devlegate service.
 The [README](../README.md) is the project overview; [Architecture](ARCHITECTURE.md)
 covers ownership and implementation boundaries.
 
@@ -41,7 +41,7 @@ devlegate --env /path/to/repository/.env status
 
 Without either selector, commands use `./.env` from the current directory.
 `@ALIAS` and `--env` belong before the command and are mutually exclusive.
-Aliases are local names; canonical repository identity, `state_key`, runtime
+Aliases are local names; repository identity, `state_key`, runtime
 paths, and systemd unit names do not depend on the alias.
 
 Register or inspect projects with:
@@ -54,7 +54,7 @@ devlegate project identify /path/to/repository
 devlegate project rename my-project new-name
 ```
 
-Each canonical repository root has at most one registered project and uses its
+Each repository root has at most one registered project and uses its
 root `.env`. Directory adoption resolves to that root. Fleet-wide orchestration
 is not implemented.
 
@@ -83,7 +83,7 @@ The systemd backend uses `systemctl --user`, project-specific units, and the
 active user's XDG configuration tree. It never silently adopts an unmanaged or
 cross-project unit.
 
-Inspect or control a service with:
+Inspect or control a service with these commands:
 
 ```sh
 devlegate status
@@ -91,6 +91,12 @@ devlegate plan
 devlegate stop
 devlegate restart
 devlegate @my-project service status --supervisor systemd
+```
+
+The `service` command is an advanced explicit control for a systemd user unit;
+normal `devlegate` startup chooses systemd automatically when it is usable.
+
+```sh
 devlegate @my-project service install --supervisor systemd
 devlegate @my-project service start --supervisor systemd
 devlegate @my-project service stop --supervisor systemd
@@ -104,7 +110,7 @@ unavailable, clients fail closed.
 
 ## Logs And State
 
-SQLite runtime state is operational bookkeeping, not canonical product or
+SQLite runtime state is operational bookkeeping, not product or
 workflow history. By default state is under `$XDG_STATE_HOME/devlegate`, or
 `~/.local/state/devlegate`; `STATE_DIR` may override it.
 
@@ -118,7 +124,7 @@ STATE_DIR/logs/<state-key>/executions/<execution-id>.log
 Direct and external hosting inherit the service stream from the caller or
 supervisor, while Devlegate still owns execution-log persistence. Logs are
 diagnostic navigation, not substitutes for reports, checkpoints, runtime state,
-or Git provenance.
+or Git history.
 
 Machine-readable output is available where supported:
 
@@ -142,8 +148,8 @@ devlegate reconcile update-base <ticket-id> --onto <product-branch>
 ```
 
 `retry` requests a new attempt after a failed execution. `drop` retires a
-blocked execution only when its exact lineage, checkpoint, report, and absent
-worker ownership are proven; it preserves evidence and does not rewrite the
+blocked execution only when its exact execution record, checkpoint, report, and
+absent worker ownership are proven; it preserves the record and does not rewrite the
 ticket. `reconcile resume` continues retained progress when the admitted product
 base is unchanged. `update-base` is a separate, explicit product-base
 transplant operation. Unknown or ambiguous state is not automatically recovered.

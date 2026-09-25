@@ -1,7 +1,7 @@
 # Devlegate Architecture
 
-This document describes the current 0.5 architecture. It is a
-technical reference for contributors and operators. The product overview is in
+This document describes the current architecture. It is a technical reference
+for contributors and operators. The product overview is in
 the [README](../README.md); development direction is in the
 [roadmap](../ROADMAP.md).
 
@@ -47,24 +47,24 @@ to own Python namespaces.
 
 ## Runtime Service
 
-Devlegate has one service execution model. Background, foreground, and once
-differ only in hosting and lifetime policy. The canonical service host owns the
+Devlegate has one service execution model. Foreground and once
+differ only in hosting and lifetime policy. The service host owns the
 project runtime lock, local Unix IPC endpoint, signal handling, readiness, and
 orderly teardown. It invokes one `ServiceEngine` scheduler iteration boundary.
 
-Devlegate 0.5 hosted execution requires Linux. The boundary is required by
+Hosted execution requires Linux. The boundary is required by
 strong worker process identity and recovery, process-group lifecycle handling,
 and Unix IPC peer-authentication assumptions. Unsupported platforms fail before
 mutable service authority or scheduler operation begins. Low-level identity and
 peer-authentication checks still fail closed independently; broader portability
-is not promised by this release.
+is not promised here.
 
 The hosting and lifetime policies are:
 
 ```text
-background = detached + continuous
-foreground = attached + continuous
-once       = attached + one scheduler iteration
+systemd when usable = supervisor-owned + continuous
+direct               = attached + continuous
+once                 = attached + one scheduler iteration
 ```
 
 Hosting ownership is a separate policy dimension:
@@ -77,9 +77,9 @@ external  = another supervisor owns process lifetime
 
 The current forms map to these policies as follows:
 
-| Form | Ownership | Attachment | Lifetime |
+| Form | Hosting | Attachment | Lifetime |
 | --- | --- | --- | --- |
-| bare `devlegate` | internal | detached | continuous |
+| bare `devlegate` | systemd when usable, direct otherwise | attached or inherited | continuous |
 | `devlegate foreground` | direct | attached | continuous |
 | `devlegate once` | direct | attached | one iteration |
 | systemd user service | external | inherited streams | continuous |
@@ -93,7 +93,7 @@ refuses units that do not contain the Devlegate identity marker, then stops,
 disables, removes, and reloads the exact unit.
 
 The generated unit uses `Type=notify`, `KillMode=mixed`,
-`TimeoutStopSec=infinity`, and `Restart=no`. The external canonical host sends
+`TimeoutStopSec=infinity`, and `Restart=no`. The external service host sends
 `READY=1` through the inherited `NOTIFY_SOCKET`; a missing required socket fails
 startup. systemd owns inherited service output and journal routing, while
 Devlegate owns execution-log persistence. Hosting ownership is not a project
@@ -119,7 +119,8 @@ own Python runtime and need no host Python or virtual environment.
 Host installation remains separate from software or package installation.
 Supervisors consume the centralized product launch identity rather than
 assuming Python, module, or virtual-environment details. Concrete distribution
-formats and their installation procedures are outside this release.
+formats and their installation procedures are described in
+[Distribution](DISTRIBUTION.md).
 
 Project selection is resolved before runtime construction. `@ALIAS` is the
 preferred local handle; `--env FILE` is the explicit path form; and an
@@ -127,23 +128,23 @@ unqualified command uses exactly `$PWD/.env`. All forms must identify a
 registered project, and explicit env paths resolve their Git repository from
 the env file's location rather than the caller's current directory. The
 registry is versioned user configuration under the XDG configuration hierarchy.
-There is at most one registered project per canonical Git working-tree root,
-and its canonical project configuration is `<repository-root>/.env`. Directory
+There is at most one registered project per Git working-tree root, and its
+project configuration is `<repository-root>/.env`. Directory
 adoption resolves to that repository root; alternate env filenames and env
 files below the root are rejected. Aliases do not enter runtime or systemd
 identity. Explicit addressing is independent of caller CWD, while relative
-`STATE_DIR` is resolved from the canonical repository root. `init <alias>`
-must be run from that root. Fleet-wide orchestration is outside this release.
+`STATE_DIR` is resolved from the repository root. `init <alias>` must be run
+from that root. Fleet-wide orchestration is not implemented.
 
 `project remove @ALIAS` is the reversible project decommissioning boundary. It
-resolves and retains the canonical target, gracefully stops the owning runtime,
+resolves and retains the selected target, gracefully stops the owning runtime,
 removes only a verified managed systemd registration, verifies runtime
 authority is gone, and removes the alias last with a compare-and-remove check.
 It preserves the repository, project configuration and workflow history,
 project documents and settings, and all retained `STATE_DIR` evidence. A later
 `project alias <name> /path/to/repository` restores addressing and the same
-runtime identity because `state_key` is derived from the canonical working-tree
-root. `devlegate host uninstall` requires an empty registry and no residual
+runtime identity because `state_key` is derived from the working-tree root.
+`devlegate host uninstall` requires an empty registry and no residual
 managed project units, then removes only the host policy record. It preserves
 projects and runtime evidence; removal of the software artifact remains the
 responsibility of its distribution mechanism.
@@ -153,7 +154,7 @@ The production runtime is one persistent service hosting one `ServiceEngine`.
 decisions, runs workers, and performs service operations.
 
 Multiple CLI processes may observe the service or submit supported operations.
-Mutable operations are admitted and serialized by the service owner. The
+Mutable operations are accepted and serialized by the service owner. The
 service owns ticket movement, worker execution, checkpoint commits, publication,
 reports, and accepted product integration.
 
@@ -186,7 +187,7 @@ STATE_DIR/logs/<state_key>/executions/<execution-id>.log
 The service host owns persistence of the service stream when internally hosted;
 direct and external hosting inherit that stream from the caller or supervisor.
 Devlegate owns execution-log persistence in all modes. Reports, checkpoints,
-disposition, runtime state, and Git provenance remain authoritative if an
+disposition, runtime state, and Git history remain authoritative if an
 execution log is unavailable.
 Foreground operation may show and persist worker output; internal and external
 operation routes detailed worker output to the execution log instead of the
@@ -194,7 +195,7 @@ service stream.
 When a worker sink is opened, the service stream records start and finish
 handoff markers with the ticket ID, execution ID, and absolute execution-log
 path. These records are operator navigation only; runtime state, execution
-reports, checkpoints, dispositions, and Git provenance remain authoritative.
+reports, checkpoints, dispositions, and Git history remain authoritative.
 
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.
@@ -203,7 +204,7 @@ local iteration state, not persistent service state.
 
 SQLite stores local operational runtime state. This state records active
 bookkeeping such as execution progress and request handling; it is not the
-canonical product or workflow history.
+product or workflow history.
 
 By default the state is under `$XDG_STATE_HOME/devlegate`, or
 `~/.local/state/devlegate` when `XDG_STATE_HOME` is unset. `STATE_DIR` can
@@ -211,7 +212,7 @@ override the location. State and Git observations are used together when the
 service must establish whether a previous operation took effect.
 
 Terminal service failures have a separate lifetime from workflow runtime state.
-When a hosted service escapes its canonical host boundary unexpectedly,
+When a hosted service escapes its service boundary unexpectedly,
 Devlegate records the latest small versioned diagnostic under the project state
 directory. A successful READY clears that diagnostic; orderly shutdown does not
 create one. Hard process loss, power loss, SIGKILL, and similar external events
@@ -237,7 +238,7 @@ Direct Git writers remain supported external actors, including humans, GitHub
 or API clients, and third-party automation. They should use ordinary non-force
 updates and treat a non-fast-forward rejection as a signal to re-observe the
 published history. Force updates are strongly discouraged; an external rewrite
-requires explicit operator-authorized control-lineage reconciliation afterward.
+requires explicit operator-authorized control-history reconciliation afterward.
 
 `devlegate reconcile control --from <local-head> --to <remote-head>` is not
 ordinary synchronization. It adopts only the exact, freshly verified divergent
@@ -260,14 +261,14 @@ Only `todo` tickets whose dependencies are in `done` are runnable. `review` and
 `accepted` do not satisfy dependencies. Devlegate selects one runnable ticket
 for a possible execution.
 
-Status exposes scheduler admission rather than duplicating internal dependency
+Status exposes scheduler eligibility rather than duplicating internal dependency
 readiness:
 
 - `eligible` means immediately admissible by the scheduler;
 - `blocked` means a `todo` ticket that is neither current nor eligible and has
   exactly one effective tagged blocking reason.
 
-For valid enumerable workflow state, the admission projection is partitioned as
+For valid enumerable workflow state, the eligibility view is partitioned as
 `todo = current union eligible union blocked`. These sets are pairwise
 disjoint. Dependency readiness remains an internal DAG predicate used by the
 scheduler; it is not serialized as a second status category.
@@ -307,7 +308,7 @@ Workers do not commit, push, merge, rebase, switch branches, move tickets,
 write reports, or integrate into the product branch. Reviewers decide whether
 work is accepted; Devlegate performs accepted product integration.
 
-An explicit `devlegate drop <ticket-id>` retires one blocked execution lineage
+An explicit `devlegate drop <ticket-id>` retires one blocked execution record
 when its exact execution ID, checkpoint, report, and absent worker ownership
 are proven. Drop preserves the worker conclusion as observed and records a
 separate `dropped` orchestration disposition. It pins the checkpoint under an
@@ -322,7 +323,7 @@ or purges evidence. A later ticket with the same ID is therefore fresh work.
   or scheduling.
 - Configured control and workflow paths, ticket metadata, dependency references,
   duplicate IDs, and dependency cycles are validated before dispatch.
-- Only canonical ticket filenames are managed; editor artifacts and sentinels are
+- Only standard ticket filenames are managed; editor artifacts and sentinels are
   not tickets.
 - Worktrees are recreated only after branch and workspace identity is proven.
   Devlegate does not reset, force-remove, or steal an unsafe worktree.
@@ -354,5 +355,5 @@ Project-side `.env`, `.devlegate/project.md`, templates, rendered role
 artifacts, and existing documentation remain owned by the target project.
 `devlegate init`, `render`, and `control init` prepare or validate those
 boundaries, but project changes are adopted through the project's own
-change-management process. See the [pre-install guide](../preinst_readme.md)
+change-management process. See the [Project Setup guide](PROJECT_SETUP.md)
 for setup and adoption details.

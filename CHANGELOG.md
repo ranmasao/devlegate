@@ -144,7 +144,7 @@ Immutable planning, read-only observability, and stricter product boundaries.
 
 ### Removed
 
-- Removed the legacy shell runtime, implicit pre-0.3 command forms, unbound pending compatibility, and obsolete launcher scaffolding.
+- Removed the legacy shell runtime, implicit command forms, unbound pending compatibility, and obsolete launcher scaffolding.
 
 ## 0.2.4 -- 2026-08-24
 

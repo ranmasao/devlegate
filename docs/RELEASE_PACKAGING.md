@@ -24,7 +24,7 @@ devlegate-X.Y.Z-linux-x86_64.tar.gz.sha256
 ```
 
 `tools/package_standalone.py` assembles this archive from a verified standalone
-executable, its build provenance, and the repository-owned compliance snapshot
+executable, its build record, and the repository-owned compliance snapshot
 under `packaging/standalone-compliance/`. Package assembly does not download
 legal material. The archive contains one top-level directory with the
 unversioned `devlegate` executable, Devlegate legal files,
@@ -34,20 +34,19 @@ the glibc target and records the GNU scie-jump asset identity.
 
 `tools/validate_standalone_package.py` independently checks the archive root,
 safe extraction, executable modes, artifact identity, manifest hashes, notice
-references, and absence of transient build paths. This archive is not uploaded
-or published for releases before `0.6.0`. It is required for releases
-`0.6.0` and later.
+references, and absence of transient build paths.
 
 ## Debian Proof Package
 
-For releases `0.6.0` and later, the workflow also builds and publishes:
+When standalone publication is enabled by release policy, the workflow also
+builds and publishes:
 
 ```text
-devlegate-X.Y.Z_amd64.deb
+devlegate_<version>_amd64.deb
 ```
 
 The package is assembled only from a validated standalone archive. It contains
-the standalone executable, legal/provenance files, and the archive hash proof.
+the standalone executable, legal files, and the archive hash proof.
 It declares no runtime dependencies, has no maintainer scripts, and does not
 install a systemd unit. The Debian package is built twice and byte-compared
 before either copy can reach the release upload job.
@@ -60,8 +59,8 @@ packages an explicitly selected ref or commit:
 ```sh
 python3 tools/build_full_source.py \
   --repo /path/to/devlegate \
-  --ref v0.5.0 \
-  --version v0.5.0 \
+  --ref vX.Y.Z \
+  --version vX.Y.Z \
   --output-dir /tmp/release-assets
 ```
 
@@ -110,9 +109,9 @@ read-only release selection
 ```
 
 The full-source path is conditional on gitlinks and uses trusted tooling from
-`master` against the selected tag. The standalone path begins with release
-`0.6.0`; it checks out the exact annotated-tag commit recursively and executes
-that tag's own standalone builder, packager, validator, and compliance manifest.
+`master` against the selected tag. When enabled, the standalone path checks out
+the exact annotated-tag commit recursively and executes that tag's own
+standalone builder, packager, validator, and compliance manifest.
 The standalone builder uses CPython `3.12.14` as its build-host interpreter.
 
 The workflow also supports `workflow_dispatch` with an explicit `tag` input for
