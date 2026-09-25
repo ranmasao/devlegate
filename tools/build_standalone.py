@@ -831,8 +831,8 @@ def build(args: argparse.Namespace) -> int:
             raise BuildError("repeated wheel builds are not byte-identical")
         wheel_input_a = build_a_root / "wheel-input"
         wheel_input_b = build_b_root / "wheel-input"
-        wheel_input_a.mkdir()
-        wheel_input_b.mkdir()
+        wheel_input_a.mkdir(parents=True)
+        wheel_input_b.mkdir(parents=True)
         wheel_a_copy = wheel_input_a / wheel_a.name
         wheel_b_copy = wheel_input_b / wheel_b.name
         shutil.copy2(wheel_a, wheel_a_copy)
