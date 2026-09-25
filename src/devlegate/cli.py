@@ -71,6 +71,7 @@ from devlegate.runtime_locator import (
 )
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
+from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.systemd_supervisor import (
     SystemdSupervisor,
     SystemdSupervisorError,
@@ -589,6 +590,47 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
     return supervisor
 
 
+def _supervision_store(target: ProjectTarget) -> SQLiteRuntimeStore:
+    store = SQLiteRuntimeStore(target.locator.state_dir, target.locator.state_key)
+    try:
+        store.probe()
+    except RuntimeStoreError as error:
+        raise DevlegateError(str(error)) from error
+    return store
+
+
+def _systemd_authority_established(
+    target: ProjectTarget, supervisor: SystemdSupervisor | None = None
+) -> tuple[SQLiteRuntimeStore, bool]:
+    store = _supervision_store(target)
+    try:
+        authority = store.supervision_authority()
+    except RuntimeStoreError as error:
+        raise DevlegateError(str(error)) from error
+    current = supervisor or SystemdSupervisor()
+    path = unit_path(target.locator, current.unit_directory)
+    if authority is not None:
+        expected = {
+            "authority": "systemd",
+            "unit_name": path.name,
+            "state_key": target.locator.state_key,
+            "env_file": str(target.env_file.resolve()),
+            "repository": str(target.repo.resolve()),
+        }
+        if authority != expected:
+            raise DevlegateError(
+                "persisted systemd authority does not match the selected project"
+            )
+        return store, True
+    if path.exists():
+        try:
+            current.inspect(target.locator, env_file=target.env_file)
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
+        return store, True
+    return store, False
+
+
 def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -928,11 +970,15 @@ def _remove_project(args: argparse.Namespace) -> int:
     try:
         target = registry.target_for_alias(alias)
         supervisor = SystemdSupervisor()
-        managed_unit = supervisor.inspect(target.locator)
+        store, systemd_authority = _systemd_authority_established(target, supervisor)
+        managed_unit = supervisor.inspect(target.locator, env_file=target.env_file)
         supervisor_removed = False
-        if target.locator.daemon_authority_present():
+        if systemd_authority:
+            supervisor.remove(target.locator, env_file=target.env_file)
+            supervisor_removed = True
+        elif target.locator.daemon_authority_present():
             if managed_unit and supervisor.status(target.locator):
-                supervisor.remove(target.locator)
+                supervisor.remove(target.locator, env_file=target.env_file)
                 supervisor_removed = True
             else:
                 _stop_runtime(target.locator)
@@ -941,12 +987,17 @@ def _remove_project(args: argparse.Namespace) -> int:
                 f"cannot decommission @{alias}: service authority remains"
             )
         if managed_unit and not supervisor_removed:
-            supervisor.remove(target.locator)
+            supervisor.remove(target.locator, env_file=target.env_file)
             supervisor_removed = True
         if supervisor.inspect(target.locator):
             raise DevlegateError(
                 f"cannot decommission @{alias}: systemd unit remains registered"
             )
+        if systemd_authority:
+            try:
+                store.clear_systemd_authority()
+            except RuntimeStoreError as error:
+                raise DevlegateError(str(error)) from error
         with installation_lock(exclusive=True):
             registry.unregister(alias, expected_env=target.env_file)
     except (ProjectRegistryError, SystemdSupervisorError) as error:
@@ -1016,9 +1067,7 @@ def _project_command(args: argparse.Namespace) -> int:
                 )
                 return 0
             case "alias":
-                with installation_lock(exclusive=True):
-                    _host_installation_locked()
-                    target = registry.register(args.alias, _project_path(args.path))
+                target = registry.register(args.alias, _project_path(args.path))
                 emit(
                     {
                         "alias": f"@{target.alias}",
@@ -1091,7 +1140,7 @@ def _systemd_service_command(args: argparse.Namespace) -> int:
                 path = supervisor.install(target.locator, target.env_file)
                 print(f"systemd user unit installed: {path}")
             case "remove":
-                path = supervisor.remove(target.locator)
+                path = supervisor.remove(target.locator, env_file=target.env_file)
                 print(f"systemd user unit removed: {path}")
             case "start":
                 supervisor.start(target.locator)
@@ -1215,16 +1264,56 @@ def _start_background(
 def _start_systemd(target: ProjectTarget) -> int:
     supervisor = SystemdSupervisor()
     try:
-        path = unit_path(target.locator, supervisor.unit_directory)
-        if path.exists():
-            supervisor.inspect(target.locator)
-        else:
-            path = supervisor.install(target.locator, target.env_file)
+        path = supervisor.install(target.locator, target.env_file)
         supervisor.start(target.locator)
+        store = _supervision_store(target)
+        store.establish_systemd_authority(
+            unit_name=path.name,
+            state_key=target.locator.state_key,
+            env_file=target.env_file.resolve(),
+            repository=target.repo.resolve(),
+        )
+    except RuntimeStoreError as error:
+        raise DevlegateError(str(error)) from error
     except SystemdSupervisorError as error:
         raise DevlegateError(str(error)) from error
     print(f"service started; systemd unit: {path}")
     return 0
+
+
+def _run_attached_target(
+    target: ProjectTarget,
+    *,
+    host_mode: HostingMode,
+    once: bool,
+    startup_fd: int | None,
+) -> int:
+    if not hosted_runtime_supported():
+        raise DevlegateError(HOSTED_RUNTIME_ERROR)
+    if host_mode is not HostingMode.EXTERNAL:
+        _store, established = _systemd_authority_established(target)
+        if established:
+            raise DevlegateError(
+                "systemd authority is established for this project; "
+                "use the managed service instead"
+            )
+    engine = _service_engine(
+        target.env_file,
+        repository=target.repo,
+        show_worker_output=host_mode is HostingMode.DIRECT,
+    )
+    run_arguments = {
+        "host_mode": host_mode,
+        "once": once,
+        "startup_fd": startup_fd,
+        "startup_report": lambda: _startup_report(
+            engine, "background" if startup_fd is not None else "direct"
+        ),
+    }
+    readiness_report = _systemd_readiness_report()
+    if readiness_report is not None:
+        run_arguments["readiness_report"] = readiness_report
+    return run_service(engine, **run_arguments)
 
 
 def _execution_projection(
@@ -2106,7 +2195,6 @@ def _run_default_command(
     startup_fd: int | None,
 ) -> int:
     try:
-        installation = _host_installation()
         target = _project_target(alias=project_alias, env_file=service_env)
         assert target is not None
         env_file = target.env_file
@@ -2115,9 +2203,36 @@ def _run_default_command(
             _warn_service_version_mismatch(health)
             print("Devlegate service is already running.")
             return 0
-        if installation is not None and installation.supervisor == "systemd":
+        supervisor = SystemdSupervisor()
+        _store, established = _systemd_authority_established(target, supervisor)
+        if established:
             return _start_systemd(target)
-        return _start_background(env_file)
+        try:
+            supervisor.probe_user_manager()
+        except SystemdSupervisorError:
+            print("systemd user supervision unavailable; running attached")
+            return _run_attached_target(
+                target,
+                host_mode=HostingMode.DIRECT,
+                once=False,
+                startup_fd=startup_fd,
+            )
+        try:
+            return _start_systemd(target)
+        except DevlegateError as error:
+            try:
+                supervisor.remove(target.locator, env_file=target.env_file)
+            except SystemdSupervisorError as cleanup_error:
+                raise DevlegateError(
+                    f"systemd startup failed and managed-unit cleanup failed: {cleanup_error}"
+                ) from error
+            print("systemd user supervision unavailable; running attached")
+            return _run_attached_target(
+                target,
+                host_mode=HostingMode.DIRECT,
+                once=False,
+                startup_fd=startup_fd,
+            )
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())
         return 130
@@ -2134,46 +2249,26 @@ def _run_attached_command(
     startup_fd: int | None,
 ) -> int:
     try:
-        _host_installation()
         target = _project_target(
             alias=project_alias,
             env_file=args.service_env,
         )
         assert target is not None
-        env_file = target.env_file
         host_mode = _host_mode()
         health = (
             None
             if os.environ.get("DEVLEGATE_RESTART_AUTHORITY_FD") is not None
-            else _healthy_service(env_file)
+            else _healthy_service(target.env_file)
         )
         if health is not None:
             _warn_service_version_mismatch(health)
             print("Devlegate service is already running.")
             return 0
-        if host_mode is HostingMode.DIRECT:
-            engine = _service_engine(env_file, repository=target.repo)
-        else:
-            engine = _service_engine(
-                env_file,
-                repository=target.repo,
-                show_worker_output=False,
-            )
-        run_arguments = dict(
+        return _run_attached_target(
+            target,
             host_mode=host_mode,
             once=args.command == "once",
             startup_fd=startup_fd,
-            startup_report=lambda: _startup_report(
-                engine,
-                "background" if startup_fd is not None else args.command,
-            ),
-        )
-        readiness_report = _systemd_readiness_report()
-        if readiness_report is not None:
-            run_arguments["readiness_report"] = readiness_report
-        return run_service(
-            engine,
-            **run_arguments,
         )
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())
@@ -2253,7 +2348,6 @@ def main() -> int:
         if args.service_env is not None:
             parser.error("--env is not valid for init; run it from the repository root")
         try:
-            _host_installation()
             alias, env_file, repo = _init_target(args.alias)
             if not env_file.exists():
                 try:
@@ -2262,9 +2356,7 @@ def main() -> int:
                     raise DevlegateError(str(error)) from error
             devlegate = Devlegate(env_file, read_only=True, repository=repo)
             value = devlegate.init_project_result(args.conflicts)
-            with installation_lock(exclusive=True):
-                _host_installation_locked()
-                target = ProjectRegistry().register(alias, env_file)
+            target = ProjectRegistry().register(alias, env_file)
             value = {
                 **value,
                 "command": "init",
@@ -2282,15 +2374,6 @@ def main() -> int:
             return 1
     env_file = (args.service_env or Path.cwd() / ".env").expanduser().resolve()
     try:
-        if args.command in {
-            "render",
-            "restart",
-            "retry",
-            "drop",
-            "reconcile",
-            "control",
-        }:
-            _host_installation()
         target = _project_target(alias=project_alias, env_file=args.service_env)
         assert target is not None
         env_file = target.env_file

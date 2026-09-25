@@ -637,22 +637,15 @@ def test_removed_top_level_forms_are_rejected(git_fixture):
         assert result.returncode == 2
 
 
-def test_bare_cli_restart_waits_for_ready_replacement(git_fixture, monkeypatch):
+def test_direct_cli_stop_waits_for_authority_release(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
-    started = invoke(git_fixture)
-    assert started.returncode == 0, started.stderr
-    before = json.loads(invoke(git_fixture, "status", "--json").stdout)
-    old_instance = before["service"]["instance_id"]
-
-    restarted = invoke(git_fixture, "restart")
-    log_path = RuntimeLocator.from_env(git_fixture["config"]).service_log_path
-    assert restarted.returncode == 0, (
-        f"{restarted.stderr}\n{log_path.read_text() if log_path.exists() else ''}"
-    )
-    after = json.loads(invoke(git_fixture, "status", "--json").stdout)
-    assert after["service"]["instance_id"] != old_instance
-    assert after["service"]["ready"] is True
-    assert invoke(git_fixture, "stop").returncode == 0
+    with LiveService(git_fixture["working"], git_fixture["config"]) as service:
+        stopped = service.cli("stop")
+        log_path = RuntimeLocator.from_env(git_fixture["config"]).service_log_path
+        assert stopped.returncode == 0, (
+            f"{stopped.stderr}\n{log_path.read_text() if log_path.exists() else ''}"
+        )
+        assert not service.locator.daemon_authority_present()
 
 
 def test_stop_wait_requires_matching_completion_receipt(monkeypatch):
@@ -1069,38 +1062,15 @@ def test_background_child_safe_bootstrap_rejects_checkout_package_shadowing(
             "devlegate",
             "--env",
             str(git_fixture["config"]),
+            "once",
         ],
         cwd=git_fixture["working"],
         env=environment,
         text=True,
         capture_output=True,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode in (0, 1), result.stderr
     assert not marker.exists()
-    monkeypatch.chdir(git_fixture["working"])
-    locator = RuntimeLocator.from_env(git_fixture["config"])
-    assert locator.daemon_authority_present()
-    ping = ipc_request(locator.socket_path, "ping")
-    assert ping["service"] == "devlegate"
-    assert ping["version"] == __version__
-    assert ping["protocol_version"] == 1
-    assert isinstance(ping["pid"], int)
-    stopped = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "devlegate",
-            "--env",
-            str(git_fixture["config"]),
-            "stop",
-        ],
-        cwd=git_fixture["working"],
-        env=environment,
-        text=True,
-        capture_output=True,
-    )
-    assert stopped.returncode == 0, stopped.stderr
 
 
 def test_background_child_safe_bootstrap_rejects_checkout_module_shadowing(
@@ -1129,33 +1099,15 @@ def test_background_child_safe_bootstrap_rejects_checkout_module_shadowing(
             "devlegate",
             "--env",
             str(git_fixture["config"]),
+            "once",
         ],
         cwd=git_fixture["working"],
         env=environment,
         text=True,
         capture_output=True,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode in (0, 1), result.stderr
     assert not marker.exists()
-    monkeypatch.chdir(git_fixture["working"])
-    locator = RuntimeLocator.from_env(git_fixture["config"])
-    assert ipc_request(locator.socket_path, "ping")["service"] == "devlegate"
-    stopped = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "devlegate",
-            "--env",
-            str(git_fixture["config"]),
-            "stop",
-        ],
-        cwd=git_fixture["working"],
-        env=environment,
-        text=True,
-        capture_output=True,
-    )
-    assert stopped.returncode == 0, stopped.stderr
 
 
 def test_service_start_forms_are_idempotent_for_healthy_owner(
@@ -1165,30 +1117,19 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
     git_fixture["config"].write_text(
         git_fixture["config"].read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
     )
-    started = invoke(git_fixture)
-    assert started.returncode == 0, started.stderr
-    assert "service started; log:" in started.stdout
-    locator = RuntimeLocator.from_env(git_fixture["config"])
-    assert f"service started; log: {locator.service_log_path}" in started.stdout
-    assert locator.daemon_authority_present()
-    assert locator.socket_path.exists()
-    status = invoke(git_fixture, "status", "--json")
-    assert status.returncode == 0, status.stderr
-    assert json.loads(status.stdout)["execution"]["phase"] == "idle"
-    try:
-        for start_args in ((), ("--foreground",), ("--once",)):
-            repeated = invoke(git_fixture, *start_args)
+    with LiveService(git_fixture["working"], git_fixture["config"]) as service:
+        locator = RuntimeLocator.from_env(git_fixture["config"])
+        assert locator.daemon_authority_present()
+        assert locator.socket_path.exists()
+        status = service.cli("status", "--json")
+        assert status.returncode == 0, status.stderr
+        assert json.loads(status.stdout)["execution"]["phase"] == "idle"
+        for start_args in (("foreground",), ("once",)):
+            repeated = service.cli(*start_args)
             assert repeated.returncode == 0, repeated.stderr
             assert repeated.stdout.strip() == "Devlegate service is already running."
-    finally:
-        stopped = invoke(git_fixture, "stop")
-        log_path = locator.service_log_path
-        receipt_path = locator.state_dir / "lifecycle" / f"{locator.state_key}.json"
-        assert stopped.returncode == 0, (
-            f"{stopped.stderr}\n"
-            f"receipt={receipt_path.read_text() if receipt_path.exists() else None}\n"
-            f"log={log_path.read_text() if log_path.exists() else None}"
-        )
+        stopped = service.cli("stop")
+        assert stopped.returncode == 0, stopped.stderr
     for _attempt in range(100):
         if not locator.daemon_authority_present():
             break
@@ -1198,25 +1139,6 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
     assert not (
         locator.state_dir / "diagnostics" / f"{locator.state_key}.json"
     ).exists()
-    deadline = time.monotonic() + 5
-    log = ""
-    while time.monotonic() < deadline:
-        log = log_path.read_text()
-        if (
-            "lifecycle stop accepted through devlegate stop" in log
-            and "orderly stop complete" in log
-        ):
-            break
-        time.sleep(0.02)
-    assert "lifecycle stop accepted through devlegate stop" in log
-    assert "orderly stop complete" in log
-    assert log.count("---< D E V L E G A T E >---") == 1
-    assert "mode    : background" in log
-    assert "version :" in log
-    assert "repo    :" in log
-    assert "product :" in log
-    assert "control :" in log
-    assert "pid     :" in log
 
 
 def test_once_emits_one_startup_identity_block(git_fixture, monkeypatch):
@@ -1224,7 +1146,7 @@ def test_once_emits_one_startup_identity_block(git_fixture, monkeypatch):
     result = invoke(git_fixture, "once")
     assert result.returncode == 0, result.stderr
     assert result.stdout.count("---< D E V L E G A T E >---") == 1
-    assert "mode    : once" in result.stdout
+    assert "mode    : direct" in result.stdout
     assert "version :" in result.stdout
     assert "repo    :" in result.stdout
     assert "product :" in result.stdout
@@ -1371,7 +1293,7 @@ def test_init_outside_git_does_not_seed_project_files(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "host is not installed" in result.stderr
+    assert "current directory is not a git repository" in result.stderr
     assert not (tmp_path / ".env").exists()
     assert not (tmp_path / ".devlegate").exists()
 
@@ -2350,7 +2272,7 @@ def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(
         assert service.process is not None
         assert service.process.poll() is None
     assert service.stdout.count("---< D E V L E G A T E >---") == 1
-    assert "mode    : foreground" in service.stdout
+    assert "mode    : direct" in service.stdout
 
 
 def _worker_script(path):

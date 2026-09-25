@@ -34,10 +34,14 @@ def test_sqlite_store_configures_schema_and_pragmas(tmp_path):
     store = SQLiteRuntimeStore(tmp_path, "checkout")
     store.probe()
     connection = store._connect(read_only=False)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     assert connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runtime_state'"
     ).fetchone() == ("runtime_state",)
+    assert connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'supervision_authority'"
+    ).fetchone() == ("supervision_authority",)
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -104,9 +108,29 @@ def test_sqlite_store_rejects_unsupported_schema_version(tmp_path):
     store = SQLiteRuntimeStore(tmp_path, "checkout")
     store.probe()
     connection = sqlite3.connect(store.path)
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("PRAGMA user_version = 3")
     connection.commit()
     connection.close()
 
     with pytest.raises(RuntimeStoreError, match="unsupported"):
         store.load()
+
+
+def test_sqlite_store_persists_only_systemd_authority(tmp_path):
+    store = SQLiteRuntimeStore(tmp_path, "checkout")
+    store.establish_systemd_authority(
+        unit_name="devlegate-unit.service",
+        state_key="a" * 64,
+        env_file=tmp_path / "repo" / ".env",
+        repository=tmp_path / "repo",
+    )
+
+    assert store.supervision_authority() == {
+        "authority": "systemd",
+        "unit_name": "devlegate-unit.service",
+        "state_key": "a" * 64,
+        "env_file": str(tmp_path / "repo" / ".env"),
+        "repository": str(tmp_path / "repo"),
+    }
+    store.clear_systemd_authority()
+    assert store.supervision_authority() is None

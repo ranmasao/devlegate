@@ -146,17 +146,27 @@ class SystemdSupervisor:
         command = ["systemctl", "--user", *arguments]
         try:
             result = self._runner(
-                command, text=True, capture_output=True, check=False
+                command, text=True, capture_output=True, check=False, timeout=5
             )
         except OSError as error:
             raise SystemdSupervisorError(
                 f"systemd user manager is unavailable: {error}"
             ) from error
+        except subprocess.TimeoutExpired as error:
+            raise SystemdSupervisorError(
+                "systemd user manager did not respond"
+            ) from error
         if result.returncode and allow_failure:
             detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
             if not any(
                 phrase in detail.lower()
-                for phrase in ("not loaded", "not enabled", "not found", "inactive")
+                for phrase in (
+                    "not loaded",
+                    "not enabled",
+                    "not found",
+                    "does not exist",
+                    "inactive",
+                )
             ):
                 raise SystemdSupervisorError(
                     f"systemd command failed ({' '.join(command)}): {detail}"
@@ -169,6 +179,7 @@ class SystemdSupervisor:
         return result
 
     def install(self, locator: RuntimeLocator, env_file: Path) -> Path:
+        self.probe_user_manager()
         path = unit_path(locator, self.unit_directory)
         if path.exists():
             self.inspect(locator)
@@ -182,9 +193,20 @@ class SystemdSupervisor:
         return path
 
     def probe_user_manager(self) -> None:
-        self._run("show-environment")
+        result = self._run("show-environment")
+        manager_environment = {
+            line.partition("=")[0]: line.partition("=")[2]
+            for line in result.stdout.splitlines()
+            if "=" in line
+        }
+        requested_config = user_unit_dir().parents[1]
+        manager_config = manager_environment.get("XDG_CONFIG_HOME")
+        if manager_config is not None and Path(manager_config) != requested_config:
+            raise SystemdSupervisorError(
+                "systemd user manager uses a different XDG_CONFIG_HOME"
+            )
 
-    def inspect(self, locator: RuntimeLocator) -> bool:
+    def inspect(self, locator: RuntimeLocator, *, env_file: Path | None = None) -> bool:
         """Verify and report the exact managed unit registration."""
         path = unit_path(locator, self.unit_directory)
         if not path.exists():
@@ -202,12 +224,19 @@ class SystemdSupervisor:
             raise SystemdSupervisorError(
                 f"refusing to operate on unmanaged systemd unit {path}"
             )
+        if env_file is not None and content != render_unit(
+            locator, env_file, launcher=self.launcher
+        ):
+            raise SystemdSupervisorError(
+                f"refusing to operate on systemd unit with unexpected identity {path}"
+            )
         return True
 
-    def remove(self, locator: RuntimeLocator) -> Path:
+    def remove(self, locator: RuntimeLocator, *, env_file: Path | None = None) -> Path:
+        self.probe_user_manager()
         path = unit_path(locator, self.unit_directory)
         if path.exists():
-            self.inspect(locator)
+            self.inspect(locator, env_file=env_file)
             self._run("stop", path.name, allow_failure=True)
             self._run("disable", path.name, allow_failure=True)
             try:
@@ -220,17 +249,21 @@ class SystemdSupervisor:
         return path
 
     def start(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
+        self.probe_user_manager()
         self._run("start", unit_name(locator))
         self.wait_ready(locator, timeout=timeout)
 
     def stop(self, locator: RuntimeLocator) -> None:
+        self.probe_user_manager()
         self._run("stop", unit_name(locator))
 
     def restart(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
+        self.probe_user_manager()
         self._run("restart", unit_name(locator))
         self.wait_ready(locator, timeout=timeout)
 
     def status(self, locator: RuntimeLocator) -> bool:
+        self.probe_user_manager()
         result = self._run("is-active", unit_name(locator), allow_failure=True)
         return result.returncode == 0
 

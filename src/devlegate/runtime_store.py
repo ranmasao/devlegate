@@ -33,7 +33,7 @@ class RuntimeStore(Protocol):
 class SQLiteRuntimeStore:
     """Persist one opaque runtime state payload in a project-local database."""
 
-    schema_version = 1
+    schema_version = 2
 
     def __init__(self, state_dir: Path, state_key: str) -> None:
         self.state_dir = state_dir
@@ -77,6 +77,12 @@ class SQLiteRuntimeStore:
         ).fetchone()
         if table is None:
             raise RuntimeStoreError("runtime database schema is incomplete")
+        authority = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'supervision_authority'"
+        ).fetchone()
+        if authority is None:
+            raise RuntimeStoreError("runtime database authority schema is incomplete")
 
     @staticmethod
     def _initialize_schema(connection: sqlite3.Connection) -> None:
@@ -93,6 +99,18 @@ class SQLiteRuntimeStore:
                 "revision INTEGER NOT NULL"
                 ")"
             )
+        if version <= 1:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS supervision_authority ("
+                "id INTEGER PRIMARY KEY CHECK (id = 1), "
+                "authority TEXT NOT NULL CHECK (authority = 'systemd'), "
+                "unit_name TEXT NOT NULL, "
+                "state_key TEXT NOT NULL, "
+                "env_file TEXT NOT NULL, "
+                "repository TEXT NOT NULL"
+                ")"
+            )
+        if version != SQLiteRuntimeStore.schema_version:
             connection.execute(
                 f"PRAGMA user_version = {SQLiteRuntimeStore.schema_version}"
             )
@@ -196,6 +214,92 @@ class SQLiteRuntimeStore:
                 raise
             raise RuntimeStoreError(
                 f"cannot write runtime database {self._path}: {error}"
+            ) from error
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def supervision_authority(self) -> dict[str, str] | None:
+        result = self._read_authority()
+        return result
+
+    def establish_systemd_authority(
+        self,
+        *,
+        unit_name: str,
+        state_key: str,
+        env_file: Path,
+        repository: Path,
+    ) -> None:
+        connection = None
+        try:
+            connection = self._connect(read_only=False)
+            self._initialize_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO supervision_authority "
+                "(id, authority, unit_name, state_key, env_file, repository) "
+                "VALUES (1, 'systemd', ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET authority='systemd', "
+                "unit_name=excluded.unit_name, state_key=excluded.state_key, "
+                "env_file=excluded.env_file, repository=excluded.repository",
+                (unit_name, state_key, str(env_file), str(repository)),
+            )
+            connection.commit()
+        except Exception as error:
+            if connection is not None:
+                connection.rollback()
+            if isinstance(error, RuntimeStoreError):
+                raise
+            raise RuntimeStoreError(
+                f"cannot establish systemd authority in {self._path}: {error}"
+            ) from error
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def clear_systemd_authority(self) -> None:
+        connection = None
+        try:
+            connection = self._connect(read_only=False)
+            self._initialize_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DELETE FROM supervision_authority WHERE id = 1")
+            connection.commit()
+        except Exception as error:
+            if connection is not None:
+                connection.rollback()
+            if isinstance(error, RuntimeStoreError):
+                raise
+            raise RuntimeStoreError(
+                f"cannot clear systemd authority in {self._path}: {error}"
+            ) from error
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _read_authority(self) -> dict[str, str] | None:
+        if not self._path.exists():
+            return None
+        connection = None
+        try:
+            connection = self._connect(read_only=True)
+            self._validate_schema(connection)
+            row = connection.execute(
+                "SELECT authority, unit_name, state_key, env_file, repository "
+                "FROM supervision_authority WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                return None
+            keys = ("authority", "unit_name", "state_key", "env_file", "repository")
+            if not all(isinstance(value, str) and value for value in row):
+                raise RuntimeStoreError("runtime supervision authority is invalid")
+            return dict(zip(keys, row, strict=True))
+        except RuntimeStoreError:
+            raise
+        except (OSError, sqlite3.Error) as error:
+            raise RuntimeStoreError(
+                f"cannot read runtime authority {self._path}: {error}"
             ) from error
         finally:
             if connection is not None:

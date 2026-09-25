@@ -103,7 +103,10 @@ def test_install_is_atomic_and_uses_user_manager(tmp_path: Path) -> None:
 
     assert installed.is_file()
     assert installed.read_text().startswith(MANAGED_MARKER)
-    assert calls == [["systemctl", "--user", "daemon-reload"]]
+    assert calls == [
+        ["systemctl", "--user", "show-environment"],
+        ["systemctl", "--user", "daemon-reload"],
+    ]
 
 
 def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> None:
@@ -135,7 +138,11 @@ def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> Non
     supervisor.restart(project_b)
     assert supervisor.status(project_b)
 
-    lifecycle = [call for call in calls if call[2] != "daemon-reload"]
+    lifecycle = [
+        call
+        for call in calls
+        if call[2] in {"start", "stop", "restart", "is-active"}
+    ]
     assert lifecycle == [
         ["systemctl", "--user", "start", path_a.name],
         ["systemctl", "--user", "stop", path_a.name],
@@ -183,7 +190,7 @@ def test_start_stop_restart_never_use_ipc_lifecycle_requests(tmp_path: Path) -> 
     supervisor.stop(item)
     supervisor.restart(item)
 
-    assert calls == [
+    assert [call for call in calls if call[2] != "show-environment"] == [
         ["systemctl", "--user", "start", unit_name(item)],
         ["systemctl", "--user", "stop", unit_name(item)],
         ["systemctl", "--user", "restart", unit_name(item)],

@@ -184,6 +184,9 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
     class FakeSupervisor:
         unit_directory = tmp_path / "units"
 
+        def probe_user_manager(self):
+            calls.append("probe")
+
         def install(self, locator, env):
             calls.append("install")
             return self.unit_directory / unit_name(locator)
@@ -191,7 +194,7 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
         def start(self, locator):
             calls.append("start")
 
-        def inspect(self, locator):
+        def inspect(self, locator, **_kwargs):
             calls.append("inspect")
             return False
 
@@ -211,4 +214,4 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
         )
         == 0
     )
-    assert calls == ["install", "start"]
+    assert calls == ["probe", "install", "start"]
