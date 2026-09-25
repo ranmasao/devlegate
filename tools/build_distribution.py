@@ -485,7 +485,7 @@ def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
 
 def package(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
-    source = source_identity(repo, str(Path(args.python).resolve()))
+    source = source_identity(repo, str(Path(args.python)))
     require_tools(("git",))
     if args.target in {"standalone", "deb", "all"}:
         require_tools(("file",))
