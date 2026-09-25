@@ -24,7 +24,12 @@ def load_tool(name):
 VALIDATOR = load_tool("validate_deb")
 
 
-def make_package(tmp_path: Path, *, depends: str | None = None) -> tuple[Path, Path]:
+def make_package(
+    tmp_path: Path,
+    *,
+    depends: str | None = None,
+    maintainer_script: bool = False,
+) -> tuple[Path, Path]:
     root = tmp_path / "root"
     control = root / "DEBIAN"
     binary = root / "usr/lib/devlegate/devlegate"
@@ -50,6 +55,10 @@ def make_package(tmp_path: Path, *, depends: str | None = None) -> tuple[Path, P
         f"{dependency}Description: test\n test\n",
         encoding="ascii",
     )
+    if maintainer_script:
+        script = control / "postinst"
+        script.write_text("#!/bin/sh\n", encoding="ascii")
+        script.chmod(0o755)
     package = tmp_path / "devlegate.deb"
     subprocess.run(
         ["dpkg-deb", "--build", "--root-owner-group", str(root), str(package)],
@@ -71,4 +80,10 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
 def test_deb_validator_rejects_runtime_dependencies(tmp_path):
     package, report = make_package(tmp_path, depends="python3")
     with pytest.raises(VALIDATOR.PackageError, match="runtime dependencies"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+def test_deb_validator_rejects_maintainer_scripts(tmp_path):
+    package, report = make_package(tmp_path, maintainer_script=True)
+    with pytest.raises(VALIDATOR.PackageError, match="maintainer scripts"):
         VALIDATOR.validate(package, report, tmp_path / "extract")

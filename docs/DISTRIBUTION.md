@@ -12,8 +12,8 @@ source -> wheel -> PEX eager scie standalone executable
 ```
 
 The wheel is the canonical Python payload. The standalone build is for Linux
-x86_64 with bundled CPython 3.12. No macOS, Windows, ARM64, PyPI, distro
-package, or release-asset workflow is implemented here.
+x86_64 with bundled CPython 3.12. No macOS, Windows, ARM64, or PyPI
+distribution is implemented here.
 
 Build and proof commands are explicit and separate:
 
@@ -38,12 +38,22 @@ The standalone publication unit is a deterministic
 `devlegate-<version>-linux-x86_64.tar.gz` archive containing the executable,
 Devlegate legal material, third-party notices and licenses, and stable build
 provenance. It is distinct from the full-source archive. The standalone pair is
-the supported release asset beginning with `0.5.4`:
+the supported release asset beginning with `0.6.0`:
 
 ```text
 devlegate-X.Y.Z-linux-x86_64.tar.gz
 devlegate-X.Y.Z-linux-x86_64.tar.gz.sha256
 ```
+
+Beginning with `0.6.0`, the same validated archive can produce the portable
+Debian proof package:
+
+```text
+devlegate-X.Y.Z_amd64.deb
+```
+
+The package has no Python or systemd package dependencies, no maintainer
+scripts, and no systemd unit. It is not built or published for `0.5.4`.
 
 The full-source pair remains separate:
 

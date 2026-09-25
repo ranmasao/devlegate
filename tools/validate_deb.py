@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from package_standalone import PackageError, sha256
@@ -41,6 +42,18 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
             raise PackageError(f"unexpected Debian control field {key}")
     if "Depends" in metadata or "Pre-Depends" in metadata:
         raise PackageError("portable Debian package declares runtime dependencies")
+    with tempfile.TemporaryDirectory(prefix="devlegate-deb-control-") as control_dir:
+        result = subprocess.run(
+            ["dpkg-deb", "-e", str(package), control_dir],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            raise PackageError(result.stderr.strip() or "cannot extract Debian control")
+        forbidden = {"preinst", "postinst", "prerm", "postrm"}
+        if forbidden.intersection(path.name for path in Path(control_dir).iterdir()):
+            raise PackageError("Debian package contains maintainer scripts")
     report = json.loads(build_report.read_text(encoding="utf-8"))
     if metadata.get("Version") != report["wheel"]["version"]:
         raise PackageError("Debian version does not match standalone build report")

@@ -35,8 +35,22 @@ the glibc target and records the GNU scie-jump asset identity.
 `tools/validate_standalone_package.py` independently checks the archive root,
 safe extraction, executable modes, artifact identity, manifest hashes, notice
 references, and absence of transient build paths. This archive is not uploaded
-or published for releases before `0.5.4`. It is required for releases
-`0.5.4` and later.
+or published for releases before `0.6.0`. It is required for releases
+`0.6.0` and later.
+
+## Debian Proof Package
+
+For releases `0.6.0` and later, the workflow also builds and publishes:
+
+```text
+devlegate-X.Y.Z_amd64.deb
+```
+
+The package is assembled only from a validated standalone archive. It contains
+the standalone executable, legal/provenance files, and the archive hash proof.
+It declares no runtime dependencies, has no maintainer scripts, and does not
+install a systemd unit. The Debian package is built twice and byte-compared
+before either copy can reach the release upload job.
 
 ## Builder
 
@@ -97,7 +111,7 @@ read-only release selection
 
 The full-source path is conditional on gitlinks and uses trusted tooling from
 `master` against the selected tag. The standalone path begins with release
-`0.5.4`; it checks out the exact annotated-tag commit recursively and executes
+`0.6.0`; it checks out the exact annotated-tag commit recursively and executes
 that tag's own standalone builder, packager, validator, and compliance manifest.
 The standalone builder uses CPython `3.12.14` as its build-host interpreter.
 

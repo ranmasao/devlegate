@@ -58,7 +58,7 @@ jobs:
           import sys
 
           version = tuple(int(part) for part in sys.argv[1].split("."))
-          print("true" if version >= (0, 5, 4) else "false")
+           print("true" if version >= (0, 6, 0) else "false")
           PY
           )"
           if [[ "$standalone_required" == true ]]; then
@@ -66,6 +66,8 @@ jobs:
               tools/build_standalone.py
               tools/package_standalone.py
               tools/validate_standalone_package.py
+              tools/package_deb.py
+              tools/validate_deb.py
               packaging/standalone-compliance/manifest.json
               pyproject.toml
             )
@@ -277,6 +279,39 @@ jobs:
           env -i HOME="$RUNNER_TEMP/standalone-home" PATH=/nonexistent \
             "$executable" version
 
+      - name: Build Debian packages twice
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          archive="$RUNNER_TEMP/standalone-package-a/devlegate-$archive_version-linux-x86_64.tar.gz"
+          sidecar="$archive.sha256"
+          report="$RUNNER_TEMP/standalone-build/standalone-build.json"
+          for slot in a b; do
+            mkdir -p "$RUNNER_TEMP/deb-$slot"
+            python3 tools/package_deb.py \
+              --repo "$GITHUB_WORKSPACE" \
+              --archive "$archive" \
+              --sidecar "$sidecar" \
+              --build-report "$report" \
+              --output-dir "$RUNNER_TEMP/deb-$slot"
+          done
+          cmp "$RUNNER_TEMP/deb-a/devlegate_${archive_version}_amd64.deb" \
+            "$RUNNER_TEMP/deb-b/devlegate_${archive_version}_amd64.deb"
+
+      - name: Validate Debian packages
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          report="$RUNNER_TEMP/standalone-build/standalone-build.json"
+          for slot in a b; do
+            python3 tools/validate_deb.py \
+              --package "$RUNNER_TEMP/deb-$slot/devlegate_${archive_version}_amd64.deb" \
+              --build-report "$report" \
+              --extract-dir "$RUNNER_TEMP/deb-extracted-$slot"
+          done
+
       - name: Publish validated standalone artifact
         if: needs.select-release.outputs.standalone_required == 'true'
         uses: actions/upload-artifact@v7
@@ -285,6 +320,7 @@ jobs:
           path: |
             ${{ runner.temp }}/standalone-package-a/devlegate-${{ needs.select-release.outputs.release_version }}-linux-x86_64.tar.gz
             ${{ runner.temp }}/standalone-package-a/devlegate-${{ needs.select-release.outputs.release_version }}-linux-x86_64.tar.gz.sha256
+            ${{ runner.temp }}/deb-a/devlegate_${{ needs.select-release.outputs.release_version }}_amd64.deb
           if-no-files-found: error
 
   upload-release-assets:
@@ -333,9 +369,11 @@ jobs:
           if [[ "$STANDALONE_REQUIRED" == true ]]; then
             standalone_archive="standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz"
             standalone_sidecar="$standalone_archive.sha256"
+            standalone_deb="standalone/devlegate_${RELEASE_VERSION}_amd64.deb"
             test -f "$standalone_archive"
             test -f "$standalone_sidecar"
-            test "$(find standalone -type f | wc -l)" -eq 2
+            test -f "$standalone_deb"
+            test "$(find standalone -type f | wc -l)" -eq 3
           fi
 
       - name: Re-check exact destination release
@@ -364,5 +402,6 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             "standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz" \
             "standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz.sha256" \
+            "standalone/devlegate_${RELEASE_VERSION}_amd64.deb" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
