@@ -12,6 +12,7 @@ from devlegate.log_reader import (
     LogReaderError,
     execution_id,
     execution_log,
+    follow_file,
     journal_command,
     service_unit,
     stream_journal,
@@ -58,8 +59,10 @@ def test_execution_prefix_rejects_ambiguity(tmp_path):
     control = tmp_path / "control"
     _report(control, "a" * 31 + "1", ticket="one")
     _report(control, "a" * 31 + "2", ticket="two")
-    with pytest.raises(LogReaderError, match="ambiguous"):
+    with pytest.raises(LogReaderError, match="ambiguous") as error:
         execution_id(control, "a" * 31)
+    assert "a" * 31 + "1" in str(error.value)
+    assert "a" * 31 + "2" in str(error.value)
 
 
 @pytest.mark.parametrize("selector", ["", "A" * 8, "../secret", "g" * 8])
@@ -81,12 +84,54 @@ def test_execution_log_returns_bounded_tail(tmp_path):
     assert list(content) == ["two\n", "three\n"]
 
 
-def test_execution_log_rejects_zero_lines(tmp_path):
+def test_execution_log_accepts_zero_lines(tmp_path):
     identifier = "a" * 32
     control = tmp_path / "control"
     _report(control, identifier)
-    with pytest.raises(LogReaderError, match="positive integer"):
-        execution_log(tmp_path / "state", "key", control, identifier, 0)
+    path = execution_log_path(tmp_path / "state", "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("one\ntwo\n")
+    resolved, content = execution_log(tmp_path / "state", "key", control, identifier, 0)
+    assert resolved == identifier
+    assert list(content) == []
+
+
+def test_execution_log_rejects_negative_lines(tmp_path):
+    identifier = "a" * 32
+    control = tmp_path / "control"
+    _report(control, identifier)
+    with pytest.raises(LogReaderError, match="non-negative integer"):
+        execution_log(tmp_path / "state", "key", control, identifier, -1)
+
+
+def test_execution_log_tail_does_not_read_whole_file(tmp_path, monkeypatch):
+    identifier = "a" * 32
+    control = tmp_path / "control"
+    _report(control, identifier)
+    path = execution_log_path(tmp_path / "state", "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("old\n" * 100_000 + "last\n")
+    original_read_text = Path.read_text
+
+    def guarded_read_text(candidate, *args, **kwargs):
+        if candidate == path:
+            raise AssertionError("execution log must not use read_text")
+        return original_read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    _, content = execution_log(tmp_path / "state", "key", control, identifier, 1)
+    assert list(content) == ["last\n"]
+
+
+def test_execution_log_tail_supports_missing_final_newline(tmp_path):
+    identifier = "a" * 32
+    control = tmp_path / "control"
+    _report(control, identifier)
+    path = execution_log_path(tmp_path / "state", "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("one\ntwo")
+    _, content = execution_log(tmp_path / "state", "key", control, identifier, 1)
+    assert list(content) == ["two"]
 
 
 def test_execution_log_reports_missing_file(tmp_path):
@@ -119,10 +164,18 @@ def test_journal_command_is_source_specific():
         "--user-unit",
         "devlegate-key.service",
         "--no-pager",
-        "--output=cat",
         "--lines",
         "7",
     ]
+
+
+def test_journal_command_accepts_zero_lines():
+    assert journal_command("persisted.service", 0, False)[-2:] == ["--lines", "0"]
+
+
+def test_journal_command_rejects_negative_lines():
+    with pytest.raises(LogReaderError, match="non-negative integer"):
+        journal_command("persisted.service", -1, False)
 
 
 def test_journal_command_binds_follow_and_lines():
@@ -160,3 +213,32 @@ def test_journal_follow_binds_unit_and_lines(monkeypatch, capsys):
     assert stream_journal("persisted.service", 4, True) == 0
     assert calls == [journal_command("persisted.service", 4, True)]
     assert capsys.readouterr().out == "record\n"
+
+
+def test_follow_remains_bound_to_resolved_execution(tmp_path, monkeypatch, capsys):
+    identifier_a = "abc" + "1" * 29
+    identifier_b = "abc" + "2" * 29
+    control = tmp_path / "control"
+    _report(control, identifier_a, ticket="one")
+    state = tmp_path / "state"
+    path_a = execution_log_path(state, "key", identifier_a)
+    path_a.parent.mkdir(parents=True)
+    path_a.write_text("a-before\n")
+    selected = execution_id(control, "abc")
+
+    _report(control, identifier_b, ticket="two")
+    path_b = execution_log_path(state, "key", identifier_b)
+    path_b.write_text("b-before\n")
+    path_a.write_text("a-before\na-after\n")
+    path_b.write_text("b-before\nb-after\n")
+
+    def stop_following(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", stop_following)
+    assert (
+        follow_file(execution_log_path(state, "key", selected), 1) == 130
+    )
+    output = capsys.readouterr().out
+    assert "a-after\n" in output
+    assert "b-after\n" not in output

@@ -20,8 +20,8 @@ class LogReaderError(RuntimeError):
 
 
 def _lines(value: int) -> int:
-    if value < 1:
-        raise LogReaderError("--lines must be a positive integer")
+    if value < 0:
+        raise LogReaderError("--lines must be a non-negative integer")
     return value
 
 
@@ -58,7 +58,10 @@ def execution_id(control_worktree: Path, selector: str) -> str:
     if not matches:
         raise LogReaderError(f"execution not found: {selector}")
     if len(matches) > 1:
-        raise LogReaderError(f"execution prefix is ambiguous: {selector}")
+        matching = "\n".join(f"  {identifier}" for identifier in sorted(matches))
+        raise LogReaderError(
+            f"execution prefix is ambiguous: {selector}\nmatches:\n{matching}"
+        )
     return matches[0]
 
 
@@ -66,11 +69,31 @@ def _read_file(path: Path, lines: int) -> Iterable[str]:
     lines = _lines(lines)
     if not path.is_file():
         raise LogReaderError(f"execution log not found: {path}")
+    if lines == 0:
+        return ()
     try:
-        content = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    except OSError as error:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            if size == 0:
+                return ()
+            handle.seek(-1, 2)
+            ends_with_newline = handle.read(1) == b"\n"
+            required_newlines = lines + int(ends_with_newline)
+            position = size
+            chunks: list[bytes] = []
+            newline_count = 0
+            while position and newline_count < required_newlines:
+                chunk_size = min(8192, position)
+                position -= chunk_size
+                handle.seek(position)
+                chunk = handle.read(chunk_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+        content = b"".join(reversed(chunks)).splitlines(keepends=True)
+        return tuple(record.decode("utf-8") for record in content[-lines:])
+    except (OSError, UnicodeError) as error:
         raise LogReaderError(f"cannot read execution log {path}: {error}") from error
-    return content[-lines:]
 
 
 def execution_log(
@@ -90,7 +113,6 @@ def journal_command(unit: str, lines: int, follow: bool) -> list[str]:
         "--user-unit",
         unit,
         "--no-pager",
-        "--output=cat",
         "--lines",
         str(_lines(lines)),
     ]
