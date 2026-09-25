@@ -332,13 +332,13 @@ def test_project_remove_unit_failure_keeps_alias(tmp_path: Path, monkeypatch) ->
     registry.register("foo", env)
 
     class FailingSupervisor:
-        def inspect(self, _locator):
+        def inspect(self, _locator, **_kwargs):
             return True
 
         def status(self, _locator):
             return False
 
-        def remove(self, _locator):
+        def remove(self, _locator, **_kwargs):
             raise cli.SystemdSupervisorError("remove failed")
 
     monkeypatch.setattr(cli, "SystemdSupervisor", FailingSupervisor)

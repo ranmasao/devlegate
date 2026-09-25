@@ -608,7 +608,7 @@ def _systemd_authority_established(
     except RuntimeStoreError as error:
         raise DevlegateError(str(error)) from error
     current = supervisor or SystemdSupervisor()
-    path = unit_path(target.locator, current.unit_directory)
+    path = unit_path(target.locator, getattr(current, "unit_directory", None))
     if authority is not None:
         expected = {
             "authority": "systemd",
