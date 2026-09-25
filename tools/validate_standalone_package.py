@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import tarfile
+import tempfile
 from pathlib import Path
 
 from package_standalone import (
@@ -19,8 +20,15 @@ from package_standalone import (
     archive_license_path,
     load_manifest,
     manifest_file_records,
+    notice_text,
+    run,
     sha256,
+    split_inventory,
+    stable_provenance,
+    validate_manifest,
 )
+
+FORBIDDEN_EPHEMERAL_PATHS = (b"/tmp/devlegate-standalone-", b"/tmp/devlegate-package-")
 
 
 def safe_extract(archive: Path, destination: Path, expected_root: str) -> Path:
@@ -41,6 +49,13 @@ def safe_extract(archive: Path, destination: Path, expected_root: str) -> Path:
                 or member.name.startswith(expected_root + "/")
             ):
                 raise PackageError(f"archive member escapes root: {member.name}")
+            if not (member.isdir() or member.isreg()):
+                raise PackageError(f"unsupported archive member type: {member.name}")
+            expected_mode = 0o755 if member.isdir() else 0o644
+            if member.name == f"{expected_root}/devlegate":
+                expected_mode = 0o755
+            if member.mode & 0o7777 != expected_mode:
+                raise PackageError(f"unexpected archive mode: {member.name}")
             names.add(member.name)
         tar.extractall(destination, filter="data")
     return destination / expected_root
@@ -61,6 +76,24 @@ def expected_files(manifest: dict[str, object]) -> set[str]:
     return files
 
 
+def expected_directories(files: set[str]) -> set[str]:
+    directories = {"LICENSES"}
+    for file in files:
+        path = Path(file).parent
+        while path != Path("."):
+            directories.add(str(path))
+            path = path.parent
+    return directories
+
+
+def reject_ephemeral_paths(root: Path) -> None:
+    for path in root.rglob("*"):
+        if path.is_file() and any(
+            value in path.read_bytes() for value in FORBIDDEN_EPHEMERAL_PATHS
+        ):
+            raise PackageError(f"archive member contains an ephemeral path: {path}")
+
+
 def validate(
     archive: Path,
     sidecar: Path,
@@ -72,11 +105,7 @@ def validate(
     report = json.loads(build_report.read_text(encoding="utf-8"))
     manifest_path = (manifest_path or repo / COMPLIANCE_DIR / "manifest.json").resolve()
     manifest = load_manifest(manifest_path)
-    records = manifest_file_records(manifest)
-    for record, file_record in records:
-        source = manifest_path.parent / file_record["path"]
-        if not source.is_file() or sha256(source) != file_record["sha256"]:
-            raise PackageError(f"compliance snapshot does not match manifest: {source}")
+    validate_manifest(manifest_path, repo)
     digest = sha256(archive)
     if sidecar.read_text(encoding="ascii").strip() != f"{digest}  {archive.name}":
         raise PackageError("archive SHA-256 sidecar mismatch")
@@ -94,12 +123,26 @@ def validate(
             f"archive file set mismatch: missing={sorted(expected - actual_files)}, "
             f"unexpected={sorted(actual_files - expected)}"
         )
+    actual_directories = {
+        str(path.relative_to(root)) for path in root.rglob("*") if path.is_dir()
+    }
+    expected_dirs = expected_directories(expected)
+    if actual_directories != expected_dirs:
+        raise PackageError(
+            "archive directory set mismatch: "
+            f"missing={sorted(expected_dirs - actual_directories)}, "
+            f"unexpected={sorted(actual_directories - expected_dirs)}"
+        )
     executable = root / "devlegate"
     if not executable.stat().st_mode & 0o111:
         raise PackageError("standalone executable is not executable")
     for path in root.rglob("*"):
         if path.is_file() and path != executable and path.stat().st_mode & 0o111:
             raise PackageError(f"unexpected executable package member: {path}")
+    if run(["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip() != report[
+        "source_commit"
+    ]:
+        raise PackageError("source commit does not match selected repository state")
     provenance = json.loads((root / "BUILD-PROVENANCE.json").read_text())
     if provenance["devlegate"]["standalone_sha256"] != sha256(executable):
         raise PackageError("BUILD-PROVENANCE executable hash mismatch")
@@ -111,15 +154,17 @@ def validate(
             "embedded compliance manifest differs from repository manifest"
         )
     notices = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-    for record, file_record in records:
-        if "not redistributed" not in record["role"]:
-            reference = f"`{archive_license_path(file_record['path'])}`"
-            if reference not in notices:
-                raise PackageError(f"notice file omits {reference}")
-    package_bytes = archive.read_bytes()
-    forbidden = (b"/tmp/devlegate-standalone-", b"/tmp/devlegate-package-")
-    if any(value in package_bytes for value in forbidden):
-        raise PackageError("archive contains an ephemeral build or package path")
+    if notices != notice_text(manifest["records"]):
+        raise PackageError("notice file does not match deterministic regeneration")
+    with tempfile.TemporaryDirectory(prefix="devlegate-validate-") as split_dir:
+        expected_provenance = stable_provenance(
+            report, manifest_path, split_inventory(executable, Path(split_dir))
+        )
+    if provenance != expected_provenance:
+        raise PackageError("BUILD-PROVENANCE does not match reconstructed provenance")
+    if provenance["devlegate"]["standalone_size"] != executable.stat().st_size:
+        raise PackageError("BUILD-PROVENANCE executable size mismatch")
+    reject_ephemeral_paths(root)
     return root
 
 

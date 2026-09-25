@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import importlib.util
+import io
 import shutil
 import sys
 import tarfile
@@ -24,6 +25,55 @@ def load_tool(name):
 PACKAGE = load_tool("package_standalone")
 VALIDATOR = load_tool("validate_standalone_package")
 MANIFEST = Path(__file__).parents[1] / "packaging/standalone-compliance/manifest.json"
+
+
+def provenance_report():
+    return {
+        "source_commit": "a" * 40,
+        "inputs": {
+            "target": "linux-x86_64",
+            "pex_version": "2.103.2",
+            "pbs_archive": PACKAGE.PBS_ARCHIVE,
+            "pbs_sha256": PACKAGE.PBS_SHA256,
+            "science_version": "0.21.0",
+            "pbs_release": "20260901",
+            "pbs_python_version": "3.12.14",
+        },
+        "target_libc": "glibc",
+        "pex": {
+            "version": "2.103.2",
+            "wheel_sha256": PACKAGE.PEX_WHEEL_SHA256,
+        },
+        "science": {
+            "version": "0.21.0",
+            "asset": PACKAGE.SCIENCE_ASSET,
+            "sha256": PACKAGE.SCIENCE_SHA256,
+        },
+        "scie_jump": {
+            "asset": PACKAGE.SCIE_JUMP_ASSET,
+            "version": PACKAGE.SCIE_JUMP_VERSION,
+            "sha256": PACKAGE.SCIE_JUMP_SHA256,
+        },
+        "wheel": {"version": "0.5.4.dev0", "sha256": "b" * 64},
+        "scie": {"sha256": "c" * 64, "size": 123},
+        "wheel_build_toolchain": {"versions": {}, "artifacts": {}},
+        "wheel_reproducible": True,
+        "scie_reproducible": True,
+        "reproducibility_scope": "test scope",
+    }
+
+
+def split_inventory():
+    return {
+        PACKAGE.SCIE_JUMP_SPLIT_NAME: {
+            "size": 1,
+            "sha256": PACKAGE.SCIE_JUMP_SHA256,
+        },
+        PACKAGE.PBS_ARCHIVE: {"size": 1, "sha256": PACKAGE.PBS_SHA256},
+        "pex": {"size": 1, "sha256": "d" * 64},
+        "configure-binding.py": {"size": 1, "sha256": "e" * 64},
+        "lift.json": {"size": 1, "sha256": "f" * 64},
+    }
 
 
 def test_manifest_snapshot_hashes_and_target():
@@ -48,8 +98,17 @@ def test_modified_snapshot_fails_closed(tmp_path):
         PACKAGE.validate_manifest(snapshot / "manifest.json")
 
 
+def test_devlegate_snapshot_must_match_repository_source(tmp_path):
+    snapshot = tmp_path / "standalone-compliance"
+    shutil.copytree(MANIFEST.parent, snapshot)
+    (snapshot / "DEVLEGATE-NOTICE").write_text("tampered\n")
+
+    with pytest.raises(PACKAGE.PackageError, match="out of sync"):
+        PACKAGE.validate_manifest(snapshot / "manifest.json", MANIFEST.parents[2])
+
+
 def test_notices_are_deterministic_and_classify_build_only():
-    records = PACKAGE.validate_manifest(MANIFEST)
+    records = PACKAGE.load_manifest(MANIFEST)["records"]
 
     first = PACKAGE.notice_text(records)
     second = PACKAGE.notice_text(records)
@@ -57,8 +116,29 @@ def test_notices_are_deterministic_and_classify_build_only():
     assert first == second
     assert "PEX vendored runtime libraries" in first
     assert "Science" in first
+    assert (
+        "| python-build-standalone build machinery | 20260901 | "
+        "build provenance not redistributed |"
+    ) in first
+    assert "| Science | 0.21.0 | build provenance not redistributed |" in first
     assert "Build Provenance Not Redistributed" in first
     assert "`LICENSES/pex-vendored/ansicolors-1.1.8-ISC.txt`" in first
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("pex", "wheel_sha256", "wrong"),
+        ("science", "asset", "wrong"),
+        ("science", "sha256", "wrong"),
+    ],
+)
+def test_pinned_component_provenance_fails_closed(section, field, value, tmp_path):
+    report = provenance_report()
+    report[section][field] = value
+
+    with pytest.raises(PACKAGE.PackageError):
+        PACKAGE.stable_provenance(report, MANIFEST, split_inventory())
 
 
 def test_unknown_license_path_fails_closed():
@@ -96,4 +176,65 @@ def test_safe_extract_rejects_path_traversal(tmp_path):
         tar.addfile(member, __import__("io").BytesIO(b"x"))
 
     with pytest.raises(PACKAGE.PackageError, match="unsafe"):
+        VALIDATOR.safe_extract(archive, tmp_path / "extract", "package")
+
+
+def test_safe_extract_rejects_symlinks(tmp_path):
+    archive = tmp_path / "symlink.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        root = tarfile.TarInfo("package")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o755
+        tar.addfile(root)
+        member = tarfile.TarInfo("package/devlegate")
+        member.type = tarfile.SYMTYPE
+        member.mode = 0o755
+        member.linkname = "/etc/passwd"
+        tar.addfile(member)
+
+    with pytest.raises(PACKAGE.PackageError, match="unsupported archive member"):
+        VALIDATOR.safe_extract(archive, tmp_path / "extract", "package")
+
+
+@pytest.mark.parametrize(
+    "member_type", [tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE]
+)
+def test_safe_extract_rejects_special_members(tmp_path, member_type):
+    archive = tmp_path / "special.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        root = tarfile.TarInfo("package")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o755
+        tar.addfile(root)
+        member = tarfile.TarInfo("package/special")
+        member.type = member_type
+        member.mode = 0o644
+        member.linkname = "package/devlegate"
+        tar.addfile(member)
+
+    with pytest.raises(PACKAGE.PackageError, match="unsupported archive member"):
+        VALIDATOR.safe_extract(archive, tmp_path / "extract", "package")
+
+
+def test_extracted_content_rejects_ephemeral_paths(tmp_path):
+    payload = tmp_path / "metadata"
+    payload.write_text("/tmp/devlegate-package-secret\n")
+
+    with pytest.raises(PACKAGE.PackageError, match="ephemeral path"):
+        VALIDATOR.reject_ephemeral_paths(tmp_path)
+
+
+def test_safe_extract_rejects_wrong_mode(tmp_path):
+    archive = tmp_path / "mode.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        root = tarfile.TarInfo("package")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o755
+        tar.addfile(root)
+        member = tarfile.TarInfo("package/devlegate")
+        member.mode = 0o644
+        member.size = 1
+        tar.addfile(member, io.BytesIO(b"x"))
+
+    with pytest.raises(PACKAGE.PackageError, match="unexpected archive mode"):
         VALIDATOR.safe_extract(archive, tmp_path / "extract", "package")

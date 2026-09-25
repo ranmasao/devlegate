@@ -30,6 +30,15 @@ SCIE_JUMP_VERSION = "1.13.0"
 SCIE_JUMP_ASSET = "scie-jump-gnu-linux-x86_64"
 SCIE_JUMP_SPLIT_NAME = "scie-jump"
 SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7e2d0"
+SCIENCE_ASSET = "science-fat-linux-x86_64"
+SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
+DEVLEGATE_SNAPSHOT_PATHS = {
+    "DEVLEGATE-LICENSE": "LICENSE",
+    "DEVLEGATE-NOTICE": "NOTICE",
+    "DEVLEGATE-LICENSING.md": "LICENSING.md",
+    "CC0-1.0.txt": "LICENSES/CC0-1.0.txt",
+    "NanoYAML-MIT.txt": "src/devlegate/_vendor/nanoyaml/LICENSE",
+}
 
 
 class PackageError(RuntimeError):
@@ -97,10 +106,55 @@ def manifest_file_records(manifest: dict[str, object]) -> list[tuple[dict, dict]
     return records
 
 
-def validate_manifest(manifest_path: Path) -> list[tuple[dict, dict]]:
-    manifest = load_manifest(manifest_path)
+def manifest_records(manifest: dict[str, object]) -> list[dict]:
+    components: set[str] = set()
+    for record in manifest["records"]:
+        if not isinstance(record, dict):
+            raise PackageError("compliance manifest record is not an object")
+        component = record.get("component")
+        if not isinstance(component, str) or not component or component in components:
+            raise PackageError(f"invalid or duplicate manifest component: {component}")
+        components.add(component)
+        for key in ("version", "role", "license", "source_repository", "source_path"):
+            if not record.get(key):
+                raise PackageError(f"incomplete compliance record: {key}")
+    return manifest["records"]
+
+
+def validate_devlegate_snapshots(manifest_path: Path, repo: Path) -> None:
     root = manifest_path.parent
+    manifest = load_manifest(manifest_path)
+    manifest_files = {
+        file_record["path"]: file_record
+        for _record, file_record in manifest_file_records(manifest)
+    }
+    for snapshot, source in DEVLEGATE_SNAPSHOT_PATHS.items():
+        snapshot_path = root / snapshot
+        source_path = repo / source
+        if (
+            not source_path.is_file()
+            or not snapshot_path.is_file()
+            or snapshot_path.read_bytes() != source_path.read_bytes()
+        ):
+            raise PackageError(
+                f"Devlegate legal snapshot is out of sync: {snapshot} != {source}"
+            )
+        file_record = manifest_files.get(snapshot)
+        if file_record is None or file_record["sha256"] != sha256(source_path):
+            raise PackageError(
+                f"Devlegate legal snapshot is absent from manifest: {snapshot}"
+            )
+
+
+def validate_manifest(
+    manifest_path: Path, repo: Path | None = None
+) -> list[tuple[dict, dict]]:
+    manifest = load_manifest(manifest_path)
+    manifest_records(manifest)
+    if repo is not None:
+        validate_devlegate_snapshots(manifest_path, repo)
     records = manifest_file_records(manifest)
+    root = manifest_path.parent
     for record, file_record in records:
         path = root / file_record["path"]
         if not path.is_file():
@@ -111,9 +165,6 @@ def validate_manifest(manifest_path: Path) -> list[tuple[dict, dict]]:
                 f"compliance snapshot hash mismatch for {file_record['path']}: "
                 f"expected {file_record['sha256']}, found {actual}"
             )
-        for key in ("component", "version", "role", "license", "source_repository"):
-            if not record.get(key):
-                raise PackageError(f"incomplete compliance record: {key}")
     return records
 
 
@@ -145,29 +196,23 @@ def source_provenance(record: dict) -> str:
     return source + f" path {record['source_path']}"
 
 
-def notice_text(records: list[tuple[dict, dict]]) -> str:
-    runtime = [item for item in records if "not redistributed" not in item[0]["role"]]
-    build_only = [item for item in records if "not redistributed" in item[0]["role"]]
+def notice_text(records: list[dict]) -> str:
+    runtime = [
+        record for record in records if "not redistributed" not in record["role"]
+    ]
+    build_only = [record for record in records if "not redistributed" in record["role"]]
 
-    def section(items: list[tuple[dict, dict]]) -> list[str]:
+    def section(items: list[dict]) -> list[str]:
         lines = [
             "| Component | Version | Role | License | License file(s) | "
             "Source/provenance |",
             "| --- | --- | --- | --- | --- | --- |",
         ]
-        grouped: dict[int, list[str]] = {}
-        for record, file_record in items:
-            key = id(record)
-            grouped.setdefault(key, []).append(
-                archive_license_path(file_record["path"])
-            )
-        seen: set[int] = set()
-        for record, _file_record in items:
-            key = id(record)
-            if key in seen:
-                continue
-            seen.add(key)
-            files = ", ".join(f"`{path}`" for path in grouped[key]) or "none"
+        for record in items:
+            files = ", ".join(
+                f"`{archive_license_path(file['path'])}`"
+                for file in record["files"]
+            ) or "none"
             lines.append(
                 f"| {record['component']} | {record['version']} | {record['role']} | "
                 f"{record['license']} | {files} | {source_provenance(record)} |"
@@ -202,6 +247,19 @@ def split_inventory(artifact: Path, destination: Path) -> dict[str, dict[str, ob
     from build_standalone import split_scie
 
     files = split_scie(artifact, destination)
+    expected_names = {
+        SCIE_JUMP_SPLIT_NAME,
+        "pex",
+        PBS_ARCHIVE,
+        "configure-binding.py",
+        "lift.json",
+    }
+    if set(files) != expected_names:
+        raise PackageError(
+            "embedded scie split inventory mismatch: "
+            f"missing={sorted(expected_names - set(files))}, "
+            f"unexpected={sorted(set(files) - expected_names)}"
+        )
     inventory = {
         name: {"size": path.stat().st_size, "sha256": sha256(path)}
         for name, path in sorted(files.items())
@@ -224,6 +282,19 @@ def stable_provenance(
     if inputs["pbs_archive"] != PBS_ARCHIVE or inputs["pbs_sha256"] != PBS_SHA256:
         raise PackageError("standalone PBS provenance mismatch")
     if inputs["science_version"] != SCIENCE_VERSION:
+        raise PackageError("standalone Science provenance mismatch")
+    pex = report.get("pex", {})
+    if (
+        pex.get("version") != PEX_VERSION
+        or pex.get("wheel_sha256") != PEX_WHEEL_SHA256
+    ):
+        raise PackageError("standalone PEX wheel provenance mismatch")
+    science = report.get("science", {})
+    if (
+        science.get("version") != SCIENCE_VERSION
+        or science.get("asset") != SCIENCE_ASSET
+        or science.get("sha256") != SCIENCE_SHA256
+    ):
         raise PackageError("standalone Science provenance mismatch")
     jump = report.get("scie_jump")
     if jump != {
@@ -253,8 +324,8 @@ def stable_provenance(
         },
         "science": {
             "version": SCIENCE_VERSION,
-            "asset": report["science"]["asset"],
-            "sha256": report["science"]["sha256"],
+            "asset": SCIENCE_ASSET,
+            "sha256": SCIENCE_SHA256,
             "role": "build-time only",
         },
         "pbs": {
@@ -342,7 +413,8 @@ def package(
     artifact = artifact.resolve()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     manifest_path = (manifest_path or repo / COMPLIANCE_DIR / "manifest.json").resolve()
-    records = validate_manifest(manifest_path)
+    records = validate_manifest(manifest_path, repo)
+    manifest = load_manifest(manifest_path)
     if not artifact.is_file():
         raise PackageError(f"standalone executable is missing: {artifact}")
     if sha256(artifact) != report["scie"]["sha256"]:
@@ -375,7 +447,7 @@ def package(
             manifest_path.read_text(encoding="utf-8"), encoding="utf-8"
         )
         (stage / "THIRD_PARTY_NOTICES.md").write_text(
-            notice_text(records), encoding="utf-8"
+            notice_text(manifest["records"]), encoding="utf-8"
         )
         split_dir = assembly_root / "split"
         inventory = split_inventory(artifact, split_dir)
