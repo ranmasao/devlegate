@@ -588,7 +588,15 @@ def _wait_for_runtime_stop(locator: RuntimeLocator) -> None:
         time.sleep(0.05)
 
 
-def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
+@dataclasses.dataclass(frozen=True)
+class ManagedSystemdOwner:
+    """The verified managed systemd unit and the supervisor that operates it."""
+
+    supervisor: SystemdSupervisor
+    unit: str
+
+
+def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | None:
     supervisor = SystemdSupervisor()
     try:
         store = SQLiteRuntimeStore(locator.state_dir, locator.state_key)
@@ -601,11 +609,12 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
         if name is None:
             finder = getattr(supervisor, "managed_unit_for", None)
             if finder is None:
+                name = unit_name(locator)
                 if not supervisor.inspect(locator):
                     return None
                 if not supervisor.status(locator):
                     return None
-                return supervisor
+                return ManagedSystemdOwner(supervisor, name)
             existing = finder(locator)
             name = existing.name if existing is not None else None
         if (
@@ -616,7 +625,7 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
             return None
     except (RuntimeStoreError, SystemdSupervisorError) as error:
         raise DevlegateError(str(error)) from error
-    return supervisor
+    return ManagedSystemdOwner(supervisor, name)
 
 
 def _supervision_store(target: ProjectTarget) -> SQLiteRuntimeStore:
@@ -725,12 +734,12 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     owner = _managed_systemd_owner(locator)
     if owner is not None:
         if intent == "stop":
-            owner.stop(locator)
+            owner.supervisor.stop(locator, name=owner.unit)
             _wait_for_runtime_stop(locator)
             result = {"result": "stopped", "service": "devlegate", "action": intent}
             emit(result, output_format, "service stopped")
             return 0
-        owner.restart(locator)
+        owner.supervisor.restart(locator, name=owner.unit)
         result = {"result": "restarted", "service": "devlegate", "action": intent}
         emit(result, output_format, "service restarted")
         return 0

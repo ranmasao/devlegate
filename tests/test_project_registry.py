@@ -18,6 +18,7 @@ from devlegate.project_registry import (
     canonical_env_path,
     validate_alias,
 )
+from devlegate.runtime_locator import RuntimeLocator
 from devlegate.runtime_store import SQLiteRuntimeStore
 from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
 
@@ -425,6 +426,85 @@ def test_start_systemd_reprovisions_persisted_legacy_name(tmp_path, monkeypatch)
     assert cli._start_systemd(target) == 0
     assert calls == [("install", legacy), ("start", legacy)]
     assert store.supervision_authority()["unit_name"] == legacy
+
+
+class RecordingSupervisor:
+    def __init__(self, calls: list[tuple[str, str | None]]) -> None:
+        self._calls = calls
+
+    def inspect(self, _locator, *, name=None):
+        self._calls.append(("inspect", name))
+        return True
+
+    def status(self, _locator, *, name=None):
+        self._calls.append(("status", name))
+        return True
+
+    def stop(self, _locator, *, name=None):
+        self._calls.append(("stop", name))
+
+    def restart(self, _locator, *, name=None):
+        self._calls.append(("restart", name))
+
+
+def lifecycle_over_persisted_unit(
+    env: Path, unit: str, monkeypatch, capsys
+) -> list[tuple[str, str | None]]:
+    locator = RuntimeLocator.from_env(env)
+    store = SQLiteRuntimeStore(locator.state_dir, locator.state_key)
+    store.establish_systemd_authority(
+        unit_name=unit,
+        state_key=locator.state_key,
+        env_file=env.resolve(),
+        repository=locator.repo,
+    )
+    calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(cli, "SystemdSupervisor", lambda: RecordingSupervisor(calls))
+
+    assert cli._stop_service(env, "table") == 0
+    assert cli._restart_service(env, "table") == 0
+
+    assert [action for action, _name in calls] == [
+        "inspect",
+        "status",
+        "stop",
+        "inspect",
+        "status",
+        "restart",
+    ]
+    assert {name for _action, name in calls} == {unit}
+    assert capsys.readouterr().out.splitlines() == [
+        "service stopped",
+        "service restarted",
+    ]
+    assert store.supervision_authority()["unit_name"] == unit
+    return calls
+
+
+def test_top_level_lifecycle_uses_persisted_legacy_unit_name(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    env = project(tmp_path, "legacy-lifecycle")
+    locator = RuntimeLocator.from_env(env)
+    legacy = f"devlegate-{locator.state_key}.service"
+    compact = f"devlegate-{locator.state_key[:8]}.service"
+
+    calls = lifecycle_over_persisted_unit(env, legacy, monkeypatch, capsys)
+
+    assert legacy != compact
+    assert compact not in {name for _action, name in calls}
+
+
+def test_top_level_lifecycle_uses_persisted_compact_unit_name(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    env = project(tmp_path, "compact-lifecycle")
+    locator = RuntimeLocator.from_env(env)
+    compact = f"devlegate-{locator.state_key[:8]}.service"
+
+    calls = lifecycle_over_persisted_unit(env, compact, monkeypatch, capsys)
+
+    assert all(name == compact for _action, name in calls)
 
 
 def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
