@@ -182,7 +182,10 @@ def test_compact_collision_extends_prefix_without_overwrite(tmp_path: Path) -> N
         tmp_path / "second", tmp_path / "state", "a" * 8 + "b" + "c" * 55
     )
     directory = tmp_path / "units"
-    supervisor = SystemdSupervisor(unit_directory=directory)
+    supervisor = SystemdSupervisor(
+        unit_directory=directory,
+        runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    )
     first_path = supervisor.install(first, tmp_path / "first.env")
     second_path = supervisor.install(second, tmp_path / "second.env")
 
@@ -194,7 +197,10 @@ def test_compact_collision_extends_prefix_without_overwrite(tmp_path: Path) -> N
 def test_same_state_managed_candidate_is_reused(tmp_path: Path) -> None:
     item = locator(tmp_path)
     directory = tmp_path / "units"
-    supervisor = SystemdSupervisor(unit_directory=directory)
+    supervisor = SystemdSupervisor(
+        unit_directory=directory,
+        runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    )
     first = supervisor.install(item, tmp_path / "first.env")
     second = supervisor.install(item, tmp_path / "second.env")
 
@@ -207,9 +213,10 @@ def test_unmanaged_compact_collision_is_not_overwritten(tmp_path: Path) -> None:
     directory.mkdir()
     compact = directory / unit_name(item)
     compact.write_text("[Service]\nExecStart=other\n")
-    installed = SystemdSupervisor(unit_directory=directory).install(
-        item, tmp_path / "project.env"
-    )
+    installed = SystemdSupervisor(
+        unit_directory=directory,
+        runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    ).install(item, tmp_path / "project.env")
 
     assert installed.name == f"devlegate-{item.state_key[:16]}.service"
     assert compact.read_text() == "[Service]\nExecStart=other\n"
@@ -244,7 +251,10 @@ def test_legacy_authoritative_name_controls_every_operation(tmp_path: Path) -> N
 def test_missing_legacy_unit_is_reprovisioned_at_same_name(tmp_path: Path) -> None:
     item = locator(tmp_path)
     legacy = f"devlegate-{item.state_key}.service"
-    supervisor = SystemdSupervisor(unit_directory=tmp_path / "units")
+    supervisor = SystemdSupervisor(
+        unit_directory=tmp_path / "units",
+        runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    )
 
     installed = supervisor.install(item, tmp_path / "project.env", name=legacy)
 

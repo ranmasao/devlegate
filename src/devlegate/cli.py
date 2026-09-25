@@ -599,7 +599,14 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> SystemdSupervisor | None:
             else None
         )
         if name is None:
-            existing = supervisor.managed_unit_for(locator)
+            finder = getattr(supervisor, "managed_unit_for", None)
+            if finder is None:
+                if not supervisor.inspect(locator):
+                    return None
+                if not supervisor.status(locator):
+                    return None
+                return supervisor
+            existing = finder(locator)
             name = existing.name if existing is not None else None
         if (
             name is None
