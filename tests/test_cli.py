@@ -3833,11 +3833,22 @@ def test_real_service_process_executes_retry_from_real_cli(git_fixture, monkeypa
         assert result.returncode == 0, result.stderr
         assert "retry accepted: T-1" in result.stdout
 
-        service.wait_for(
-            lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
-        )
+        expected_review = [{"id": "T-1", "title": "Control ticket"}]
+
+        def retry_completed_in_status():
+            observed = service.cli("status", "--json")
+            if observed.returncode != 0:
+                return False
+            try:
+                payload = json.loads(observed.stdout)
+            except json.JSONDecodeError:
+                return False
+            return payload["tickets"]["review"] == expected_review
+
+        service.wait_for(retry_completed_in_status)
+        assert (engine.control_worktree / "kanban/review/T-1.md").is_file()
         status = json.loads(service.cli("status", "--json").stdout)
-        assert status["tickets"]["review"] == [{"id": "T-1", "title": "Control ticket"}]
+        assert status["tickets"]["review"] == expected_review
         assert attempts.read_text().splitlines() == ["attempt"]
 
 
