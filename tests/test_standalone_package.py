@@ -11,9 +11,13 @@ from pathlib import Path
 
 import pytest
 
+ROOT = Path(__file__).parents[1]
+TOOLS = ROOT / "tools"
+sys.path.insert(0, str(TOOLS))
+
 
 def load_tool(name):
-    path = Path(__file__).parents[1] / "tools" / f"{name}.py"
+    path = TOOLS / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -25,6 +29,7 @@ def load_tool(name):
 PACKAGE = load_tool("package_standalone")
 VALIDATOR = load_tool("validate_standalone_package")
 MANIFEST = Path(__file__).parents[1] / "packaging/standalone-compliance/manifest.json"
+BUILDER = load_tool("build_standalone")
 
 
 def provenance_report():
@@ -33,16 +38,26 @@ def provenance_report():
         "inputs": {
             "target": "linux-x86_64",
             "pex_version": "2.103.2",
+            "pex_wheel": BUILDER.PEX_WHEEL,
+            "pex_sha256": BUILDER.PEX_SHA256,
             "pbs_archive": PACKAGE.PBS_ARCHIVE,
             "pbs_sha256": PACKAGE.PBS_SHA256,
             "science_version": "0.21.0",
+            "science_asset": PACKAGE.SCIENCE_ASSET,
+            "science_sha256": PACKAGE.SCIENCE_SHA256,
+            "pbs_provider": BUILDER.PBS_PROVIDER,
             "pbs_release": "20260901",
             "pbs_python_version": "3.12.14",
+            "scie_jump_version": PACKAGE.SCIE_JUMP_VERSION,
         },
         "target_libc": "glibc",
         "pex": {
             "version": "2.103.2",
+            "wheel_filename": BUILDER.PEX_WHEEL,
             "wheel_sha256": PACKAGE.PEX_WHEEL_SHA256,
+            "bootstrap_tools": PACKAGE.pinned_tools(
+                BUILDER.PEX_BOOTSTRAP_TOOLS
+            )["artifacts"],
         },
         "science": {
             "version": "0.21.0",
@@ -56,10 +71,13 @@ def provenance_report():
         },
         "wheel": {"version": "0.5.4.dev0", "sha256": "b" * 64},
         "scie": {"sha256": "c" * 64, "size": 123},
-        "wheel_build_toolchain": {"versions": {}, "artifacts": {}},
+        "wheel_build_toolchain": PACKAGE.pinned_tools(BUILDER.WHEEL_BUILD_TOOLS),
         "wheel_reproducible": True,
         "scie_reproducible": True,
-        "reproducibility_scope": "test scope",
+        "independent_build_roots": True,
+        "independent_pex_roots": True,
+        "temporary_build_path_embedded": False,
+        "reproducibility_scope": PACKAGE.EXPECTED_REPRODUCIBILITY_SCOPE,
     }
 
 
@@ -126,19 +144,45 @@ def test_notices_are_deterministic_and_classify_build_only():
 
 
 @pytest.mark.parametrize(
-    ("section", "field", "value"),
+    ("path", "value"),
     [
-        ("pex", "wheel_sha256", "wrong"),
-        ("science", "asset", "wrong"),
-        ("science", "sha256", "wrong"),
+        (("inputs", "pbs_provider"), "wrong"),
+        (("inputs", "pbs_release"), "20991231"),
+        (("inputs", "pbs_python_version"), "9.9.9"),
+        (("inputs", "pex_wheel"), "wrong.whl"),
+        (("inputs", "pex_sha256"), "wrong"),
+        (("inputs", "science_asset"), "wrong"),
+        (("inputs", "science_sha256"), "wrong"),
+        (("wheel_build_toolchain", "versions", "pip"), "0.0.0"),
+        (("wheel_build_toolchain", "artifacts", "setuptools", "sha256"), "wrong"),
+        (("pex", "bootstrap_tools", "pip", "sha256"), "wrong"),
+        (("wheel_reproducible",), False),
+        (("scie_reproducible",), False),
+        (("independent_build_roots",), False),
+        (("independent_pex_roots",), False),
+        (("temporary_build_path_embedded",), True),
+        (("reproducibility_scope",), "wrong"),
     ],
 )
-def test_pinned_component_provenance_fails_closed(section, field, value, tmp_path):
+def test_canonical_identity_fails_closed(path, value):
     report = provenance_report()
-    report[section][field] = value
+    target = report
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
 
     with pytest.raises(PACKAGE.PackageError):
         PACKAGE.stable_provenance(report, MANIFEST, split_inventory())
+
+
+def test_source_version_must_match_report(tmp_path):
+    report = provenance_report()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "devlegate"\nversion = "0.5.5.dev0"\n'
+    )
+
+    with pytest.raises(PACKAGE.PackageError, match="source version"):
+        PACKAGE.stable_provenance(report, MANIFEST, split_inventory(), tmp_path)
 
 
 def test_unknown_license_path_fails_closed():

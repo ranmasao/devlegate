@@ -158,7 +158,10 @@ def validate(
         raise PackageError("notice file does not match deterministic regeneration")
     with tempfile.TemporaryDirectory(prefix="devlegate-validate-") as split_dir:
         expected_provenance = stable_provenance(
-            report, manifest_path, split_inventory(executable, Path(split_dir))
+            report,
+            manifest_path,
+            split_inventory(executable, Path(split_dir)),
+            repo,
         )
     if provenance != expected_provenance:
         raise PackageError("BUILD-PROVENANCE does not match reconstructed provenance")

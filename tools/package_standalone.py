@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 
 COMPLIANCE_DIR = "packaging/standalone-compliance"
@@ -24,6 +25,7 @@ LIBC = "glibc"
 PBS_ARCHIVE = "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
 PBS_SHA256 = "936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22"
 PEX_VERSION = "2.103.2"
+PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_WHEEL_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"
 SCIENCE_VERSION = "0.21.0"
 SCIE_JUMP_VERSION = "1.13.0"
@@ -32,6 +34,13 @@ SCIE_JUMP_SPLIT_NAME = "scie-jump"
 SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7e2d0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
+PBS_PROVIDER = "PythonBuildStandalone"
+PBS_RELEASE = "20260901"
+PBS_PYTHON_VERSION = "3.12.14"
+EXPECTED_REPRODUCIBILITY_SCOPE = (
+    "byte-reproducible on the tested Linux x86_64 build environment "
+    "from the pinned immutable inputs"
+)
 DEVLEGATE_SNAPSHOT_PATHS = {
     "DEVLEGATE-LICENSE": "LICENSE",
     "DEVLEGATE-NOTICE": "NOTICE",
@@ -77,6 +86,43 @@ def load_manifest(path: Path) -> dict[str, object]:
     if not isinstance(manifest.get("records"), list):
         raise PackageError("compliance manifest records must be a list")
     return manifest
+
+
+def builder_constants() -> tuple[
+    dict[str, str], dict[str, tuple[str, str]], dict[str, tuple[str, str]]
+]:
+    from build_standalone import INPUTS, PEX_BOOTSTRAP_TOOLS, WHEEL_BUILD_TOOLS
+
+    return (
+        {
+            key: value
+            for key, value in vars(INPUTS).items()
+        },
+        WHEEL_BUILD_TOOLS,
+        PEX_BOOTSTRAP_TOOLS,
+    )
+
+
+def project_version(repo: Path) -> str:
+    try:
+        data = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))
+        return data["project"]["version"]
+    except (KeyError, OSError, tomllib.TOMLDecodeError) as error:
+        raise PackageError(f"cannot read project version: {error}") from error
+
+
+def pinned_tools(
+    tools: dict[str, tuple[str, str]]
+) -> dict[str, dict[str, dict[str, str]]]:
+    return {
+        "versions": {
+            name: filename.split("-")[1] for name, (filename, _sha256) in tools.items()
+        },
+        "artifacts": {
+            name: {"filename": filename, "sha256": digest}
+            for name, (filename, digest) in tools.items()
+        },
+    }
 
 
 def manifest_file_records(manifest: dict[str, object]) -> list[tuple[dict, dict]]:
@@ -272,30 +318,33 @@ def split_inventory(artifact: Path, destination: Path) -> dict[str, dict[str, ob
 
 
 def stable_provenance(
-    report: dict[str, object], manifest_path: Path, inventory: dict[str, dict]
+    report: dict[str, object],
+    manifest_path: Path,
+    inventory: dict[str, dict],
+    repo: Path | None = None,
 ) -> dict[str, object]:
+    canonical_inputs, wheel_tools, bootstrap_tools = builder_constants()
     inputs = report["inputs"]
-    if inputs["target"] != TARGET or report.get("target_libc") != LIBC:
-        raise PackageError("standalone build target/libc mismatch")
-    if inputs["pex_version"] != PEX_VERSION:
-        raise PackageError("standalone PEX version mismatch")
-    if inputs["pbs_archive"] != PBS_ARCHIVE or inputs["pbs_sha256"] != PBS_SHA256:
-        raise PackageError("standalone PBS provenance mismatch")
-    if inputs["science_version"] != SCIENCE_VERSION:
-        raise PackageError("standalone Science provenance mismatch")
+    for key, expected in canonical_inputs.items():
+        if inputs.get(key) != expected:
+            raise PackageError(f"standalone input identity mismatch: {key}")
+    if report.get("target_libc") != LIBC:
+        raise PackageError("standalone build libc mismatch")
     pex = report.get("pex", {})
     if (
         pex.get("version") != PEX_VERSION
+        or pex.get("wheel_filename") != PEX_WHEEL
         or pex.get("wheel_sha256") != PEX_WHEEL_SHA256
+        or pex.get("bootstrap_tools") != pinned_tools(bootstrap_tools)["artifacts"]
     ):
-        raise PackageError("standalone PEX wheel provenance mismatch")
+        raise PackageError("standalone PEX identity mismatch")
     science = report.get("science", {})
     if (
         science.get("version") != SCIENCE_VERSION
         or science.get("asset") != SCIENCE_ASSET
         or science.get("sha256") != SCIENCE_SHA256
     ):
-        raise PackageError("standalone Science provenance mismatch")
+        raise PackageError("standalone Science identity mismatch")
     jump = report.get("scie_jump")
     if jump != {
         "asset": SCIE_JUMP_ASSET,
@@ -303,11 +352,24 @@ def stable_provenance(
         "sha256": SCIE_JUMP_SHA256,
     }:
         raise PackageError("standalone scie-jump provenance mismatch")
+    if repo is not None and project_version(repo) != report["wheel"]["version"]:
+        raise PackageError("standalone source version does not match wheel version")
+    if report.get("wheel_build_toolchain") != pinned_tools(wheel_tools):
+        raise PackageError("standalone wheel build toolchain mismatch")
+    if (
+        report.get("wheel_reproducible") is not True
+        or report.get("scie_reproducible") is not True
+        or report.get("independent_build_roots") is not True
+        or report.get("independent_pex_roots") is not True
+        or report.get("temporary_build_path_embedded") is not False
+        or report.get("reproducibility_scope") != EXPECTED_REPRODUCIBILITY_SCOPE
+    ):
+        raise PackageError("standalone reproducibility proof is incomplete")
     wheel = report["wheel"]
     scie = report["scie"]
     manifest_hash = sha256(manifest_path)
     return {
-        "schema_version": 1,
+            "schema_version": 2,
         "devlegate": {
             "version": wheel["version"],
             "source_commit": report["source_commit"],
@@ -318,7 +380,9 @@ def stable_provenance(
         "target": {"platform": TARGET, "libc": LIBC},
         "pex": {
             "version": PEX_VERSION,
+            "wheel_filename": PEX_WHEEL,
             "wheel_sha256": report["pex"]["wheel_sha256"],
+            "bootstrap_tools": report["pex"]["bootstrap_tools"],
             "source_tag": "v2.103.2",
             "source_commit": "ab31461ceaec1167f60751416dbed0e6b5803b03",
         },
@@ -329,6 +393,7 @@ def stable_provenance(
             "role": "build-time only",
         },
         "pbs": {
+            "provider": PBS_PROVIDER,
             "release": inputs["pbs_release"],
             "python_version": inputs["pbs_python_version"],
             "archive": inputs["pbs_archive"],
@@ -345,6 +410,11 @@ def stable_provenance(
         "reproducibility": {
             "wheel": report["wheel_reproducible"],
             "scie": report["scie_reproducible"],
+            "independent_build_roots": report["independent_build_roots"],
+            "independent_pex_roots": report["independent_pex_roots"],
+            "temporary_build_path_embedded": report[
+                "temporary_build_path_embedded"
+            ],
             "scope": report["reproducibility_scope"],
         },
         "ptex_runtime_included": False,
@@ -451,7 +521,7 @@ def package(
         )
         split_dir = assembly_root / "split"
         inventory = split_inventory(artifact, split_dir)
-        provenance = stable_provenance(report, manifest_path, inventory)
+        provenance = stable_provenance(report, manifest_path, inventory, repo)
         (stage / "BUILD-PROVENANCE.json").write_text(
             json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
