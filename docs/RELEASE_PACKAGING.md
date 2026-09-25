@@ -14,6 +14,29 @@ That archive includes
 the pinned NanoYAML source and can be built without network access to obtain
 repository source dependencies.
 
+## Standalone Binary Archive
+
+The standalone executable has a separate deterministic distribution unit:
+
+```text
+devlegate-X.Y.Z-linux-x86_64.tar.gz
+devlegate-X.Y.Z-linux-x86_64.tar.gz.sha256
+```
+
+`tools/package_standalone.py` assembles this archive from a verified standalone
+executable, its build provenance, and the repository-owned compliance snapshot
+under `packaging/standalone-compliance/`. Package assembly does not download
+legal material. The archive contains one top-level directory with the
+unversioned `devlegate` executable, Devlegate legal files,
+`THIRD_PARTY_NOTICES.md`, `BUILD-PROVENANCE.json`, and the exact third-party
+license snapshots used by the manifest. Its Linux x86_64 target is explicitly
+the glibc target and records the GNU scie-jump asset identity.
+
+`tools/validate_standalone_package.py` independently checks the archive root,
+safe extraction, executable modes, artifact identity, manifest hashes, notice
+references, and absence of transient build paths. This archive is not uploaded
+or published by the current GitHub workflow.
+
 ## Builder
 
 `tools/build_full_source.py` (also exposed as `tools/build-full-source`)

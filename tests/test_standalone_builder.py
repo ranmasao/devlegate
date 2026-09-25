@@ -4,6 +4,7 @@
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from zipfile import ZipFile
@@ -112,6 +113,59 @@ def test_scie_inspection_rejects_build_root_in_raw_metadata(tmp_path):
 
     with pytest.raises(BUILDER.BuildError, match="temporary build root"):
         BUILDER.validate_scie_inspection(inspection, forbidden_build_root=tmp_path)
+
+
+def test_scie_inspection_rejects_common_outer_build_root(tmp_path):
+    outer = tmp_path / "outer"
+    inspection = {
+        "scie": {
+            "lift": {
+                "files": [
+                    {
+                        "name": BUILDER.PBS_ARCHIVE,
+                        "hash": BUILDER.PBS_SHA256,
+                        "path": str(outer / "build-a"),
+                    }
+                ]
+            },
+            "jump": {"version": BUILDER.SCIE_JUMP_VERSION},
+        }
+    }
+
+    with pytest.raises(BUILDER.BuildError, match="temporary build root"):
+        BUILDER.validate_scie_inspection(inspection, forbidden_build_root=outer)
+
+
+def test_split_scie_verifies_gnu_jump_hash(tmp_path, monkeypatch):
+    names = {
+        BUILDER.SCIE_JUMP_SPLIT_NAME,
+        "pex",
+        BUILDER.PBS_ARCHIVE,
+        "configure-binding.py",
+        "lift.json",
+    }
+    for name in names:
+        (tmp_path / name).write_bytes(b"payload")
+
+    def fake_run(command, *, env=None, cwd=None):
+        stdout = BUILDER.SCIE_JUMP_VERSION if command[-1] == "--version" else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    original_sha256 = BUILDER.sha256
+
+    def fake_sha256(path):
+        if path.name == BUILDER.SCIE_JUMP_SPLIT_NAME:
+            return BUILDER.SCIE_JUMP_SHA256
+        if path.name == BUILDER.PBS_ARCHIVE:
+            return BUILDER.PBS_SHA256
+        return original_sha256(path)
+
+    monkeypatch.setattr(BUILDER, "run", fake_run)
+    monkeypatch.setattr(BUILDER, "sha256", fake_sha256)
+
+    split = BUILDER.split_scie(tmp_path / "artifact", tmp_path)
+
+    assert sorted(split) == sorted(names)
 
 
 def test_scie_inspection_rejects_pbs_hash_mismatch():

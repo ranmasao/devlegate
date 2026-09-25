@@ -34,6 +34,12 @@ its own isolated bootstrap wheels, pip `23.2`, setuptools `68.0.0`, and wheel
 wheel build backend or runtime dependencies. It does not modify the normal
 runtime dependency set or invoke package managers at runtime.
 
+The standalone publication unit is a deterministic
+`devlegate-<version>-linux-x86_64.tar.gz` archive containing the executable,
+Devlegate legal material, third-party notices and licenses, and stable build
+provenance. It is distinct from the full-source archive and is not published
+automatically by the current GitHub workflow.
+
 The reproducibility proof assembles wheel and scie A/B independently under
 distinct temporary build roots, wheel-build environments, and PEX_ROOT caches.
 They share only immutable, hash-verified downloaded inputs. PEX_ROOT is
@@ -89,6 +95,11 @@ is CPython; acceptance by the version predicate is not a tested interpreter
 support matrix. The builder is not coupled to the bundled runtime minor
 version. The current bundled runtime is independently pinned to CPython
 `3.12.14` from PBS release `20260901`.
+
+The native standalone target is Linux x86_64 with glibc. Its eager scie uses
+the official `scie-jump-gnu-linux-x86_64` asset from scie-jump `1.13.0`, not
+the unqualified Linux asset. The PBS archive is the GNU Linux
+`x86_64-unknown-linux-gnu` `install_only` flavor.
 
 Science is build-time tooling and is not part of the eager runtime payload.
 The eager runtime contains the Devlegate wheel, PEX bootstrap/runtime material,

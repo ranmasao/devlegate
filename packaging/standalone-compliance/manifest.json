@@ -1,0 +1,144 @@
+{
+  "schema": "devlegate.standalone-compliance.v1",
+  "target": {
+    "platform": "linux-x86_64",
+    "libc": "glibc"
+  },
+  "records": [
+    {
+      "component": "Devlegate",
+      "version": "selected-source",
+      "role": "redistributed runtime",
+      "license": "EUPL-1.2, CC0-1.0, MIT",
+      "source_repository": "https://github.com/ranmasao/devlegate",
+      "source_tag": null,
+      "source_commit": null,
+      "source_path": "LICENSE, NOTICE, LICENSING.md, LICENSES/CC0-1.0.txt, src/devlegate/_vendor/nanoyaml/LICENSE",
+      "files": [
+        {"path": "DEVLEGATE-LICENSE", "sha256": "57fb42fbcd0b037ce528ed8f72f1ec095d67bc6825ecf1448ff39be1fe68a4b4"},
+        {"path": "DEVLEGATE-NOTICE", "sha256": "66445a213e50b74398d69a5e2a964ec7e46c3394bcbfc20077f87d390f39259d"},
+        {"path": "DEVLEGATE-LICENSING.md", "sha256": "8a7c726613ce4c98d6ca3161b76b5bfea4b91aa5d6920e2d7288f432d0c7925d"},
+        {"path": "CC0-1.0.txt", "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"},
+        {"path": "NanoYAML-MIT.txt", "sha256": "7a4e98a8717172b9c872e04c04ef1f3290b7e67f97c18793dafa057b18582969"}
+      ]
+    },
+    {
+      "component": "PEX",
+      "version": "2.103.2",
+      "role": "redistributed runtime/bootstrap",
+      "license": "Apache-2.0",
+      "source_repository": "https://github.com/pex-tool/pex",
+      "source_tag": "v2.103.2",
+      "source_commit": "ab31461ceaec1167f60751416dbed0e6b5803b03",
+      "source_path": "LICENSE; pex/scie/configure-binding.py",
+      "files": [
+        {"path": "pex/Apache-2.0.txt", "sha256": "6dc0e068dcf3a5bc8e054205b85b7720e1d49265bbc64bf515d2cf79197df69a"},
+        {"path": "pex/configure-binding.py", "sha256": "7282030feae30e8217a38074916da6d0ce17f8e50ba0bb50a3fefccdd39e9d4b"}
+      ]
+    },
+    {
+      "component": "PEX vendored runtime libraries",
+      "version": "2.103.2 pinned bootstrap payload",
+      "role": "redistributed runtime, conservative license superset",
+      "license": "Mixed upstream licenses",
+      "source_repository": "https://github.com/pex-tool/pex",
+      "source_tag": "v2.103.2",
+      "source_commit": "ab31461ceaec1167f60751416dbed0e6b5803b03",
+      "source_path": "pex/vendor/_vendored/**",
+      "files": [
+        {"path": "pex-vendored/ansicolors-1.1.8-ISC.txt", "sha256": "ab20ccd2613487b0f0cdda6e95e22bec7e4c8da1b063466cb266fe8fa316e604"},
+        {"path": "pex-vendored/appdirs-1.4.4-LICENSE.txt", "sha256": "36ddb4d0a745a93ab203203d7190814b1b89727d254caff48c7a7afbbd47000b"},
+        {"path": "pex-vendored/attrs-21.5.0.dev0-LICENSE", "sha256": "bf659a28b49240602f56bbdf490cbe2ec509b15b98f99d7b19a52c740e327863"},
+        {"path": "pex-vendored/packaging-20.9-LICENSE", "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"},
+        {"path": "pex-vendored/packaging-20.9-LICENSE.APACHE", "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+        {"path": "pex-vendored/packaging-20.9-LICENSE.BSD", "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"},
+        {"path": "pex-vendored/packaging-21.3-LICENSE", "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"},
+        {"path": "pex-vendored/packaging-21.3-LICENSE.APACHE", "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+        {"path": "pex-vendored/packaging-21.3-LICENSE.BSD", "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"},
+        {"path": "pex-vendored/packaging-24.0-LICENSE", "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"},
+        {"path": "pex-vendored/packaging-24.0-LICENSE.APACHE", "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+        {"path": "pex-vendored/packaging-24.0-LICENSE.BSD", "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"},
+        {"path": "pex-vendored/packaging-26.2-LICENSE", "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"},
+        {"path": "pex-vendored/packaging-26.2-LICENSE.APACHE", "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+        {"path": "pex-vendored/packaging-26.2-LICENSE.BSD", "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"},
+        {"path": "pex-vendored/packaging-26.3-LICENSE", "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"},
+        {"path": "pex-vendored/packaging-26.3-LICENSE.APACHE", "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+        {"path": "pex-vendored/packaging-26.3-LICENSE.BSD", "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"},
+        {"path": "pex-vendored/pip-20.3.4-LICENSE.txt", "sha256": "81d012fe03f24d49014efbe0a0d3651bd32fd4a1434e283a5b525d78c0f611f8"},
+        {"path": "pex-vendored/pyparsing-2.4.7-LICENSE", "sha256": "10d5120a16805804ffda8b688c220bfb4e8f39741b57320604d455a309e01972"},
+        {"path": "pex-vendored/pyparsing-3.0.7-LICENSE", "sha256": "10d5120a16805804ffda8b688c220bfb4e8f39741b57320604d455a309e01972"},
+        {"path": "pex-vendored/setuptools-44.0.0-LICENSE", "sha256": "c32a3ac395af6321efd28be73d06a00f0db6ab887d1c21d4fec46128d2056d5a"},
+        {"path": "pex-vendored/toml-0.10.2-LICENSE", "sha256": "2d9294823df6c89357c8be4927fce79361d6561e5ee7532d5926e63939aaa536"},
+        {"path": "pex-vendored/tomli-2.0.1-LICENSE", "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"}
+      ]
+    },
+    {
+      "component": "scie-jump",
+      "version": "1.13.0",
+      "role": "redistributed native launcher",
+      "license": "Apache-2.0",
+      "source_repository": "https://github.com/a-scie/jump",
+      "source_tag": "v1.13.0",
+      "source_commit": "d45d0d80845220f3f842083d42caba31f35b5290",
+      "source_path": "LICENSE",
+      "asset": "scie-jump-gnu-linux-x86_64",
+      "asset_sha256": "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7e2d0",
+      "files": [
+        {"path": "scie-jump/Apache-2.0.txt", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"}
+      ]
+    },
+    {
+      "component": "CPython runtime libraries",
+      "version": "3.12.14 PBS 20260901",
+      "role": "redistributed runtime",
+      "license": "Per-file upstream licenses",
+      "source_repository": "https://github.com/indygreg/python-build-standalone",
+      "source_tag": null,
+      "source_commit": "4bb01f09aaf362c71e891be4a41cb6d6ddf830b3",
+      "source_path": "LICENSE.*.txt",
+      "files": [
+        {"path": "python-runtime/LICENSE.bdb.txt", "sha256": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b"},
+        {"path": "python-runtime/LICENSE.bzip2.txt", "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441"},
+        {"path": "python-runtime/LICENSE.cpython.txt", "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd"},
+        {"path": "python-runtime/LICENSE.expat.txt", "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"},
+        {"path": "python-runtime/LICENSE.libX11.txt", "sha256": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e"},
+        {"path": "python-runtime/LICENSE.libXau.txt", "sha256": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa"},
+        {"path": "python-runtime/LICENSE.libedit.txt", "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1"},
+        {"path": "python-runtime/LICENSE.libffi.txt", "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0"},
+        {"path": "python-runtime/LICENSE.liblzma.txt", "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02"},
+        {"path": "python-runtime/LICENSE.libuuid.txt", "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b"},
+        {"path": "python-runtime/LICENSE.libxcb.txt", "sha256": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd"},
+        {"path": "python-runtime/LICENSE.mpdecimal.txt", "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b"},
+        {"path": "python-runtime/LICENSE.ncurses.txt", "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c"},
+        {"path": "python-runtime/LICENSE.openssl-1.1.txt", "sha256": "9c04cce50c4989d5601dd8b07f6ab922c40388b66ac736c9007cb1ed9d9dd560"},
+        {"path": "python-runtime/LICENSE.openssl-3.txt", "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"},
+        {"path": "python-runtime/LICENSE.sqlite.txt", "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719"},
+        {"path": "python-runtime/LICENSE.tcl.txt", "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16"},
+        {"path": "python-runtime/LICENSE.tix.txt", "sha256": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5"},
+        {"path": "python-runtime/LICENSE.zlib.txt", "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c"}
+      ]
+    },
+    {
+      "component": "Science",
+      "version": "0.21.0",
+      "role": "build provenance not redistributed",
+      "license": "Build-time only",
+      "source_repository": "https://github.com/a-scie/lift",
+      "source_tag": "v0.21.0",
+      "source_commit": null,
+      "source_path": "science-fat-linux-x86_64",
+      "files": []
+    },
+    {
+      "component": "python-build-standalone build machinery",
+      "version": "20260901",
+      "role": "build provenance not redistributed",
+      "license": "Build provenance only",
+      "source_repository": "https://github.com/indygreg/python-build-standalone",
+      "source_tag": null,
+      "source_commit": "4bb01f09aaf362c71e891be4a41cb6d6ddf830b3",
+      "source_path": "build machinery",
+      "files": []
+    }
+  ]
+}

@@ -33,6 +33,10 @@ SCIENCE_VERSION = "0.21.0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
 SCIE_JUMP_VERSION = "1.13.0"
+SCIE_JUMP_ASSET = "scie-jump-gnu-linux-x86_64"
+SCIE_JUMP_SPLIT_NAME = "scie-jump"
+SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7e2d0"
+LIBC = "glibc"
 PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"
 WHEEL_BUILD_TOOLS = {
@@ -485,13 +489,50 @@ def inspect_scie(
             "pbs_release": inputs.pbs_release,
             "python_version": inputs.pbs_python_version,
             "target": inputs.target,
+            "libc": LIBC,
             "pbs_archive": inputs.pbs_archive,
             "pbs_sha256": inputs.pbs_sha256,
             "science_version": inputs.science_version,
             "scie_jump_version": inputs.scie_jump_version,
+            "scie_jump_asset": SCIE_JUMP_ASSET,
+            "scie_jump_sha256": SCIE_JUMP_SHA256,
         },
         "observed": observed,
     }
+
+
+def split_scie(artifact: Path, destination: Path) -> dict[str, Path]:
+    destination.mkdir(parents=True, exist_ok=True)
+    run(
+        [str(artifact), str(destination)],
+        env={**os.environ, "SCIE": "split"},
+    )
+    files = {path.name: path for path in destination.iterdir() if path.is_file()}
+    required = {
+        SCIE_JUMP_SPLIT_NAME: "scie-jump",
+        "pex": "pex",
+        PBS_ARCHIVE: "pbs",
+        "configure-binding.py": "configure-binding",
+        "lift.json": "lift",
+    }
+    missing = [name for name in required if name not in files]
+    if missing:
+        raise BuildError(f"scie split is missing required files: {missing}")
+    if any(name.startswith("ptex") for name in files):
+        raise BuildError("eager scie split unexpectedly contains ptex")
+    if sha256(files[SCIE_JUMP_SPLIT_NAME]) != SCIE_JUMP_SHA256:
+        raise BuildError(
+            "scie-jump hash mismatch: expected "
+            f"{SCIE_JUMP_SHA256}, found {sha256(files[SCIE_JUMP_SPLIT_NAME])}"
+        )
+    if (
+        run([str(files[SCIE_JUMP_SPLIT_NAME]), "--version"]).stdout.strip()
+        != SCIE_JUMP_VERSION
+    ):
+        raise BuildError("scie-jump version mismatch in split payload")
+    if sha256(files[PBS_ARCHIVE]) != PBS_SHA256:
+        raise BuildError("split PBS archive hash mismatch")
+    return files
 
 
 def sanitize_inspection(value):
@@ -806,8 +847,14 @@ def build(args: argparse.Namespace) -> int:
             build_b_root,
             epoch,
         )
-        scie_a = inspect_scie(artifact_a, forbidden_build_root=build_a_root)
-        scie_b = inspect_scie(artifact_b, forbidden_build_root=build_b_root)
+        scie_a = inspect_scie(artifact_a, forbidden_build_root=root)
+        scie_b = inspect_scie(artifact_b, forbidden_build_root=root)
+        split_a = split_scie(artifact_a, build_a_root / "split")
+        split_b = split_scie(artifact_b, build_b_root / "split")
+        if {
+            name: sha256(path) for name, path in split_a.items()
+        } != {name: sha256(path) for name, path in split_b.items()}:
+            raise BuildError("repeated scie split outputs are not identical")
         print("BUILD A")
         print(f"build_root: {build_a_root}")
         print(f"PEX_ROOT: {build_a_root / 'PEX_ROOT'}")
@@ -865,6 +912,21 @@ def build(args: argparse.Namespace) -> int:
             "scie": scie_a,
             "scie_reproducible": scie_a["sha256"] == scie_b["sha256"],
             "scie_second_sha256": scie_b["sha256"],
+            "target_libc": LIBC,
+            "scie_jump": {
+                "asset": SCIE_JUMP_ASSET,
+                "version": SCIE_JUMP_VERSION,
+                "sha256": SCIE_JUMP_SHA256,
+            },
+            "split_inventory": sorted(
+                {
+                    name: {
+                        "size": split_a[name].stat().st_size,
+                        "sha256": sha256(split_a[name]),
+                    }
+                    for name in split_a
+                }.items()
+            ),
             "reproducibility_scope": (
                 "byte-reproducible on the tested Linux x86_64 build environment "
                 "from the pinned immutable inputs"
