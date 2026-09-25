@@ -99,13 +99,13 @@ startup. systemd owns inherited service output and journal routing, while
 Devlegate owns execution-log persistence. Hosting ownership is not a project
 `.env` setting.
 
-Per-user host policy is separate from software distribution. After a runnable
-Devlegate artifact is provided by a wheel, self-contained executable, or future
-distro package, `devlegate host install --supervisor internal|systemd` records
-the default detached supervisor at
-`$XDG_CONFIG_HOME/devlegate/installation.json`. It does not invoke a package
-manager, create a Python environment, or install a global unit. Systemd host
-policy provisions project units lazily at detached start.
+Per-user host policy is separate from software distribution. The explicit host
+installation commands remain available for environments that need a recorded
+detached policy, but ordinary bare startup probes the current user manager and
+chooses systemd or direct attachment automatically. Host integration does not
+invoke a package manager, create a Python environment, or install a global unit.
+Systemd provisions a project unit only when the automatic or explicit external
+path can verify the exact project identity.
 
 ### Runtime and Distribution Contract
 
@@ -163,11 +163,11 @@ published immutable views and enqueue mutable commands. The owner thread
 validates and dispatches commands at scheduler boundaries, while duplicate
 request identities are resolved through durable receipts.
 
-Bare `devlegate` starts the detached form selected by the installed host policy:
-internal policy uses Devlegate's detached subprocess, while systemd policy uses
-the exact managed project unit. `devlegate foreground` runs that host attached
-to the current terminal, and `devlegate once` runs it for one complete scheduler
-iteration. All three modes use the same authority and IPC boundary.
+Bare `devlegate` probes the current user manager and starts the exact managed
+project unit when systemd is usable; otherwise it runs direct and attached.
+`devlegate foreground` runs direct and attached, and `devlegate once` runs one
+complete scheduler iteration. All modes use the same authority and IPC
+boundary.
 `devlegate stop` requests orderly shutdown through the actual runtime owner.
 
 ### Operational Logging

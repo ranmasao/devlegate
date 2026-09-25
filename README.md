@@ -11,305 +11,117 @@ State · Provenance · Quality · Recovery
 [![CI](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml/badge.svg)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ranmasao/devlegate/badges/coverage.json)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 
-Devlegate runs coding work from explicit tickets. The coding agent writes the
-implementation; Devlegate manages the workflow around it.
+Devlegate is a local deterministic control plane and orchestrator for coding
+agents. The agent implements changes; Devlegate owns the workflow around them:
+selecting work, preserving Git authority and provenance, validating transitions,
+and recovering only from durable evidence.
 
-The four design promises behind SPQR are:
-
-- **State** - explicit workflow and runtime state instead of hidden agent context.
-- **Provenance** - preserve where work, decisions, and repository history came from.
-- **Quality** - make validation, review, and acceptance explicit parts of the workflow.
-- **Recovery** - stop safely on ambiguity and recover from known durable evidence.
-
-It selects work, prepares an isolated worktree, launches a worker, preserves
-the result, sends completed work to review, and integrates only accepted
-changes. Product code and workflow history stay separate, and Git remains the
-source of truth for both.
-
-## Why Devlegate
-
-Devlegate's main difference from a conventional agentic loop is that it treats
-the coding agent as a nondeterministic worker inside a deterministic workflow
-harness, removing as much repository, state, publication, and recovery
-responsibility from the agent as practical. The harness owns or constrains work
-selection, repository synchronization, isolated workspace preparation, durable
-state transitions, checkpoint and publication mechanics, review handoff,
-integration, and fail-closed recovery. The agent remains primarily responsible
-for producing the implementation, where nondeterminism is useful.
-
-Coding agents are good at making changes, but a useful development workflow
-also needs repository synchronization, work selection, workspace preparation,
-checkpointing, publication, outcome handling, review handoff, integration, and
-recovery after interruptions.
-
-Devlegate owns those surrounding mechanics outside the worker. The worker does
-not publish branches, move tickets, write workflow reports, or integrate code
-into the product branch. When the result or ownership of an operation is
-unclear, Devlegate stops instead of silently guessing.
+It is not another coding model or chat agent. It is the boundary that makes a
+nondeterministic worker operate inside a controlled development process.
 
 ## How It Works
 
 ```text
 ticket
-  -> Devlegate selects it
-  -> worker edits an isolated worktree
-  -> Devlegate preserves and publishes the result
-  -> reviewer accepts or rejects it
-  -> Devlegate integrates accepted work
-  -> done
+  ↓
+Devlegate selects work
+  ↓
+agent edits an isolated workspace
+  ↓
+Devlegate preserves the result
+  ↓
+review
+  ↓
+accepted integration
+  ↓
+done
 ```
 
-The project checkout holds product code. A separate control history holds
-tickets and execution reports. Local runtime state records active bookkeeping;
-it is not a replacement for Git history.
+Product history, workflow control history, and active ticket work live in
+separate Git surfaces. Workers produce implementation and validated evidence;
+Devlegate performs publication, workflow movement, review handoff, and accepted
+integration. Ambiguous ownership or state fails closed instead of being guessed
+through.
 
-## Key Properties
+## Why Devlegate / SPQR
 
-- Local operation in the target Git repository.
-- Explicit, ticket-driven work instead of an untracked task queue.
-- Isolated worker workspaces that keep active changes away from the operator
-  checkout.
-- Git history remains the source of truth for product and workflow changes.
-- Workers write code; Devlegate owns publication and workflow state.
-- Review is a separate step from product integration.
-- Product history and workflow history remain separate.
-- Ambiguous failures stop for inspection or explicit retry.
-- `devlegate reconcile resume <ticket>` recovers retained execution progress when
-  the admitted product base is unchanged; `reconcile update-base` remains the
-  separate product-base transplant operation.
+The useful distinction is simple:
 
-## Current Scope
+| Coding agent | Devlegate |
+| --- | --- |
+| Produces implementation | Selects and admits work |
+| Works in an assigned workspace | Owns durable state and exact provenance |
+| Returns a result | Controls Git publication and integration |
+| Supplies evidence | Validates transitions and recovery |
 
-The current implementation has these practical limits:
+SPQR names the four concrete design commitments:
 
-- Hosted Devlegate execution currently requires Linux.
-- `devlegate status` reports the client version and, when a service is running,
-  the version and informational PID of that service. A service keeps reporting
-  the version loaded when it started until it is stopped and started again.
-- Workflow execution is serial; general parallel worker execution is not
-  implemented yet.
-- Active workflow execution is hosted by one persistent Devlegate service.
-- Bare `devlegate` ensures the service is running in the background; use
-  `devlegate foreground` to run it attached to the current terminal or
-  `devlegate once` for one service pass.
-- There is no warm worker pool; worker sessions are ephemeral.
-- Full YAML compatibility is not provided.
+- **State**: explicit durable workflow and runtime state.
+- **Provenance**: know which repository, control revision, workspace, and result produced work.
+- **Quality**: validation, review, and acceptance are explicit gates.
+- **Recovery**: known evidence may resume work; ambiguity stops for inspection.
+
+Git remains authoritative outside the worker. Worker output is input and
+evidence, not workflow authority. Review remains separate from product
+integration, and product history remains separate from workflow history.
 
 ## Quick Start
 
-Install this checkout with the package or distribution mechanism appropriate for
-your environment. Then install Devlegate's per-user host policy and initialize
-the target project:
+Devlegate currently operates on Linux-hosted local Git repositories. From an
+existing repository root:
 
 ```sh
 python -m pip install -e /path/to/devlegate
-devlegate host install --supervisor internal
-cd /path/to/project
-devlegate init rslab2
-# configure .env and project context
+devlegate init my-project
+# configure .env and .devlegate/project.md
 devlegate control init
 devlegate check
 devlegate
 ```
 
-Useful read-only and recovery commands:
+The normal `devlegate` command chooses automatic systemd supervision when the
+current user manager is usable; otherwise it runs attached to the terminal.
+Use `devlegate foreground` for an explicitly attached continuous service or
+`devlegate once` for one scheduler pass. See [Operations](docs/OPERATIONS.md)
+for project adoption, addressing, service control, and recovery commands.
 
-```sh
-devlegate status
-devlegate plan
-devlegate retry
-devlegate drop <ticket-id>
-devlegate @rslab2 status
-devlegate @rslab2 service restart
-```
+## What Works Today
 
-Project addressing has three equivalent forms:
+- Ticket-driven workflow with isolated per-ticket workspaces.
+- Persistent service ownership through local Unix IPC.
+- Automatic systemd-or-direct hosting, with fail-closed ownership checks.
+- Separate review and accepted integration boundaries.
+- SQLite operational state kept outside canonical Git history.
+- Explicit retry, drop, reconciliation, and evidence-based recovery.
 
-```text
-@rslab2                         preferred registered alias
---env /path/to/rslab2/.env      explicit configuration path
-PWD/.env                        current-directory convenience form
-```
+Current limits:
 
-The `--env` selector is global and belongs before the command. `@ALIAS` also
-belongs before the command, and the two selectors are mutually exclusive. An
-ordinary project command requires the selected project to be registered. Use
-`devlegate project alias <name> [PATH]` to register an existing project.
-
-Each canonical Git working-tree root has at most one registered Devlegate
-project, and its canonical configuration is `<repository-root>/.env`. An alias
-is only a local human-facing name; it does not affect the repository root,
-`state_key`, runtime paths, or systemd unit. Explicit `@ALIAS` and `--env`
-addressing work from an unrelated current directory. Without an explicit
-selector, `$PWD/.env` is used exactly as written. Relative `STATE_DIR` values
-are resolved relative to the canonical repository root.
-
-Run `devlegate init <alias>` from the repository root. To adopt an existing
-project, `project alias` accepts a directory anywhere inside the repository and
-registers the repository root's `.env`; an explicit file argument must itself
-be that canonical `.env`.
-
-`devlegate project remove @ALIAS` decommissions one project from this host
-without deleting project data. It stops the active Devlegate authority, removes
-that project's managed systemd registration when present, and removes only the
-local alias. The repository, `.env`, workflow files, documents, settings, and
-`STATE_DIR` retained runtime evidence remain available for later registration:
-
-```sh
-devlegate project alias new-name /path/to/project
-```
-
-Host installation is separate from software installation. The host record is at
-`$XDG_CONFIG_HOME/devlegate/installation.json` or
-`~/.config/devlegate/installation.json` and stores only the detached supervisor
-policy. `internal` uses Devlegate's detached subprocess; `systemd` provisions
-the exact project unit lazily for detached starts. `foreground` and `once`
-remain direct attached modes.
-
-To remove host integration without removing the software artifact, decommission
-all projects first:
-
-```sh
-devlegate project list
-devlegate project remove @rslab2
-devlegate host uninstall
-```
-
-Host uninstall preserves repositories, project files, runtime state, and
-evidence. It does not invoke pip, pipx, uv, apt, or another package manager.
-Remove installed software separately with the mechanism that provided it.
-
-The current standalone Linux x86_64 proof is documented in
-[`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md). It builds the canonical wheel
-into a PEX eager scie; it does not publish or install a release artifact.
-
-The registry is local user configuration at
-`$XDG_CONFIG_HOME/devlegate/projects.json` or
-`~/.config/devlegate/projects.json`. Aliases are not stored in the project and
-do not affect repository identity, runtime state, or systemd unit names.
-
-Inspect the registry with:
-
-```sh
-devlegate project list
-devlegate project resolve @rslab2
-devlegate project identify /path/to/rslab2
-devlegate project rename rslab2 ratil
-devlegate project remove @ratil
-```
-
-Multiple independent projects can have independent systemd units. Fleet-wide
-orchestration is not implemented.
-
-Finite commands use concise operator-oriented human output by default. Tables
-are used where information is genuinely tabular. Add `--yaml` for canonical
-vendored NanoYAML or `--json` for deterministic pretty JSON; the two
-machine-readable flags are mutually exclusive. This applies to `version`,
-`init`, `render`, `check`, `status`, `plan`, `stop`, `retry`, `drop`, `control init`,
-and the `reconcile update-base`, `reconcile resume`, and `reconcile control`
-commands. Service and worker logs from `foreground` and the background daemon
-remain operational streams, not YAML or JSON documents.
-
-Operational logs have separate scopes. The internally supervised service log is
-`STATE_DIR/logs/<state-key>/service.log`; detailed output for one durable
-execution is stored at
-`STATE_DIR/logs/<state-key>/executions/<execution-id>.log`. Service logs describe
-the control plane, while execution logs contain sanitized worker output and
-execution-local diagnostics. Execution logs are diagnostic and do not replace
-execution reports, checkpoints, runtime state, or Git provenance as authoritative
-evidence. The boundary also leaves room for future externally supervised hosting;
-that integration is not part of this release.
-
-When a worker execution log is opened, the service stream emits concise start
-and finish handoff records containing the ticket ID, execution ID, and absolute
-execution-log path. This makes `service.log` or the service journal navigable to
-the detailed worker output without making either log an authoritative workflow
-state source.
-
-Service hosting ownership is explicit and separate from attachment and lifetime:
-
-| Form | Ownership | Attachment | Lifetime |
-| --- | --- | --- | --- |
-| bare `devlegate` | internal | detached | continuous |
-| `foreground` | direct | attached | continuous |
-| `once` | direct | attached | one iteration |
-| systemd user service | external | inherited streams | continuous |
-
-Register a Linux systemd user service explicitly when detached lifetime should be
-owned by systemd instead of Devlegate:
-
-```sh
-devlegate @rslab2 service install --supervisor systemd
-devlegate @rslab2 service start --supervisor systemd
-devlegate @rslab2 service status --supervisor systemd
-devlegate @rslab2 service stop --supervisor systemd
-devlegate @rslab2 service remove --supervisor systemd
-```
-
-The generated unit is project-specific, uses `systemctl --user`, and starts the
-same canonical host in explicit external mode. systemd owns the service stream;
-Devlegate continues to own execution logs under
-`STATE_DIR/logs/<state-key>/executions/`. Registration is explicit and does not
-enable lingering or install a system-wide unit.
-
-A future distribution package may place the runnable executable system-wide, but
-package scripts must not perform per-user host installation for an arbitrary
-user. Host installation remains an explicit per-user command.
-
-Status reports service state (`running` or `stopped`) separately from the
-execution phase and operator execution state (`idle`, `preparing`, `starting`,
-`running`, `finalizing`, `unverified`, or `recovery-required`). Operator
-`running` means the live service proved ownership of the exact worker execution;
-`unverified` is used when a running service exposes an incomplete older status
-protocol, while `recovery-required` remains the stronger state for known or
-sufficiently evidenced ownership problems. Persisted `agent_running` state
-alone is not sufficient. Human `Eligible` work excludes the currently bound
-ticket, while the compatibility machine `runnable` field retains its
-scheduler-level meaning.
-
-`init` creates missing project-owned setup files without starting execution.
-`control init` prepares the separate workflow history. `check` validates the
-project before work starts. Bare `devlegate` ensures the persistent background
-service is running; `devlegate foreground` attaches it to the current terminal
-and `devlegate once` performs one synchronization and execution pass. Use
-`devlegate stop` for orderly shutdown. Use `devlegate drop <ticket-id>` to
-explicitly retire a blocked execution without applying it. Drop preserves the
-worker report and checkpoint provenance, removes the old execution ownership,
-and does not delete or rewrite the current ticket. A later ticket generation
-may reuse the same ID as fresh work. Without a ticket ID, `devlegate drop`
-offers an interactive candidate menu in a terminal.
-
-## Workflow
-
-Tickets move from `backlog` to `todo`, then to `review`, `accepted`, and
-`done`. Devlegate runs only work whose dependencies are complete. Completed
-worker results go to review; a reviewer decides whether accepted work can be
-integrated into product history.
+- Hosted execution requires Linux.
+- Execution is serial; there is no warm worker pool.
+- Workers are ephemeral and external integrations are not part of this release.
+- Standalone and Debian distribution proofs target Linux x86_64; public binary
+  publication begins with `0.6.0`.
 
 ## Development
 
 ```sh
 ./dev setup
 ./dev check
-./dev coverage
 ./dev test-parallel
 ```
 
-`./dev test` remains the serial debugging path. `./dev test-parallel` uses four
-worksteal workers. CI runs the coverage suite with the same four-worker
-configuration; coverage is diagnostic and there is no percentage gate.
-
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Roadmap](ROADMAP.md)
-- [Changelog](CHANGELOG.md)
-- [Pre-install guide](preinst_readme.md)
-- [Release packaging](docs/RELEASE_PACKAGING.md)
+- [Architecture](docs/ARCHITECTURE.md): ownership, runtime, worker, and recovery boundaries.
+- [Operations](docs/OPERATIONS.md): projects, services, status, logs, and recovery commands.
+- [Pre-install guide](preinst_readme.md): adoption and project-context preparation.
+- [Distribution](docs/DISTRIBUTION.md): wheel, standalone, and Debian contracts.
+- [Release packaging](docs/RELEASE_PACKAGING.md): artifact construction and publication policy.
+- [Roadmap](ROADMAP.md): future engineering direction.
+- [Changelog](CHANGELOG.md): shipped product changes.
 
 ## Licensing
 
-- Devlegate core: EUPL-1.2 ([LICENSE](LICENSE))
-- Default copyable templates, prompts, and skills: CC0-1.0
-  ([LICENSING.md](LICENSING.md))
-- NanoYAML: separate upstream license ([NOTICE](NOTICE))
+- Devlegate core: EUPL-1.2 ([LICENSE](LICENSE)).
+- Copyable templates, prompts, and skills: CC0-1.0 ([LICENSING.md](LICENSING.md)).
+- NanoYAML: upstream MIT terms ([NOTICE](NOTICE)).

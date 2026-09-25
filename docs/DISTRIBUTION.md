@@ -86,11 +86,9 @@ is not an installed-product runtime interface.
 
 The eager scie contains its own CPython runtime. Its executable can therefore
 run without host Python, a host virtual environment, pip, or network access at
-runtime. Host integration remains a separate explicit operation:
-
-```sh
-devlegate host install --supervisor internal
-```
+runtime. Host integration remains separate from software distribution; ordinary
+bare startup automatically chooses usable systemd supervision or direct
+attachment, while explicit host-policy commands remain available when needed.
 
 The host installation record does not identify a package manager or artifact.
 
