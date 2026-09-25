@@ -222,12 +222,15 @@ def test_systemctl_failure_is_not_silenced_on_remove(tmp_path: Path) -> None:
     path = tmp_path / "units" / unit_name(item)
     path.parent.mkdir()
     path.write_text(f"{MANAGED_MARKER}\n# state_key={item.state_key}\n")
+    calls: list[list[str]] = []
 
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
         return subprocess.CompletedProcess(command, 1, "", "Failed to connect to bus")
 
     with pytest.raises(SystemdSupervisorError, match="connect to bus"):
         SystemdSupervisor(unit_directory=path.parent, runner=runner).remove(item)
+    assert calls == [["systemctl", "--user", "show-environment"]]
 
 
 def test_missing_notify_socket_fails_when_required(

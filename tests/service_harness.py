@@ -204,6 +204,9 @@ class LiveService:
     def stop(self) -> None:
         if self.process is None:
             return
+        if not self.locator.daemon_authority_present():
+            self.wait_exited()
+            return
         if self.process.poll() is None:
             self.process.send_signal(signal.SIGTERM)
         try:
@@ -239,7 +242,9 @@ class LiveService:
                 f"stderr:\n{self.stderr}"
             ) from error
         self._collect_output()
-        assert self.process.returncode == 0, (
+        assert self.process.returncode == 0 or (
+            self._abruptly_killed and self.process.returncode == -signal.SIGKILL
+        ), (
             f"service exited with {self.process.returncode}\n"
             f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
         )

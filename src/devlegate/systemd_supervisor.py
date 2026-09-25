@@ -179,10 +179,10 @@ class SystemdSupervisor:
         return result
 
     def install(self, locator: RuntimeLocator, env_file: Path) -> Path:
-        self.probe_user_manager()
         path = unit_path(locator, self.unit_directory)
         if path.exists():
             self.inspect(locator)
+        self.probe_user_manager()
         try:
             _write_atomic(path, render_unit(locator, env_file, launcher=self.launcher))
         except OSError as error:
@@ -233,10 +233,11 @@ class SystemdSupervisor:
         return True
 
     def remove(self, locator: RuntimeLocator, *, env_file: Path | None = None) -> Path:
-        self.probe_user_manager()
         path = unit_path(locator, self.unit_directory)
         if path.exists():
             self.inspect(locator, env_file=env_file)
+        self.probe_user_manager()
+        if path.exists():
             self._run("stop", path.name, allow_failure=True)
             self._run("disable", path.name, allow_failure=True)
             try:
