@@ -45,7 +45,14 @@ from devlegate.ipc_client import (
 )
 from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
-from devlegate.operational_log import service_log
+from devlegate.log_reader import (
+    LogReaderError,
+    execution_log,
+    follow_file,
+    service_unit,
+    stream_journal,
+)
+from devlegate.operational_log import execution_log_path, service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_registry import (
@@ -1809,6 +1816,37 @@ def _startup_report(engine: ServiceEngine, mode: str) -> None:
         service_log(line)
 
 
+def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
+    try:
+        if args.logs_source == "service":
+            unit = service_unit(target.locator.state_dir, target.locator.state_key)
+            return stream_journal(unit, args.lines, args.follow)
+        resolved, content = execution_log(
+            target.locator.state_dir,
+            target.locator.state_key,
+            (
+                target.locator.state_dir
+                / "worktrees"
+                / target.locator.state_key
+                / "control"
+            ),
+            args.execution_id,
+            args.lines,
+        )
+        if args.follow:
+            return follow_file(
+                execution_log_path(
+                    target.locator.state_dir, target.locator.state_key, resolved
+                ),
+                args.lines,
+            )
+        print("".join(content), end="")
+        return 0
+    except LogReaderError as error:
+        print(f"devlegate: {error}", file=sys.stderr)
+        return 1
+
+
 class DevlegateArgumentParser(ConciseArgumentParser):
     """Present syntax errors concisely while retaining argparse parsing."""
 
@@ -1821,6 +1859,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
                 ("stop", "stop the persistent service"),
                 ("restart", "restart the persistent service"),
                 ("service", "manage an explicitly registered external service"),
+                ("logs", "read service or execution logs"),
                 ("status", "show current workflow status"),
                 ("plan", "show the next workflow plan"),
             ),
@@ -1873,6 +1912,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
             return "\n".join(lines)
         result = super().format_help()
         return result
+
 
 class Devlegate(ServiceEngine):
     """Legacy CLI-facing runtime surface; presentation remains here."""
@@ -2034,6 +2074,25 @@ def build_parser() -> argparse.ArgumentParser:
             default="systemd",
             help="external supervisor backend",
         )
+    logs_parser = commands.add_parser(
+        "logs",
+        help="read service or execution logs",
+        description="Read one explicit Devlegate operational log source.",
+    )
+    logs_commands = logs_parser.add_subparsers(
+        dest="logs_source", required=True, parser_class=DevlegateArgumentParser
+    )
+    service_logs_parser = logs_commands.add_parser(
+        "service", help="read the registered service journal"
+    )
+    service_logs_parser.add_argument("--follow", "-f", action="store_true")
+    service_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
+    execution_logs_parser = logs_commands.add_parser(
+        "execution", help="read one execution log"
+    )
+    execution_logs_parser.add_argument("execution_id", metavar="EXECUTION")
+    execution_logs_parser.add_argument("--follow", "-f", action="store_true")
+    execution_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
     project_parser = commands.add_parser(
         "project",
         help="inspect and register local projects",
@@ -2342,6 +2401,8 @@ def main() -> int:
         target = _project_target(alias=project_alias, env_file=args.service_env)
         assert target is not None
         env_file = target.env_file
+        if args.command == "logs":
+            return _logs_command(args, target)
         devlegate = None
         if args.command in {"render", "check", "control"}:
             devlegate = Devlegate(env_file, read_only=True, repository=target.repo)
