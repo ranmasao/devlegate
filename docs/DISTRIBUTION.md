@@ -1,7 +1,7 @@
 # Distribution Proof
 
-This document records the current distribution boundary. It is a proof of the
-standalone build path, not a release or package publication specification.
+This document records the current distribution boundary and standalone release
+package proof.
 
 ## Layering
 
@@ -37,8 +37,24 @@ runtime dependency set or invoke package managers at runtime.
 The standalone publication unit is a deterministic
 `devlegate-<version>-linux-x86_64.tar.gz` archive containing the executable,
 Devlegate legal material, third-party notices and licenses, and stable build
-provenance. It is distinct from the full-source archive and is not published
-automatically by the current GitHub workflow.
+provenance. It is distinct from the full-source archive. The standalone pair is
+the supported release asset beginning with `0.5.4`:
+
+```text
+devlegate-X.Y.Z-linux-x86_64.tar.gz
+devlegate-X.Y.Z-linux-x86_64.tar.gz.sha256
+```
+
+The full-source pair remains separate:
+
+```text
+devlegate-X.Y.Z-full-source.tar.gz
+devlegate-X.Y.Z-full-source.tar.gz.sha256
+```
+
+The release workflow builds and validates these units in read-only jobs, then
+passes only the exact validated pairs to a write-only upload job for the
+existing release.
 
 The reproducibility proof assembles wheel and scie A/B independently under
 distinct temporary build roots, wheel-build environments, and PEX_ROOT caches.
@@ -119,4 +135,7 @@ that the entire standalone executable is MPL-2.0. Final standalone publication
 still requires a separate review and packaging of the PEX, scie-jump, CPython,
 and bundled-library notice/license material.
 
-This proof does not claim that the single-file executable is publication-ready.
+The standalone archive, rather than the naked executable, is the release
+publication unit. The selected tag's own standalone tooling and compliance
+manifest define the standalone boundary; full-source packaging continues to
+use trusted current release tooling against the selected tag.

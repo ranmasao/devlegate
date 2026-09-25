@@ -35,7 +35,8 @@ the glibc target and records the GNU scie-jump asset identity.
 `tools/validate_standalone_package.py` independently checks the archive root,
 safe extraction, executable modes, artifact identity, manifest hashes, notice
 references, and absence of transient build paths. This archive is not uploaded
-or published by the current GitHub workflow.
+or published for releases before `0.5.4`. It is required for releases
+`0.5.4` and later.
 
 ## Builder
 
@@ -75,10 +76,30 @@ manifest. The builder never uses `git submodule update --remote`.
 ## GitHub Workflow
 
 `.github/workflows/release.yaml` reacts to an already published GitHub Release.
-It obtains the packaging tool from `master`, checks out the selected annotated
-tag separately, and uploads the full-source asset only when that selected tree
-contains a gitlink. It never creates tags or releases. Normal release tags must
-match `vX.Y.Z`.
+It first selects and validates the existing annotated tag, release object, commit,
+source shape, and release version. Normal release tags must match `vX.Y.Z`.
+
+The workflow has separate read-only build paths:
+
+```text
+read-only release selection
+        |
+        +-- trusted master full-source tooling against selected tag
+        |
+        +-- selected-tag standalone tooling, pins, and compliance manifest
+                         |
+                         v
+                 validated workflow artifacts
+                         |
+                         v
+                 write-only upload job
+```
+
+The full-source path is conditional on gitlinks and uses trusted tooling from
+`master` against the selected tag. The standalone path begins with release
+`0.5.4`; it checks out the exact annotated-tag commit recursively and executes
+that tag's own standalone builder, packager, validator, and compliance manifest.
+The standalone builder uses CPython `3.12.14` as its build-host interpreter.
 
 The workflow also supports `workflow_dispatch` with an explicit `tag` input for
 retry or historical recovery. The release and tag must already exist. Existing
@@ -87,12 +108,16 @@ policy after all tag checks pass.
 
 Before upload, the read-only build job extracts the actual archive and checks
 its root, SHA-256 sidecar, `SOURCE-MANIFEST`, selected tag target, absence of
-Git metadata, and every materialized submodule path and pinned commit. It runs
-`./dev setup && ./dev check` from the extracted tree when that source tree has
-the current development entrypoints; early historical trees receive the
-structural/provenance checks they support.
+Git metadata, and every materialized submodule path and pinned commit. The
+standalone path builds and proves the executable, packages twice under distinct
+assembly roots, validates both compliance archives, and runs `version` from the
+extracted archive with an isolated environment.
 
 The validated archive and sidecar cross the job boundary as a workflow
-artifact. Only the separate upload job has `contents: write`, and it uploads
-to the exact existing release tag. The explicit `--clobber` behavior is the
-documented idempotent retry policy for a requested release.
+artifact. The full-source and standalone pairs use separate workflow artifact
+names. Only the separate upload job has `contents: write`; it checks exact
+filenames, re-checks the existing release, and uploads only to that exact tag.
+The explicit `--clobber` behavior is the documented idempotent retry policy for
+a requested release. The upload job does not check out code, set up Python, or
+execute repository tooling. Same-tag runs are serialized without cancelling an
+earlier run.

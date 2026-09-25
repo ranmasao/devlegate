@@ -1,4 +1,4 @@
-name: Release full-source asset
+name: Release assets
 
 on:
   release:
@@ -12,30 +12,25 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-validate:
+  select-release:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      has_gitlinks: ${{ steps.source-shape.outputs.has_gitlinks }}
       release_tag: ${{ steps.release.outputs.release_tag }}
+      release_version: ${{ steps.release.outputs.release_version }}
+      release_commit: ${{ steps.release.outputs.release_commit }}
+      has_gitlinks: ${{ steps.release.outputs.has_gitlinks }}
+      standalone_required: ${{ steps.release.outputs.standalone_required }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - name: Check out trusted release tooling
-        uses: actions/checkout@v7
-        with:
-          ref: master
-          fetch-depth: 0
-          submodules: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Validate release and fetch selected source
+      - name: Validate existing release and annotated tag
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,24 +42,99 @@ jobs:
           fi
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           rm -rf source
-          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
+          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" clone \
+            --quiet --no-checkout \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
           git -C source fetch --quiet --force --tags origin
           test "$(git -C source cat-file -t "refs/tags/$RELEASE_TAG")" = tag
-          git -C source rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" >/dev/null
-          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          release_commit="$(git -C source rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$(git -C source cat-file -t "$release_commit")" = commit
+          release_version="${RELEASE_TAG#v}"
+          has_gitlinks=false
+          if git -C source ls-tree -r "refs/tags/$RELEASE_TAG" | grep -q '^160000 '; then
+            has_gitlinks=true
+          fi
+          standalone_required="$(python3 - "$release_version" <<'PY'
+          import sys
 
-      - name: Detect source gitlinks
-        id: source-shape
+          version = tuple(int(part) for part in sys.argv[1].split("."))
+          print("true" if version >= (0, 5, 4) else "false")
+          PY
+          )"
+          if [[ "$standalone_required" == true ]]; then
+            required_files=(
+              tools/build_standalone.py
+              tools/package_standalone.py
+              tools/validate_standalone_package.py
+              packaging/standalone-compliance/manifest.json
+              pyproject.toml
+            )
+            for path in "${required_files[@]}"; do
+              test "$(git -C source cat-file -t "refs/tags/$RELEASE_TAG:$path")" = blob
+            done
+            source_version="$(python3 - "$GITHUB_WORKSPACE/source" "$RELEASE_TAG" <<'PY'
+          import subprocess
+          import sys
+          import tomllib
+
+          repo, tag = sys.argv[1:]
+          contents = subprocess.run(
+              ["git", "-C", repo, "show", f"{tag}:pyproject.toml"],
+              check=True,
+              capture_output=True,
+          ).stdout
+          print(tomllib.loads(contents.decode())["project"]["version"])
+          PY
+            )"
+            test "$source_version" = "$release_version"
+          fi
+          {
+            printf 'release_tag=%s\n' "$RELEASE_TAG"
+            printf 'release_version=%s\n' "$release_version"
+            printf 'release_commit=%s\n' "$release_commit"
+            printf 'has_gitlinks=%s\n' "$has_gitlinks"
+            printf 'standalone_required=%s\n' "$standalone_required"
+          } >> "$GITHUB_OUTPUT"
+
+  build-full-source:
+    needs: select-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.select-release.outputs.release_tag }}
+      RELEASE_COMMIT: ${{ needs.select-release.outputs.release_commit }}
+      HAS_GITLINKS: ${{ needs.select-release.outputs.has_gitlinks }}
+    steps:
+      - name: Check out trusted release tooling
+        if: env.HAS_GITLINKS == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+
+      - name: Set up Python
+        if: env.HAS_GITLINKS == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch selected source
+        if: env.HAS_GITLINKS == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          if git -C source ls-tree -r "refs/tags/$RELEASE_TAG" | grep -q '^160000 '; then
-            echo 'has_gitlinks=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'has_gitlinks=false' >> "$GITHUB_OUTPUT"
-          fi
+          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" clone \
+            --quiet --no-checkout \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
+          git -C source fetch --quiet --force --tags origin
+          test "$(git -C source rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
 
       - name: Build full-source archive
-        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        if: env.HAS_GITLINKS == 'true'
         run: |
           set -Eeuo pipefail
           mkdir -p "$RUNNER_TEMP/full-source"
@@ -74,8 +144,8 @@ jobs:
             --version "$RELEASE_TAG" \
             --output-dir "$RUNNER_TEMP/full-source"
 
-      - name: Extract and validate full-source archive
-        if: steps.source-shape.outputs.has_gitlinks == 'true'
+      - name: Validate full-source archive
+        if: env.HAS_GITLINKS == 'true'
         run: |
           set -Eeuo pipefail
           archive_version="${RELEASE_TAG#v}"
@@ -88,7 +158,7 @@ jobs:
             --extract-dir "$RUNNER_TEMP/full-source-extracted"
 
       - name: Run extracted source checks when supported
-        if: steps.source-shape.outputs.has_gitlinks == 'true'
+        if: env.HAS_GITLINKS == 'true'
         run: |
           set -Eeuo pipefail
           archive_version="${RELEASE_TAG#v}"
@@ -101,37 +171,198 @@ jobs:
             printf 'Skipping modern Devlegate checks for this historical source tree\n'
           fi
 
-      - name: Publish validated workflow artifact
-        if: steps.source-shape.outputs.has_gitlinks == 'true'
+      - name: Publish validated full-source artifact
+        if: env.HAS_GITLINKS == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: full-source-${{ steps.release.outputs.release_tag }}
-          path: ${{ runner.temp }}/full-source/
+          name: full-source-${{ needs.select-release.outputs.release_tag }}
+          path: |
+            ${{ runner.temp }}/full-source/devlegate-${{ needs.select-release.outputs.release_version }}-full-source.tar.gz
+            ${{ runner.temp }}/full-source/devlegate-${{ needs.select-release.outputs.release_version }}-full-source.tar.gz.sha256
+          if-no-files-found: error
+
+  build-standalone:
+    needs: select-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out selected release source and submodules
+        if: needs.select-release.outputs.standalone_required == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select-release.outputs.release_commit }}
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify selected commit
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.select-release.outputs.release_commit }}"
+
+      - name: Set up exact builder Python
+        if: needs.select-release.outputs.standalone_required == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+
+      - name: Build standalone executable
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/standalone-build"
+          python3 tools/build_standalone.py build \
+            --repo "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/standalone-build"
+
+      - name: Prove standalone executable
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          python3 tools/build_standalone.py prove \
+            --repo "$GITHUB_WORKSPACE" \
+            --artifact "$RUNNER_TEMP/standalone-build/devlegate-$archive_version-linux-x86_64" \
+            --report "$RUNNER_TEMP/standalone-build/standalone-proof.json"
+
+      - name: Build compliance packages twice
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          artifact="$RUNNER_TEMP/standalone-build/devlegate-$archive_version-linux-x86_64"
+          report="$RUNNER_TEMP/standalone-build/standalone-build.json"
+          python3 tools/package_standalone.py package \
+            --repo "$GITHUB_WORKSPACE" \
+            --artifact "$artifact" \
+            --build-report "$report" \
+            --output-dir "$RUNNER_TEMP/standalone-package-a"
+          python3 tools/package_standalone.py package \
+            --repo "$GITHUB_WORKSPACE" \
+            --artifact "$artifact" \
+            --build-report "$report" \
+            --output-dir "$RUNNER_TEMP/standalone-package-b"
+          archive="devlegate-$archive_version-linux-x86_64.tar.gz"
+          test "$(sha256sum "$RUNNER_TEMP/standalone-package-a/$archive" | cut -d' ' -f1)" = \
+            "$(sha256sum "$RUNNER_TEMP/standalone-package-b/$archive" | cut -d' ' -f1)"
+          cmp "$RUNNER_TEMP/standalone-package-a/$archive.sha256" \
+            "$RUNNER_TEMP/standalone-package-b/$archive.sha256"
+
+      - name: Validate both compliance packages
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          artifact="$RUNNER_TEMP/standalone-build/devlegate-$archive_version-linux-x86_64"
+          report="$RUNNER_TEMP/standalone-build/standalone-build.json"
+          archive="devlegate-$archive_version-linux-x86_64.tar.gz"
+          for slot in a b; do
+            python3 tools/validate_standalone_package.py \
+              --archive "$RUNNER_TEMP/standalone-package-$slot/$archive" \
+              --sidecar "$RUNNER_TEMP/standalone-package-$slot/$archive.sha256" \
+              --repo "$GITHUB_WORKSPACE" \
+              --build-report "$report" \
+              --extract-dir "$RUNNER_TEMP/standalone-extracted-$slot"
+          done
+
+      - name: Execute extracted standalone package
+        if: needs.select-release.outputs.standalone_required == 'true'
+        run: |
+          set -Eeuo pipefail
+          archive_version="${{ needs.select-release.outputs.release_version }}"
+          executable="$RUNNER_TEMP/standalone-extracted-a/devlegate-$archive_version-linux-x86_64/devlegate"
+          mkdir -p "$RUNNER_TEMP/standalone-home"
+          env -i HOME="$RUNNER_TEMP/standalone-home" PATH=/nonexistent \
+            "$executable" version
+
+      - name: Publish validated standalone artifact
+        if: needs.select-release.outputs.standalone_required == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-${{ needs.select-release.outputs.release_tag }}
+          path: |
+            ${{ runner.temp }}/standalone-package-a/devlegate-${{ needs.select-release.outputs.release_version }}-linux-x86_64.tar.gz
+            ${{ runner.temp }}/standalone-package-a/devlegate-${{ needs.select-release.outputs.release_version }}-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
   upload-release-assets:
-    needs: build-and-validate
-    if: needs.build-and-validate.outputs.has_gitlinks == 'true'
+    needs:
+      - select-release
+      - build-full-source
+      - build-standalone
+    if: >-
+      always()
+      && needs.select-release.result == 'success'
+      && needs.build-full-source.result == 'success'
+      && needs.build-standalone.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      RELEASE_TAG: ${{ needs.build-and-validate.outputs.release_tag }}
+      RELEASE_TAG: ${{ needs.select-release.outputs.release_tag }}
+      RELEASE_VERSION: ${{ needs.select-release.outputs.release_version }}
+      HAS_GITLINKS: ${{ needs.select-release.outputs.has_gitlinks }}
+      STANDALONE_REQUIRED: ${{ needs.select-release.outputs.standalone_required }}
     steps:
       - name: Download validated full-source assets
+        if: env.HAS_GITLINKS == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: full-source-${{ needs.build-and-validate.outputs.release_tag }}
+          name: full-source-${{ needs.select-release.outputs.release_tag }}
           path: full-source
 
-      - name: Upload validated assets to exact release
+      - name: Download validated standalone assets
+        if: env.STANDALONE_REQUIRED == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: standalone-${{ needs.select-release.outputs.release_tag }}
+          path: standalone
+
+      - name: Verify exact workflow artifact file sets
+        run: |
+          set -Eeuo pipefail
+          if [[ "$HAS_GITLINKS" == true ]]; then
+            full_archive="full-source/devlegate-$RELEASE_VERSION-full-source.tar.gz"
+            full_sidecar="$full_archive.sha256"
+            test -f "$full_archive"
+            test -f "$full_sidecar"
+            test "$(find full-source -type f | wc -l)" -eq 2
+          fi
+          if [[ "$STANDALONE_REQUIRED" == true ]]; then
+            standalone_archive="standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz"
+            standalone_sidecar="$standalone_archive.sha256"
+            test -f "$standalone_archive"
+            test -f "$standalone_sidecar"
+            test "$(find standalone -type f | wc -l)" -eq 2
+          fi
+
+      - name: Re-check exact destination release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Upload validated full-source assets
+        if: env.HAS_GITLINKS == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          archive_version="${RELEASE_TAG#v}"
           gh release upload "$RELEASE_TAG" \
-            "full-source/devlegate-$archive_version-full-source.tar.gz" \
-            "full-source/devlegate-$archive_version-full-source.tar.gz.sha256" \
+            "full-source/devlegate-$RELEASE_VERSION-full-source.tar.gz" \
+            "full-source/devlegate-$RELEASE_VERSION-full-source.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Upload validated standalone assets
+        if: env.STANDALONE_REQUIRED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz" \
+            "standalone/devlegate-$RELEASE_VERSION-linux-x86_64.tar.gz.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
