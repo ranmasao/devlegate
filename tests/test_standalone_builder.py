@@ -63,6 +63,7 @@ def test_scie_command_pins_runtime_inputs(tmp_path):
         python_pin : python_pin + 2
     ]
     assert "--runtime-pex-root" not in command
+    assert "--scie-pbs-stripped" in command
     science_pin = command.index("--scie-science-binary")
     assert ["--scie-science-binary", str(tmp_path / "science")] == command[
         science_pin : science_pin + 2

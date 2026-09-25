@@ -390,6 +390,7 @@ def scie_command(
         PBS_RELEASE,
         "--scie-python-version",
         PBS_PYTHON_VERSION,
+        "--scie-pbs-stripped",
         "--scie-science-binary",
         str(science),
         "--output-file",
