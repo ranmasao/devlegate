@@ -21,6 +21,8 @@ from email.message import Message
 from email.parser import Parser
 from pathlib import Path
 
+from devlegate.cli_common import ConciseArgumentParser
+
 TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
 GRAPH = {
     "wheel": (),
@@ -477,6 +479,10 @@ def publish(artifacts: list[Path], output_dir: Path) -> list[Path]:
     return published
 
 
+def output_directory(repo: Path, output_dir: Path | None) -> Path:
+    return output_dir.resolve() if output_dir is not None else repo.resolve() / "dist"
+
+
 def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
     files: list[Path] = []
     if target in {"wheel", "python", "all"}:
@@ -537,7 +543,8 @@ def package(args: argparse.Namespace) -> int:
                 )
             prove_python_install(values["sdist"], source, workspace_path)
         final_files = publish(
-            selected_final_files(args.target, values), Path(args.output_dir).resolve()
+            selected_final_files(args.target, values),
+            output_directory(repo, args.output_dir),
         )
         print("\nDevlegate distributions ready")
         for path in final_files:
@@ -551,12 +558,80 @@ def package(args: argparse.Namespace) -> int:
 
 
 def parser() -> argparse.ArgumentParser:
-    command = argparse.ArgumentParser(description=__doc__)
-    command.add_argument("target", choices=TARGETS)
-    command.add_argument("--repo", type=Path, default=Path(__file__).parents[1])
-    command.add_argument("--python", default=sys.executable)
-    command.add_argument("--output-dir", type=Path, default=Path("dist"))
-    command.add_argument("--keep-work", action="store_true")
+    repo = Path(__file__).parents[1].resolve()
+
+    def add_common_options(target, *, defaults: bool) -> None:
+        target.add_argument(
+            "--output-dir",
+            type=Path,
+            metavar="PATH",
+            default=None if defaults else argparse.SUPPRESS,
+            help="write final validated artifacts to PATH instead of <repo>/dist",
+        )
+        target.add_argument(
+            "--repo",
+            type=Path,
+            default=repo if defaults else argparse.SUPPRESS,
+            metavar="PATH",
+            help=(
+                "package this Devlegate source repository instead of the "
+                "default checkout"
+            ),
+        )
+        target.add_argument(
+            "--keep-work",
+            action="store_true",
+            default=False if defaults else argparse.SUPPRESS,
+            help="keep temporary build files and print their location",
+        )
+        target.add_argument(
+            "--python",
+            default=sys.executable if defaults else argparse.SUPPRESS,
+            help=argparse.SUPPRESS,
+        )
+
+    common = argparse.ArgumentParser(add_help=False)
+    add_common_options(common, defaults=False)
+    command = ConciseArgumentParser(
+        prog="./dev package",
+        description="Build and validate Devlegate distribution artifacts.",
+        usage="%(prog)s COMMAND [options]",
+        error_prefix="dev: package",
+        quote_unknown_commands=False,
+        help_program="./dev package",
+    )
+    command._optionals.title = "Options"
+    add_common_options(command, defaults=True)
+    commands = command.add_subparsers(
+        dest="target", required=True, parser_class=ConciseArgumentParser
+    )
+    descriptions = {
+        "wheel": "Build and validate the Python wheel.",
+        "sdist": "Build and validate the Python source distribution.",
+        "python": "Build wheel and sdist and prove isolated pip installation.",
+        "standalone": (
+            "Build and validate the self-contained Linux distribution. "
+            "The wheel is built automatically."
+        ),
+        "deb": (
+            "Build and validate the Debian package. Wheel and standalone "
+            "prerequisites are built automatically."
+        ),
+        "full-source": "Build and validate the materialized full-source archive.",
+        "all": "Build and validate all supported distribution formats.",
+    }
+    for target in TARGETS:
+        child = commands.add_parser(
+            target,
+            parents=[common],
+            help=descriptions[target].split(".", 1)[0],
+            description=descriptions[target],
+            error_prefix=f"dev: package {target}",
+            quote_unknown_commands=False,
+            help_program=f"./dev package {target}",
+        )
+        child._optionals.title = "Options"
+        child.set_defaults(target=target)
     return command
 
 

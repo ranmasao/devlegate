@@ -23,15 +23,12 @@ Commands:
   check             Run tests and lint
   coverage          Run pytest with statement/branch coverage
   run [args...]     Run the installed devlegate CLI
-  package TARGET    Build validated source-tree distribution artifacts
+  package COMMAND   Build validated source-tree distribution artifacts
   clean             Remove named caches and build artifacts
   purge             Clean, then remove .venv and named development artifacts
 
 Options:
   -h, --help        Show this help message
-
-Package targets: wheel, sdist, python, standalone, deb, full-source, all.
-Package options include --output-dir PATH and --keep-work.
 
 Run ./dev setup before test, lint, check, run, or package.
 EOF
@@ -145,11 +142,6 @@ run)
     ;;
   package)
     require_venv
-    if (($# == 0)); then
-      printf 'dev: package requires a target\n' >&2
-      usage >&2
-      exit 2
-    fi
     exec "$PYTHON" "$ROOT/tools/build_distribution.py" "$@"
     ;;
   clean) clean "$@" ;;

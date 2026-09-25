@@ -39,6 +39,98 @@ def test_target_parser_rejects_pip():
         GRAPH.parser().parse_args(["pip"])
 
 
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        ([], "dev: package: a command is required"),
+        (["banana"], "dev: package: unknown command banana"),
+    ],
+)
+def test_package_parser_errors_are_concise(argv, message, capsys):
+    with pytest.raises(SystemExit) as error:
+        GRAPH.parser().parse_args(argv)
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert message in stderr
+    assert "Try './dev package --help' for usage." in stderr
+    assert "invalid choice" not in stderr
+
+
+def test_package_help_is_subcommand_oriented():
+    help_text = GRAPH.parser().format_help()
+    for target in GRAPH.TARGETS:
+        assert target in help_text
+    assert "{wheel,sdist" not in help_text
+    assert "--repo" in help_text
+    assert "--output-dir" in help_text
+    assert "--keep-work" in help_text
+    assert "--python" not in help_text
+
+
+def test_package_help_has_target_options(capsys):
+    parser = GRAPH.parser()
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["deb", "--help"])
+    assert error.value.code == 0
+    assert "Build and validate the Debian package." in capsys.readouterr().out
+
+
+def test_default_repo_and_output_dir_are_repository_relative(tmp_path):
+    parser = GRAPH.parser()
+    args = parser.parse_args(["wheel"])
+    expected = Path(GRAPH.__file__).parents[1].resolve()
+    assert args.repo == expected
+    assert GRAPH.output_directory(args.repo, args.output_dir) == expected / "dist"
+
+    other = tmp_path / "other"
+    other.mkdir()
+    args = parser.parse_args(["wheel", "--repo", str(other)])
+    assert GRAPH.output_directory(args.repo, args.output_dir) == other / "dist"
+    explicit = tmp_path / "artifacts"
+    args = parser.parse_args(
+        ["wheel", "--repo", str(other), "--output-dir", str(explicit)]
+    )
+    assert GRAPH.output_directory(args.repo, args.output_dir) == explicit.resolve()
+
+
+def test_keep_work_preserves_failed_workspace(monkeypatch, capsys):
+    source = GRAPH.Source(Path("/repo"), "a" * 40, "1.2.3", "python")
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+
+    def fail(*_args):
+        raise GRAPH.DistributionError("failed stage")
+
+    monkeypatch.setattr(GRAPH, "build_python_artifact", fail)
+    args = GRAPH.parser().parse_args(["wheel", "--keep-work"])
+    with pytest.raises(GRAPH.DistributionError):
+        GRAPH.package(args)
+
+    output = capsys.readouterr().out
+    kept = Path(output.split("Temporary workspace kept: ", 1)[1].strip())
+    assert kept.is_dir()
+    import shutil
+
+    shutil.rmtree(kept)
+
+
+def test_failed_workspace_is_removed_without_keep(monkeypatch, tmp_path):
+    source = GRAPH.Source(Path("/repo"), "a" * 40, "1.2.3", "python")
+    workspace = tmp_path / "workspace"
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(GRAPH.tempfile, "mkdtemp", lambda **_kwargs: str(workspace))
+    monkeypatch.setattr(
+        GRAPH,
+        "build_python_artifact",
+        lambda *_args: (_ for _ in ()).throw(GRAPH.DistributionError("failed stage")),
+    )
+    args = GRAPH.parser().parse_args(["wheel"])
+    with pytest.raises(GRAPH.DistributionError):
+        GRAPH.package(args)
+    assert not workspace.exists()
+
+
 def test_graph_cycle_detection(monkeypatch):
     monkeypatch.setitem(GRAPH.GRAPH, "wheel", ("standalone",))
     with pytest.raises(GRAPH.DistributionError, match="cycle"):

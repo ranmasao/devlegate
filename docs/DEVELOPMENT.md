@@ -81,10 +81,39 @@ project version before building.
 ```
 
 All successful final artifacts are published to `dist/`. Use
-`--output-dir PATH` to select another output directory. Use `--keep-work` when
-debugging a failed build; otherwise the temporary graph workspace is removed.
+`--output-dir PATH` to select another output directory. It receives only final
+validated artifacts; intermediate build data stays in the temporary workspace.
+The default is `<selected-repository>/dist`, not the caller's current directory.
+Use `--keep-work` when debugging a failed build; otherwise the temporary graph
+workspace is removed.
 The command never installs a Debian package, uses `sudo`, or publishes an
 artifact.
+
+Common options follow the target for the normal command-oriented form:
+
+```sh
+./dev package deb --output-dir PATH
+./dev package deb --repo PATH
+./dev package deb --keep-work
+```
+
+`--repo PATH` packages that Devlegate source checkout instead of the checkout
+containing `./dev`. The selected repository supplies the source HEAD, version,
+`pyproject.toml`, compliance material, packaging tools, and Git identity. It
+must satisfy the same clean-worktree rules as the default checkout. This is
+useful for intentionally packaging another worktree or source tree.
+
+`--keep-work` preserves the new temporary workspace on both success and
+failure, then prints its exact path. It is useful for inspecting intermediate
+artifacts, build reports, and extracted validation trees. It is not a cache, and
+later invocations always create a new workspace.
+
+The ordinary workflow needs none of these options:
+
+```sh
+./dev package deb
+./dev package all
+```
 
 The targets have distinct meanings:
 

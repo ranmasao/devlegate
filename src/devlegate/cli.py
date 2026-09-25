@@ -15,10 +15,10 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
 
 from devlegate import __version__
 from devlegate.agent_protocol import AgentProtocolError, seed_project_env
+from devlegate.cli_common import ConciseArgumentParser
 from devlegate.daemon import HostingMode, run_service
 from devlegate.host_installation import (
     HostInstallation,
@@ -1809,7 +1809,7 @@ def _startup_report(engine: ServiceEngine, mode: str) -> None:
         service_log(line)
 
 
-class DevlegateArgumentParser(argparse.ArgumentParser):
+class DevlegateArgumentParser(ConciseArgumentParser):
     """Present syntax errors concisely while retaining argparse parsing."""
 
     _top_level_groups = (
@@ -1851,11 +1851,6 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
             return "usage: devlegate [--env FILE | @ALIAS] COMMAND ...\n"
         return super().format_usage()
 
-    def add_subparsers(self, **kwargs):
-        kwargs.setdefault("title", "Commands")
-        kwargs.setdefault("metavar", "COMMAND")
-        return super().add_subparsers(**kwargs)
-
     def format_help(self) -> str:
         if self.prog == "devlegate":
             lines = [
@@ -1878,37 +1873,6 @@ class DevlegateArgumentParser(argparse.ArgumentParser):
             return "\n".join(lines)
         result = super().format_help()
         return result
-
-    def parse_known_args(self, args=None, namespace=None):
-        if self.prog == "devlegate":
-            values = list(sys.argv[1:] if args is None else args)
-            choices = next(
-                action.choices
-                for action in self._subparsers._group_actions
-                if action.dest == "command"
-            )
-            self._command_context = (
-                values[0] if values and values[0] in choices else None
-            )
-        return super().parse_known_args(args, namespace)
-
-    def error(self, message: str) -> NoReturn:
-        if self.prog == "devlegate" and ": invalid choice: " in message:
-            choice = message.split(": invalid choice: ", 1)[1]
-            choice = choice.split(" (choose from", 1)[0]
-            message = f"unknown command {choice}"
-        elif message.startswith("unrecognized arguments: "):
-            message = "unrecognized argument: " + message[
-                len("unrecognized arguments: ") :
-            ]
-        program = self.prog
-        command = getattr(self, "_command_context", None)
-        if program == "devlegate" and command is not None:
-            program = f"{program} {command}"
-        print(f"{program}: {message}", file=sys.stderr)
-        print(f"Try '{program} --help' for usage.", file=sys.stderr)
-        raise SystemExit(2)
-
 
 class Devlegate(ServiceEngine):
     """Legacy CLI-facing runtime surface; presentation remains here."""
