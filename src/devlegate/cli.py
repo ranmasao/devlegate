@@ -69,9 +69,9 @@ from devlegate.runtime_locator import (
     RuntimeLocatorError,
     repository_root,
 )
+from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import read as read_service_failure
-from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.systemd_supervisor import (
     SystemdSupervisor,
     SystemdSupervisorError,
@@ -2224,7 +2224,8 @@ def _run_default_command(
                 supervisor.remove(target.locator, env_file=target.env_file)
             except SystemdSupervisorError as cleanup_error:
                 raise DevlegateError(
-                    f"systemd startup failed and managed-unit cleanup failed: {cleanup_error}"
+                    "systemd startup failed and managed-unit cleanup failed: "
+                    f"{cleanup_error}"
                 ) from error
             print("systemd user supervision unavailable; running attached")
             return _run_attached_target(
