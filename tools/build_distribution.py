@@ -623,6 +623,7 @@ def parser() -> argparse.ArgumentParser:
     for target in TARGETS:
         child = commands.add_parser(
             target,
+            prog=f"./dev package {target}",
             parents=[common],
             help=descriptions[target].split(".", 1)[0],
             description=descriptions[target],
