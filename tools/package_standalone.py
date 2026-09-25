@@ -22,8 +22,10 @@ COMPLIANCE_DIR = "packaging/standalone-compliance"
 MANIFEST_SCHEMA = "devlegate.standalone-compliance.v1"
 TARGET = "linux-x86_64"
 LIBC = "glibc"
-PBS_ARCHIVE = "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
-PBS_SHA256 = "936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22"
+PBS_ARCHIVE = (
+    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+)
+PBS_SHA256 = "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
 PEX_VERSION = "2.103.2"
 PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_WHEEL_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"

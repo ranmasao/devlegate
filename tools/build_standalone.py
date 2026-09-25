@@ -25,8 +25,10 @@ TARGET = "linux-x86_64"
 PBS_PROVIDER = "PythonBuildStandalone"
 PBS_RELEASE = "20260901"
 PBS_PYTHON_VERSION = "3.12.14"
-PBS_ARCHIVE = "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
-PBS_SHA256 = "936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22"
+PBS_ARCHIVE = (
+    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+)
+PBS_SHA256 = "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
 SCIENCE_VERSION = "0.21.0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
