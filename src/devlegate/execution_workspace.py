@@ -10,6 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from devlegate.commit_messages import checkpoint_message
 from devlegate.tickets import is_canonical_ticket_name
 
 
@@ -336,7 +337,12 @@ class ExecutionWorkspaceManager:
         raise ExecutionWorkspaceError(f"cannot observe gitlink for submodule {path}")
 
     def checkpoint(
-        self, workspace: ExecutionWorkspace, execution_id: str
+        self,
+        workspace: ExecutionWorkspace,
+        execution_id: str,
+        *,
+        title: str = "",
+        summary: str = "",
     ) -> ExecutionCheckpoint:
         self._validate_workspace(workspace)
         before_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
@@ -356,7 +362,7 @@ class ExecutionWorkspaceManager:
                 workspace.path,
                 "commit",
                 "-m",
-                f"Devlegate checkpoint {self.ticket_id} {execution_id}",
+                checkpoint_message(self.ticket_id, title, execution_id, summary),
                 check=False,
             )
             if committed.returncode:

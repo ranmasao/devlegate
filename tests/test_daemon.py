@@ -1727,7 +1727,7 @@ def test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary(
     monkeypatch.setattr(
         ExecutionWorkspaceManager,
         "checkpoint",
-        lambda *_args: (_ for _ in ()).throw(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ExecutionWorkspaceError("checkpoint unavailable")
         ),
     )

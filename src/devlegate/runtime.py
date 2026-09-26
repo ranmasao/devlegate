@@ -23,6 +23,7 @@ from devlegate.agent_protocol import (
     initialize_project,
     render_project,
 )
+from devlegate.commit_messages import lifecycle_message
 from devlegate.execution_result import (
     ExecutionReport,
     ExecutionReportError,
@@ -3525,7 +3526,16 @@ class ServiceEngine:
             pending_execution_report=execution_result.as_dict(),
         )
         try:
-            checkpoint = manager.checkpoint(workspace, execution_id)
+            checkpoint = manager.checkpoint(
+                workspace,
+                execution_id,
+                title=selected_ticket.title,
+                summary=(
+                    execution_result.result.claim.summary
+                    if execution_result.result.claim is not None
+                    else execution_result.result.reason
+                ),
+            )
         except (ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(f"execution checkpoint failed: {error}") from error
         report = dataclasses.replace(
@@ -5016,12 +5026,6 @@ class ServiceEngine:
         )
         if lineage.returncode or lineage.stdout.splitlines() != [commit]:
             return False
-        subject = _git(workspace.path, "log", "-1", "--format=%s", commit, check=False)
-        if subject.returncode or subject.stdout.rstrip("\r\n") != (
-            f"Devlegate checkpoint {self._state['execution_ticket_id']} "
-            f"{self._state['execution_id']}"
-        ):
-            return False
         return not workspace.dirty
 
     def _recover_checkpoint_publication(self) -> None:
@@ -5060,7 +5064,16 @@ class ServiceEngine:
                 try:
                     checkpoint = ExecutionWorkspaceManager(
                         self.repo, self.execution_worktree_root, report.ticket_id
-                    ).checkpoint(workspace, report.execution_id)
+                    ).checkpoint(
+                        workspace,
+                        report.execution_id,
+                        title=self._ticket_store().by_id[report.ticket_id].title,
+                        summary=(
+                            report.result.claim.summary
+                            if report.result.claim is not None
+                            else report.result.reason
+                        ),
+                    )
                 except (ExecutionWorkspaceError, OSError) as error:
                     raise WorkflowBlockedError(
                         f"cannot recover execution checkpoint: {error}"
@@ -5455,9 +5468,17 @@ class ServiceEngine:
             self.control_worktree,
             "commit",
             "-m",
-            f"Devlegate {'lifecycle' if apply_conclusion else 'historical report'} "
-            f"{report.ticket_id} {report.execution_id} "
-            f"{report.result.conclusion}",
+            lifecycle_message(
+                report.ticket_id,
+                ticket.title,
+                report.execution_id,
+                report.result.conclusion,
+                (
+                    report.result.claim.summary
+                    if report.result.claim is not None
+                    else report.result.reason
+                ),
+            ),
             check=False,
         )
         if committed.returncode:

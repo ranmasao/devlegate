@@ -76,8 +76,8 @@ def main() -> int:
 
         original_checkpoint = ExecutionWorkspaceManager.checkpoint
 
-        def checkpoint(manager, workspace, execution_id):
-            result = original_checkpoint(manager, workspace, execution_id)
+        def checkpoint(manager, workspace, execution_id, **kwargs):
+            result = original_checkpoint(manager, workspace, execution_id, **kwargs)
             crash()
             return result
 

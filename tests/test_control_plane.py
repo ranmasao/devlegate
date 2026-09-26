@@ -978,11 +978,12 @@ def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monke
     execution = next((state / "worktrees").glob("*/work/T-1"))
     control = next((state / "worktrees").glob("*/control"))
     assert (execution / "implementation.txt").exists()
-    assert (
-        git(execution, "log", "-1", "--pretty=%s")
-        .stdout.strip()
-        .startswith("Devlegate checkpoint T-1 ")
+    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip() == (
+        "T-1: Control ticket"
     )
+    message = git(execution, "log", "-1", "--format=%B").stdout
+    assert "Worker result:\ndone" in message
+    assert "Devlegate-Execution:" in message
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
     assert not list((control / "executions").glob("T-1/*.json"))
@@ -1208,15 +1209,22 @@ def test_completed_worker_is_checkpointed_published_and_submitted_to_review(
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert (execution / "implementation.txt").read_text() == "worker change\n"
-    assert (
-        git(execution, "log", "-1", "--pretty=%s")
-        .stdout.strip()
-        .startswith("Devlegate checkpoint T-1 ")
+    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip() == (
+        "T-1: Control ticket"
     )
+    message = git(execution, "log", "-1", "--format=%B").stdout
+    assert "Worker result:\nimplemented" in message
+    assert "Devlegate-Execution:" in message
     remote_control = git(
         control, "ls-remote", "origin", "refs/heads/devlegate/control"
     ).stdout.split()[0]
     assert remote_control == git(control, "rev-parse", "HEAD").stdout.strip()
+    control_message = git(control, "log", "-1", "--format=%B").stdout
+    assert git(control, "log", "-1", "--pretty=%s").stdout.strip() == (
+        "T-1: Control ticket (completed)"
+    )
+    assert "Worker result:\nimplemented" in control_message
+    assert "Devlegate-Execution:" in control_message
     assert not (control / "kanban/todo/T-1.md").exists()
     assert (control / "kanban/review/T-1.md").is_file()
     reports = list((control / "executions/T-1").glob("*.json"))
@@ -1244,12 +1252,12 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
     original_checkpoint = ExecutionWorkspaceManager.checkpoint
     failed = False
 
-    def fail_once(manager, workspace, execution_id):
+    def fail_once(manager, workspace, execution_id, **kwargs):
         nonlocal failed
         if not failed:
             failed = True
             raise ExecutionWorkspaceError("simulated checkpoint crash")
-        return original_checkpoint(manager, workspace, execution_id)
+        return original_checkpoint(manager, workspace, execution_id, **kwargs)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
     monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", fail_once)
@@ -1303,16 +1311,9 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         run_test_iteration(devlegate)
     assert crashed
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    checkpoint_count = int(
-        git(
-            execution,
-            "rev-list",
-            "--count",
-            "--all",
-            "--grep",
-            "Devlegate checkpoint",
-        ).stdout
-    )
+    checkpoint_count = git(
+        execution, "log", "--all", "--format=%s"
+    ).stdout.splitlines().count("T-1: Control ticket")
     assert checkpoint_count == 1
 
     if dirty_after_checkpoint:
@@ -1338,19 +1339,9 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         lambda *_args: pytest.fail("checkpoint recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
-    assert (
-        int(
-            git(
-                execution,
-                "rev-list",
-                "--count",
-                "--all",
-                "--grep",
-                "Devlegate checkpoint",
-            ).stdout
-        )
-        == 1
-    )
+    assert git(execution, "log", "--all", "--format=%s").stdout.splitlines().count(
+        "T-1: Control ticket"
+    ) == 1
 
 
 def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypatch):
@@ -1464,7 +1455,7 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
     monkeypatch.setattr(
         ExecutionWorkspaceManager,
         "checkpoint",
-        lambda *_args: (_ for _ in ()).throw(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ExecutionWorkspaceError("simulated checkpoint crash")
         ),
     )
@@ -3832,7 +3823,9 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     assert calls == 2
     assert (execution / "attempt-1.txt").exists()
     assert (execution / "attempt-2.txt").exists()
-    assert git(execution, "log", "--oneline").stdout.count("Devlegate checkpoint") == 2
+    assert git(execution, "log", "--format=%s").stdout.splitlines().count(
+        "T-1: Control ticket"
+    ) == 2
     assert len(list((control / "executions/T-1").glob("*.json"))) == 2
 
 
