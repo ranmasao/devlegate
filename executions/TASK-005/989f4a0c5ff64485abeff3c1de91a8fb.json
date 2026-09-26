@@ -1,0 +1,25 @@
+{
+  "code_base_head": "71db110944768aa767aa8888a1b3ee887a85650a",
+  "conclusion": "completed",
+  "control_head": "a005d4ccdfe5a3a61527c25e657955bb68bdaf99",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-005",
+  "execution_id": "989f4a0c5ff64485abeff3c1de91a8fb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-005",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-005",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Execution log resolution now combines the trusted active execution identity from runtime state with canonical historical execution reports, preserving deterministic ambiguity handling and preventing arbitrary log filenames from resolving. Added regressions for pre-report active reads, transition to historical resolution, live/history ambiguity, and unproven filenames."
+  },
+  "workspace_head": "75d416434abcebb9794b51b19e222ab0756d2a65"
+}
