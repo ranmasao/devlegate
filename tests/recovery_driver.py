@@ -121,7 +121,6 @@ def main() -> int:
 
             def git(repo, *git_args, **git_kwargs):
                 result = original_git(repo, *git_args, **git_kwargs)
-                subject = git_args[2] if len(git_args) > 2 else ""
                 is_product_push = (
                     repo == engine.repo
                     and git_args[:1] == ("push",)
@@ -130,7 +129,6 @@ def main() -> int:
                 is_control_commit = (
                     repo == engine.control_worktree
                     and git_args[:1] == ("commit",)
-                    and "Devlegate integrate" in subject
                 )
                 is_control_push = (
                     repo == engine.control_worktree

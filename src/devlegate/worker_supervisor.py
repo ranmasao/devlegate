@@ -565,7 +565,12 @@ class WorkerSupervisor:
             """import { tool } from "@opencode-ai/plugin"
 
 export default tool({
-  description: "Report the worker's semantic claim to Devlegate.",
+  description: "Report the worker's semantic claim to Devlegate. " +
+    "summary must be a concise human-readable description of implemented " +
+    "changes, normally one to three short sentences; do not include test " +
+    "counts, validation status, remaining work, questions, execution IDs, " +
+    "or provenance. Put concrete unfinished work in remaining and required " +
+    "external questions or decisions in questions.",
   args: {
     outcome: tool.schema.enum(["completed", "incomplete", "blocked"]),
     summary: tool.schema.string(),

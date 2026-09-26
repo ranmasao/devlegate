@@ -10,18 +10,13 @@ import textwrap
 
 
 def _summary(summary: str) -> str:
-    """Keep worker output concise without copying questions or raw output."""
+    """Normalize the worker's already-semantic summary for Git display."""
     value = re.sub(r"\s+", " ", summary).strip()
     if not value:
         return "Worker reported no summary."
-    lines = textwrap.wrap(
-        value, width=72, break_long_words=False, break_on_hyphens=False
+    return "\n".join(
+        textwrap.wrap(value, width=72, break_long_words=False, break_on_hyphens=False)
     )
-    if len(lines) > 3:
-        lines = lines[:3]
-        last = lines[-1].rstrip(" .,;:")
-        lines[-1] = f"{last}..."
-    return "\n".join(lines)
 
 
 def checkpoint_message(

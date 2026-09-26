@@ -4324,10 +4324,10 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
             )
-        return self._complete_accepted(ticket_id, expected_head, report)
+        return self._complete_accepted(ticket_id, expected_head)
 
     def _complete_accepted(
-        self, ticket_id: str, expected_head: str, report: ExecutionReport
+        self, ticket_id: str, expected_head: str
     ) -> str:
         current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
         if not _is_git_identity(expected_head):
@@ -4365,6 +4365,7 @@ class ServiceEngine:
             return current
         if ticket.state != "accepted":
             raise WorkflowBlockedError("accepted ticket changed during integration")
+        report = self._accepted_execution_report(ticket_id)
         if current != expected_head:
             raise WorkflowBlockedError(
                 "control HEAD changed during accepted integration"

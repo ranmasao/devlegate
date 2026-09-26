@@ -98,11 +98,12 @@ def _service_engine(
 ) -> ServiceEngine:
     """Construct the canonical service engine."""
     options = {"read_only": read_only}
-    if not show_worker_output:
-        options["show_worker_output"] = False
     if repository is not None:
         options["repository"] = repository
-    return ServiceEngine(env_file, **options)
+    engine = ServiceEngine(env_file, **options)
+    if not show_worker_output and hasattr(engine, "_workers"):
+        engine._workers.show_worker_output = False
+    return engine
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1450,7 +1451,7 @@ def _run_attached_target(
         ),
     }
     readiness_report = _systemd_readiness_report()
-    if readiness_report is not None:
+    if readiness_report is not None and startup_fd is not None:
         run_arguments["readiness_report"] = readiness_report
     return run_service(engine, **run_arguments)
 
