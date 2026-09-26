@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "7b93a79e8cd5fb5033a3d115bb221c775795e428",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "8a0478bf45cd46b99b759d1bed32ab15",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Removed the unused multi-stage progress plan and progress imports from package_standalone.py, leaving standalone packaging as the atomic leaf wrapper used by the distribution component tree. Existing standalone builder and Debian component plans remain the owners of their emitted internal stages."
+  },
+  "workspace_head": "649eb65ec199cfea5c5efcf4b26805c870bce4ba"
+}
