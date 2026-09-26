@@ -46,7 +46,8 @@ devlegate_<version>_amd64.deb
 ```
 
 The package is assembled only from a validated standalone archive. It contains
-the standalone executable, legal files, and the archive hash proof.
+the standalone executable directly at `/usr/bin/devlegate`, with no private
+executable plus launcher symlink, legal files, and the archive hash proof.
 It declares no runtime dependencies, has no maintainer scripts, and does not
 install a systemd unit. The Debian package is built twice and byte-compared
 before either copy can reach the release upload job.

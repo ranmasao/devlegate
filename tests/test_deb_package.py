@@ -36,18 +36,24 @@ def make_package(
     maintainer_script: bool = False,
     installed_size: int | None = None,
     include_installed_size: bool = True,
+    legacy_layout: bool = False,
 ) -> tuple[Path, Path]:
     root = tmp_path / "root"
     control = root / "DEBIAN"
-    binary = root / "usr/lib/devlegate/devlegate"
+    binary = (
+        root / "usr/lib/devlegate/devlegate"
+        if legacy_layout
+        else root / "usr/bin/devlegate"
+    )
     doc = root / "usr/share/doc/devlegate"
     control.mkdir(parents=True)
     binary.parent.mkdir(parents=True)
     doc.mkdir(parents=True)
     binary.write_bytes(b"standalone")
     binary.chmod(0o755)
-    (root / "usr/bin").mkdir(parents=True)
-    (root / "usr/bin/devlegate").symlink_to("../lib/devlegate/devlegate")
+    if legacy_layout:
+        (root / "usr/bin").mkdir(parents=True)
+        (root / "usr/bin/devlegate").symlink_to("../lib/devlegate/devlegate")
     for name in (
         "LICENSE",
         "NOTICE",
@@ -95,6 +101,12 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
     metadata = VALIDATOR.fields(package)
     assert int(metadata["Installed-Size"]) > 0
     assert not list((tmp_path / "extract/usr/share/doc/devlegate").glob("*.tar.gz*"))
+
+
+def test_deb_validator_rejects_former_private_payload_and_launcher_symlink(tmp_path):
+    package, report = make_package(tmp_path, legacy_layout=True)
+    with pytest.raises(VALIDATOR.PackageError, match="regular executable"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
 
 
 def test_installed_size_rounds_each_tiny_file(tmp_path):

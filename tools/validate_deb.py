@@ -93,12 +93,18 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     )
     if result.returncode:
         raise PackageError(result.stderr.strip() or "cannot extract Debian package")
-    binary = extract_dir / "usr/lib/devlegate/devlegate"
-    link = extract_dir / "usr/bin/devlegate"
-    if not binary.is_file() or not binary.stat().st_mode & 0o111:
-        raise PackageError("Debian package does not contain an executable payload")
-    if not link.is_symlink() or link.resolve() != binary:
-        raise PackageError("Debian executable link is invalid")
+    binary = extract_dir / "usr/bin/devlegate"
+    private_binary = extract_dir / "usr/lib/devlegate/devlegate"
+    try:
+        binary_mode = binary.lstat().st_mode
+    except FileNotFoundError as error:
+        raise PackageError(
+            "Debian package does not contain an executable payload"
+        ) from error
+    if not stat.S_ISREG(binary_mode) or not binary_mode & 0o111:
+        raise PackageError("Debian executable must be a regular executable file")
+    if private_binary.exists() or private_binary.is_symlink():
+        raise PackageError("Debian package contains a private executable payload")
     systemd_root = extract_dir / "usr/lib/systemd"
     if (extract_dir / "etc/systemd").exists() or (
         systemd_root.exists() and any(systemd_root.glob("**/*"))

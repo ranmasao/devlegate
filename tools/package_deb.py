@@ -65,7 +65,7 @@ def package(
         )
         package_root = temporary_root / "package"
         control = package_root / "DEBIAN"
-        binary = package_root / "usr/lib/devlegate/devlegate"
+        binary = package_root / "usr/bin/devlegate"
         documentation = package_root / "usr/share/doc/devlegate"
         control.mkdir(parents=True)
         binary.parent.mkdir(parents=True)
@@ -81,8 +81,6 @@ def package(
         ):
             shutil.copy2(extracted / name, documentation / name)
         shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
-        (package_root / "usr/bin").mkdir(parents=True)
-        (package_root / "usr/bin/devlegate").symlink_to("../lib/devlegate/devlegate")
         installed_size = installed_size_kib(package_root)
         (control / "control").write_text(
             "Package: devlegate\n"
