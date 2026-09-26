@@ -1,0 +1,29 @@
+{
+  "code_base_head": "10dccef7fc36b7e7a2ac474fe3b8d21c070592cf",
+  "conclusion": "completed",
+  "control_head": "788939f9ffb1a467670048190a4ba7601df682a3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-002",
+  "execution_id": "e01b2ea0e085412da3ede9cbe3052196",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-002",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full suite did not complete within 120 seconds; a targeted CLI rerun exposed an existing unrelated failure in test_operational_cli_constructs_service_engine_directly because the fake ServiceEngine rejects show_worker_output."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-002",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Full suite did not complete within 120 seconds; a targeted CLI rerun exposed an existing unrelated failure in test_operational_cli_constructs_service_engine_directly because the fake ServiceEngine rejects show_worker_output."
+    ],
+    "summary": "Implemented human-readable checkpoint, lifecycle, and accepted-to-done integration commit messages. Added deterministic word-safe summary wrapping, execution/checkpoint trailers, report-derived integration metadata, and removed prose parsing from accepted integration exactness. Added focused regressions. Focused tests (4), all control-plane tests (156), lint, compile, and diff checks pass."
+  },
+  "workspace_head": "243328e56b0be0f1c252af023bba0c7dabb34ff9"
+}
