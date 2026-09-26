@@ -1556,8 +1556,17 @@ class ServiceEngine:
         if snapshot.lifecycle_integration is not None:
             blocked_reason = snapshot.plan.reason
         worker_running = self.service_snapshot().worker_running
+        lifecycle_intent = self.lifecycle_intent()
         lifecycle = (
-            "worker" if worker_running else ("blocked" if blocked_reason else "ready")
+            "restarting"
+            if lifecycle_intent == "restart"
+            else "stopping"
+            if lifecycle_intent == "stop"
+            else (
+                "worker"
+                if worker_running
+                else ("blocked" if blocked_reason else "ready")
+            )
         )
         if worker_running:
             blocked_reason = None
@@ -1607,6 +1616,22 @@ class ServiceEngine:
             )
             self._published_retry_candidates = tuple(retry_candidates)
             self._published_drop_candidates = self._drop_candidate_from_state()
+
+    def _refresh_published_status(self) -> None:
+        """Refresh the owner-published view without weakening fail-closed reads."""
+        try:
+            self.status_view()
+        except DevlegateError:
+            # Keep the last coherent generation when observation cannot be proven.
+            return
+
+    def _record_worker_identity(self, identity: WorkerProcessIdentity) -> None:
+        self._save_state(
+            "agent_running",
+            execution_stage="worker-running",
+            worker_identity=identity.as_dict(),
+        )
+        self._refresh_published_status()
 
     def _publish_ticket_projection(
         self,
@@ -3057,6 +3082,7 @@ class ServiceEngine:
                 execution_plan.reason if execution_plan.action == "blocked" else None
             ),
         )
+        self._refresh_published_status()
         automatic_authorization = self._automatic_zero_delta_authorization(
             ticket_store, execution_plan, local_head, remote_head
         )
@@ -3133,6 +3159,7 @@ class ServiceEngine:
                 accepted_integration=None,
             )
             self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+            self._refresh_published_status()
             _log(f"accepted ticket {pending_ticket} integrated")
             return 0
         if execution_plan.action == "integrate":
@@ -3167,6 +3194,7 @@ class ServiceEngine:
                 accepted_integration=None,
             )
             self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+            self._refresh_published_status()
             _log(f"accepted ticket {execution_plan.ticket_id} integrated")
             return 0
         if execution_plan.action == "none":
@@ -3383,6 +3411,7 @@ class ServiceEngine:
                 return 0
             self._owned_execution_id = execution_id
             self._publish_service_snapshot(worker_running=False)
+            self._refresh_published_status()
 
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
@@ -3442,6 +3471,7 @@ class ServiceEngine:
         )
         self._owned_execution_id = execution_id
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
+        self._refresh_published_status()
         worker_returned = False
         try:
             try:
@@ -3450,11 +3480,7 @@ class ServiceEngine:
                     prompt,
                     execution_id=execution_id,
                     stop_request=self._stop_event,
-                    identity_handler=lambda identity: self._save_state(
-                        "agent_running",
-                        execution_stage="worker-running",
-                        worker_identity=identity.as_dict(),
-                    ),
+                    identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
                     ),
@@ -3476,6 +3502,7 @@ class ServiceEngine:
                     worker_identity=None,
                 )
             self._publish_service_snapshot(lifecycle="processing", worker_running=False)
+            self._refresh_published_status()
         if not worker_run.worker_group_retired:
             raise DevlegateError(
                 "worker leader exited but execution process group is still alive"
@@ -3525,6 +3552,7 @@ class ServiceEngine:
             execution_stage="checkpointing",
             pending_execution_report=execution_result.as_dict(),
         )
+        self._refresh_published_status()
         try:
             checkpoint = manager.checkpoint(
                 workspace,
@@ -3547,6 +3575,7 @@ class ServiceEngine:
             execution_stage="post-checkpoint",
             pending_execution_report=report.as_dict(),
         )
+        self._refresh_published_status()
         _log(
             "execution checkpoint "
             f"{'created' if checkpoint.commit_created else 'not needed'}: "
@@ -3561,6 +3590,7 @@ class ServiceEngine:
                 ),
                 worker_running=False,
             )
+            self._refresh_published_status()
             return 0
         product = self._observe_product_generation(workspace.base_head)
         current_product_remote = product["remote_head"]
@@ -3575,6 +3605,7 @@ class ServiceEngine:
                     pending_execution_report=report.as_dict(),
                     automatic_retry=retry,
                 )
+                self._refresh_published_status()
                 return self._complete_execution_lifecycle(report)
             reconciliation_product = (
                 product["local_head"]
@@ -3632,6 +3663,7 @@ class ServiceEngine:
                 handled_control_head=str(self._state["control_head"]),
                 reconciliation=reconciliation,
             )
+            self._refresh_published_status()
             reason = (
                 f"reconciliation required: ticket {selected_ticket.id}; "
                 f"original base {workspace.base_head}; "
@@ -3643,6 +3675,7 @@ class ServiceEngine:
             _log(reason)
             return 1
         self._save_state("agent_running", execution_stage="publishing")
+        self._refresh_published_status()
         try:
             self._publish_execution_branch(
                 workspace,
@@ -3654,12 +3687,14 @@ class ServiceEngine:
                 f"execution branch publication failed: {error}"
             ) from error
         self._save_state("agent_running", execution_stage="post-publication")
+        self._refresh_published_status()
         self._save_state(
             "agent_running",
             execution_stage="lifecycle",
             pending_execution_report=report.as_dict(),
             execution_interruption_kind=worker_run.interruption_kind,
         )
+        self._refresh_published_status()
         try:
             control_head = self._apply_execution_lifecycle(report)
         except (DevlegateError, OSError, ExecutionReportError) as error:
@@ -3716,6 +3751,7 @@ class ServiceEngine:
             accepted_integration=None,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        self._refresh_published_status()
         _log(f"accepted ticket {ticket_id} integrated")
         return 0
 
@@ -4005,6 +4041,7 @@ class ServiceEngine:
             **fields,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        self._refresh_published_status()
 
     def _record_post_worker_failure(
         self,
@@ -4044,6 +4081,7 @@ class ServiceEngine:
             failed_executions=failed_executions,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        self._refresh_published_status()
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
@@ -5735,6 +5773,7 @@ class ServiceEngine:
                         ),
                         worker_running=False,
                     )
+                    self._refresh_published_status()
                     return 0
                 if (
                     stop_event is not None
@@ -5744,6 +5783,7 @@ class ServiceEngine:
                     self._service_shutdown.set()
                     self._reject_pending_operator_command_on_shutdown()
                     self._publish_service_snapshot(lifecycle="ready")
+                    self._refresh_published_status()
                     return 0
                 operator_command = None
                 scheduler_active = False
@@ -5873,6 +5913,7 @@ class ServiceEngine:
                         self._service_shutdown.set()
                         self._reject_pending_operator_command_on_shutdown()
                         self._publish_service_snapshot(lifecycle="ready")
+                        self._refresh_published_status()
                         return 0
                 else:
                     self._service_wake.wait(int(self.poll_interval))
@@ -7278,6 +7319,7 @@ class ServiceEngine:
             failed_executions=failures,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        self._refresh_published_status()
 
     def _recover_interrupted_execution(self, ticket_id: str) -> None:
         """Authorize recovery of a stranded post-worker execution only by identity."""

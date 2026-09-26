@@ -112,6 +112,12 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
     assert snapshot.worker_running is True
     assert snapshot.selected_ticket_id == "T-1"
     assert snapshot.execution_id
+    published = engine.published_status_payload()
+    assert published["execution"]["bound_ticket"] == "T-1"
+    assert published["execution"]["execution_id"] == snapshot.execution_id
+    assert published["execution"]["stage"] == snapshot.execution_stage
+    assert published["live_execution"]["execution_id"] == snapshot.execution_id
+    assert published["live_execution"]["stage"] == snapshot.execution_stage
 
     worker_release.set()
     thread.join(10)

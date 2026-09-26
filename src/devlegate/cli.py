@@ -1650,6 +1650,9 @@ def _render_status_text(
                     subsequent_indent="  ",
                 )
             )
+        execution_id = execution.get("execution_id")
+        if execution_id:
+            lines.append(f"  Execution: {str(execution_id)[:12]}")
         if execution["state"] == "unverified":
             lines.append("  Live ownership evidence is unavailable.")
         elif execution["state"] == "recovery-required":

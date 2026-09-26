@@ -79,6 +79,23 @@ def test_operator_execution_projection_is_conservative(phase, stage, expected):
     assert _execution_projection(snapshot, evidence)["state"] == expected
 
 
+def test_status_text_exposes_active_execution_selector():
+    snapshot = _execution_snapshot("agent_running", "worker-launch")
+    execution = _execution_projection(
+        snapshot,
+        {
+            "ticket_id": "LAB-1",
+            "execution_id": "exec-1",
+            "stage": "worker-launch",
+            "ownership": "current-service",
+        },
+    )
+
+    text = _render_status_text(snapshot, "running", execution)
+
+    assert "Execution: exec-1" in text
+
+
 def test_operator_execution_projection_requires_exact_live_evidence():
     snapshot = _execution_snapshot("agent_running", "worker-running")
     evidence = {
