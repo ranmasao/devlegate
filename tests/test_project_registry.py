@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -505,6 +506,48 @@ def test_top_level_lifecycle_uses_persisted_compact_unit_name(
     calls = lifecycle_over_persisted_unit(env, compact, monkeypatch, capsys)
 
     assert all(name == compact for _action, name in calls)
+
+
+@pytest.mark.parametrize("action", ["stop", "restart"])
+def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
+    tmp_path, monkeypatch, capsys, action
+) -> None:
+    env = project(tmp_path, f"failing-{action}")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = ProjectRegistry().register("failing", env)
+    unit = f"devlegate-{target.locator.state_key[:8]}.service"
+    SQLiteRuntimeStore(
+        target.locator.state_dir, target.locator.state_key
+    ).establish_systemd_authority(
+        unit_name=unit,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+
+    class FailingSupervisor:
+        def inspect(self, _locator, *, name=None):
+            return True
+
+        def status(self, _locator, *, name=None):
+            return True
+
+        def stop(self, _locator, *, name=None):
+            raise cli.SystemdSupervisorError("systemctl stop failed")
+
+        def restart(self, _locator, *, name=None):
+            raise cli.SystemdSupervisorError("systemctl restart failed")
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FailingSupervisor)
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "--env", str(env), action]
+    )
+
+    assert cli.main() == 1
+    captured = capsys.readouterr()
+    assert captured.err == f"devlegate: systemctl {action} failed\n"
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
 
 
 def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(

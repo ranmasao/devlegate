@@ -5,6 +5,24 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
+## 0.5.4 -- 2026-09-26
+
+Operational project hosting, durable lifecycle compatibility, and release-proof tooling.
+
+### Added
+
+- Added explicit service and execution log access, registered project addressing, and per-user host installation.
+- Added systemd user supervision with automatic project hosting and standalone/Debian distribution proof tooling; binary publication remains deferred to 0.6.0.
+
+### Changed
+
+- Made service relaunch identity distribution-neutral and systemd unit authority compact, while retaining compatibility with legacy persisted units.
+- Hardened reproducible standalone and Debian packaging, including direct installation of the Debian executable at `/usr/bin/devlegate`.
+
+### Fixed
+
+- Fixed lifecycle/systemd compatibility and error handling so managed stop and restart use authoritative units and report operational failures without tracebacks.
+
 ## 0.5.3 -- 2026-09-23
 
 Checkpoint-aware service lifecycle, explicit execution retirement, and distribution hardening.

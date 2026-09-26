@@ -734,12 +734,18 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     owner = _managed_systemd_owner(locator)
     if owner is not None:
         if intent == "stop":
-            owner.supervisor.stop(locator, name=owner.unit)
+            try:
+                owner.supervisor.stop(locator, name=owner.unit)
+            except SystemdSupervisorError as error:
+                raise DevlegateError(str(error)) from error
             _wait_for_runtime_stop(locator)
             result = {"result": "stopped", "service": "devlegate", "action": intent}
             emit(result, output_format, "service stopped")
             return 0
-        owner.supervisor.restart(locator, name=owner.unit)
+        try:
+            owner.supervisor.restart(locator, name=owner.unit)
+        except SystemdSupervisorError as error:
+            raise DevlegateError(str(error)) from error
         result = {"result": "restarted", "service": "devlegate", "action": intent}
         emit(result, output_format, "service restarted")
         return 0
