@@ -2611,7 +2611,23 @@ def main() -> int:
             )
             return (
                 1
-                if snapshot.plan.action == "blocked" or view.service_failure is not None
+                if (
+                    view.service_failure is not None
+                    or (
+                        snapshot.plan.action == "blocked"
+                        and snapshot.bound_ticket_id is None
+                    )
+                    or (
+                        snapshot.plan.action == "blocked"
+                        and snapshot.bound_ticket_id is not None
+                        and not (
+                            isinstance(view.service_metadata, dict)
+                            and isinstance(view.service_metadata.get("lifecycle"), dict)
+                            and view.service_metadata["lifecycle"].get("intent")
+                            in {"stop", "restart"}
+                        )
+                    )
+                )
                 else 0
             )
         if args.command == "plan":

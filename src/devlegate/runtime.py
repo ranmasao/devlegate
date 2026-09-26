@@ -1621,7 +1621,7 @@ class ServiceEngine:
         """Refresh the owner-published view without weakening fail-closed reads."""
         try:
             self.status_view()
-        except DevlegateError:
+        except (DevlegateError, OSError, subprocess.CalledProcessError):
             # Keep the last coherent generation when observation cannot be proven.
             return
 
@@ -3411,7 +3411,6 @@ class ServiceEngine:
                 return 0
             self._owned_execution_id = execution_id
             self._publish_service_snapshot(worker_running=False)
-            self._refresh_published_status()
 
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
@@ -5773,7 +5772,8 @@ class ServiceEngine:
                         ),
                         worker_running=False,
                     )
-                    self._refresh_published_status()
+                    if stop_event is None or not stop_event.is_set():
+                        self._refresh_published_status()
                     return 0
                 if (
                     stop_event is not None
@@ -5783,7 +5783,8 @@ class ServiceEngine:
                     self._service_shutdown.set()
                     self._reject_pending_operator_command_on_shutdown()
                     self._publish_service_snapshot(lifecycle="ready")
-                    self._refresh_published_status()
+                    if stop_event is None or not stop_event.is_set():
+                        self._refresh_published_status()
                     return 0
                 operator_command = None
                 scheduler_active = False

@@ -2661,7 +2661,7 @@ def test_real_service_admitted_retry_outlives_cli_process(git_fixture, monkeypat
         assert service.process.poll() is None
         status = service.cli("status", "--json")
         assert status.returncode in {0, 1}, status.stderr
-        assert json.loads(status.stdout)["execution"]["phase"] == "idle"
+        assert json.loads(status.stdout)["execution"]["phase"] == "agent_running"
         identity = _disk_state(config)["worker_identity"]
         os.kill(identity["pid"], 0)
         assert attempts.read_text().splitlines() == ["attempt"]
