@@ -1,0 +1,25 @@
+{
+  "code_base_head": "10dccef7fc36b7e7a2ac474fe3b8d21c070592cf",
+  "conclusion": "completed",
+  "control_head": "430c94ef671625a665ef2f982d681df81a62f656",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-002",
+  "execution_id": "1e04429c9f0a489f893d7ce03c6a6080",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-002",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-002",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Implemented human-readable Devlegate commit formatting without execution IDs in subjects, preserved full-word worker summaries, documented devlegate_report field semantics in generated prompts and tool descriptions, restored the two-argument accepted-integration seam, and updated recovery/CLI test seams for the new commit subjects and compatible hosting behavior. Full suite passes with ambient DEVLEGATE_HOST_MODE and DEVLEGATE_REQUIRE_NOTIFY unset: 944 passed; focused licensing, contract, message, and protocol tests: 72 passed; Ruff clean."
+  },
+  "workspace_head": "8f343296cadeabde48187c5a2394dd6f664c150f"
+}
