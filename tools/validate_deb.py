@@ -15,7 +15,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from package_standalone import PackageError
+try:
+    from package_standalone import PackageError
+except ModuleNotFoundError:
+    from tools.package_standalone import PackageError
 
 
 def fields(package: Path) -> dict[str, str]:

@@ -23,9 +23,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 try:
-    from build_progress import ComponentStep
+    from build_progress import ComponentEvent, ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.build_standalone by test clients.
-    from tools.build_progress import ComponentStep
+    from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep
 
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
@@ -45,6 +45,14 @@ def semantic_plan() -> tuple[ComponentStep, ...]:
     )
 
 
+def component_plan() -> ComponentPlan:
+    """Return the standalone builder's owned plan as a component tree."""
+    return ComponentPlan(
+        "standalone",
+        tuple(ComponentPlan.leaf(step) for step in semantic_plan()),
+    )
+
+
 @contextlib.contextmanager
 def progress_stage(
     emit, step: ComponentStep,
@@ -56,16 +64,16 @@ def progress_stage(
         except ModuleNotFoundError:
             from tools.build_progress import ComponentEvent
 
-        emit(ComponentEvent("start", step))
+        emit(ComponentEvent("start", step, step.identity))
     try:
         yield
     except Exception:
         if emit is not None:
-            emit(ComponentEvent("fail", step))
+            emit(ComponentEvent("fail", step, step.identity))
         raise
     else:
         if emit is not None:
-            emit(ComponentEvent("complete", step))
+            emit(ComponentEvent("complete", step, step.identity))
 
 PEX_VERSION = "2.103.2"
 TARGET = "linux-x86_64"
@@ -871,6 +879,9 @@ def build(args: argparse.Namespace, emit=None) -> int:
                     repo, build_b_root / "wheel", str(wheel_python_b), epoch
                 )
         else:
+            if emit is not None:
+                emit(ComponentEvent("skip", semantic_plan()[1], semantic_plan()[1].identity))
+                emit(ComponentEvent("skip", semantic_plan()[2], semantic_plan()[2].identity))
             wheel_toolchain_a = {
                 name: filename.split("-")[1]
                 for name, (filename, _digest) in WHEEL_BUILD_TOOLS.items()

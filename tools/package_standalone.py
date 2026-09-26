@@ -19,9 +19,9 @@ import tomllib
 from pathlib import Path
 
 try:
-    from build_progress import ComponentStep
+    from build_progress import ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.package_standalone by test clients.
-    from tools.build_progress import ComponentStep
+    from tools.build_progress import ComponentPlan, ComponentStep
 
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
@@ -35,6 +35,13 @@ def semantic_plan() -> tuple[ComponentStep, ...]:
             "create standalone archive",
             "write standalone checksum",
         )
+    )
+
+
+def component_plan() -> ComponentPlan:
+    return ComponentPlan(
+        "standalone archive",
+        tuple(ComponentPlan.leaf(step) for step in semantic_plan()),
     )
 
 COMPLIANCE_DIR = "packaging/standalone-compliance"

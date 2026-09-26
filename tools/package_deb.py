@@ -25,9 +25,9 @@ except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
     from tools.validate_deb import installed_size_kib
     from tools.validate_standalone_package import validate
 try:
-    from build_progress import ComponentStep
+    from build_progress import ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
-    from tools.build_progress import ComponentStep
+    from tools.build_progress import ComponentPlan, ComponentStep
 
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
@@ -41,6 +41,13 @@ def semantic_plan() -> tuple[ComponentStep, ...]:
             "build Debian package",
             "write Debian package checksum",
         )
+    )
+
+
+def component_plan() -> ComponentPlan:
+    return ComponentPlan(
+        "debian package",
+        tuple(ComponentPlan.leaf(step) for step in semantic_plan()),
     )
 
 

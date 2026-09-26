@@ -25,9 +25,9 @@ from pathlib import Path
 from devlegate.cli_common import ConciseArgumentParser
 
 try:
-    from build_progress import ComponentStep
+    from build_progress import ComponentEvent, ComponentPlan, ComponentStep, freeze_plan
 except ModuleNotFoundError:
-    from tools.build_progress import ComponentStep
+    from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep, freeze_plan
 
 TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
 GRAPH = {
@@ -62,6 +62,11 @@ class Artifact:
 class SemanticStep:
     target: str
     name: str
+    leaf_id: str | None = None
+
+    @property
+    def identity(self) -> str:
+        return self.leaf_id or f"{self.target}:{self.name}"
 
 
 @dataclass(frozen=True)
@@ -80,33 +85,41 @@ class ProgressReporter:
         self._started: SemanticStep | None = None
 
     def emit(self, event: ProgressEvent) -> None:
-        if event.step not in self.steps:
+        matches = [step for step in self.steps if step.identity == event.step.identity]
+        if not matches:
+            matches = [
+                step
+                for step in self.steps
+                if step.target == event.step.target and step.name == event.step.name
+            ]
+        if len(matches) != 1:
             raise DistributionError(f"progress event is not in the frozen plan: {event.step}")
-        position = self.steps.index(event.step) + 1
+        step = matches[0]
+        position = self.steps.index(step) + 1
         if event.action == "start":
             if position != self.completed + 1 or self._started is not None:
                 raise DistributionError(f"progress step is out of order: {event.step.name}")
-            self._started = event.step
-            print(f"[{self.completed}/{len(self.steps)}] START {event.step.target}: {event.step.name}")
+            self._started = step
+            print(f"[{self.completed}/{len(self.steps)}] START {step.target}: {step.name}")
         elif event.action in {"complete", "skip"}:
-            if event.action == "complete" and self._started != event.step:
-                raise DistributionError(f"progress step was not started: {event.step.name}")
-            if event.action == "skip" and self._started not in {None, event.step}:
-                raise DistributionError(f"progress step was not started: {event.step.name}")
+            if event.action == "complete" and self._started != step:
+                raise DistributionError(f"progress step was not started: {step.name}")
+            if event.action == "skip" and self._started not in {None, step}:
+                raise DistributionError(f"progress step was not started: {step.name}")
             if position != self.completed + 1:
-                raise DistributionError(f"progress step is out of order: {event.step.name}")
+                raise DistributionError(f"progress step is out of order: {step.name}")
             self.completed += 1
             status = "SKIP" if event.action == "skip" else "DONE"
             if event.action == "skip":
-                self.skipped.append(event.step)
-            print(f"[{self.completed}/{len(self.steps)}] {status} {event.step.target}: {event.step.name}")
+                self.skipped.append(step)
+            print(f"[{self.completed}/{len(self.steps)}] {status} {step.target}: {step.name}")
             self._started = None
         elif event.action == "fail":
-            if self._started != event.step:
+            if self._started != step:
                 raise DistributionError(
-                    f"progress step was not started: {event.step.name}"
+                    f"progress step was not started: {step.name}"
                 )
-            print(f"[{self.completed}/{len(self.steps)}] FAILED {event.step.target}: {event.step.name}")
+            print(f"[{self.completed}/{len(self.steps)}] FAILED {step.target}: {step.name}")
         else:
             raise DistributionError(f"unknown progress event: {event.action}")
 
@@ -321,21 +334,27 @@ def build_standalone(
     require_tools(("file", "git"))
     output = work / "standalone-build"
     output.mkdir()
-    _step(reporter, "standalone", "build standalone executable", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/build_standalone.py"),
-            "build",
-            "--repo",
-            str(source.repo),
-            "--output",
-            str(output),
-            "--python",
-            source.python,
-            "--wheel",
-            str(wheel.path),
-        ]
-    ))
+    try:
+        from build_standalone import build as standalone_build
+    except ModuleNotFoundError:
+        from tools.build_standalone import build as standalone_build
+    try:
+        from build_standalone import semantic_plan as standalone_plan
+    except ModuleNotFoundError:
+        from tools.build_standalone import semantic_plan as standalone_plan
+    import argparse
+
+    component_steps = standalone_plan()
+    emit = component_emitter(reporter, "standalone", component_steps) if reporter else None
+    standalone_build(
+        argparse.Namespace(
+            repo=source.repo,
+            output=output,
+            python=source.python,
+            wheel=wheel.path,
+        ),
+        emit=emit,
+    )
     executable = artifact_in(
         output, "devlegate-*-linux-x86_64", "standalone executable"
     )
@@ -549,14 +568,14 @@ def _component_steps(target: str) -> tuple[ComponentStep, ...]:
     """Load the plan from the module that owns the target's work."""
     if target == "standalone":
         try:
-            from build_standalone import semantic_plan as plan
+            from build_standalone import component_plan as plan
         except ModuleNotFoundError:
-            from tools.build_standalone import semantic_plan as plan
+            from tools.build_standalone import component_plan as plan
     elif target == "deb":
         try:
-            from package_deb import semantic_plan as plan
+            from package_deb import component_plan as plan
         except ModuleNotFoundError:
-            from tools.package_deb import semantic_plan as plan
+            from tools.package_deb import component_plan as plan
     else:
         plans = {
             "wheel": ("build wheel", "validate wheel"),
@@ -564,15 +583,48 @@ def _component_steps(target: str) -> tuple[ComponentStep, ...]:
             "full-source": ("build full-source archive", "validate full-source archive"),
         }
         return tuple(ComponentStep(name) for name in plans[target])
-    return plan()
+    steps = tuple(step for _identity, step in freeze_plan(plan()))
+    if target == "standalone":
+        steps += tuple(
+            ComponentStep(name)
+            for name in (
+                "package standalone archive",
+                "validate standalone archive",
+                "prove standalone execution",
+            )
+        )
+    elif target == "deb":
+        steps += tuple(
+            ComponentStep(name)
+            for name in (
+                "validate Debian package",
+                "prove Debian execution",
+                "write Debian checksum",
+            )
+        )
+    return steps
 
 
 def semantic_plan(targets: tuple[str, ...]) -> tuple[SemanticStep, ...]:
     """Return the complete, deterministic plan for the selected graph."""
-    return tuple(
-        SemanticStep(node, step.name)
-        for node in dependency_order(targets)
-        for step in _component_steps(node)
+    result: list[SemanticStep] = []
+    for node in dependency_order(targets):
+        for index, step in enumerate(_component_steps(node)):
+            result.append(SemanticStep(node, step.name, f"{node}/{index}"))
+    return tuple(result)
+
+
+def component_tree(targets: tuple[str, ...]) -> ComponentPlan:
+    """Return the selected graph as one deterministic component tree."""
+    return ComponentPlan(
+        "distribution",
+        tuple(
+            ComponentPlan(
+                node,
+                tuple(ComponentPlan.leaf(step) for step in _component_steps(node)),
+            )
+            for node in dependency_order(targets)
+        ),
     )
 
 
@@ -585,6 +637,27 @@ def _step(
     if reporter is None:
         return action()
     return reporter.step(SemanticStep(target, name), action)
+
+
+def component_emitter(
+    reporter: ProgressReporter, target: str, component_steps: tuple[ComponentStep, ...]
+) -> Callable[[ComponentEvent], None]:
+    """Bind component-owned events to the already frozen global leaf IDs."""
+    bindings = {
+        step.identity: SemanticStep(target, step.name, f"{target}/{index}")
+        for index, step in enumerate(component_steps)
+    }
+
+    def emit(event: ComponentEvent) -> None:
+        try:
+            semantic_step = bindings[event.leaf_id or event.step.identity]
+        except KeyError as error:
+            raise DistributionError(
+                f"component emitted an unknown leaf: {event.leaf_id or event.step.identity}"
+            ) from error
+        reporter.emit(ProgressEvent(event.action, semantic_step))
+
+    return emit
 
 
 def publish(artifacts: list[Path], output_dir: Path) -> list[Path]:
