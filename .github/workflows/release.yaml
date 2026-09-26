@@ -42,7 +42,7 @@ jobs:
           fi
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           rm -rf source
-          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" clone \
+          git clone \
             --quiet --no-checkout \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
           git -C source fetch --quiet --force --tags origin
@@ -58,7 +58,7 @@ jobs:
           import sys
 
           version = tuple(int(part) for part in sys.argv[1].split("."))
-           print("true" if version >= (0, 6, 0) else "false")
+          print("true" if version >= (0, 6, 0) else "false")
           PY
           )"
           if [[ "$standalone_required" == true ]]; then
@@ -125,11 +125,9 @@ jobs:
 
       - name: Fetch selected source
         if: env.HAS_GITLINKS == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" clone \
+          git clone \
             --quiet --no-checkout \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
           git -C source fetch --quiet --force --tags origin
