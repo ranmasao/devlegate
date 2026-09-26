@@ -157,3 +157,47 @@ above remains a blocking review finding.
   typed skip event for that exact planned step and the global reporter records it as
   skipped.
 - Exact-head full tests with coverage and lint are green before acceptance.
+
+
+## Component tree contract
+
+The progress component abstraction must be tree-capable from the start rather than
+introducing separate unrelated interfaces for atomic wrappers and compound builders.
+
+Use one component contract for both leaves and composites:
+
+- A leaf component represents one semantic operation, typically a thin wrapper over
+  one existing packaging/validation/proof tool or function.
+- A composite component owns ordered child components through the same interface.
+- Component plans form a deterministic tree. Each node has a stable hierarchical
+  identity independent of its display label so repeated labels in different
+  subtrees cannot collide.
+- Structural/group nodes organize the tree but do not themselves advance the global
+  progress denominator. Progress accounting is over the frozen executable leaves.
+- The outer distribution orchestrator recursively composes and freezes the selected
+  component tree before execution, then renders events for those frozen leaves. It
+  must not duplicate internal component step lists.
+- Atomic tools do not need to become progress-aware themselves. A thin leaf wrapper
+  may expose a one-step plan, run the existing tool, validate its result, and emit
+  start plus exactly one terminal event for that leaf.
+- Compound builders may contain leaf wrappers and/or nested composite components and
+  therefore expose meaningful internal stages without a special second interface.
+- Events identify the exact frozen hierarchical leaf ID, not only a display name or
+  target/name pair.
+- Start/complete/fail/skip sequencing remains fail-closed for the exact current leaf.
+
+Keep this minimal for 0.6. Do not add parallel execution, subtree retry, timing-based
+scheduling, visualization, or generalized recovery semantics as part of this ticket.
+
+### Additional tree regressions
+
+- Given an atomic tool wrapper, it satisfies the same component interface as a
+  composite component and contributes exactly one executable leaf to the plan.
+- Given nested composite components, recursively freezing the plan produces stable,
+  unique hierarchical leaf IDs in deterministic execution order.
+- Given two leaves with the same display label under different parents, their IDs
+  remain distinct and events cannot resolve ambiguously.
+- Given structural/group nodes, they do not double-count progress in addition to
+  their executable descendants.
+- Given an event for a leaf ID not present in the frozen plan, or a terminal event
+  for a leaf other than the currently started leaf, progress handling fails closed.
