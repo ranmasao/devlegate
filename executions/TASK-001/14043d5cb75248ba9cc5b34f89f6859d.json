@@ -1,0 +1,31 @@
+{
+  "code_base_head": "8a183bddd9ff60e7e0ba08bf6bd7cb2f1d6ffa4c",
+  "conclusion": "completed",
+  "control_head": "df88cdfd43fbd53e68a6c3a13a2057eb45cf501a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-001",
+  "execution_id": "14043d5cb75248ba9cc5b34f89f6859d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-001",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full pytest could not complete within 300 seconds and has an unrelated existing failure in tests/test_cli.py::test_operational_cli_constructs_service_engine_directly.",
+    "Repository-wide Ruff reports pre-existing violations in packaging/standalone-compliance vendor snapshots."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-001",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Full pytest could not complete within 300 seconds and has an unrelated existing failure in tests/test_cli.py::test_operational_cli_constructs_service_engine_directly.",
+      "Repository-wide Ruff reports pre-existing violations in packaging/standalone-compliance vendor snapshots."
+    ],
+    "summary": "Updated tools/package_deb.py to emit Maintainer: Daniil Romanov <romanov.at.bg@gmail.com>. Added a regression test that exercises the production Debian builder, inspects dpkg metadata for the exact maintainer and absence of devlegate.invalid, and validates the resulting dependency-free package has no maintainer scripts. Focused Debian tests (12) and changed-file Ruff checks pass."
+  },
+  "workspace_head": "10dccef7fc36b7e7a2ac474fe3b8d21c070592cf"
+}
