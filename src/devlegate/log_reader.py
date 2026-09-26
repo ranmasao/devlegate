@@ -39,7 +39,31 @@ def service_unit(state_dir: Path, state_key: str) -> str:
     return unit
 
 
-def execution_id(control_worktree: Path, selector: str) -> str:
+def _current_execution_id(state_dir: Path, state_key: str) -> str | None:
+    try:
+        state = SQLiteRuntimeStore(state_dir, state_key).load()
+    except RuntimeStoreError as error:
+        raise LogReaderError(str(error)) from error
+    if not isinstance(state, dict) or state.get("phase") not in {
+        "agent_pending",
+        "agent_running",
+    }:
+        return None
+    current = state.get("execution_id")
+    if not isinstance(current, str) or not current or any(
+        character not in "0123456789abcdef" for character in current
+    ):
+        raise LogReaderError("invalid current execution identity")
+    return current
+
+
+def execution_id(
+    control_worktree: Path,
+    selector: str,
+    *,
+    state_dir: Path | None = None,
+    state_key: str | None = None,
+) -> str:
     if not selector or any(
         character not in "0123456789abcdef" for character in selector
     ):
@@ -50,10 +74,15 @@ def execution_id(control_worktree: Path, selector: str) -> str:
         reports = ExecutionReportStore(control_worktree).list()
     except ExecutionReportError as error:
         raise LogReaderError(str(error)) from error
+    identities = [report.execution_id for report in reports]
+    if state_dir is not None and state_key is not None:
+        current = _current_execution_id(state_dir, state_key)
+        if current is not None:
+            identities.append(current)
     matches = tuple(
-        report.execution_id
-        for report in reports
-        if report.execution_id.startswith(selector)
+        dict.fromkeys(
+            identity for identity in identities if identity.startswith(selector)
+        )
     )
     if not matches:
         raise LogReaderError(f"execution not found: {selector}")
@@ -99,7 +128,12 @@ def _read_file(path: Path, lines: int) -> Iterable[str]:
 def execution_log(
     state_dir: Path, state_key: str, control_worktree: Path, selector: str, lines: int
 ) -> tuple[str, Iterable[str]]:
-    resolved = execution_id(control_worktree, selector)
+    resolved = execution_id(
+        control_worktree,
+        selector,
+        state_dir=state_dir,
+        state_key=state_key,
+    )
     try:
         path = execution_log_path(state_dir, state_key, resolved)
     except OperationalLogError as error:

@@ -65,6 +65,53 @@ def test_execution_prefix_rejects_ambiguity(tmp_path):
     assert "a" * 31 + "2" in str(error.value)
 
 
+def test_active_execution_resolves_before_report(tmp_path):
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    identifier = "a" * 32
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": identifier}
+    )
+    path = execution_log_path(state, "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("active\n")
+
+    resolved, content = execution_log(state, "key", control, "a" * 8, 10)
+
+    assert resolved == identifier
+    assert list(content) == ["active\n"]
+
+    _report(control, identifier)
+    SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+    resolved, content = execution_log(state, "key", control, "a" * 8, 10)
+    assert resolved == identifier
+    assert list(content) == ["active\n"]
+
+
+def test_active_and_historical_prefixes_are_ambiguous(tmp_path):
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    current = "a" * 31 + "1"
+    historical = "a" * 31 + "2"
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": current}
+    )
+    _report(control, historical, ticket="historical")
+
+    with pytest.raises(LogReaderError, match="ambiguous"):
+        execution_id(control, "a" * 31, state_dir=state, state_key="key")
+
+
+def test_unproven_log_filename_does_not_resolve(tmp_path):
+    state = tmp_path / "state"
+    path = execution_log_path(state, "key", "a" * 32)
+    path.parent.mkdir(parents=True)
+    path.write_text("untrusted\n")
+
+    with pytest.raises(LogReaderError, match="not found"):
+        execution_log(state, "key", tmp_path / "control", "a" * 8, 10)
+
+
 @pytest.mark.parametrize("selector", ["", "A" * 8, "../secret", "g" * 8])
 def test_execution_prefix_rejects_invalid_selectors(tmp_path, selector):
     with pytest.raises(LogReaderError, match="lowercase hexadecimal"):
