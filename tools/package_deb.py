@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 try:
@@ -25,21 +28,21 @@ except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
     from tools.validate_deb import installed_size_kib
     from tools.validate_standalone_package import validate
 try:
-    from build_progress import ComponentPlan, ComponentStep
+    from build_progress import ComponentEvent, ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
-    from tools.build_progress import ComponentPlan, ComponentStep
+    from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep
 
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
     """Return the deterministic stages owned by Debian packaging."""
     return tuple(
-        ComponentStep(name)
-        for name in (
-            "validate standalone input for Debian",
-            "assemble Debian filesystem",
-            "write Debian control metadata",
-            "build Debian package",
-            "write Debian package checksum",
+        ComponentStep(name, key=key)
+        for key, name in (
+            ("validate-input", "validate standalone input for Debian"),
+            ("assemble", "assemble Debian filesystem"),
+            ("metadata", "write Debian control metadata"),
+            ("build", "build Debian package"),
+            ("checksum", "write Debian package checksum"),
         )
     )
 
@@ -49,6 +52,21 @@ def component_plan() -> ComponentPlan:
         "debian package",
         tuple(ComponentPlan.leaf(step) for step in semantic_plan()),
     )
+
+
+@contextmanager
+def progress_stage(emit: Callable | None, step: ComponentStep):
+    if emit is not None:
+        emit(ComponentEvent("start", step, step.identity))
+    try:
+        yield
+    except Exception:
+        if emit is not None:
+            emit(ComponentEvent("fail", step, step.identity))
+        raise
+    else:
+        if emit is not None:
+            emit(ComponentEvent("complete", step, step.identity))
 
 
 def git_timestamp(repo: Path, commit: str) -> int:
@@ -73,6 +91,7 @@ def package(
     build_report: Path,
     output_dir: Path,
     manifest: Path | None = None,
+    emit: Callable | None = None,
 ) -> Path:
     repo = repo.resolve()
     archive = archive.resolve()
@@ -86,65 +105,74 @@ def package(
 
     with tempfile.TemporaryDirectory(prefix="devlegate-deb-") as temporary:
         temporary_root = Path(temporary)
-        extracted = validate(
-            archive,
-            sidecar,
-            repo,
-            build_report,
-            manifest,
-            temporary_root / "standalone",
-        )
+        with progress_stage(emit, semantic_plan()[0]):
+            extracted = validate(
+                archive,
+                sidecar,
+                repo,
+                build_report,
+                manifest,
+                temporary_root / "standalone",
+            )
         package_root = temporary_root / "package"
         control = package_root / "DEBIAN"
         binary = package_root / "usr/bin/devlegate"
         documentation = package_root / "usr/share/doc/devlegate"
-        control.mkdir(parents=True)
-        binary.parent.mkdir(parents=True)
-        documentation.mkdir(parents=True)
-        shutil.copy2(extracted / "devlegate", binary)
-        binary.chmod(0o755)
-        for name in (
-            "LICENSE",
-            "NOTICE",
-            "LICENSING.md",
-            "THIRD_PARTY_NOTICES.md",
-            "BUILD-PROVENANCE.json",
-        ):
-            shutil.copy2(extracted / name, documentation / name)
-        shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
-        installed_size = installed_size_kib(package_root)
-        (control / "control").write_text(
-            "Package: devlegate\n"
-            f"Version: {version}\n"
-            "Section: devel\n"
-            "Priority: optional\n"
-            "Architecture: amd64\n"
-            f"Installed-Size: {installed_size}\n"
-            "Maintainer: Daniil Romanov <romanov.at.bg@gmail.com>\n"
-            "Description: deterministic local agent orchestrator\n"
-            " Dependency-free standalone Devlegate executable.\n",
-            encoding="ascii",
-        )
+        with progress_stage(emit, semantic_plan()[1]):
+            control.mkdir(parents=True)
+            binary.parent.mkdir(parents=True)
+            documentation.mkdir(parents=True)
+            shutil.copy2(extracted / "devlegate", binary)
+            binary.chmod(0o755)
+            for name in (
+                "LICENSE",
+                "NOTICE",
+                "LICENSING.md",
+                "THIRD_PARTY_NOTICES.md",
+                "BUILD-PROVENANCE.json",
+            ):
+                shutil.copy2(extracted / name, documentation / name)
+            shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
+        with progress_stage(emit, semantic_plan()[2]):
+            installed_size = installed_size_kib(package_root)
+            (control / "control").write_text(
+                "Package: devlegate\n"
+                f"Version: {version}\n"
+                "Section: devel\n"
+                "Priority: optional\n"
+                "Architecture: amd64\n"
+                f"Installed-Size: {installed_size}\n"
+                "Maintainer: Daniil Romanov <romanov.at.bg@gmail.com>\n"
+                "Description: deterministic local agent orchestrator\n"
+                " Dependency-free standalone Devlegate executable.\n",
+                encoding="ascii",
+            )
         timestamp = git_timestamp(repo, source_commit)
         set_tree_timestamp(package_root, timestamp)
         environment = {**os.environ, "SOURCE_DATE_EPOCH": str(timestamp)}
-        result = subprocess.run(
-            [
-                "dpkg-deb",
-                "--build",
-                "--root-owner-group",
-                "-Zgzip",
-                str(package_root),
-                str(output),
-            ],
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode:
-            detail = result.stderr.strip() or result.stdout.strip() or "no output"
-            raise PackageError(f"dpkg-deb failed: {detail}")
+        with progress_stage(emit, semantic_plan()[3]):
+            result = subprocess.run(
+                [
+                    "dpkg-deb",
+                    "--build",
+                    "--root-owner-group",
+                    "-Zgzip",
+                    str(package_root),
+                    str(output),
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or result.stdout.strip() or "no output"
+                raise PackageError(f"dpkg-deb failed: {detail}")
+        with progress_stage(emit, semantic_plan()[4]):
+            output.with_name(f"{output.name}.sha256").write_text(
+                f"{hashlib.sha256(output.read_bytes()).hexdigest()}  {output.name}\n",
+                encoding="ascii",
+            )
     return output
 
 

@@ -31,12 +31,11 @@ def test_target_expansion_and_dependency_order():
 
 def test_semantic_plan_is_frozen_and_in_dependency_order():
     plan = GRAPH.semantic_plan(("deb",))
-    assert [step.target for step in plan] == [
-        "wheel", "wheel", "standalone", "standalone", "standalone", "standalone",
-        "deb", "deb", "deb", "deb",
-    ]
+    assert [step.target for step in plan] == ["wheel"] * 3 + ["standalone"] * 11 + [
+        "deb"
+    ] * 5
     assert plan[0].name == "build wheel"
-    assert plan[-1].name == "write Debian checksum"
+    assert plan[-1].name == "write Debian package checksum"
 
 
 def test_progress_reports_named_completion_skip_and_failure(capsys):
@@ -61,6 +60,33 @@ def test_progress_reports_named_completion_skip_and_failure(capsys):
         "standalone",
         "deb",
     )
+
+
+def test_component_tree_freezes_nested_ids_and_rejects_future_failure():
+    first = GRAPH.ComponentStep("same label", key="first")
+    second = GRAPH.ComponentStep("same label", key="second")
+    tree = GRAPH.ComponentPlan(
+        "root",
+        (
+            GRAPH.ComponentPlan("left", (GRAPH.ComponentPlan.leaf(first),), key="left"),
+            GRAPH.ComponentPlan(
+                "right", (GRAPH.ComponentPlan.leaf(second),), key="right"
+            ),
+        ),
+    )
+    frozen = GRAPH.freeze_plan(tree)
+    assert [leaf_id for leaf_id, _step in frozen] == [
+        "left/first",
+        "right/second",
+    ]
+
+    steps = tuple(
+        GRAPH.SemanticStep("root", step.name, leaf_id) for leaf_id, step in frozen
+    )
+    reporter = GRAPH.ProgressReporter(steps)
+    reporter.emit(GRAPH.ProgressEvent("start", steps[0]))
+    with pytest.raises(GRAPH.DistributionError, match="not started"):
+        reporter.emit(GRAPH.ProgressEvent("fail", steps[1]))
 
 
 def test_target_parser_rejects_pip():

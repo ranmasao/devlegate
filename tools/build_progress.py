@@ -1,9 +1,12 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Small shared protocol for component-owned distribution progress."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from collections.abc import Callable, Iterable
 from typing import Literal, Protocol
 
 ProgressAction = Literal["start", "complete", "skip", "fail"]
@@ -34,12 +37,13 @@ class ComponentPlan:
     """A deterministic component tree; only leaves are executable work."""
 
     name: str
-    children: tuple["ComponentPlan", ...] = ()
+    children: tuple[ComponentPlan, ...] = ()
     step: ComponentStep | None = None
+    key: str | None = None
 
     @classmethod
-    def leaf(cls, step: ComponentStep) -> "ComponentPlan":
-        return cls(step.name, step=step)
+    def leaf(cls, step: ComponentStep) -> ComponentPlan:
+        return cls(step.name, step=step, key=step.identity)
 
     @property
     def executable(self) -> bool:
@@ -77,21 +81,29 @@ class CompositeComponent:
     children: tuple[Component, ...]
 
     def plan(self) -> ComponentPlan:
-        return ComponentPlan(
-            self.name, tuple(child.plan() for child in self.children)
-        )
+        return ComponentPlan(self.name, tuple(child.plan() for child in self.children))
 
     def run(self, emit: Callable[[ComponentEvent], None]) -> tuple[object, ...]:
         return tuple(child.run(emit) for child in self.children)
 
 
-def freeze_plan(plan: ComponentPlan, prefix: str = "") -> tuple[tuple[str, ComponentStep], ...]:
+def freeze_plan(
+    plan: ComponentPlan, prefix: str = ""
+) -> tuple[tuple[str, ComponentStep], ...]:
     """Flatten executable leaves into stable hierarchical IDs."""
     leaves: list[tuple[str, ComponentStep]] = []
     if plan.step is not None:
-        leaves.append((prefix or plan.step.identity, plan.step))
+        leaf_id = prefix or plan.step.identity
+        leaves.append((leaf_id, plan.step))
         return tuple(leaves)
-    for index, child in enumerate(plan.children):
-        child_prefix = f"{prefix}/{index}" if prefix else str(index)
+    seen: set[str] = set()
+    for child in plan.children:
+        segment = child.key or (child.step.identity if child.step else child.name)
+        if not segment or "/" in segment or segment in seen:
+            raise ValueError(
+                f"component tree has an invalid or duplicate key: {segment!r}"
+            )
+        seen.add(segment)
+        child_prefix = f"{prefix}/{segment}" if prefix else segment
         leaves.extend(freeze_plan(child, child_prefix))
     return tuple(leaves)

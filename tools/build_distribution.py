@@ -25,9 +25,21 @@ from pathlib import Path
 from devlegate.cli_common import ConciseArgumentParser
 
 try:
-    from build_progress import ComponentEvent, ComponentPlan, ComponentStep, freeze_plan
+    from build_progress import (
+        Component,
+        ComponentEvent,
+        ComponentPlan,
+        ComponentStep,
+        freeze_plan,
+    )
 except ModuleNotFoundError:
-    from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep, freeze_plan
+    from tools.build_progress import (
+        Component,
+        ComponentEvent,
+        ComponentPlan,
+        ComponentStep,
+        freeze_plan,
+    )
 
 TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
 GRAPH = {
@@ -86,21 +98,21 @@ class ProgressReporter:
 
     def emit(self, event: ProgressEvent) -> None:
         matches = [step for step in self.steps if step.identity == event.step.identity]
-        if not matches:
-            matches = [
-                step
-                for step in self.steps
-                if step.target == event.step.target and step.name == event.step.name
-            ]
         if len(matches) != 1:
-            raise DistributionError(f"progress event is not in the frozen plan: {event.step}")
+            raise DistributionError(
+                f"progress event is not in the frozen plan: {event.step}"
+            )
         step = matches[0]
         position = self.steps.index(step) + 1
         if event.action == "start":
             if position != self.completed + 1 or self._started is not None:
-                raise DistributionError(f"progress step is out of order: {event.step.name}")
+                raise DistributionError(
+                    f"progress step is out of order: {event.step.name}"
+                )
             self._started = step
-            print(f"[{self.completed}/{len(self.steps)}] START {step.target}: {step.name}")
+            print(
+                f"[{self.completed}/{len(self.steps)}] START {step.target}: {step.name}"
+            )
         elif event.action in {"complete", "skip"}:
             if event.action == "complete" and self._started != step:
                 raise DistributionError(f"progress step was not started: {step.name}")
@@ -112,14 +124,18 @@ class ProgressReporter:
             status = "SKIP" if event.action == "skip" else "DONE"
             if event.action == "skip":
                 self.skipped.append(step)
-            print(f"[{self.completed}/{len(self.steps)}] {status} {step.target}: {step.name}")
+            print(
+                f"[{self.completed}/{len(self.steps)}] {status} "
+                f"{step.target}: {step.name}"
+            )
             self._started = None
         elif event.action == "fail":
             if self._started != step:
-                raise DistributionError(
-                    f"progress step was not started: {step.name}"
-                )
-            print(f"[{self.completed}/{len(self.steps)}] FAILED {step.target}: {step.name}")
+                raise DistributionError(f"progress step was not started: {step.name}")
+            print(
+                f"[{self.completed}/{len(self.steps)}] FAILED "
+                f"{step.target}: {step.name}"
+            )
         else:
             raise DistributionError(f"unknown progress event: {event.action}")
 
@@ -132,6 +148,62 @@ class ProgressReporter:
             raise
         self.emit(ProgressEvent("complete", semantic_step))
         return result
+
+
+class FunctionComponent:
+    """Component adapter for an existing operation or component builder."""
+
+    def __init__(
+        self,
+        plan: ComponentPlan,
+        action: Callable[[Callable[[ComponentEvent], None]], object],
+    ) -> None:
+        self._plan = plan
+        self._action = action
+
+    def plan(self) -> ComponentPlan:
+        return self._plan
+
+    def run(self, emit: Callable[[ComponentEvent], None]) -> object:
+        return self._action(emit)
+
+
+class TreeComponent:
+    """Composite component that scopes child leaf IDs by its stable tree key."""
+
+    def __init__(self, plan: ComponentPlan, children: tuple[Component, ...]) -> None:
+        self._plan = plan
+        self._children = children
+
+    def plan(self) -> ComponentPlan:
+        return self._plan
+
+    def run(self, emit: Callable[[ComponentEvent], None]) -> tuple[object, ...]:
+        results = []
+        for child, child_plan in zip(self._children, self._plan.children, strict=True):
+            child_leaves = freeze_plan(child_plan)
+            by_identity = {step.identity: leaf_id for leaf_id, step in child_leaves}
+
+            def scoped(
+                event: ComponentEvent,
+                *,
+                child_leaves=child_leaves,
+                by_identity=by_identity,
+            ) -> None:
+                local_id = event.leaf_id or event.step.identity
+                if local_id in {leaf_id for leaf_id, _step in child_leaves}:
+                    leaf_id = local_id
+                else:
+                    try:
+                        leaf_id = by_identity[local_id]
+                    except KeyError as error:
+                        raise DistributionError(
+                            f"component emitted an unknown leaf: {local_id}"
+                        ) from error
+                emit(ComponentEvent(event.action, event.step, leaf_id))
+
+            results.append(child.run(scoped))
+        return tuple(results)
 
 
 def run(command: list[str], *, cwd: Path | None = None) -> str:
@@ -315,11 +387,22 @@ def build_python_artifact(
     source: Source, work: Path, kind: str, reporter: ProgressReporter | None = None
 ) -> Artifact:
     output = work / kind
+
     def build() -> Artifact:
         output.mkdir()
         flag = "--wheel" if kind == "wheel" else "--sdist"
-        run([source.python, "-m", "build", "--no-isolation", flag,
-             "--outdir", str(output), str(source.repo)])
+        run(
+            [
+                source.python,
+                "-m",
+                "build",
+                "--no-isolation",
+                flag,
+                "--outdir",
+                str(output),
+                str(source.repo),
+            ]
+        )
         pattern = "devlegate-*.whl" if kind == "wheel" else "devlegate-*.tar.gz"
         return artifact_in(output, pattern, kind)
 
@@ -328,8 +411,11 @@ def build_python_artifact(
 
 
 def build_standalone(
-    source: Source, wheel: Artifact, work: Path,
+    source: Source,
+    wheel: Artifact,
+    work: Path,
     reporter: ProgressReporter | None = None,
+    emit: Callable[[ComponentEvent], None] | None = None,
 ) -> dict[str, Artifact]:
     require_tools(("file", "git"))
     output = work / "standalone-build"
@@ -344,8 +430,17 @@ def build_standalone(
         from tools.build_standalone import semantic_plan as standalone_plan
     import argparse
 
-    component_steps = standalone_plan()
-    emit = component_emitter(reporter, "standalone", component_steps) if reporter else None
+    component_steps = standalone_plan() + tuple(
+        ComponentStep(name, key=key)
+        for key, name in (
+            ("package", "package standalone archive"),
+            ("validate", "validate standalone archive"),
+            ("prove", "prove standalone execution"),
+        )
+    )
+    emit = emit or (
+        component_emitter(reporter, "standalone", component_steps) if reporter else None
+    )
     standalone_build(
         argparse.Namespace(
             repo=source.repo,
@@ -363,21 +458,26 @@ def build_standalone(
         raise DistributionError("standalone builder did not produce its build report")
     package_output = work / "standalone-package"
     package_output.mkdir()
-    _step(reporter, "standalone", "package standalone archive", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/package_standalone.py"),
-            "package",
-            "--repo",
-            str(source.repo),
-            "--artifact",
-            str(executable.path),
-            "--build-report",
-            str(report),
-            "--output-dir",
-            str(package_output),
-        ]
-    ))
+    component_step(
+        emit,
+        "package",
+        "package standalone archive",
+        lambda: run(
+            [
+                source.python,
+                str(source.repo / "tools/package_standalone.py"),
+                "package",
+                "--repo",
+                str(source.repo),
+                "--artifact",
+                str(executable.path),
+                "--build-report",
+                str(report),
+                "--output-dir",
+                str(package_output),
+            ]
+        ),
+    )
     archive = artifact_in(
         package_output, "devlegate-*-linux-x86_64.tar.gz", "standalone archive"
     )
@@ -386,22 +486,27 @@ def build_standalone(
     )
     validate_dir = work / "standalone-validated"
     validated_root = Path(
-        _step(reporter, "standalone", "validate standalone archive", lambda: run(
-            [
-                source.python,
-                str(source.repo / "tools/validate_standalone_package.py"),
-                "--archive",
-                str(archive.path),
-                "--sidecar",
-                str(sidecar.path),
-                "--repo",
-                str(source.repo),
-                "--build-report",
-                str(report),
-                "--extract-dir",
-                str(validate_dir),
-            ]
-        ))
+        component_step(
+            emit,
+            "validate",
+            "validate standalone archive",
+            lambda: run(
+                [
+                    source.python,
+                    str(source.repo / "tools/validate_standalone_package.py"),
+                    "--archive",
+                    str(archive.path),
+                    "--sidecar",
+                    str(sidecar.path),
+                    "--repo",
+                    str(source.repo),
+                    "--build-report",
+                    str(report),
+                    "--extract-dir",
+                    str(validate_dir),
+                ]
+            ),
+        )
         .strip()
         .splitlines()[-1]
     )
@@ -413,17 +518,22 @@ def build_standalone(
         "XDG_CACHE_HOME": str(work / "smoke-cache"),
         "PEX_ROOT": str(work / "smoke-pex-root"),
     }
+
     def prove() -> None:
         result = subprocess.run(
-            [str(validated_root / "devlegate"), "version"], cwd=work,
-            env=smoke_environment, text=True, capture_output=True, check=False,
+            [str(validated_root / "devlegate"), "version"],
+            cwd=work,
+            env=smoke_environment,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         if result.returncode:
             raise DistributionError(
                 f"standalone isolated execution proof failed:\n{result.stderr}"
             )
 
-    _step(reporter, "standalone", "prove standalone execution", prove)
+    component_step(emit, "prove", "prove standalone execution", prove)
     return {
         "archive": archive,
         "sidecar": sidecar,
@@ -433,108 +543,87 @@ def build_standalone(
 
 
 def build_deb(
-    source: Source, standalone: dict[str, Artifact], work: Path,
+    source: Source,
+    standalone: dict[str, Artifact],
+    work: Path,
     reporter: ProgressReporter | None = None,
+    emit: Callable[[ComponentEvent], None] | None = None,
 ) -> Artifact:
     require_tools(("dpkg-deb",))
-    output = work / "deb"
-    output.mkdir()
-    _step(reporter, "deb", "build Debian package", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/package_deb.py"),
-            "--repo",
-            str(source.repo),
-            "--archive",
-            str(standalone["archive"].path),
-            "--sidecar",
-            str(standalone["sidecar"].path),
-            "--build-report",
-            str(standalone["report"].path),
-            "--output-dir",
-            str(output),
-        ]
-    ))
-    package = artifact_in(output, "devlegate_*.deb", "Debian package")
-    extracted = work / "deb-validated"
-    binary_command = _step(reporter, "deb", "validate Debian package", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/validate_deb.py"),
-            "--package",
-            str(package.path),
-            "--build-report",
-            str(standalone["report"].path),
-            "--extract-dir",
-            str(extracted),
-        ]
-    )).strip()
-    binary = Path(binary_command.splitlines()[-1])
-    def prove() -> None:
-        result = subprocess.run(
-            [str(binary), "version"], cwd=work, text=True,
-            capture_output=True, check=False,
-        )
-        if result.returncode:
-            raise DistributionError(
-                f"Debian extracted payload proof failed:\n{result.stderr}"
-            )
-
-    _step(reporter, "deb", "prove Debian execution", prove)
-    sidecar = package.path.with_name(f"{package.path.name}.sha256")
-    _step(
-        reporter, "deb", "write Debian checksum",
-        lambda: sidecar.write_text(
-            f"{digest(package.path)}  {package.path.name}\n", encoding="ascii"
+    try:
+        from package_deb import package as deb_package
+    except ModuleNotFoundError:
+        from tools.package_deb import package as deb_package
+    return Artifact(
+        deb_package(
+            repo=source.repo,
+            archive=standalone["archive"].path,
+            sidecar=standalone["sidecar"].path,
+            build_report=standalone["report"].path,
+            output_dir=work / "deb",
+            emit=emit,
         ),
+        "Debian package",
     )
-    return package
 
 
 def build_full_source(
-    source: Source, work: Path, reporter: ProgressReporter | None = None
+    source: Source,
+    work: Path,
+    reporter: ProgressReporter | None = None,
+    emit: Callable[[ComponentEvent], None] | None = None,
 ) -> dict[str, Artifact]:
     output = work / "full-source"
     output.mkdir()
     release_ref = f"v{source.version}"
-    _step(reporter, "full-source", "build full-source archive", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/build_full_source.py"),
-            "--repo",
-            str(source.repo),
-            "--ref",
-            source.commit,
-            "--version",
-            release_ref,
-            "--output-dir",
-            str(output),
-        ]
-    ))
+    component_step(
+        emit,
+        "build",
+        "build full-source archive",
+        lambda: run(
+            [
+                source.python,
+                str(source.repo / "tools/build_full_source.py"),
+                "--repo",
+                str(source.repo),
+                "--ref",
+                source.commit,
+                "--version",
+                release_ref,
+                "--output-dir",
+                str(output),
+            ]
+        ),
+    )
     archive = artifact_in(
         output, "devlegate-*-full-source.tar.gz", "full-source archive"
     )
     sidecar = Artifact(
         archive.path.with_name(f"{archive.path.name}.sha256"), "full-source checksum"
     )
-    _step(reporter, "full-source", "validate full-source archive", lambda: run(
-        [
-            source.python,
-            str(source.repo / "tools/validate_full_source.py"),
-            "--archive",
-            str(archive.path),
-            "--sidecar",
-            str(sidecar.path),
-            "--repo",
-            str(source.repo),
-            "--ref",
-            source.commit,
-            "--version",
-            release_ref,
-            "--extract-dir",
-            str(work / "full-source-validated"),
-        ]
-    ))
+    component_step(
+        emit,
+        "validate",
+        "validate full-source archive",
+        lambda: run(
+            [
+                source.python,
+                str(source.repo / "tools/validate_full_source.py"),
+                "--archive",
+                str(archive.path),
+                "--sidecar",
+                str(sidecar.path),
+                "--repo",
+                str(source.repo),
+                "--ref",
+                source.commit,
+                "--version",
+                release_ref,
+                "--extract-dir",
+                str(work / "full-source-validated"),
+            ]
+        ),
+    )
     return {"archive": archive, "sidecar": sidecar}
 
 
@@ -564,7 +653,7 @@ def dependency_order(targets: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _component_steps(target: str) -> tuple[ComponentStep, ...]:
+def _owned_component_plan(target: str) -> ComponentPlan:
     """Load the plan from the module that owns the target's work."""
     if target == "standalone":
         try:
@@ -580,52 +669,180 @@ def _component_steps(target: str) -> tuple[ComponentStep, ...]:
         plans = {
             "wheel": ("build wheel", "validate wheel"),
             "sdist": ("build source distribution", "validate source distribution"),
-            "full-source": ("build full-source archive", "validate full-source archive"),
+            "full-source": (
+                "build full-source archive",
+                "validate full-source archive",
+            ),
         }
-        return tuple(ComponentStep(name) for name in plans[target])
-    steps = tuple(step for _identity, step in freeze_plan(plan()))
+        return ComponentPlan(
+            target,
+            tuple(
+                ComponentPlan.leaf(ComponentStep(name, key=key))
+                for key, name in plans[target]
+            ),
+            key=target,
+        )
+    return ComponentPlan(plan().name, plan().children, key=target)
+
+
+def _leaf_plan(key: str, name: str) -> ComponentPlan:
+    return ComponentPlan.leaf(ComponentStep(name, key=key))
+
+
+def _target_plan(target: str) -> ComponentPlan:
+    """Compose the exact executable tree for one distribution target."""
     if target == "standalone":
-        steps += tuple(
-            ComponentStep(name)
-            for name in (
-                "package standalone archive",
-                "validate standalone archive",
-                "prove standalone execution",
-            )
+        owned = _owned_component_plan(target)
+        return ComponentPlan(
+            target,
+            owned.children
+            + (
+                _leaf_plan("package", "package standalone archive"),
+                _leaf_plan("validate", "validate standalone archive"),
+                _leaf_plan("prove", "prove standalone execution"),
+            ),
+            key=target,
         )
-    elif target == "deb":
-        steps += tuple(
-            ComponentStep(name)
-            for name in (
-                "validate Debian package",
-                "prove Debian execution",
-                "write Debian checksum",
-            )
-        )
-    return steps
+    if target == "deb":
+        owned = _owned_component_plan(target)
+        return ComponentPlan(target, owned.children, key=target)
+    plans = {
+        "wheel": (
+            ("build", "build wheel"),
+            ("validate", "validate wheel"),
+            ("prove", "prove Python wheel installation"),
+        ),
+        "sdist": (
+            ("build", "build source distribution"),
+            ("validate", "validate source distribution"),
+            ("prove", "prove Python source installation"),
+        ),
+        "full-source": (
+            ("build", "build full-source archive"),
+            ("validate", "validate full-source archive"),
+        ),
+    }
+    return ComponentPlan(
+        target,
+        tuple(_leaf_plan(key, name) for key, name in plans[target]),
+        key=target,
+    )
 
 
 def semantic_plan(targets: tuple[str, ...]) -> tuple[SemanticStep, ...]:
     """Return the complete, deterministic plan for the selected graph."""
-    result: list[SemanticStep] = []
-    for node in dependency_order(targets):
-        for index, step in enumerate(_component_steps(node)):
-            result.append(SemanticStep(node, step.name, f"{node}/{index}"))
-    return tuple(result)
+    return tuple(
+        SemanticStep(leaf_id.split("/", 1)[0], step.name, leaf_id)
+        for leaf_id, step in freeze_plan(component_tree(targets))
+    )
 
 
 def component_tree(targets: tuple[str, ...]) -> ComponentPlan:
     """Return the selected graph as one deterministic component tree."""
     return ComponentPlan(
         "distribution",
-        tuple(
-            ComponentPlan(
-                node,
-                tuple(ComponentPlan.leaf(step) for step in _component_steps(node)),
-            )
-            for node in dependency_order(targets)
-        ),
+        tuple(_target_plan(node) for node in dependency_order(targets)),
     )
+
+
+def _event_leaf(
+    plan: ComponentPlan,
+    emit: Callable[[ComponentEvent], None],
+    action: Callable[[], object],
+) -> object:
+    step = plan.step
+    assert step is not None
+    emit(ComponentEvent("start", step, step.identity))
+    try:
+        result = action()
+    except Exception:
+        emit(ComponentEvent("fail", step, step.identity))
+        raise
+    emit(ComponentEvent("complete", step, step.identity))
+    return result
+
+
+def _component_for_target(
+    target: str,
+    source: Source,
+    work: Path,
+    values: dict[str, object],
+) -> Component:
+    """Build the executable component tree without repeating its stage list."""
+    plan = _target_plan(target)
+
+    def leaf(key: str, action: Callable[[], object]) -> FunctionComponent:
+        child_plan = next(child for child in plan.children if child.key == key)
+        return FunctionComponent(
+            child_plan, lambda emit: _event_leaf(child_plan, emit, action)
+        )
+
+    if target == "wheel":
+
+        def artifact() -> Artifact:
+            return build_python_artifact(source, work, "wheel")
+
+        values["wheel"] = None
+        children = (
+            leaf(
+                "build",
+                lambda: values.__setitem__("wheel", artifact()) or values["wheel"],
+            ),
+            leaf("validate", lambda: validate_wheel(values["wheel"], source)),
+            leaf("prove", lambda: prove_python_install(values["wheel"], source, work)),
+        )
+    elif target == "sdist":
+
+        def artifact() -> Artifact:
+            return build_python_artifact(source, work, "sdist")
+
+        values["sdist"] = None
+        children = (
+            leaf(
+                "build",
+                lambda: values.__setitem__("sdist", artifact()) or values["sdist"],
+            ),
+            leaf("validate", lambda: validate_sdist(values["sdist"], source)),
+            leaf("prove", lambda: prove_python_install(values["sdist"], source, work)),
+        )
+    elif target == "full-source":
+        return FunctionComponent(
+            plan,
+            lambda emit: (
+                values.__setitem__(
+                    "full-source", build_full_source(source, work, emit=emit)
+                )
+                or values["full-source"]
+            ),
+        )
+    elif target == "standalone":
+        children = (
+            FunctionComponent(
+                plan,
+                lambda emit: (
+                    values.__setitem__(
+                        "standalone",
+                        build_standalone(source, values["wheel"], work, emit=emit),
+                    )
+                    or values["standalone"]
+                ),
+            ),
+        )
+    elif target == "deb":
+        component = FunctionComponent(
+            plan,
+            lambda emit: (
+                values.__setitem__(
+                    "deb",
+                    build_deb(source, values["standalone"], work, emit=emit),
+                )
+                or values["deb"]
+            ),
+        )
+        return component
+    else:
+        raise DistributionError(f"unsupported component target: {target}")
+    return TreeComponent(plan, tuple(children))
 
 
 def _step(
@@ -644,8 +861,8 @@ def component_emitter(
 ) -> Callable[[ComponentEvent], None]:
     """Bind component-owned events to the already frozen global leaf IDs."""
     bindings = {
-        step.identity: SemanticStep(target, step.name, f"{target}/{index}")
-        for index, step in enumerate(component_steps)
+        step.identity: SemanticStep(target, step.name, f"{target}/{step.identity}")
+        for step in component_steps
     }
 
     def emit(event: ComponentEvent) -> None:
@@ -653,11 +870,32 @@ def component_emitter(
             semantic_step = bindings[event.leaf_id or event.step.identity]
         except KeyError as error:
             raise DistributionError(
-                f"component emitted an unknown leaf: {event.leaf_id or event.step.identity}"
+                "component emitted an unknown leaf: "
+                f"{event.leaf_id or event.step.identity}"
             ) from error
         reporter.emit(ProgressEvent(event.action, semantic_step))
 
     return emit
+
+
+def component_step(
+    emit: Callable[[ComponentEvent], None] | None,
+    key: str,
+    name: str,
+    action: Callable[[], object],
+) -> object:
+    """Run one component-owned leaf and emit its exact local identity."""
+    step = ComponentStep(name, key=key)
+    if emit is None:
+        return action()
+    emit(ComponentEvent("start", step, step.identity))
+    try:
+        result = action()
+    except Exception:
+        emit(ComponentEvent("fail", step, step.identity))
+        raise
+    emit(ComponentEvent("complete", step, step.identity))
+    return result
 
 
 def publish(artifacts: list[Path], output_dir: Path) -> list[Path]:
@@ -704,41 +942,29 @@ def package(args: argparse.Namespace) -> int:
         require_tools(("dpkg-deb",))
     selected = expand_targets(args.target)
     order = dependency_order(selected)
-    plan_steps = list(semantic_plan(order))
-    if args.target in {"wheel", "python", "all"}:
-        plan_steps.append(SemanticStep("wheel", "prove Python wheel installation"))
-    if args.target in {"sdist", "python", "all"}:
-        plan_steps.append(SemanticStep("sdist", "prove Python source installation"))
-    reporter = ProgressReporter(tuple(plan_steps))
+    frozen = freeze_plan(component_tree(order))
+    plan_steps = tuple(
+        SemanticStep(leaf_id.split("/", 1)[0], step.name, leaf_id)
+        for leaf_id, step in frozen
+    )
+    reporter = ProgressReporter(plan_steps)
     workspace_path = Path(tempfile.mkdtemp(prefix="devlegate-distribution-"))
     print(f"Source: {source.commit}")
     print(f"Version: {source.version}")
     values: dict[str, object] = {}
     try:
         for node in order:
-            if node == "wheel":
-                artifact = build_python_artifact(source, workspace_path, "wheel", reporter)
-                _step(reporter, "wheel", "validate wheel", lambda: validate_wheel(artifact, source))
-                values[node] = artifact
-            elif node == "sdist":
-                artifact = build_python_artifact(source, workspace_path, "sdist", reporter)
-                _step(reporter, "sdist", "validate source distribution", lambda: validate_sdist(artifact, source))
-                values[node] = artifact
-            elif node == "standalone":
-                values[node] = build_standalone(source, values["wheel"], workspace_path, reporter)
-            elif node == "deb":
-                values[node] = build_deb(source, values["standalone"], workspace_path, reporter)
-            elif node == "full-source":
-                values[node] = build_full_source(source, workspace_path, reporter)
-        if args.target in {"wheel", "python", "all"}:
-            _step(
-                reporter, "wheel", "prove Python wheel installation",
-                lambda: prove_python_install(values["wheel"], source, workspace_path),
-            )
-        if args.target in {"sdist", "python", "all"}:
-            _step(
-                reporter, "sdist", "prove Python source installation",
-                lambda: prove_python_install(values["sdist"], source, workspace_path),
+            _component_for_target(node, source, workspace_path, values).run(
+                lambda event, node=node: reporter.emit(
+                    ProgressEvent(
+                        event.action,
+                        SemanticStep(
+                            node,
+                            event.step.name,
+                            f"{node}/{event.leaf_id or event.step.identity}",
+                        ),
+                    )
+                )
             )
         final_files = publish(
             selected_final_files(args.target, values),
@@ -747,7 +973,10 @@ def package(args: argparse.Namespace) -> int:
         print("\nDevlegate distributions ready")
         for path in final_files:
             print(f"{path}: {path.stat().st_size} bytes {digest(path)}")
-        print(f"Progress complete: {reporter.completed}/{len(reporter.steps)} semantic steps")
+        print(
+            f"Progress complete: {reporter.completed}/"
+            f"{len(reporter.steps)} semantic steps"
+        )
         return 0
     finally:
         if args.keep_work:
