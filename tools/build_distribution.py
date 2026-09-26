@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
@@ -50,6 +51,63 @@ class Source:
 class Artifact:
     path: Path
     kind: str
+
+
+@dataclass(frozen=True)
+class SemanticStep:
+    target: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ProgressEvent:
+    action: str
+    step: SemanticStep
+
+
+class ProgressReporter:
+    """Render one deterministic progress stream for the complete build plan."""
+
+    def __init__(self, steps: tuple[SemanticStep, ...]) -> None:
+        self.steps = steps
+        self.completed = 0
+        self._started: SemanticStep | None = None
+
+    def emit(self, event: ProgressEvent) -> None:
+        if event.step not in self.steps:
+            raise DistributionError(f"progress event is not in the frozen plan: {event.step}")
+        position = self.steps.index(event.step) + 1
+        if event.action == "start":
+            if position != self.completed + 1 or self._started is not None:
+                raise DistributionError(f"progress step is out of order: {event.step.name}")
+            self._started = event.step
+            print(f"[{self.completed}/{len(self.steps)}] START {event.step.target}: {event.step.name}")
+        elif event.action in {"complete", "skip"}:
+            if event.action == "complete" and self._started != event.step:
+                raise DistributionError(f"progress step was not started: {event.step.name}")
+            if event.action == "skip" and self._started not in {None, event.step}:
+                raise DistributionError(f"progress step was not started: {event.step.name}")
+            if position != self.completed + 1:
+                raise DistributionError(f"progress step is out of order: {event.step.name}")
+            self.completed += 1
+            status = "SKIP" if event.action == "skip" else "DONE"
+            print(f"[{self.completed}/{len(self.steps)}] {status} {event.step.target}: {event.step.name}")
+            self._started = None
+        elif event.action == "fail":
+            print(f"[{self.completed}/{len(self.steps)}] FAILED {event.step.target}: {event.step.name}")
+            self._started = None
+        else:
+            raise DistributionError(f"unknown progress event: {event.action}")
+
+    def step(self, semantic_step: SemanticStep, action: Callable[[], object]) -> object:
+        self.emit(ProgressEvent("start", semantic_step))
+        try:
+            result = action()
+        except Exception:
+            self.emit(ProgressEvent("fail", semantic_step))
+            raise
+        self.emit(ProgressEvent("complete", semantic_step))
+        return result
 
 
 def run(command: list[str], *, cwd: Path | None = None) -> str:
@@ -229,33 +287,30 @@ def prove_python_install(artifact: Artifact, source: Source, work: Path) -> None
         )
 
 
-def build_python_artifact(source: Source, work: Path, kind: str) -> Artifact:
+def build_python_artifact(
+    source: Source, work: Path, kind: str, reporter: ProgressReporter | None = None
+) -> Artifact:
     output = work / kind
-    output.mkdir()
-    flag = "--wheel" if kind == "wheel" else "--sdist"
-    run(
-        [
-            source.python,
-            "-m",
-            "build",
-            "--no-isolation",
-            flag,
-            "--outdir",
-            str(output),
-            str(source.repo),
-        ]
-    )
-    pattern = "devlegate-*.whl" if kind == "wheel" else "devlegate-*.tar.gz"
-    return artifact_in(output, pattern, kind)
+    def build() -> Artifact:
+        output.mkdir()
+        flag = "--wheel" if kind == "wheel" else "--sdist"
+        run([source.python, "-m", "build", "--no-isolation", flag,
+             "--outdir", str(output), str(source.repo)])
+        pattern = "devlegate-*.whl" if kind == "wheel" else "devlegate-*.tar.gz"
+        return artifact_in(output, pattern, kind)
+
+    label = "build wheel" if kind == "wheel" else "build source distribution"
+    return _step(reporter, kind, label, build)  # type: ignore[return-value]
 
 
 def build_standalone(
-    source: Source, wheel: Artifact, work: Path
+    source: Source, wheel: Artifact, work: Path,
+    reporter: ProgressReporter | None = None,
 ) -> dict[str, Artifact]:
     require_tools(("file", "git"))
     output = work / "standalone-build"
     output.mkdir()
-    run(
+    _step(reporter, "standalone", "build standalone executable", lambda: run(
         [
             source.python,
             str(source.repo / "tools/build_standalone.py"),
@@ -269,7 +324,7 @@ def build_standalone(
             "--wheel",
             str(wheel.path),
         ]
-    )
+    ))
     executable = artifact_in(
         output, "devlegate-*-linux-x86_64", "standalone executable"
     )
@@ -278,7 +333,7 @@ def build_standalone(
         raise DistributionError("standalone builder did not produce its build report")
     package_output = work / "standalone-package"
     package_output.mkdir()
-    run(
+    _step(reporter, "standalone", "package standalone archive", lambda: run(
         [
             source.python,
             str(source.repo / "tools/package_standalone.py"),
@@ -292,7 +347,7 @@ def build_standalone(
             "--output-dir",
             str(package_output),
         ]
-    )
+    ))
     archive = artifact_in(
         package_output, "devlegate-*-linux-x86_64.tar.gz", "standalone archive"
     )
@@ -301,7 +356,7 @@ def build_standalone(
     )
     validate_dir = work / "standalone-validated"
     validated_root = Path(
-        run(
+        _step(reporter, "standalone", "validate standalone archive", lambda: run(
             [
                 source.python,
                 str(source.repo / "tools/validate_standalone_package.py"),
@@ -316,7 +371,7 @@ def build_standalone(
                 "--extract-dir",
                 str(validate_dir),
             ]
-        )
+        ))
         .strip()
         .splitlines()[-1]
     )
@@ -328,18 +383,17 @@ def build_standalone(
         "XDG_CACHE_HOME": str(work / "smoke-cache"),
         "PEX_ROOT": str(work / "smoke-pex-root"),
     }
-    result = subprocess.run(
-        [str(validated_root / "devlegate"), "version"],
-        cwd=work,
-        env=smoke_environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        raise DistributionError(
-            f"standalone isolated execution proof failed:\n{result.stderr}"
+    def prove() -> None:
+        result = subprocess.run(
+            [str(validated_root / "devlegate"), "version"], cwd=work,
+            env=smoke_environment, text=True, capture_output=True, check=False,
         )
+        if result.returncode:
+            raise DistributionError(
+                f"standalone isolated execution proof failed:\n{result.stderr}"
+            )
+
+    _step(reporter, "standalone", "prove standalone execution", prove)
     return {
         "archive": archive,
         "sidecar": sidecar,
@@ -348,11 +402,14 @@ def build_standalone(
     }
 
 
-def build_deb(source: Source, standalone: dict[str, Artifact], work: Path) -> Artifact:
+def build_deb(
+    source: Source, standalone: dict[str, Artifact], work: Path,
+    reporter: ProgressReporter | None = None,
+) -> Artifact:
     require_tools(("dpkg-deb",))
     output = work / "deb"
     output.mkdir()
-    run(
+    _step(reporter, "deb", "build Debian package", lambda: run(
         [
             source.python,
             str(source.repo / "tools/package_deb.py"),
@@ -367,10 +424,10 @@ def build_deb(source: Source, standalone: dict[str, Artifact], work: Path) -> Ar
             "--output-dir",
             str(output),
         ]
-    )
+    ))
     package = artifact_in(output, "devlegate_*.deb", "Debian package")
     extracted = work / "deb-validated"
-    binary_command = run(
+    binary_command = _step(reporter, "deb", "validate Debian package", lambda: run(
         [
             source.python,
             str(source.repo / "tools/validate_deb.py"),
@@ -381,27 +438,36 @@ def build_deb(source: Source, standalone: dict[str, Artifact], work: Path) -> Ar
             "--extract-dir",
             str(extracted),
         ]
-    ).strip()
+    )).strip()
     binary = Path(binary_command.splitlines()[-1])
-    result = subprocess.run(
-        [str(binary), "version"], cwd=work, text=True, capture_output=True, check=False
-    )
-    if result.returncode:
-        raise DistributionError(
-            f"Debian extracted payload proof failed:\n{result.stderr}"
+    def prove() -> None:
+        result = subprocess.run(
+            [str(binary), "version"], cwd=work, text=True,
+            capture_output=True, check=False,
         )
+        if result.returncode:
+            raise DistributionError(
+                f"Debian extracted payload proof failed:\n{result.stderr}"
+            )
+
+    _step(reporter, "deb", "prove Debian execution", prove)
     sidecar = package.path.with_name(f"{package.path.name}.sha256")
-    sidecar.write_text(
-        f"{digest(package.path)}  {package.path.name}\n", encoding="ascii"
+    _step(
+        reporter, "deb", "write Debian checksum",
+        lambda: sidecar.write_text(
+            f"{digest(package.path)}  {package.path.name}\n", encoding="ascii"
+        ),
     )
     return package
 
 
-def build_full_source(source: Source, work: Path) -> dict[str, Artifact]:
+def build_full_source(
+    source: Source, work: Path, reporter: ProgressReporter | None = None
+) -> dict[str, Artifact]:
     output = work / "full-source"
     output.mkdir()
     release_ref = f"v{source.version}"
-    run(
+    _step(reporter, "full-source", "build full-source archive", lambda: run(
         [
             source.python,
             str(source.repo / "tools/build_full_source.py"),
@@ -414,14 +480,14 @@ def build_full_source(source: Source, work: Path) -> dict[str, Artifact]:
             "--output-dir",
             str(output),
         ]
-    )
+    ))
     archive = artifact_in(
         output, "devlegate-*-full-source.tar.gz", "full-source archive"
     )
     sidecar = Artifact(
         archive.path.with_name(f"{archive.path.name}.sha256"), "full-source checksum"
     )
-    run(
+    _step(reporter, "full-source", "validate full-source archive", lambda: run(
         [
             source.python,
             str(source.repo / "tools/validate_full_source.py"),
@@ -438,7 +504,7 @@ def build_full_source(source: Source, work: Path) -> dict[str, Artifact]:
             "--extract-dir",
             str(work / "full-source-validated"),
         ]
-    )
+    ))
     return {"archive": archive, "sidecar": sidecar}
 
 
@@ -466,6 +532,45 @@ def dependency_order(targets: tuple[str, ...]) -> tuple[str, ...]:
     for target in targets:
         visit(target)
     return tuple(result)
+
+
+COMPONENT_STEPS = {
+    "wheel": ("build wheel", "validate wheel"),
+    "sdist": ("build source distribution", "validate source distribution"),
+    "standalone": (
+        "build standalone executable",
+        "package standalone archive",
+        "validate standalone archive",
+        "prove standalone execution",
+    ),
+    "deb": (
+        "build Debian package",
+        "validate Debian package",
+        "prove Debian execution",
+        "write Debian checksum",
+    ),
+    "full-source": ("build full-source archive", "validate full-source archive"),
+}
+
+
+def semantic_plan(targets: tuple[str, ...]) -> tuple[SemanticStep, ...]:
+    """Return the complete, deterministic plan for the selected graph."""
+    return tuple(
+        SemanticStep(node, name)
+        for node in dependency_order(targets)
+        for name in COMPONENT_STEPS[node]
+    )
+
+
+def _step(
+    reporter: ProgressReporter | None,
+    target: str,
+    name: str,
+    action: Callable[[], object],
+) -> object:
+    if reporter is None:
+        return action()
+    return reporter.step(SemanticStep(target, name), action)
 
 
 def publish(artifacts: list[Path], output_dir: Path) -> list[Path]:
@@ -512,36 +617,42 @@ def package(args: argparse.Namespace) -> int:
         require_tools(("dpkg-deb",))
     selected = expand_targets(args.target)
     order = dependency_order(selected)
+    plan_steps = list(semantic_plan(order))
+    if args.target in {"wheel", "python", "all"}:
+        plan_steps.append(SemanticStep("wheel", "prove Python wheel installation"))
+    if args.target in {"sdist", "python", "all"}:
+        plan_steps.append(SemanticStep("sdist", "prove Python source installation"))
+    reporter = ProgressReporter(tuple(plan_steps))
     workspace_path = Path(tempfile.mkdtemp(prefix="devlegate-distribution-"))
     print(f"Source: {source.commit}")
     print(f"Version: {source.version}")
     values: dict[str, object] = {}
     try:
-        for index, node in enumerate(order, 1):
-            print(f"[{index}/{len(order)}] Building {node}")
+        for node in order:
             if node == "wheel":
-                artifact = build_python_artifact(source, workspace_path, "wheel")
-                validate_wheel(artifact, source)
+                artifact = build_python_artifact(source, workspace_path, "wheel", reporter)
+                _step(reporter, "wheel", "validate wheel", lambda: validate_wheel(artifact, source))
                 values[node] = artifact
             elif node == "sdist":
-                artifact = build_python_artifact(source, workspace_path, "sdist")
-                validate_sdist(artifact, source)
+                artifact = build_python_artifact(source, workspace_path, "sdist", reporter)
+                _step(reporter, "sdist", "validate source distribution", lambda: validate_sdist(artifact, source))
                 values[node] = artifact
             elif node == "standalone":
-                values[node] = build_standalone(source, values["wheel"], workspace_path)
+                values[node] = build_standalone(source, values["wheel"], workspace_path, reporter)
             elif node == "deb":
-                values[node] = build_deb(source, values["standalone"], workspace_path)
+                values[node] = build_deb(source, values["standalone"], workspace_path, reporter)
             elif node == "full-source":
-                values[node] = build_full_source(source, workspace_path)
+                values[node] = build_full_source(source, workspace_path, reporter)
         if args.target in {"wheel", "python", "all"}:
-            print(f"[{len(order) + 1}/{len(order) + 1}] Proving Python installations")
-            prove_python_install(values["wheel"], source, workspace_path)
+            _step(
+                reporter, "wheel", "prove Python wheel installation",
+                lambda: prove_python_install(values["wheel"], source, workspace_path),
+            )
         if args.target in {"sdist", "python", "all"}:
-            if args.target == "sdist":
-                print(
-                    f"[{len(order) + 1}/{len(order) + 1}] Proving Python installation"
-                )
-            prove_python_install(values["sdist"], source, workspace_path)
+            _step(
+                reporter, "sdist", "prove Python source installation",
+                lambda: prove_python_install(values["sdist"], source, workspace_path),
+            )
         final_files = publish(
             selected_final_files(args.target, values),
             output_directory(repo, args.output_dir),
@@ -549,6 +660,7 @@ def package(args: argparse.Namespace) -> int:
         print("\nDevlegate distributions ready")
         for path in final_files:
             print(f"{path}: {path.stat().st_size} bytes {digest(path)}")
+        print(f"Progress complete: {reporter.completed}/{len(reporter.steps)} semantic steps")
         return 0
     finally:
         if args.keep_work:

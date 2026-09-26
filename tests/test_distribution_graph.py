@@ -27,6 +27,35 @@ def test_target_expansion_and_dependency_order():
         "deb",
         "full-source",
     )
+
+
+def test_semantic_plan_is_frozen_and_in_dependency_order():
+    plan = GRAPH.semantic_plan(("deb",))
+    assert [step.target for step in plan] == [
+        "wheel", "wheel", "standalone", "standalone", "standalone", "standalone",
+        "deb", "deb", "deb", "deb",
+    ]
+    assert plan[0].name == "build wheel"
+    assert plan[-1].name == "write Debian checksum"
+
+
+def test_progress_reports_named_completion_skip_and_failure(capsys):
+    first = GRAPH.SemanticStep("demo", "first")
+    second = GRAPH.SemanticStep("demo", "second")
+    reporter = GRAPH.ProgressReporter((first, second))
+    reporter.emit(GRAPH.ProgressEvent("start", first))
+    reporter.emit(GRAPH.ProgressEvent("complete", first))
+    reporter.emit(GRAPH.ProgressEvent("skip", second))
+    output = capsys.readouterr().out
+    assert "DONE demo: first" in output
+    assert "SKIP demo: second" in output
+    assert reporter.completed == 2
+
+    failing = GRAPH.ProgressReporter((first,))
+    failing.emit(GRAPH.ProgressEvent("start", first))
+    failing.emit(GRAPH.ProgressEvent("fail", first))
+    assert failing.completed == 0
+    assert "FAILED demo: first" in capsys.readouterr().out
     assert GRAPH.dependency_order(("deb", "standalone")) == (
         "wheel",
         "standalone",
