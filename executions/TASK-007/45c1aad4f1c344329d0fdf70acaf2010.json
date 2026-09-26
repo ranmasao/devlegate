@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "0fa2dab717c1694d2826e33ca1f024bbb93ebbc6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "45c1aad4f1c344329d0fdf70acaf2010",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Refactored distribution progress around one executable component tree with stable hierarchical leaf IDs, frozen dependency-wide plans, and strict exact-leaf event ordering. Standalone and Debian builders now emit their owned internal semantic stages, including typed skip/fail transitions, while the outer orchestrator remains the sole progress presenter; tree and progress regressions were added and stale plan expectations updated."
+  },
+  "workspace_head": "4d3d321926ccc912c06160060e8fc229cd407edc"
+}
