@@ -14,7 +14,7 @@ import tempfile
 import termios
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -222,6 +222,31 @@ def _write_worker_line(text: str, stream) -> None:
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 WORKER_TERMINATION_TIMEOUT = 1.0
 WORKER_WAIT_INTERVAL = 0.05
+
+_HOST_CONTROL_ENVIRONMENT = frozenset(
+    {
+        "NOTIFY_SOCKET",
+        "WATCHDOG_PID",
+        "WATCHDOG_USEC",
+        "DEVLEGATE_HOST_MODE",
+        "DEVLEGATE_REQUIRE_NOTIFY",
+        "DEVLEGATE_STARTUP_FD",
+        "DEVLEGATE_RESTART_AUTHORITY_FD",
+        "DEVLEGATE_RESTART_AUTHORITY_KEY",
+        "DEVLEGATE_RESTART_REQUEST",
+        "DEVLEGATE_RESTART_INSTANCE",
+    }
+)
+
+
+def worker_environment(
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Copy the environment without service-owned process authority."""
+    worker_env = dict(os.environ if environment is None else environment)
+    for name in _HOST_CONTROL_ENVIRONMENT:
+        worker_env.pop(name, None)
+    return worker_env
 
 
 def _run_opencode(
@@ -592,7 +617,7 @@ export default tool({
                 }
             },
         }
-        environment = os.environ.copy()
+        environment = worker_environment()
         environment["PWD"] = str(execution_path)
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
         environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, sort_keys=True)

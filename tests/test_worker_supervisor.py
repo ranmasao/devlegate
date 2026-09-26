@@ -8,7 +8,11 @@ import pytest
 
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.worker_egress import OpenCodeRunResult
-from devlegate.worker_supervisor import WorkerAdmissionClosed, WorkerSupervisor
+from devlegate.worker_supervisor import (
+    WorkerAdmissionClosed,
+    WorkerSupervisor,
+    worker_environment,
+)
 
 
 def _report_event():
@@ -28,6 +32,45 @@ def _report_event():
             },
         },
     }
+
+
+def test_worker_environment_removes_host_control_state():
+    parent_environment = {
+        "PROJECT_SETTING": "available",
+        "NOTIFY_SOCKET": "/run/notify",
+        "WATCHDOG_PID": "123",
+        "WATCHDOG_USEC": "5000000",
+        "DEVLEGATE_HOST_MODE": "external",
+        "DEVLEGATE_REQUIRE_NOTIFY": "1",
+        "DEVLEGATE_STARTUP_FD": "4",
+        "DEVLEGATE_RESTART_AUTHORITY_FD": "5",
+        "DEVLEGATE_RESTART_AUTHORITY_KEY": "key",
+        "DEVLEGATE_RESTART_REQUEST": "request",
+        "DEVLEGATE_RESTART_INSTANCE": "instance",
+    }
+
+    sanitized = worker_environment(parent_environment)
+
+    assert sanitized == {"PROJECT_SETTING": "available"}
+    assert parent_environment["NOTIFY_SOCKET"] == "/run/notify"
+
+
+def test_sanitized_environment_does_not_enable_nested_hosting(monkeypatch):
+    from devlegate import cli
+
+    parent_environment = {
+        "NOTIFY_SOCKET": "/run/notify",
+        "DEVLEGATE_HOST_MODE": "external",
+        "DEVLEGATE_REQUIRE_NOTIFY": "1",
+    }
+    monkeypatch.delenv("DEVLEGATE_HOST_MODE", raising=False)
+    monkeypatch.delenv("DEVLEGATE_REQUIRE_NOTIFY", raising=False)
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+    for name, value in worker_environment(parent_environment).items():
+        monkeypatch.setenv(name, value)
+
+    assert cli._host_mode() is cli.HostingMode.DIRECT
+    assert cli._systemd_readiness_report() is None
 
 
 def test_supervisor_tracks_live_execution_ownership(tmp_path, monkeypatch):
