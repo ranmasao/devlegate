@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -136,6 +137,163 @@ def test_nested_component_execution_emits_frozen_hierarchical_ids():
         )
     )
     assert reporter.completed == len(steps)
+
+
+def test_real_standalone_adapter_emits_frozen_internal_steps(monkeypatch, tmp_path):
+    import tools.build_standalone as standalone
+    import tools.package_standalone as package_standalone
+
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    values = {"wheel": GRAPH.Artifact(wheel, "wheel")}
+    executable = tmp_path / "standalone-build" / "devlegate-1.2.3-linux-x86_64"
+    report = executable.parent / "standalone-build.json"
+
+    def fake_build(args, emit=None):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"executable")
+        report.write_text(json.dumps({"source_commit": source.commit}))
+        for step in standalone.semantic_plan():
+            if step.identity in {"wheel-a", "wheel-b"}:
+                emit(GRAPH.ComponentEvent("skip", step, step.identity))
+            else:
+                emit(GRAPH.ComponentEvent("start", step, step.identity))
+                emit(GRAPH.ComponentEvent("complete", step, step.identity))
+
+    archive = tmp_path / "standalone.tar.gz"
+    sidecar = tmp_path / "standalone.sha256"
+
+    def fake_package(*_args, **_kwargs):
+        archive.write_bytes(b"archive")
+        sidecar.write_text("checksum")
+        return archive, sidecar
+
+    monkeypatch.setattr(standalone, "build", fake_build)
+    monkeypatch.setattr(package_standalone, "package", fake_package)
+    monkeypatch.setattr(GRAPH, "validate_standalone_archive", lambda *_args: tmp_path)
+    monkeypatch.setattr(GRAPH, "prove_standalone", lambda *_args: None)
+
+    component = GRAPH._component_for_target(
+        "standalone", source, tmp_path, values
+    )
+    frozen = GRAPH.freeze_plan(GRAPH._target_plan("standalone"))
+    events = []
+    component.run(events.append)
+
+    assert [event.leaf_id for event in events if event.action == "complete"] == [
+        leaf_id for leaf_id, _step in frozen if "wheel" not in leaf_id
+    ]
+    assert {event.leaf_id for event in events if event.action == "skip"} == {
+        "build/wheel-a",
+        "build/wheel-b",
+    }
+
+
+def test_real_debian_adapter_emits_package_and_post_build_steps(monkeypatch, tmp_path):
+    import tools.package_deb as package_deb
+    import tools.validate_deb as validate_deb
+
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    archive = tmp_path / "standalone.tar.gz"
+    sidecar = tmp_path / "standalone.sha256"
+    report = tmp_path / "standalone-build.json"
+    archive.write_bytes(b"archive")
+    sidecar.write_text("checksum")
+    report.write_text(json.dumps({"wheel": {"version": "1.2.3"}}))
+    deb = tmp_path / "devlegate_1.2.3_amd64.deb"
+    values = {
+        "standalone": {
+            "archive": GRAPH.Artifact(archive, "archive"),
+            "sidecar": GRAPH.Artifact(sidecar, "checksum"),
+            "report": GRAPH.Artifact(report, "report"),
+        }
+    }
+
+    def fake_package(*, emit=None, **_kwargs):
+        deb.write_bytes(b"deb")
+        for step in package_deb.semantic_plan():
+            emit(GRAPH.ComponentEvent("start", step, step.identity))
+            emit(GRAPH.ComponentEvent("complete", step, step.identity))
+        return deb
+
+    binary = tmp_path / "devlegate"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr(package_deb, "package", fake_package)
+    monkeypatch.setattr(validate_deb, "validate", lambda *_args: binary)
+    monkeypatch.setattr(
+        GRAPH.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+    )
+
+    component = GRAPH._component_for_target("deb", source, tmp_path, values)
+    frozen = GRAPH.freeze_plan(GRAPH._target_plan("deb"))
+    events = []
+    component.run(events.append)
+
+    assert [event.leaf_id for event in events if event.action == "complete"] == [
+        leaf_id for leaf_id, _step in frozen
+    ]
+    assert events[-1].leaf_id == "prove-deb"
+
+
+def test_real_component_progress_output_is_deterministic_and_noninteractive(
+    monkeypatch, tmp_path, capsys
+):
+    import tools.build_standalone as standalone
+    import tools.package_standalone as package_standalone
+
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    values = {"wheel": GRAPH.Artifact(wheel, "wheel")}
+
+    def fake_build(args, emit=None):
+        output = args.output
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "devlegate-1.2.3-linux-x86_64").write_bytes(b"x")
+        (output / "standalone-build.json").write_text("{}")
+        for step in standalone.semantic_plan():
+            if step.identity in {"wheel-a", "wheel-b"}:
+                emit(GRAPH.ComponentEvent("skip", step, step.identity))
+            else:
+                emit(GRAPH.ComponentEvent("start", step, step.identity))
+                emit(GRAPH.ComponentEvent("complete", step, step.identity))
+
+    archive = tmp_path / "archive"
+    sidecar = tmp_path / "sidecar"
+    monkeypatch.setattr(standalone, "build", fake_build)
+    monkeypatch.setattr(
+        package_standalone,
+        "package",
+        lambda *_args, **_kwargs: (archive, sidecar),
+    )
+    archive.write_bytes(b"archive")
+    sidecar.write_text("sidecar")
+    monkeypatch.setattr(GRAPH, "validate_standalone_archive", lambda *_args: tmp_path)
+    monkeypatch.setattr(GRAPH, "prove_standalone", lambda *_args: None)
+
+    component = GRAPH._component_for_target("standalone", source, tmp_path, values)
+    frozen = GRAPH.freeze_plan(GRAPH._target_plan("standalone"))
+    steps = tuple(
+        GRAPH.SemanticStep("standalone", step.name, leaf_id)
+        for leaf_id, step in frozen
+    )
+    reporter = GRAPH.ProgressReporter(steps)
+    component.run(
+        lambda event: reporter.emit(
+            GRAPH.ProgressEvent(
+                event.action,
+                GRAPH.SemanticStep("standalone", event.step.name, event.leaf_id),
+            )
+        )
+    )
+    output = capsys.readouterr().out
+    assert reporter.completed == len(steps)
+    assert "Progress complete" not in output
+    assert "[0/" in output and f"[{len(steps)}/{len(steps)}]" in output
+    assert "\x1b[" not in output
 
 
 def test_target_parser_rejects_pip():

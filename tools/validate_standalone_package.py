@@ -16,15 +16,31 @@ from pathlib import Path
 
 try:
     from package_standalone import (
-        COMPLIANCE_DIR, PackageError, archive_license_path, load_manifest,
-        manifest_file_records, notice_text, run, sha256, split_inventory,
-        stable_provenance, validate_manifest,
+        COMPLIANCE_DIR,
+        PackageError,
+        archive_license_path,
+        load_manifest,
+        manifest_file_records,
+        notice_text,
+        run,
+        sha256,
+        split_inventory,
+        stable_provenance,
+        validate_manifest,
     )
 except ModuleNotFoundError:
     from tools.package_standalone import (
-        COMPLIANCE_DIR, PackageError, archive_license_path, load_manifest,
-        manifest_file_records, notice_text, run, sha256, split_inventory,
-        stable_provenance, validate_manifest,
+        COMPLIANCE_DIR,
+        PackageError,
+        archive_license_path,
+        load_manifest,
+        manifest_file_records,
+        notice_text,
+        run,
+        sha256,
+        split_inventory,
+        stable_provenance,
+        validate_manifest,
     )
 
 FORBIDDEN_EPHEMERAL_PATHS = (b"/tmp/devlegate-standalone-", b"/tmp/devlegate-package-")

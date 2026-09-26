@@ -879,8 +879,16 @@ def build(args: argparse.Namespace, emit=None) -> int:
                 )
         else:
             if emit is not None:
-                emit(ComponentEvent("skip", semantic_plan()[1], semantic_plan()[1].identity))
-                emit(ComponentEvent("skip", semantic_plan()[2], semantic_plan()[2].identity))
+                emit(
+                    ComponentEvent(
+                        "skip", semantic_plan()[1], semantic_plan()[1].identity
+                    )
+                )
+                emit(
+                    ComponentEvent(
+                        "skip", semantic_plan()[2], semantic_plan()[2].identity
+                    )
+                )
             wheel_toolchain_a = {
                 name: filename.split("-")[1]
                 for name, (filename, _digest) in WHEEL_BUILD_TOOLS.items()
