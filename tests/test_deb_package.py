@@ -73,7 +73,7 @@ def make_package(
     )
     installed_size_field = f"Installed-Size: {size}\n" if include_installed_size else ""
     (control / "control").write_text(
-        "Package: devlegate\nVersion: 0.5.4.dev0\nArchitecture: amd64\n"
+        "Package: devlegate\nVersion: 0.5.5.dev0\nArchitecture: amd64\n"
         f"{installed_size_field}"
         f"{dependency}Description: test\n test\n",
         encoding="ascii",
@@ -90,7 +90,7 @@ def make_package(
         text=True,
     )
     report = tmp_path / "report.json"
-    report.write_text(json.dumps({"wheel": {"version": "0.5.4.dev0"}}))
+    report.write_text(json.dumps({"wheel": {"version": "0.5.5.dev0"}}))
     return package, report
 
 

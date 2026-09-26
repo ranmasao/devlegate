@@ -5,6 +5,24 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
+## 0.5.5.dev0 -- unreleased
+
+Automatic retry safety for product drift during zero-delta execution.
+
+### Added
+
+- Added a narrowly scoped automatic retry when a worker leaves its execution
+  checkpoint unchanged while the product advances by one verified descendant
+  generation during that execution.
+- Preserved the original execution report and provenance, retired the stale
+  zero-delta workspace, and admitted the fresh execution under a new durable
+  execution identity without creating reconciliation state.
+
+### Fixed
+
+- Kept no-drift, divergent-history, unpublished-worker, and ticket-state races
+  on the existing fail-closed or reconciliation paths.
+
 ## 0.5.4 -- 2026-09-26
 
 Operational project hosting, durable lifecycle compatibility, and release-proof tooling.

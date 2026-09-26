@@ -98,6 +98,10 @@ class ExecutionAuthorization:
     def is_explicit_retry(self) -> bool:
         return self.kind == "explicit_retry"
 
+    @property
+    def is_zero_delta_retry(self) -> bool:
+        return self.kind == "zero_delta_product_drift"
+
 
 class SnapshotChanged(Exception):
     """The observed project changed during a status snapshot attempt."""
@@ -1059,6 +1063,90 @@ class ServiceEngine:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
+
+    def _automatic_zero_delta_authorization(
+        self,
+        ticket_store: TicketStore,
+        execution_plan: ExecutionPlan,
+        local_head: str,
+        remote_head: str,
+    ) -> ExecutionAuthorization | None:
+        retry = self._state.get("automatic_retry")
+        if not isinstance(retry, dict) or retry.get("status") != (
+            "pending_admission"
+        ):
+            return None
+        ticket_id = retry.get("ticket_id")
+        original_base = retry.get("original_base")
+        if not isinstance(ticket_id, str) or not isinstance(original_base, str):
+            raise WorkflowBlockedError("automatic zero-delta retry identity is invalid")
+        ticket = ticket_store.by_id.get(ticket_id)
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+        ):
+            completed = {**retry, "status": "not_admitted"}
+            self._save_state(
+                "idle",
+                automatic_retry=None,
+                last_automatic_retry=completed,
+            )
+            _log(
+                f"automatic zero-delta retry skipped; ticket {ticket_id} "
+                "is no longer executable"
+            )
+            return None
+        if execution_plan.ticket_id != ticket_id:
+            return None
+        if execution_plan.action != "run-worker" or execution_plan.bound:
+            return None
+        if local_head != remote_head or local_head == original_base:
+            raise WorkflowBlockedError(
+                "automatic zero-delta retry requires one current product generation"
+            )
+        ancestor = _git(
+            self.repo,
+            "merge-base",
+            "--is-ancestor",
+            original_base,
+            local_head,
+            check=False,
+        )
+        if ancestor.returncode:
+            raise WorkflowBlockedError(
+                "automatic zero-delta retry product history is not a descendant"
+            )
+        if retry.get("product_head") != local_head:
+            retry = {**retry, "product_head": local_head}
+            self._save_state("idle", automatic_retry=retry)
+        return ExecutionAuthorization(ticket_id, "zero_delta_product_drift")
+
+    def _discard_ineligible_zero_delta_retry(self, ticket_store: TicketStore) -> None:
+        retry = self._state.get("automatic_retry")
+        if not isinstance(retry, dict) or retry.get("status") != (
+            "pending_admission"
+        ):
+            return
+        ticket_id = retry.get("ticket_id")
+        if not isinstance(ticket_id, str):
+            raise WorkflowBlockedError("automatic zero-delta retry identity is invalid")
+        ticket = ticket_store.by_id.get(ticket_id)
+        if (
+            ticket is not None
+            and ticket.state == "todo"
+            and ticket in ticket_store.runnable
+        ):
+            return
+        self._save_state(
+            "idle",
+            automatic_retry=None,
+            last_automatic_retry={**retry, "status": "not_admitted"},
+        )
+        _log(
+            f"automatic zero-delta retry skipped; ticket {ticket_id} "
+            "is no longer executable"
+        )
 
     def _validate_reconcile_resume_admission(self, ticket_id: str) -> None:
         reconciliation = self._state.get("reconciliation")
@@ -2538,9 +2626,7 @@ class ServiceEngine:
             }:
                 self._recover_checkpoint_publication()
                 report = self._recover_lifecycle_report()
-                control_head = self._apply_execution_lifecycle(report)
-                self._finalize_execution_lifecycle(report, control_head)
-                return 0 if report.result.conclusion != "failed" else 1
+                return self._complete_execution_lifecycle(report)
             if (
                 self._state.get("execution_stage") == "lifecycle"
                 and self._state.get("worker_identity") is None
@@ -2567,9 +2653,7 @@ class ServiceEngine:
                     self._automatic_drop_recovery_execution = None
                     return 0
                 report = self._recover_lifecycle_report()
-                control_head = self._apply_execution_lifecycle(report)
-                self._finalize_execution_lifecycle(report, control_head)
-                return 0 if report.result.conclusion != "failed" else 1
+                return self._complete_execution_lifecycle(report)
             automatic_ticket = self._reconcile_stranded_execution()
             if automatic_ticket is None or self._stop_requested():
                 return 0
@@ -2875,6 +2959,7 @@ class ServiceEngine:
             load_project_context(self.repo)
         except ProjectContextError as error:
             raise WorkflowBlockedError(str(error)) from error
+        self._discard_ineligible_zero_delta_retry(ticket_store)
         bound_execution = pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
@@ -2909,6 +2994,11 @@ class ServiceEngine:
                 execution_plan.reason if execution_plan.action == "blocked" else None
             ),
         )
+        automatic_authorization = self._automatic_zero_delta_authorization(
+            ticket_store, execution_plan, local_head, remote_head
+        )
+        if automatic_authorization is not None:
+            authorization = automatic_authorization
         if self._stop_before_admission():
             return 0
         if authorization is not None:
@@ -2929,7 +3019,11 @@ class ServiceEngine:
                 (
                     "automatic resume of safely interrupted execution"
                     if authorization.is_automatic_resume
-                    else "explicit retry of current failed execution"
+                    else (
+                        "automatic retry after zero-delta product drift"
+                        if authorization.is_zero_delta_retry
+                        else "explicit retry of current failed execution"
+                    )
                 ),
                 retry_ticket.id,
                 retry_ticket.title,
@@ -3093,27 +3187,28 @@ class ServiceEngine:
                     return 0
             if authorization is not None:
                 authorized_ticket_id = authorization.ticket_id
-                if not isinstance(failed_for_ticket, dict) or any(
-                    failed_for_ticket.get(field) != expected
-                    for field, expected in (
-                        ("product_head", local_head),
-                        ("remote_head", remote_head),
-                        ("control_head", control_head),
-                        ("todo_fingerprint", todo_fingerprint),
-                    )
-                ):
-                    raise DevlegateError(
-                        f"ticket {authorized_ticket_id} failed execution is stale; "
-                        "current project state must be reviewed before retry"
-                    )
-                if authorization.is_automatic_resume and (
-                    failed_for_ticket.get("interrupted") is not True
-                    or failed_for_ticket.get("interruption_kind")
-                    not in {"service_shutdown", "process_loss"}
-                ):
-                    raise DevlegateError(
-                        "automatic resume requires a safely interrupted execution"
-                    )
+                if not authorization.is_zero_delta_retry:
+                    if not isinstance(failed_for_ticket, dict) or any(
+                        failed_for_ticket.get(field) != expected
+                        for field, expected in (
+                            ("product_head", local_head),
+                            ("remote_head", remote_head),
+                            ("control_head", control_head),
+                            ("todo_fingerprint", todo_fingerprint),
+                        )
+                    ):
+                        raise DevlegateError(
+                            f"ticket {authorized_ticket_id} failed execution is stale; "
+                            "current project state must be reviewed before retry"
+                        )
+                    if authorization.is_automatic_resume and (
+                        failed_for_ticket.get("interrupted") is not True
+                        or failed_for_ticket.get("interruption_kind")
+                        not in {"service_shutdown", "process_loss"}
+                    ):
+                        raise DevlegateError(
+                            "automatic resume requires a safely interrupted execution"
+                        )
             if (
                 authorization is None
                 and not pending_agent_execution
@@ -3171,10 +3266,18 @@ class ServiceEngine:
                 execution_remote_head, str
             ):
                 raise DevlegateError("invalid persisted execution remote identity")
+            automatic_retry = self._state.get("automatic_retry")
+            automatic_fresh_id = (
+                automatic_retry.get("fresh_execution_id")
+                if authorization is not None
+                and authorization.is_zero_delta_retry
+                and isinstance(automatic_retry, dict)
+                else None
+            )
             execution_id = (
                 self._state.get("execution_id")
                 if pending_agent_execution
-                else new_execution_id()
+                else automatic_fresh_id or new_execution_id()
             )
             if not isinstance(execution_id, str) or not execution_id:
                 raise DevlegateError("invalid persisted execution identity")
@@ -3201,6 +3304,17 @@ class ServiceEngine:
                 execution_remote_head=execution_remote_head,
                 worker_identity=None,
                 resume_required=None,
+                automatic_retry=(
+                    {
+                        **automatic_retry,
+                        "status": "admitted",
+                        "fresh_execution_id": execution_id,
+                    }
+                    if authorization is not None
+                    and authorization.is_zero_delta_retry
+                    and isinstance(automatic_retry, dict)
+                    else automatic_retry
+                ),
             )
             if self._stop_before_admission():
                 return 0
@@ -3379,6 +3493,17 @@ class ServiceEngine:
         product = self._observe_product_generation(workspace.base_head)
         current_product_remote = product["remote_head"]
         if not product["stable"]:
+            if self._is_zero_delta_stale_product_drift(
+                workspace.base_head, checkpoint.after_head, product
+            ):
+                retry = self._zero_delta_retry_payload(report, product)
+                self._save_state(
+                    "agent_running",
+                    execution_stage="lifecycle",
+                    pending_execution_report=report.as_dict(),
+                    automatic_retry=retry,
+                )
+                return self._complete_execution_lifecycle(report)
             reconciliation_product = (
                 product["local_head"]
                 if product["local_head"] != workspace.base_head
@@ -3522,12 +3647,212 @@ class ServiceEngine:
         _log(f"accepted ticket {ticket_id} integrated")
         return 0
 
+    def _complete_execution_lifecycle(self, report: ExecutionReport) -> int:
+        automatic_retry = self._state.get("automatic_retry")
+        if isinstance(automatic_retry, dict) and automatic_retry.get("status") == (
+            "pending"
+        ):
+            return self._resolve_zero_delta_retry(report)
+        product = self._observe_product_generation(report.code_base_head)
+        if self._is_zero_delta_stale_product_drift(
+            report.code_base_head, report.workspace_head, product
+        ):
+            retry = self._zero_delta_retry_payload(report, product)
+            self._save_state(
+                "agent_running",
+                execution_stage="lifecycle",
+                pending_execution_report=report.as_dict(),
+                automatic_retry=retry,
+            )
+            return self._resolve_zero_delta_retry(report)
+        control_head = self._apply_execution_lifecycle(report)
+        self._finalize_execution_lifecycle(report, control_head)
+        return 0 if report.result.conclusion != "failed" else 1
+
+    def _is_zero_delta_stale_product_drift(
+        self,
+        admitted_base: str,
+        checkpoint: str | None,
+        product: dict[str, object],
+    ) -> bool:
+        if checkpoint != admitted_base or not product.get("target_eligible"):
+            return False
+        local_head = product.get("local_head")
+        remote_head = product.get("remote_head")
+        if (
+            not isinstance(local_head, str)
+            or not isinstance(remote_head, str)
+            or local_head != remote_head
+            or local_head == admitted_base
+        ):
+            return False
+        if self._state.get("execution_remote_head") is not None:
+            return False
+        execution_branch = self._state.get("execution_branch")
+        if not isinstance(execution_branch, str) or not execution_branch:
+            return False
+        if self._execution_remote_head(execution_branch) is not None:
+            return False
+        ancestor = _git(
+            self.repo,
+            "merge-base",
+            "--is-ancestor",
+            admitted_base,
+            local_head,
+            check=False,
+        )
+        return ancestor.returncode == 0
+
+    @staticmethod
+    def _zero_delta_retry_payload(
+        report: ExecutionReport, product: dict[str, object]
+    ) -> dict[str, object]:
+        product_head = product.get("local_head")
+        if not isinstance(product_head, str) or not product_head:
+            raise WorkflowBlockedError("zero-delta retry lacks a product generation")
+        return {
+            "status": "pending",
+            "reason": "automatic retry after zero-delta product drift",
+            "ticket_id": report.ticket_id,
+            "stale_execution_id": report.execution_id,
+            "original_base": report.code_base_head,
+            "worker_checkpoint": report.workspace_head,
+            "product_head": product_head,
+            "control_head": report.control_head,
+        }
+
+    def _retire_zero_delta_execution(self, report: ExecutionReport) -> None:
+        checkpoint = report.workspace_head
+        if checkpoint != report.code_base_head:
+            raise WorkflowBlockedError(
+                "zero-delta execution checkpoint is not its base"
+            )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, report.ticket_id
+        )
+        remote = self._execution_remote_head(report.execution_branch)
+        if remote is not None:
+            raise WorkflowBlockedError(
+                "zero-delta execution has published execution history"
+            )
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if registration is not None:
+            try:
+                workspace = manager._validate_existing(registration, checkpoint)
+                manager.retire(workspace, checkpoint)
+            except (ExecutionWorkspaceError, OSError) as error:
+                raise WorkflowBlockedError(
+                    f"cannot retire zero-delta execution: {error}"
+                ) from error
+        elif manager.path.exists() or any(
+            item.get("branch") == manager.branch for item in registrations.values()
+        ):
+            raise WorkflowBlockedError(
+                "zero-delta execution workspace topology is ambiguous"
+            )
+        local_ref = f"refs/heads/{report.execution_branch}"
+        local = _git(self.repo, "rev-parse", "--verify", local_ref, check=False)
+        if local.returncode == 0 and local.stdout.strip() != checkpoint:
+            raise WorkflowBlockedError(
+                "zero-delta execution branch changed before retirement"
+            )
+        if local.returncode == 0:
+            removed = _git(
+                self.repo, "branch", "-D", report.execution_branch, check=False
+            )
+            if removed.returncode:
+                raise WorkflowBlockedError(
+                    removed.stderr.strip()
+                    or "cannot retire zero-delta execution branch"
+                )
+
+    def _resolve_zero_delta_retry(self, report: ExecutionReport) -> int:
+        retry = self._state.get("automatic_retry")
+        if not isinstance(retry, dict) or retry.get("status") != "pending":
+            raise WorkflowBlockedError("zero-delta retry state is missing")
+        if any(
+            retry.get(key) != value
+            for key, value in (
+                ("ticket_id", report.ticket_id),
+                ("stale_execution_id", report.execution_id),
+                ("original_base", report.code_base_head),
+                ("worker_checkpoint", report.workspace_head),
+            )
+        ):
+            raise WorkflowBlockedError("zero-delta retry identity is inconsistent")
+        product = self._observe_product_generation(report.code_base_head)
+        if not self._is_zero_delta_stale_product_drift(
+            report.code_base_head, report.workspace_head, product
+        ):
+            raise WorkflowBlockedError(
+                "zero-delta product drift is no longer safely provable"
+            )
+        control_head = self._apply_execution_lifecycle(
+            report, allow_unpublished=True
+        )
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(report.ticket_id)
+        executable = (
+            ticket is not None
+            and ticket.state == "todo"
+            and ticket in ticket_store.runnable
+        )
+        self._retire_zero_delta_execution(report)
+        product_head = str(product["local_head"])
+        if executable:
+            fresh_execution_id = retry.get("fresh_execution_id")
+            if not isinstance(fresh_execution_id, str) or not fresh_execution_id:
+                fresh_execution_id = new_execution_id()
+            next_retry = {
+                **retry,
+                "status": "pending_admission",
+                "fresh_execution_id": fresh_execution_id,
+                "product_head": product_head,
+            }
+            self._finalize_execution_lifecycle(
+                report,
+                control_head,
+                product_head,
+                product_head,
+                clear_execution=True,
+                automatic_retry=next_retry,
+            )
+            _log(
+                f"zero-delta execution {report.execution_id} became stale on "
+                f"{product_head[:12]}; fresh execution admission is pending"
+            )
+            return 0
+        completed = {
+            **retry,
+            "status": "not_admitted",
+            "product_head": product_head,
+        }
+        self._finalize_execution_lifecycle(
+            report,
+            control_head,
+            product_head,
+            product_head,
+            clear_execution=True,
+            automatic_retry=None,
+            last_automatic_retry=completed,
+        )
+        _log(
+            f"zero-delta execution {report.execution_id} retained without retry; "
+            f"ticket {report.ticket_id} is no longer executable"
+        )
+        return 0
+
     def _finalize_execution_lifecycle(
         self,
         report: ExecutionReport,
         control_head: str,
         product_head: str | None = None,
         product_remote_head: str | None = None,
+        *,
+        clear_execution: bool = False,
+        automatic_retry: object = _UNSET,
+        last_automatic_retry: object = _UNSET,
     ) -> None:
         interruption_kind = self._state.get("execution_interruption_kind")
         if not isinstance(interruption_kind, str):
@@ -3578,13 +3903,33 @@ class ServiceEngine:
                 for ticket_id, metadata in failed_executions.items()
                 if ticket_id != report.ticket_id
             }
+        fields: dict[str, object] = {
+            "handled_remote_head": product_remote_head,
+            "handled_control_head": control_head,
+            "handled_todo_fingerprint": todo_fingerprint,
+            "execution_control_head": control_head,
+            "failed_executions": failed_executions,
+        }
+        if automatic_retry is _UNSET:
+            current_retry = self._state.get("automatic_retry")
+            if (
+                isinstance(current_retry, dict)
+                and current_retry.get("fresh_execution_id") == report.execution_id
+            ):
+                fields["automatic_retry"] = None
+                fields["last_automatic_retry"] = {
+                    **current_retry,
+                    "status": "completed",
+                    "completed_conclusion": report.result.conclusion,
+                }
+        else:
+            fields["automatic_retry"] = automatic_retry
+        if last_automatic_retry is not _UNSET:
+            fields["last_automatic_retry"] = last_automatic_retry
         self._save_state(
             "idle",
-            handled_remote_head=product_remote_head,
-            handled_control_head=control_head,
-            handled_todo_fingerprint=todo_fingerprint,
-            execution_control_head=control_head,
-            failed_executions=failed_executions,
+            clear_execution=clear_execution,
+            **fields,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
 
@@ -4990,8 +5335,15 @@ class ServiceEngine:
             )
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
-    def _apply_execution_lifecycle(self, report: ExecutionReport) -> str:
-        self._report_matches_execution_state(report)
+    def _apply_execution_lifecycle(
+        self, report: ExecutionReport, *, allow_unpublished: bool = False
+    ) -> str:
+        if allow_unpublished:
+            self._report_matches_execution_binding(report)
+            if not isinstance(report.workspace_head, str) or not report.workspace_head:
+                raise WorkflowBlockedError("execution checkpoint identity is missing")
+        else:
+            self._report_matches_execution_state(report)
         self._validate_control_worktree()
         for _attempt in range(3):
             status = _git(self.control_worktree, "status", "--porcelain").stdout

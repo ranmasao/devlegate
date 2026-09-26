@@ -284,6 +284,22 @@ or failed result remains in `todo` with its execution evidence. Reviewer
 acceptance moves the ticket to `accepted`; Devlegate then integrates the
 accepted product change and moves the ticket to `done`.
 
+If the worker leaves its checkpoint exactly at the admitted product base, the
+result is a zero-delta execution. Devlegate normally preserves that result and
+does not retry it. One automatic exception is allowed when the product has
+advanced to exactly one current remote generation, that generation is a
+descendant of the admitted base, the execution branch has no publication, and
+the ticket is still executable. The original immutable report remains stored;
+the execution workspace is retired; and a new execution ID is admitted at the
+new product head. This path does not create reconciliation state.
+
+The exception is fail-closed. No automatic retry occurs for no product drift,
+divergent or rewritten product history, worker publication, identity or
+workspace ambiguity, or a ticket that is no longer executable. Those cases use
+the ordinary terminal or reconciliation lifecycle. Durable retry state records
+the stale execution ID, original base, worker checkpoint, product generation,
+and fresh execution ID so restart and replay cannot admit a duplicate.
+
 Review and product integration are separate boundaries. Accepted integration
 uses proven fast-forward ancestry only. Devlegate does not automatically rebase,
 merge conflicting histories, resolve conflicts, or perform destructive

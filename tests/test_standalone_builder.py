@@ -44,7 +44,7 @@ def test_scie_command_pins_runtime_inputs(tmp_path):
     wheel = tmp_path / "devlegate.whl"
     with ZipFile(wheel, "w") as archive:
         archive.writestr(
-            "devlegate-0.5.4.dev0.dist-info/METADATA", "Version: 0.5.4.dev0\n"
+            "devlegate-0.5.5.dev0.dist-info/METADATA", "Version: 0.5.5.dev0\n"
         )
     command = BUILDER.scie_command(
         "python",

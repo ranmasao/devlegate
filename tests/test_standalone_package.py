@@ -69,7 +69,7 @@ def provenance_report():
             "version": PACKAGE.SCIE_JUMP_VERSION,
             "sha256": PACKAGE.SCIE_JUMP_SHA256,
         },
-        "wheel": {"version": "0.5.4.dev0", "sha256": "b" * 64},
+        "wheel": {"version": "0.5.5.dev0", "sha256": "b" * 64},
         "scie": {"sha256": "c" * 64, "size": 123},
         "wheel_build_toolchain": PACKAGE.pinned_tools(BUILDER.WHEEL_BUILD_TOOLS),
         "wheel_reproducible": True,
@@ -178,7 +178,7 @@ def test_canonical_identity_fails_closed(path, value):
 def test_source_version_must_match_report(tmp_path):
     report = provenance_report()
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "devlegate"\nversion = "0.5.5.dev0"\n'
+        '[project]\nname = "devlegate"\nversion = "0.5.4"\n'
     )
 
     with pytest.raises(PACKAGE.PackageError, match="source version"):

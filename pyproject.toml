@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlegate"
-version = "0.5.4"
+version = "0.5.5.dev0"
 description = "Local deterministic orchestrator for agent-driven software development."
 readme = "README.md"
 license = "EUPL-1.2 AND CC0-1.0 AND MIT"

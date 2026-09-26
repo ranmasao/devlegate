@@ -2027,6 +2027,201 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     ).is_file()
 
 
+def test_zero_delta_product_drift_preserves_old_report_and_admits_fresh_execution(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(_workspace, _prompt, **_kwargs):
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+    assert pending["status"] == "pending_admission"
+    assert pending["original_base"] == base
+    assert pending["worker_checkpoint"] == base
+    assert engine._state.get("reconciliation") is None
+
+    control = next((state / "worktrees").glob("*/control"))
+    old_id = pending["stale_execution_id"]
+    old_report = ExecutionReportStore(control).read("T-1", old_id)
+    assert old_report.code_base_head == base
+    assert old_report.workspace_head == base
+    assert old_report.result.conclusion == "blocked"
+
+    restarted = Devlegate(config)
+    fresh_ids = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        fresh_ids.append(restarted._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert fresh_ids == [pending["fresh_execution_id"]]
+    assert fresh_ids[0] != old_id
+    fresh_report = ExecutionReportStore(control).read("T-1", fresh_ids[0])
+    product_b = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert product_b != base
+    assert fresh_report.code_base_head == product_b
+    assert fresh_report.workspace_head == product_b
+    assert restarted._state.get("reconciliation") is None
+    assert restarted._state["last_automatic_retry"]["status"] == "completed"
+
+
+def test_zero_delta_without_product_drift_does_not_retry(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    calls = []
+
+    def worker(_workspace, _prompt, **_kwargs):
+        calls.append(engine._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    assert len(calls) == 1
+    assert engine._state.get("automatic_retry") is None
+    assert engine._state.get("reconciliation") is None
+    control = next((state / "worktrees").glob("*/control"))
+    assert len(list((control / "executions/T-1").glob("*.json"))) == 1
+
+
+def test_zero_delta_divergent_product_history_remains_reconciliation(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    alternate = tmp_path / "alternate"
+
+    def worker(_workspace, _prompt, **_kwargs):
+        remote_url = git(working, "remote", "get-url", "origin").stdout.strip()
+        git(working, "clone", "--no-local", remote_url, alternate)
+        git(alternate, "switch", "--orphan", "divergent")
+        git(alternate, "config", "user.email", "test@example.com")
+        git(alternate, "config", "user.name", "Test User")
+        (alternate / "divergent.txt").write_text("divergent\n")
+        git(alternate, "add", "divergent.txt")
+        git(alternate, "commit", "-m", "divergent product")
+        divergent = git(alternate, "rev-parse", "HEAD").stdout.strip()
+        git(alternate, "push", "--force", "origin", f"{divergent}:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    assert engine._state["reconciliation"]["status"] == "pending"
+    assert engine._state.get("automatic_retry") is None
+
+
+def test_zero_delta_ticket_state_change_skips_fresh_execution(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: (
+            (working / "product-change.txt").write_text("product B\n"),
+            git(working, "add", "product-change.txt"),
+            git(working, "commit", "-m", "advance product"),
+            git(working, "push", "origin", "HEAD:main"),
+            WorkerRunResult(
+                0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+            ),
+        )[-1],
+    )
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+    control = next((state / "worktrees").glob("*/control"))
+    todo = control / "kanban/todo/T-1.md"
+    todo.rename(control / "kanban/review/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "review ticket externally")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    restarted = Devlegate(config)
+    monkeypatch.setattr(
+        restarted._workers,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("obsolete retry was admitted"),
+    )
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state.get("automatic_retry") is None
+    assert restarted._state["last_automatic_retry"]["status"] == "not_admitted"
+    assert restarted._state["last_automatic_retry"]["stale_execution_id"] == (
+        pending["stale_execution_id"]
+    )
+
+
+def test_zero_delta_retry_replay_does_not_double_admit(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def worker(_workspace, _prompt, **_kwargs):
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+    restarted = Devlegate(config)
+    calls = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        calls.append(restarted._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert calls == [pending["fresh_execution_id"]]
+
+    replay = Devlegate(config)
+    monkeypatch.setattr(
+        replay._workers,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("replay admitted a duplicate"),
+    )
+    assert run_test_iteration(replay) == 0
+    assert replay._state["last_automatic_retry"]["fresh_execution_id"] == calls[0]
+
+
 def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     tmp_path, monkeypatch
 ):
