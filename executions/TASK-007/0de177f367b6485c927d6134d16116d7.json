@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "07a048c35f74e523d361f586a1aa24fe01a974ea",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "0de177f367b6485c927d6134d16116d7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Updated distribution component adapters to prefer the canonical tools.* module identity, with top-level imports retained only as script-execution fallbacks. This makes production adapter imports target the same module objects patched by the real standalone and Debian regression tests without changing packaging operations."
+  },
+  "workspace_head": "3fa9908a2ff84e5b94f8911c7e14b1d057a7bc98"
+}
