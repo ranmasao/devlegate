@@ -14,10 +14,34 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from package_standalone import PackageError
-from package_standalone import run as package_run
-from validate_deb import installed_size_kib
-from validate_standalone_package import validate
+try:
+    from package_standalone import PackageError
+    from package_standalone import run as package_run
+    from validate_deb import installed_size_kib
+    from validate_standalone_package import validate
+except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
+    from tools.package_standalone import PackageError
+    from tools.package_standalone import run as package_run
+    from tools.validate_deb import installed_size_kib
+    from tools.validate_standalone_package import validate
+try:
+    from build_progress import ComponentStep
+except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
+    from tools.build_progress import ComponentStep
+
+
+def semantic_plan() -> tuple[ComponentStep, ...]:
+    """Return the deterministic stages owned by Debian packaging."""
+    return tuple(
+        ComponentStep(name)
+        for name in (
+            "validate standalone input for Debian",
+            "assemble Debian filesystem",
+            "write Debian control metadata",
+            "build Debian package",
+            "write Debian package checksum",
+        )
+    )
 
 
 def git_timestamp(repo: Path, commit: str) -> int:

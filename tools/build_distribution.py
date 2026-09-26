@@ -24,6 +24,11 @@ from pathlib import Path
 
 from devlegate.cli_common import ConciseArgumentParser
 
+try:
+    from build_progress import ComponentStep
+except ModuleNotFoundError:
+    from tools.build_progress import ComponentStep
+
 TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
 GRAPH = {
     "wheel": (),
@@ -71,6 +76,7 @@ class ProgressReporter:
     def __init__(self, steps: tuple[SemanticStep, ...]) -> None:
         self.steps = steps
         self.completed = 0
+        self.skipped: list[SemanticStep] = []
         self._started: SemanticStep | None = None
 
     def emit(self, event: ProgressEvent) -> None:
@@ -91,11 +97,16 @@ class ProgressReporter:
                 raise DistributionError(f"progress step is out of order: {event.step.name}")
             self.completed += 1
             status = "SKIP" if event.action == "skip" else "DONE"
+            if event.action == "skip":
+                self.skipped.append(event.step)
             print(f"[{self.completed}/{len(self.steps)}] {status} {event.step.target}: {event.step.name}")
             self._started = None
         elif event.action == "fail":
+            if self._started != event.step:
+                raise DistributionError(
+                    f"progress step was not started: {event.step.name}"
+                )
             print(f"[{self.completed}/{len(self.steps)}] FAILED {event.step.target}: {event.step.name}")
-            self._started = None
         else:
             raise DistributionError(f"unknown progress event: {event.action}")
 
@@ -534,31 +545,34 @@ def dependency_order(targets: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(result)
 
 
-COMPONENT_STEPS = {
-    "wheel": ("build wheel", "validate wheel"),
-    "sdist": ("build source distribution", "validate source distribution"),
-    "standalone": (
-        "build standalone executable",
-        "package standalone archive",
-        "validate standalone archive",
-        "prove standalone execution",
-    ),
-    "deb": (
-        "build Debian package",
-        "validate Debian package",
-        "prove Debian execution",
-        "write Debian checksum",
-    ),
-    "full-source": ("build full-source archive", "validate full-source archive"),
-}
+def _component_steps(target: str) -> tuple[ComponentStep, ...]:
+    """Load the plan from the module that owns the target's work."""
+    if target == "standalone":
+        try:
+            from build_standalone import semantic_plan as plan
+        except ModuleNotFoundError:
+            from tools.build_standalone import semantic_plan as plan
+    elif target == "deb":
+        try:
+            from package_deb import semantic_plan as plan
+        except ModuleNotFoundError:
+            from tools.package_deb import semantic_plan as plan
+    else:
+        plans = {
+            "wheel": ("build wheel", "validate wheel"),
+            "sdist": ("build source distribution", "validate source distribution"),
+            "full-source": ("build full-source archive", "validate full-source archive"),
+        }
+        return tuple(ComponentStep(name) for name in plans[target])
+    return plan()
 
 
 def semantic_plan(targets: tuple[str, ...]) -> tuple[SemanticStep, ...]:
     """Return the complete, deterministic plan for the selected graph."""
     return tuple(
-        SemanticStep(node, name)
+        SemanticStep(node, step.name)
         for node in dependency_order(targets)
-        for name in COMPONENT_STEPS[node]
+        for step in _component_steps(node)
     )
 
 

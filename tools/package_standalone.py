@@ -18,6 +18,25 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+try:
+    from build_progress import ComponentStep
+except ModuleNotFoundError:  # Imported as tools.package_standalone by test clients.
+    from tools.build_progress import ComponentStep
+
+
+def semantic_plan() -> tuple[ComponentStep, ...]:
+    """Return the deterministic stages owned by standalone packaging."""
+    return tuple(
+        ComponentStep(name)
+        for name in (
+            "validate standalone package inputs",
+            "assemble standalone package tree",
+            "write standalone provenance",
+            "create standalone archive",
+            "write standalone checksum",
+        )
+    )
+
 COMPLIANCE_DIR = "packaging/standalone-compliance"
 MANIFEST_SCHEMA = "devlegate.standalone-compliance.v1"
 TARGET = "linux-x86_64"

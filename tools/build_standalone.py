@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextlib
 import hashlib
 import json
 import os
@@ -19,6 +21,51 @@ import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+try:
+    from build_progress import ComponentStep
+except ModuleNotFoundError:  # Imported as tools.build_standalone by test clients.
+    from tools.build_progress import ComponentStep
+
+
+def semantic_plan() -> tuple[ComponentStep, ...]:
+    """Return the deterministic stages owned by the standalone builder."""
+    return tuple(
+        ComponentStep(name)
+        for name in (
+            "download standalone toolchain",
+            "build reproducibility wheel A",
+            "build reproducibility wheel B",
+            "validate reproducibility wheels",
+            "build standalone executable A",
+            "build standalone executable B",
+            "validate reproducibility executables",
+            "write standalone build report",
+        )
+    )
+
+
+@contextlib.contextmanager
+def progress_stage(
+    emit, step: ComponentStep,
+):
+    """Emit component events without coupling the builder to presentation."""
+    if emit is not None:
+        try:
+            from build_progress import ComponentEvent
+        except ModuleNotFoundError:
+            from tools.build_progress import ComponentEvent
+
+        emit(ComponentEvent("start", step))
+    try:
+        yield
+    except Exception:
+        if emit is not None:
+            emit(ComponentEvent("fail", step))
+        raise
+    else:
+        if emit is not None:
+            emit(ComponentEvent("complete", step))
 
 PEX_VERSION = "2.103.2"
 TARGET = "linux-x86_64"
@@ -778,7 +825,7 @@ def prove(args: argparse.Namespace) -> int:
     return 0
 
 
-def build(args: argparse.Namespace) -> int:
+def build(args: argparse.Namespace, emit=None) -> int:
     repo = args.repo.resolve()
     output = args.output.resolve()
     builder = builder_python_info(args.python)
@@ -800,9 +847,10 @@ def build(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="devlegate-standalone-") as temporary:
         root = Path(temporary)
         tools = root / "tools"
-        pex_wheel, pex_runtime, tool_wheels = download_packaging_tools(
-            args.python, tools
-        )
+        with progress_stage(emit, semantic_plan()[0]):
+            pex_wheel, pex_runtime, tool_wheels = download_packaging_tools(
+                args.python, tools
+            )
         build_a_root = root / "build-a"
         build_b_root = root / "build-b"
         if supplied_wheel is None:
@@ -814,12 +862,14 @@ def build(args: argparse.Namespace) -> int:
             )
             if wheel_toolchain_a != wheel_toolchain_b:
                 raise BuildError("independent wheel build environments differ")
-            wheel_a = build_wheel(
-                repo, build_a_root / "wheel", str(wheel_python_a), epoch
-            )
-            wheel_b = build_wheel(
-                repo, build_b_root / "wheel", str(wheel_python_b), epoch
-            )
+            with progress_stage(emit, semantic_plan()[1]):
+                wheel_a = build_wheel(
+                    repo, build_a_root / "wheel", str(wheel_python_a), epoch
+                )
+            with progress_stage(emit, semantic_plan()[2]):
+                wheel_b = build_wheel(
+                    repo, build_b_root / "wheel", str(wheel_python_b), epoch
+                )
         else:
             wheel_toolchain_a = {
                 name: filename.split("-")[1]
@@ -830,8 +880,9 @@ def build(args: argparse.Namespace) -> int:
             wheel_b = supplied_wheel
         wheel_a_info = inspect_wheel(wheel_a)
         wheel_b_info = inspect_wheel(wheel_b)
-        if wheel_a_info["sha256"] != wheel_b_info["sha256"]:
-            raise BuildError("repeated wheel builds are not byte-identical")
+        with progress_stage(emit, semantic_plan()[3]):
+            if wheel_a_info["sha256"] != wheel_b_info["sha256"]:
+                raise BuildError("repeated wheel builds are not byte-identical")
         wheel_input_a = build_a_root / "wheel-input"
         wheel_input_b = build_b_root / "wheel-input"
         wheel_input_a.mkdir(parents=True)
@@ -846,36 +897,27 @@ def build(args: argparse.Namespace) -> int:
         artifact_b_dir = build_b_root / "scie"
         artifact_a_dir.mkdir()
         artifact_b_dir.mkdir()
-        artifact_a = build_scie(
-            wheel_a,
-            wheel_input_a,
-            tools,
-            pex_runtime,
-            args.python,
-            artifact_a_dir / f"devlegate-{version}-linux-x86_64",
-            tools / SCIENCE_ASSET,
-            build_a_root,
-            epoch,
-        )
-        artifact_b = build_scie(
-            wheel_b,
-            wheel_input_b,
-            tools,
-            pex_runtime,
-            args.python,
-            artifact_b_dir / f"devlegate-{version}-linux-x86_64",
-            tools / SCIENCE_ASSET,
-            build_b_root,
-            epoch,
-        )
+        with progress_stage(emit, semantic_plan()[4]):
+            artifact_a = build_scie(
+                wheel_a, wheel_input_a, tools, pex_runtime, args.python,
+                artifact_a_dir / f"devlegate-{version}-linux-x86_64",
+                tools / SCIENCE_ASSET, build_a_root, epoch,
+            )
+        with progress_stage(emit, semantic_plan()[5]):
+            artifact_b = build_scie(
+                wheel_b, wheel_input_b, tools, pex_runtime, args.python,
+                artifact_b_dir / f"devlegate-{version}-linux-x86_64",
+                tools / SCIENCE_ASSET, build_b_root, epoch,
+            )
         scie_a = inspect_scie(artifact_a, forbidden_build_root=root)
         scie_b = inspect_scie(artifact_b, forbidden_build_root=root)
         split_a = split_scie(artifact_a, build_a_root / "split")
         split_b = split_scie(artifact_b, build_b_root / "split")
-        if {name: sha256(path) for name, path in split_a.items()} != {
-            name: sha256(path) for name, path in split_b.items()
-        }:
-            raise BuildError("repeated scie split outputs are not identical")
+        with progress_stage(emit, semantic_plan()[6]):
+            if {name: sha256(path) for name, path in split_a.items()} != {
+                name: sha256(path) for name, path in split_b.items()
+            }:
+                raise BuildError("repeated scie split outputs are not identical")
         print("BUILD A")
         print(f"build_root: {build_a_root}")
         print(f"PEX_ROOT: {build_a_root / 'PEX_ROOT'}")
@@ -901,7 +943,8 @@ def build(args: argparse.Namespace) -> int:
         final_artifact = output / f"devlegate-{version}-linux-x86_64"
         shutil.copy2(artifact_a, final_artifact)
         final_artifact.chmod(final_artifact.stat().st_mode | stat.S_IXUSR)
-        report = {
+        with progress_stage(emit, semantic_plan()[7]):
+            report = {
             "schema_version": 2,
             "source_commit": commit,
             "source_epoch": epoch,
@@ -957,7 +1000,7 @@ def build(args: argparse.Namespace) -> int:
             "independent_pex_roots": build_environment(build_a_root, epoch)["PEX_ROOT"]
             != build_environment(build_b_root, epoch)["PEX_ROOT"],
             "temporary_build_path_embedded": False,
-        }
+            }
     report_path = output / "standalone-build.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(final_artifact)
