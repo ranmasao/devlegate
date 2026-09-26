@@ -1,0 +1,25 @@
+{
+  "code_base_head": "c7087aab3773493185d017056e79975c15afa33d",
+  "conclusion": "completed",
+  "control_head": "57275a6870384f267ab9cb5a5b1dfe9d4d5d1ee8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-004",
+  "execution_id": "eaef5224decc4ea7b40f561dcbf66b45",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-004",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-004",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Completed owner-side status publication hardening across execution admission, worker identity, finalization, accepted integration recovery, post-worker failure, and lifecycle shutdown transitions. Preserved immutable IPC reads, added lifecycle-aware publication, and retained fail-closed behavior when a fresh coherent snapshot cannot be collected."
+  },
+  "workspace_head": "d34de9cc51fa7e5735ab6b0ad45ee5176736a26d"
+}
