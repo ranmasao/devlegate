@@ -1,0 +1,25 @@
+{
+  "code_base_head": "75d416434abcebb9794b51b19e222ab0756d2a65",
+  "conclusion": "completed",
+  "control_head": "8cadb0bef4cddf813296d4796d06d1fee2616a87",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-006",
+  "execution_id": "3b02526109c64567b918d971bff42e2c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-006",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-006",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Startup diagnostics now use the canonical HostingMode value, so external/systemd, internal/background, and direct hosts retain truthful, distinct labels. Added regression coverage for all three hosting modes without changing supervision or lifecycle behavior."
+  },
+  "workspace_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2"
+}
