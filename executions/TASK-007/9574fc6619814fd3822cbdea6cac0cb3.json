@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "829885d0c9177805c21259778528988a3e46fa02",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "9574fc6619814fd3822cbdea6cac0cb3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Implemented a shared tree-capable component progress protocol with deterministic hierarchical leaf identities, frozen global planning, and fail-closed start/complete/skip/fail handling. Standalone builds now emit their owned internal semantic stages through the outer reporter, component plans are exported by packaging builders, and imported-tool dependency fallbacks were hardened."
+  },
+  "workspace_head": "fa9485b8432b1f1492a19f7d2223a4bd1fcb8430"
+}
