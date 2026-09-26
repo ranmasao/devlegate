@@ -421,13 +421,13 @@ def build_standalone(
     output = work / "standalone-build"
     output.mkdir()
     try:
-        from build_standalone import build as standalone_build
-    except ModuleNotFoundError:
         from tools.build_standalone import build as standalone_build
-    try:
-        from build_standalone import semantic_plan as standalone_plan
     except ModuleNotFoundError:
+        from build_standalone import build as standalone_build
+    try:
         from tools.build_standalone import semantic_plan as standalone_plan
+    except ModuleNotFoundError:
+        from build_standalone import semantic_plan as standalone_plan
     import argparse
 
     component_steps = standalone_plan() + tuple(
@@ -546,9 +546,9 @@ def validate_standalone_archive(
     source: Source, standalone: dict[str, Artifact], work: Path
 ) -> Path:
     try:
-        from validate_standalone_package import validate
-    except ModuleNotFoundError:
         from tools.validate_standalone_package import validate
+    except ModuleNotFoundError:
+        from validate_standalone_package import validate
     return validate(
         standalone["archive"].path,
         standalone["sidecar"].path,
@@ -592,11 +592,11 @@ def build_deb(
 ) -> Artifact:
     require_tools(("dpkg-deb",))
     try:
-        from package_deb import package as deb_package
-        from validate_deb import validate as validate_deb
-    except ModuleNotFoundError:
         from tools.package_deb import package as deb_package
         from tools.validate_deb import validate as validate_deb
+    except ModuleNotFoundError:
+        from package_deb import package as deb_package
+        from validate_deb import validate as validate_deb
     package = Artifact(
         deb_package(
             repo=source.repo,
@@ -723,14 +723,14 @@ def _owned_component_plan(target: str) -> ComponentPlan:
     """Load the plan from the module that owns the target's work."""
     if target == "standalone":
         try:
-            from build_standalone import component_plan as plan
-        except ModuleNotFoundError:
             from tools.build_standalone import component_plan as plan
+        except ModuleNotFoundError:
+            from build_standalone import component_plan as plan
     elif target == "deb":
         try:
-            from package_deb import component_plan as plan
-        except ModuleNotFoundError:
             from tools.package_deb import component_plan as plan
+        except ModuleNotFoundError:
+            from package_deb import component_plan as plan
     else:
         plans = {
             "wheel": ("build wheel", "validate wheel"),
@@ -911,13 +911,13 @@ def _component_for_target(
         )
     elif target == "standalone":
         try:
-            from package_standalone import package as standalone_package
-        except ModuleNotFoundError:
             from tools.package_standalone import package as standalone_package
-        try:
-            from build_standalone import build as standalone_build
         except ModuleNotFoundError:
+            from package_standalone import package as standalone_package
+        try:
             from tools.build_standalone import build as standalone_build
+        except ModuleNotFoundError:
+            from build_standalone import build as standalone_build
         build_plan = next(child for child in plan.children if child.key == "build")
         def build_action(emit: Callable[[ComponentEvent], None]) -> object:
             import argparse
@@ -977,11 +977,11 @@ def _component_for_target(
         )
     elif target == "deb":
         try:
-            from package_deb import package as deb_package
-            from validate_deb import validate as validate_deb
-        except ModuleNotFoundError:
             from tools.package_deb import package as deb_package
             from tools.validate_deb import validate as validate_deb
+        except ModuleNotFoundError:
+            from package_deb import package as deb_package
+            from validate_deb import validate as validate_deb
         package_component_plan = next(
             child for child in plan.children if child.key == "package"
         )
