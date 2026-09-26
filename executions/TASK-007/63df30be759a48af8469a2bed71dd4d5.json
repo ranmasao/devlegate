@@ -1,0 +1,31 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "incomplete",
+  "control_head": "d11decf6cb9093ad04439d26a34d2366bcc4a4aa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "63df30be759a48af8469a2bed71dd4d5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Bridge component event streams into the distribution subprocess orchestrator so the frozen global plan and execution events cover every internal stage without synthetic no-op advances.",
+    "Add/update regression coverage for component event emission, component-owned plan composition, and captured output."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Bridge component event streams into the distribution subprocess orchestrator so the frozen global plan and execution events cover every internal stage without synthetic no-op advances.",
+      "Add/update regression coverage for component event emission, component-owned plan composition, and captured output."
+    ],
+    "summary": "Added shared typed component progress primitives, component-owned semantic plan exports for standalone and Debian packaging, standalone internal stage event emission, and fail-closed progress reporting with skipped-step tracking."
+  },
+  "workspace_head": "4f15f13b657208d9ee062aa157b7cced9de1e582"
+}
