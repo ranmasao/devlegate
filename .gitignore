@@ -13,3 +13,4 @@ htmlcov/
 .tox/
 .nox/
 .mypy_cache/
+.env
