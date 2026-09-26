@@ -201,3 +201,110 @@ scheduling, visualization, or generalized recovery semantics as part of this tic
   their executable descendants.
 - Given an event for a leaf ID not present in the frozen plan, or a terminal event
   for a leaf other than the currently started leaf, progress handling fails closed.
+
+
+## Review hardening — tree execution integration
+
+The completed attempt at checkpoint
+`fa9485b8432b1f1492a19f7d2223a4bd1fcb8430` with execution
+`9574fc6619814fd3822cbdea6cac0cb3` is not yet acceptable.
+
+The tree primitives exist, but planning and execution are still split across two
+inconsistent models.
+
+### Blocking findings
+
+1. Debian plan/execution mismatch
+
+`_component_steps("deb")` freezes the internal `package_deb.component_plan()`
+leaves first:
+
+- validate standalone input for Debian
+- assemble Debian filesystem
+- write Debian control metadata
+- build Debian package
+- write Debian package checksum
+
+and then appends validation/proof/checksum leaves.
+
+However `build_deb()` does not execute that component plan or bridge its events.
+It emits one outer step named `build Debian package` before running
+`tools/package_deb.py`.
+
+Therefore the frozen plan expects the first Debian internal leaf while execution
+attempts to start a later leaf. The reporter should fail closed with an out-of-order
+progress error. Fix the ownership boundary rather than weakening ordering checks.
+
+For every atomic or compound tool choose one coherent model:
+
+- either treat it as one thin leaf wrapper with a one-leaf plan and one terminal
+  event, or
+- treat it as a composite whose own plan is frozen and whose execution emits the
+  corresponding internal leaf events.
+
+Do not expose an internal component plan while executing it as one unrelated outer
+leaf.
+
+2. Outer orchestrator still duplicates component-owned stage lists
+
+`_component_steps()` still manually appends standalone package/validate/prove
+steps and Debian validate/prove/checksum steps. Wheel, sdist, and full-source steps
+are also hard-coded there.
+
+The selected distribution must be composed from component objects through the common
+leaf/composite interface. Thin wrappers are valid components and may contribute one
+leaf. The outer orchestrator may select and compose components, but must not maintain
+a second copy of their internal stage lists.
+
+3. The tree is not yet the execution source of truth
+
+`component_tree()` exists, but `package()` still builds a separate flat
+`semantic_plan()` and then executes procedural target branches with `_step()`.
+The tree therefore does not prove that the frozen denominator corresponds to the
+actual component execution structure.
+
+Freeze executable leaves from the actual selected component tree and bind execution
+events to that same frozen tree.
+
+4. Hierarchical identities are not yet fully enforced
+
+The new protocol supports `ComponentPlan`, `ComponentStep.key`, and
+`freeze_plan()`, but current production plans mostly rely on display names and the
+outer layer synthesizes positional IDs such as `standalone/3`.
+
+Use stable component-owned local keys/path segments and derive hierarchical frozen
+leaf IDs from the composed tree. Repeated display labels under different parents
+must remain unambiguous without name-based fallback.
+
+The reporter should not fall back from an unknown exact identity to matching
+`target + name`; an event that does not resolve to exactly one frozen leaf must
+fail closed.
+
+5. Required regressions are still missing
+
+Add direct regressions for:
+
+- leaf and composite components satisfying the same interface;
+- nested composite freezing with deterministic hierarchical IDs;
+- repeated display labels under different parents;
+- structural nodes not contributing to the denominator;
+- unknown leaf IDs rejected;
+- terminal event for a different/future leaf rejected;
+- a real component-level skip path;
+- a Debian execution path proving frozen plan and emitted events stay in lock-step;
+- captured/non-interactive output for a compound target.
+
+### Exact-head CI
+
+GitHub Actions run `36272291730` failed with 951 passed, 1 skipped, 3 failed.
+
+Two failures are directly part of this attempt:
+
+- `tools/build_progress.py` lacks the required Devlegate EUPL source header.
+- `test_semantic_plan_is_frozen_and_in_dependency_order` was not updated for the
+  changed semantic plan.
+
+The third failure is the previously observed unrelated live-service drop race, this
+time in the T-1 variant during a control-worktree Git commit.
+
+Acceptance still requires exact-head tests with coverage and lint to be green.
