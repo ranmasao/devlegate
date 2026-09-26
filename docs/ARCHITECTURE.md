@@ -286,9 +286,9 @@ accepted product change and moves the ticket to `done`.
 
 If the worker leaves its checkpoint exactly at the admitted product base, the
 result is a zero-delta execution. Devlegate normally preserves that result and
-does not retry it. One automatic exception is allowed when the product has
-advanced to exactly one current remote generation, that generation is a
-descendant of the admitted base, the execution branch has no publication, and
+does not retry it. One automatic exception is allowed when the canonical
+product has advanced to a current generation that is a proven descendant of
+the admitted base, the execution branch has no publication, and
 the ticket is still executable. The original immutable report remains stored;
 the execution workspace is retired; and a new execution ID is admitted at the
 new product head. This path does not create reconciliation state.

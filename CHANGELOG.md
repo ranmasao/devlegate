@@ -12,8 +12,8 @@ Automatic retry safety for product drift during zero-delta execution.
 ### Added
 
 - Added a narrowly scoped automatic retry when a worker leaves its execution
-  checkpoint unchanged while the product advances by one verified descendant
-  generation during that execution.
+  checkpoint unchanged while the canonical product advances to a verified
+  descendant of the admitted base during that execution.
 - Preserved the original execution report and provenance, retired the stale
   zero-delta workspace, and admitted the fresh execution under a new durable
   execution identity without creating reconciliation state.

@@ -730,7 +730,7 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
         "import json, os, pathlib, sys, time\n"
         "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
         f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
-        "time.sleep(2)\n"
+        "time.sleep(5)\n"
         "(workspace / 'graceful-worker.txt').write_text('completed\\n')\n"
         "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
         "'tool': 'devlegate_report', 'state': {'status': 'completed', "
@@ -3007,6 +3007,17 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         )
         assert service.process is not None and service.process.poll() is None
         assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+
+        def review_barrier_plan_is_stable():
+            response = service.cli("plan", "--json")
+            if response.returncode:
+                return False
+            try:
+                return json.loads(response.stdout).get("action") == "none"
+            except json.JSONDecodeError:
+                return False
+
+        service.wait_for(review_barrier_plan_is_stable, timeout=30)
         plan = json.loads(service.cli("plan", "--json").stdout)
         assert plan["action"] == "none"
         assert "waiting for review" in plan["reason"]

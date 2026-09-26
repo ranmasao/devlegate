@@ -36,6 +36,7 @@ from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime import BlockedReason, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import (
+    WorkerAdmissionClosed,
     WorkerProcessIdentity,
     _capture_worker_identity,
     observe_worker_identity,
@@ -2082,6 +2083,160 @@ def test_zero_delta_product_drift_preserves_old_report_and_admits_fresh_executio
     assert restarted._state["last_automatic_retry"]["status"] == "completed"
 
 
+@pytest.mark.parametrize(
+    ("claim", "process_returncode", "egress_error", "conclusion"),
+    [
+        (WorkerClaim("completed", "done", (), ()), 0, None, "completed"),
+        (None, 1, "worker failed", "failed"),
+    ],
+)
+def test_zero_delta_stale_conclusions_are_historical_only(
+    tmp_path, monkeypatch, claim, process_returncode, egress_error, conclusion
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def stale_worker(_workspace, _prompt, **_kwargs):
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            process_returncode, None, claim, egress_error
+        )
+
+    monkeypatch.setattr(engine._workers, "run", stale_worker)
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+    control = next((state / "worktrees").glob("*/control"))
+    ticket = control / "kanban/todo/T-1.md"
+    assert ticket.is_file()
+    assert not (control / "kanban/review/T-1.md").exists()
+    old_report = ExecutionReportStore(control).read(
+        "T-1", pending["stale_execution_id"]
+    )
+    assert old_report.result.conclusion == conclusion
+    assert "T-1" not in engine._state.get("failed_executions", {})
+
+    restarted = Devlegate(config)
+    fresh_ids = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        fresh_ids.append(restarted._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert fresh_ids == [pending["fresh_execution_id"]]
+    fresh_report = ExecutionReportStore(control).read("T-1", fresh_ids[0])
+    assert fresh_report.code_base_head != old_report.code_base_head
+    assert fresh_report.result.conclusion == "blocked"
+    assert "T-1" not in restarted._state.get("failed_executions", {})
+
+
+def test_zero_delta_remote_only_descendant_is_safely_retried(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    alternate = tmp_path / "remote-advance"
+
+    def worker(_workspace, _prompt, **_kwargs):
+        git(working, "worktree", "add", "--detach", alternate, base)
+        git(alternate, "config", "user.email", "test@example.com")
+        git(alternate, "config", "user.name", "Test User")
+        (alternate / "remote-change.txt").write_text("product B\n")
+        git(alternate, "add", "remote-change.txt")
+        git(alternate, "commit", "-m", "advance remote product")
+        git(alternate, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == base
+    assert pending["product_head"] != base
+
+    restarted = Devlegate(config)
+    fresh_bases = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        fresh_bases.append(restarted._state["execution_base_head"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert fresh_bases == [pending["product_head"]]
+
+
+def test_zero_delta_retry_state_rejects_unknown_or_invalid_status():
+    with pytest.raises(DevlegateError, match="automatic retry status"):
+        runtime.ServiceEngine._validate_state_invariant(
+            {"phase": "idle", "automatic_retry": {"status": "unknown"}}
+        )
+
+
+def test_zero_delta_checkpoint_recovery_observes_drift_after_restart(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    alternate = tmp_path / "checkpoint-remote"
+
+    def crash_after_checkpoint(_admitted_head):
+        git(working, "worktree", "add", "--detach", alternate, base)
+        git(alternate, "config", "user.email", "test@example.com")
+        git(alternate, "config", "user.name", "Test User")
+        (alternate / "remote-change.txt").write_text("product B\n")
+        git(alternate, "add", "remote-change.txt")
+        git(alternate, "commit", "-m", "advance remote product")
+        git(alternate, "push", "origin", "HEAD:main")
+        git(working, "worktree", "remove", "--force", alternate)
+        raise RuntimeError("simulated stop after checkpoint")
+
+    monkeypatch.setattr(engine, "_observe_product_generation", crash_after_checkpoint)
+    monkeypatch.setattr(
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        ),
+    )
+    with pytest.raises(RuntimeError, match="after checkpoint"):
+        run_test_iteration(engine)
+    assert engine._state["execution_stage"] == "post-checkpoint"
+    assert engine._state.get("automatic_retry") is None
+    assert engine._state["pending_execution_report"]["workspace_head"] == base
+
+    restarted = Devlegate(config)
+    fresh_ids = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        fresh_ids.append(restarted._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["automatic_retry"]["status"] == "pending_admission"
+    assert fresh_ids == []
+    assert run_test_iteration(restarted) == 0
+    assert len(fresh_ids) == 1
+
+
 def test_zero_delta_without_product_drift_does_not_retry(
     tmp_path, monkeypatch
 ):
@@ -2220,6 +2375,103 @@ def test_zero_delta_retry_replay_does_not_double_admit(
     )
     assert run_test_iteration(replay) == 0
     assert replay._state["last_automatic_retry"]["fresh_execution_id"] == calls[0]
+
+
+def test_zero_delta_retry_replays_after_historical_report_persistence(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def worker(_workspace, _prompt, **_kwargs):
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    original_retire = engine._retire_zero_delta_execution
+
+    def crash_before_retirement(report):
+        monkeypatch.setattr(
+            engine, "_retire_zero_delta_execution", original_retire
+        )
+        raise RuntimeError("simulated crash before retirement")
+
+    monkeypatch.setattr(engine, "_retire_zero_delta_execution", crash_before_retirement)
+    with pytest.raises(RuntimeError, match="before retirement"):
+        run_test_iteration(engine)
+    pending = engine._state["automatic_retry"]
+
+    restarted = Devlegate(config)
+    ids = []
+
+    def fresh_worker(_workspace, _prompt, **_kwargs):
+        ids.append(restarted._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
+    assert run_test_iteration(restarted) == 0
+    assert ids == []
+    assert run_test_iteration(restarted) == 0
+    assert len(ids) == 1
+    assert ids[0] != pending["stale_execution_id"]
+    control = next((state / "worktrees").glob("*/control"))
+    assert len(list((control / "executions/T-1").glob("*.json"))) == 2
+
+
+def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def stale_worker(_workspace, _prompt, **_kwargs):
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "evidence absent", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", stale_worker)
+    assert run_test_iteration(engine) == 0
+    pending = engine._state["automatic_retry"]
+
+    restarted = Devlegate(config)
+    monkeypatch.setattr(
+        restarted._workers, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            WorkerAdmissionClosed()
+        )
+    )
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["automatic_retry"]["status"] == "admitted"
+    assert restarted._state["automatic_retry"]["fresh_execution_id"] == (
+        pending["fresh_execution_id"]
+    )
+
+    replay = Devlegate(config)
+    ids = []
+
+    def resumed_worker(_workspace, _prompt, **_kwargs):
+        ids.append(replay._state["execution_id"])
+        return WorkerRunResult(
+            0, None, WorkerClaim("blocked", "rechecked", (), ()), None
+        )
+
+    monkeypatch.setattr(replay._workers, "run", resumed_worker)
+    assert run_test_iteration(replay) == 0
+    assert ids == [pending["fresh_execution_id"]]
 
 
 def test_engine_reconciliation_resume_reuses_retained_report_without_worker(

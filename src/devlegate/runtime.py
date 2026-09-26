@@ -1072,9 +1072,10 @@ class ServiceEngine:
         remote_head: str,
     ) -> ExecutionAuthorization | None:
         retry = self._state.get("automatic_retry")
-        if not isinstance(retry, dict) or retry.get("status") != (
-            "pending_admission"
-        ):
+        if not isinstance(retry, dict) or retry.get("status") not in {
+            "pending_admission",
+            "admitted",
+        }:
             return None
         ticket_id = retry.get("ticket_id")
         original_base = retry.get("original_base")
@@ -2241,6 +2242,67 @@ class ServiceEngine:
             for ticket_id, value in failures.items()
         ):
             raise DevlegateError("invalid state: failed execution metadata is invalid")
+
+        def validate_automatic_retry(
+            value: object, *, current: bool
+        ) -> None:
+            if value is None:
+                return
+            if not isinstance(value, dict):
+                raise DevlegateError("invalid automatic retry state")
+            status = value.get("status")
+            current_statuses = {"pending", "pending_admission", "admitted"}
+            terminal_statuses = {"completed", "not_admitted"}
+            valid_statuses = current_statuses if current else terminal_statuses
+            if status not in valid_statuses:
+                raise DevlegateError("invalid automatic retry status")
+            required = {
+                "status",
+                "reason",
+                "ticket_id",
+                "stale_execution_id",
+                "original_base",
+                "worker_checkpoint",
+                "product_head",
+                "control_head",
+            }
+            if status in {"pending_admission", "admitted", "completed"}:
+                required.add("fresh_execution_id")
+            if status == "not_admitted" and "fresh_execution_id" in value:
+                required.add("fresh_execution_id")
+            if status == "completed":
+                required.add("completed_conclusion")
+            if not required.issubset(value):
+                raise DevlegateError("automatic retry identity is incomplete")
+            allowed = required
+            if set(value) != allowed:
+                raise DevlegateError("automatic retry fields are invalid")
+            for field in (
+                "reason",
+                "ticket_id",
+                "stale_execution_id",
+                "worker_checkpoint",
+            ):
+                if not isinstance(value.get(field), str) or not value[field]:
+                    raise DevlegateError("automatic retry identity is invalid")
+            for field in ("original_base", "product_head", "control_head"):
+                if not _is_git_identity(value.get(field)):
+                    raise DevlegateError("automatic retry Git identity is invalid")
+            if "fresh_execution_id" in required and (
+                not isinstance(value.get("fresh_execution_id"), str)
+                or not value["fresh_execution_id"]
+            ):
+                raise DevlegateError("automatic retry fresh execution is invalid")
+            if "completed_conclusion" in required and (
+                not isinstance(value.get("completed_conclusion"), str)
+                or not value["completed_conclusion"]
+            ):
+                raise DevlegateError("automatic retry conclusion is invalid")
+
+        validate_automatic_retry(state.get("automatic_retry"), current=True)
+        validate_automatic_retry(
+            state.get("last_automatic_retry"), current=False
+        )
         identity = _worker_identity_from_value(
             state.get("worker_identity"), state.get("execution_id")
         )
@@ -3682,8 +3744,8 @@ class ServiceEngine:
         if (
             not isinstance(local_head, str)
             or not isinstance(remote_head, str)
-            or local_head != remote_head
-            or local_head == admitted_base
+            or remote_head == admitted_base
+            or local_head not in {admitted_base, remote_head}
         ):
             return False
         if self._state.get("execution_remote_head") is not None:
@@ -3698,7 +3760,7 @@ class ServiceEngine:
             "merge-base",
             "--is-ancestor",
             admitted_base,
-            local_head,
+            remote_head,
             check=False,
         )
         return ancestor.returncode == 0
@@ -3707,7 +3769,7 @@ class ServiceEngine:
     def _zero_delta_retry_payload(
         report: ExecutionReport, product: dict[str, object]
     ) -> dict[str, object]:
-        product_head = product.get("local_head")
+        product_head = product.get("remote_head")
         if not isinstance(product_head, str) or not product_head:
             raise WorkflowBlockedError("zero-delta retry lacks a product generation")
         return {
@@ -3788,9 +3850,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "zero-delta product drift is no longer safely provable"
             )
-        control_head = self._apply_execution_lifecycle(
-            report, allow_unpublished=True
-        )
+        control_head = self._persist_historical_execution_report(report)
         ticket_store = self._ticket_store()
         ticket = ticket_store.by_id.get(report.ticket_id)
         executable = (
@@ -3799,7 +3859,7 @@ class ServiceEngine:
             and ticket in ticket_store.runnable
         )
         self._retire_zero_delta_execution(report)
-        product_head = str(product["local_head"])
+        product_head = str(product["remote_head"])
         if executable:
             fresh_execution_id = retry.get("fresh_execution_id")
             if not isinstance(fresh_execution_id, str) or not fresh_execution_id:
@@ -3817,6 +3877,7 @@ class ServiceEngine:
                 product_head,
                 clear_execution=True,
                 automatic_retry=next_retry,
+                apply_conclusion=False,
             )
             _log(
                 f"zero-delta execution {report.execution_id} became stale on "
@@ -3836,6 +3897,7 @@ class ServiceEngine:
             clear_execution=True,
             automatic_retry=None,
             last_automatic_retry=completed,
+            apply_conclusion=False,
         )
         _log(
             f"zero-delta execution {report.execution_id} retained without retry; "
@@ -3853,6 +3915,7 @@ class ServiceEngine:
         clear_execution: bool = False,
         automatic_retry: object = _UNSET,
         last_automatic_retry: object = _UNSET,
+        apply_conclusion: bool = True,
     ) -> None:
         interruption_kind = self._state.get("execution_interruption_kind")
         if not isinstance(interruption_kind, str):
@@ -3867,7 +3930,7 @@ class ServiceEngine:
         failed_executions = self._state.get("failed_executions", {})
         if not isinstance(failed_executions, dict):
             failed_executions = {}
-        if report.result.conclusion == "failed":
+        if apply_conclusion and report.result.conclusion == "failed":
             failure = {
                 "execution_id": report.execution_id,
                 "product_head": product_head,
@@ -3897,7 +3960,7 @@ class ServiceEngine:
                 **failed_executions,
                 report.ticket_id: failure,
             }
-        else:
+        elif apply_conclusion:
             failed_executions = {
                 ticket_id: metadata
                 for ticket_id, metadata in failed_executions.items()
@@ -4964,7 +5027,6 @@ class ServiceEngine:
     def _recover_checkpoint_publication(self) -> None:
         state = self._state
         stage = state.get("execution_stage")
-        self._prove_product_generation()
         pending = state.get("pending_execution_report")
         try:
             report = ExecutionReport.from_dict(pending)
@@ -4979,6 +5041,21 @@ class ServiceEngine:
             raise WorkflowBlockedError("execution start HEAD is unavailable")
         checkpoint_head: str
         if stage == "checkpointing":
+            if workspace.head == start_head and not workspace.dirty:
+                product = self._observe_product_generation(report.code_base_head)
+                if self._is_zero_delta_stale_product_drift(
+                    report.code_base_head, start_head, product
+                ):
+                    report = dataclasses.replace(report, workspace_head=start_head)
+                    retry = self._zero_delta_retry_payload(report, product)
+                    self._save_state(
+                        "agent_running",
+                        execution_stage="lifecycle",
+                        pending_execution_report=report.as_dict(),
+                        automatic_retry=retry,
+                    )
+                    return
+            self._prove_product_generation()
             if workspace.head == start_head:
                 try:
                     checkpoint = ExecutionWorkspaceManager(
@@ -5009,6 +5086,26 @@ class ServiceEngine:
                 pending_execution_report=report.as_dict(),
             )
             stage = "post-checkpoint"
+        product = (
+            self._observe_product_generation(report.code_base_head)
+            if report.workspace_head == report.code_base_head
+            else None
+        )
+        if (
+            product is not None
+            and self._is_zero_delta_stale_product_drift(
+                report.code_base_head, report.workspace_head, product
+            )
+        ):
+            retry = self._zero_delta_retry_payload(report, product)
+            self._save_state(
+                "agent_running",
+                execution_stage="lifecycle",
+                pending_execution_report=report.as_dict(),
+                automatic_retry=retry,
+            )
+            return
+        self._prove_product_generation()
         if stage in {"post-checkpoint", "publishing"}:
             if report.workspace_head is None or workspace.head != report.workspace_head:
                 raise WorkflowBlockedError(
@@ -5083,8 +5180,20 @@ class ServiceEngine:
         remote_head = state.get("remote_head")
         if not isinstance(local_head, str) or not isinstance(remote_head, str):
             raise WorkflowBlockedError("lifecycle product binding is incomplete")
-        self._prove_product_generation()
-        self._report_matches_execution_state(report)
+        retry = self._state.get("automatic_retry")
+        if (
+            isinstance(retry, dict)
+            and retry.get("status") == "pending"
+            and report.workspace_head == report.code_base_head
+        ):
+            self._report_matches_execution_binding(report)
+            if self._execution_remote_head(report.execution_branch) is not None:
+                raise WorkflowBlockedError(
+                    "zero-delta retry execution branch is already published"
+                )
+        else:
+            self._prove_product_generation()
+            self._report_matches_execution_state(report)
         return report
 
     def _control_report_at(
@@ -5100,7 +5209,13 @@ class ServiceEngine:
             return None
         return recovered if recovered.as_dict() == report.as_dict() else None
 
-    def _lifecycle_commit_is_exact(self, commit: str, report: ExecutionReport) -> bool:
+    def _lifecycle_commit_is_exact(
+        self,
+        commit: str,
+        report: ExecutionReport,
+        *,
+        apply_conclusion: bool = True,
+    ) -> bool:
         parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
         if parent.returncode:
             return False
@@ -5138,7 +5253,7 @@ class ServiceEngine:
         )
         report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
         expected = {f"A\t{report_path}"}
-        if report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion == "completed":
             expected.update(
                 {
                     f"D\t{self.todo_path}/{report.ticket_id}.md",
@@ -5153,7 +5268,7 @@ class ServiceEngine:
         )
         if report_bytes.returncode or report_bytes.stdout != report.to_json():
             return False
-        if report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion == "completed":
             parent_blob = _git(
                 self.control_worktree,
                 "rev-parse",
@@ -5175,7 +5290,12 @@ class ServiceEngine:
         return True
 
     def _prove_unpublished_lifecycle_lineage(
-        self, commit: str, remote_head: str, report: ExecutionReport
+        self,
+        commit: str,
+        remote_head: str,
+        report: ExecutionReport,
+        *,
+        apply_conclusion: bool = True,
     ) -> None:
         parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
         if parent.returncode:
@@ -5204,13 +5324,19 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "unpublished control history contains more than one commit"
             )
-        if not self._lifecycle_commit_is_exact(commit, report):
+        if not self._lifecycle_commit_is_exact(
+            commit, report, apply_conclusion=apply_conclusion
+        ):
             raise WorkflowBlockedError(
                 "unpublished control commit is not the exact lifecycle mutation"
             )
 
     def _remote_lifecycle_commit(
-        self, remote_head: str, report: ExecutionReport
+        self,
+        remote_head: str,
+        report: ExecutionReport,
+        *,
+        apply_conclusion: bool = True,
     ) -> str | None:
         path = f"executions/{report.ticket_id}/{report.execution_id}.json"
         history = _git(
@@ -5225,7 +5351,9 @@ class ServiceEngine:
         if history.returncode:
             return None
         for commit in history.stdout.splitlines():
-            if self._lifecycle_commit_is_exact(commit, report):
+            if self._lifecycle_commit_is_exact(
+                commit, report, apply_conclusion=apply_conclusion
+            ):
                 return commit
         return None
 
@@ -5290,14 +5418,16 @@ class ServiceEngine:
             str(self._state.get("selected_ticket_body", "")),
         )
 
-    def _apply_lifecycle_once(self, report: ExecutionReport) -> str:
+    def _apply_lifecycle_once(
+        self, report: ExecutionReport, *, apply_conclusion: bool = True
+    ) -> str:
         ticket_store = self._ticket_store()
         ticket = ticket_store.by_id.get(report.ticket_id)
         if ticket is None or ticket.state != "todo":
             raise WorkflowBlockedError(
                 "execution ticket is not in its expected todo state"
             )
-        if report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion == "completed":
             boundary = tuple(
                 item
                 for item in ticket_store.tickets
@@ -5309,7 +5439,7 @@ class ServiceEngine:
                 )
         report_store = ExecutionReportStore(self.control_worktree)
         report_store.write(report)
-        if report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion == "completed":
             review = self.control_worktree / self.review_path / f"{ticket.id}.md"
             if review.exists() or review.is_symlink():
                 raise WorkflowBlockedError("review ticket already exists")
@@ -5325,7 +5455,8 @@ class ServiceEngine:
             self.control_worktree,
             "commit",
             "-m",
-            f"Devlegate lifecycle {report.ticket_id} {report.execution_id} "
+            f"Devlegate {'lifecycle' if apply_conclusion else 'historical report'} "
+            f"{report.ticket_id} {report.execution_id} "
             f"{report.result.conclusion}",
             check=False,
         )
@@ -5336,7 +5467,11 @@ class ServiceEngine:
         return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
     def _apply_execution_lifecycle(
-        self, report: ExecutionReport, *, allow_unpublished: bool = False
+        self,
+        report: ExecutionReport,
+        *,
+        allow_unpublished: bool = False,
+        apply_conclusion: bool = True,
     ) -> str:
         if allow_unpublished:
             self._report_matches_execution_binding(report)
@@ -5370,7 +5505,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError("control remote branch is unavailable")
             remote_head = remote_result.stdout.strip()
             local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
-            existing = self._remote_lifecycle_commit(remote_head, report)
+            existing = self._remote_lifecycle_commit(
+                remote_head, report, apply_conclusion=apply_conclusion
+            )
             if existing is not None:
                 parent = _git(
                     self.control_worktree, "rev-parse", f"{existing}^", check=False
@@ -5409,7 +5546,10 @@ class ServiceEngine:
                 return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
             if local_head != report.control_head:
                 self._prove_unpublished_lifecycle_lineage(
-                    local_head, remote_head, report
+                    local_head,
+                    remote_head,
+                    report,
+                    apply_conclusion=apply_conclusion,
                 )
                 self._prove_control_descendant(remote_head, report)
                 reset = _git(
@@ -5432,7 +5572,9 @@ class ServiceEngine:
                     raise WorkflowBlockedError("cannot fast-forward control descendant")
             else:
                 self._prove_control_descendant(report.control_head, report)
-            lifecycle_head = self._apply_lifecycle_once(report)
+            lifecycle_head = self._apply_lifecycle_once(
+                report, apply_conclusion=apply_conclusion
+            )
             pushed = _git(
                 self.control_worktree,
                 "push",
@@ -5447,6 +5589,11 @@ class ServiceEngine:
             )
         raise WorkflowBlockedError(
             "control lifecycle reconciliation retry bound exceeded"
+        )
+
+    def _persist_historical_execution_report(self, report: ExecutionReport) -> str:
+        return self._apply_execution_lifecycle(
+            report, allow_unpublished=True, apply_conclusion=False
         )
 
     def serve(
