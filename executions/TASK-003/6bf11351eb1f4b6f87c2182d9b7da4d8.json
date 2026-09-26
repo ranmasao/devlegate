@@ -1,0 +1,29 @@
+{
+  "code_base_head": "8f343296cadeabde48187c5a2394dd6f664c150f",
+  "conclusion": "completed",
+  "control_head": "9379f77f505a5a47d0f3b5d7b4bf639fbc3bbb3e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-003",
+  "execution_id": "6bf11351eb1f4b6f87c2182d9b7da4d8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-003",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full suite was attempted but stopped on an existing environment-sensitive failure: test_once_uses_canonical_service_host received DEVLEGATE_HOST_MODE=external from the surrounding process environment; focused worker/systemd/daemon tests pass."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-003",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Full suite was attempted but stopped on an existing environment-sensitive failure: test_once_uses_canonical_service_host received DEVLEGATE_HOST_MODE=external from the surrounding process environment; focused worker/systemd/daemon tests pass."
+    ],
+    "summary": "Added scoped worker environment sanitization that preserves normal project environment while removing systemd notify/watchdog state, Devlegate hosting/startup state, and restart authority/request variables. Applied it at WorkerSupervisor worker launch and added regressions for sanitization and nested hosting detection."
+  },
+  "workspace_head": "e91f82150f9c60382d645e33f0499791bceaa1c8"
+}
