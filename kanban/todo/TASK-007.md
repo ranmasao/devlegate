@@ -534,3 +534,55 @@ green before review acceptance.
 
 No further packaging-progress architecture change is requested here unless one of
 the required real-adapter regressions exposes a concrete defect.
+
+
+## Review hardening — make the real-adapter regressions actually intercept production imports
+
+The completed attempt at checkpoint
+`ebf67e0a7eee214a3b41dc68f122e54238820c05` with execution
+`6a54e5734d0248e7a250f152be87e2bb` adds the required standalone, Debian,
+supplied-wheel skip, and captured-output regressions and includes the previously
+requested Ruff formatting changes.
+
+The new regressions do not yet test the intended production adapters because their
+monkeypatches target a different module identity from the one dynamically imported by
+`_component_for_target()`.
+
+### Blocking test failures
+
+GitHub Actions run `36276357021` failed with 957 passed, 1 skipped, and 3 failed.
+
+1. `test_real_standalone_adapter_emits_frozen_internal_steps`
+
+The test patches `tools.build_standalone.build`, but
+`_component_for_target("standalone", ...)` resolves the top-level
+`build_standalone` module in this test environment. The real builder therefore
+runs and fails reading the synthetic temporary repository's missing
+`pyproject.toml`.
+
+2. `test_real_debian_adapter_emits_package_and_post_build_steps`
+
+The test patches `tools.package_deb.package`, but the adapter resolves the
+top-level `package_deb` module. The real Debian packager therefore runs and fails
+because the synthetic report lacks `source_commit`.
+
+3. `test_real_component_progress_output_is_deterministic_and_noninteractive`
+
+This has the same standalone module-identity problem as the first regression and
+runs the real builder instead of the test double.
+
+Fix the regressions so they replace the exact implementation object imported by the
+production adapter. Acceptable approaches include arranging the test module aliases
+so top-level and `tools.*` imports refer to the same module object, or refactoring
+the adapter import seam in a small deterministic way that gives tests one canonical
+object to replace. Do not weaken the tests by bypassing
+`_component_for_target()`; they must continue to exercise the real production
+adapter boundary.
+
+After the fix, the regressions must prove the originally requested event sequences,
+skip behavior, and captured output rather than merely avoiding the real builder.
+
+### Final acceptance gate
+
+No new packaging-progress architecture is requested. Re-run exact-head CI and require
+tests, coverage, and Ruff all to be green before acceptance.
