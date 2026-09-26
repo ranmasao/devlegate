@@ -103,3 +103,57 @@ orchestrates, including standalone packaging/validation and Debian packaging.
   progress remains readable without ANSI cursor control or terminal-only behavior.
 - Given identical source/configuration and selected target, when planning is
   repeated, then the semantic plan and step ordering are deterministic.
+
+
+## Review hardening
+
+The first implementation reached checkpoint
+`b42bc0ff6aa0f94c643146c25e132a1f029381c3` with execution
+`09b48a76fa564cea8c7cf1b888d93c04`.
+
+Review found that the implementation does not yet satisfy the component/event
+boundary required by this ticket:
+
+- `tools/build_distribution.py` centrally hard-codes `COMPONENT_STEPS` and wraps
+  whole component calls with `_step(...)`, while the component builders themselves
+  do not expose their semantic plans or emit semantic progress events.
+- As a result, the longest standalone operation remains the opaque
+  `build standalone executable` subprocess even though it performs multiple
+  meaningful internal operations. The outer plan can therefore drift from component
+  behavior and cannot prove that its denominator describes the work the component
+  will actually execute.
+- The progress reporter accepts a `fail` event for any planned step without
+  proving that the same step is currently started. Failure events must be ordered
+  and fail-closed just like completion.
+- `skip` is supported syntactically by the reporter, but there is no real
+  component-level skip emission/regression proving that planned optional work is
+  surfaced truthfully.
+
+Harden the design so semantic plan ownership lives with the component that owns the
+work, with an explicit interface consumed by the outer orchestrator. The outer
+orchestrator should combine/freeze component plans and own presentation, but should
+not duplicate the components' internal stage lists. Component execution must emit
+typed semantic events for the frozen plan (directly or through a small shared
+callback/protocol) so internal standalone/Debian/package/validation stages are
+observable rather than represented only by one outer subprocess wrapper.
+
+The exact-head CI run `36269805896` also failed with 953 passed, 1 skipped, and one
+failure in the unrelated live-service drop test
+`test_real_service_drop_retire_old_lineage_and_runs_fresh[T-2]` at concurrent
+`git add -A`. A rerun was requested to distinguish that apparent race from this
+packaging change. Regardless of the rerun result, the component/event architecture
+above remains a blocking review finding.
+
+### Additional required regressions
+
+- Given a component implementation, its exported semantic plan is the source of
+  truth used by the outer global plan; the outer orchestrator does not maintain a
+  duplicated list of that component's internal steps.
+- Given a long standalone build, meaningful internal stages are emitted from the
+  component execution boundary and appear in the frozen global progress stream.
+- Given a started step, a fail event for a different or future step is rejected
+  rather than silently resetting reporter state.
+- Given a component that intentionally skips planned work, the component emits a
+  typed skip event for that exact planned step and the global reporter records it as
+  skipped.
+- Exact-head full tests with coverage and lint are green before acceptance.
