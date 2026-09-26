@@ -2264,10 +2264,16 @@ def test_external_attached_host_reports_readiness_without_startup_fd(monkeypatch
     target = Namespace(env_file=Path("/tmp/service.env"), repo=Path("/tmp/repo"))
     readiness_report = object()
     captured = {}
+    startup_modes = []
 
     monkeypatch.setattr(cli, "hosted_runtime_supported", lambda: True)
     monkeypatch.setattr(cli, "_service_engine", lambda *args, **kwargs: object())
     monkeypatch.setattr(cli, "_systemd_readiness_report", lambda: readiness_report)
+    monkeypatch.setattr(
+        cli,
+        "_startup_report",
+        lambda engine, mode: startup_modes.append(mode),
+    )
     monkeypatch.setattr(
         cli,
         "run_service",
@@ -2285,6 +2291,50 @@ def test_external_attached_host_reports_readiness_without_startup_fd(monkeypatch
     )
     assert captured["startup_fd"] is None
     assert captured["readiness_report"] is readiness_report
+    captured["startup_report"]()
+    assert startup_modes == ["external"]
+
+
+@pytest.mark.parametrize(
+    ("host_mode", "startup_fd", "expected_mode"),
+    [
+        (cli.HostingMode.DIRECT, None, "direct"),
+        (cli.HostingMode.INTERNAL, 42, "internal"),
+    ],
+)
+def test_attached_host_startup_report_uses_hosting_mode(
+    monkeypatch, host_mode, startup_fd, expected_mode
+):
+    target = Namespace(env_file=Path("/tmp/service.env"), repo=Path("/tmp/repo"))
+    startup_modes = []
+
+    monkeypatch.setattr(cli, "hosted_runtime_supported", lambda: True)
+    monkeypatch.setattr(
+        cli, "_systemd_authority_established", lambda target: (None, False)
+    )
+    monkeypatch.setattr(cli, "_service_engine", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "_systemd_readiness_report", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_startup_report",
+        lambda engine, mode: startup_modes.append(mode),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_service",
+        lambda engine, **kwargs: kwargs["startup_report"]() or 0,
+    )
+
+    assert (
+        cli._run_attached_target(
+            target,
+            host_mode=host_mode,
+            once=False,
+            startup_fd=startup_fd,
+        )
+        == 0
+    )
+    assert startup_modes == [expected_mode]
 
 
 def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(

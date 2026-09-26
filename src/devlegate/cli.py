@@ -1447,7 +1447,7 @@ def _run_attached_target(
         "once": once,
         "startup_fd": startup_fd,
         "startup_report": lambda: _startup_report(
-            engine, "background" if startup_fd is not None else "direct"
+            engine, host_mode.value
         ),
     }
     readiness_report = _systemd_readiness_report()
