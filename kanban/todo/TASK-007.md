@@ -486,3 +486,51 @@ only the standalone `ComponentPlan`/TreeComponent primitives in isolation.
 
 Exact-head GitHub Actions run `36274320406` was still running at review time.
 Acceptance requires its tests, coverage, and Ruff steps all to complete successfully.
+
+
+## Review hardening — finish required adapter regressions and lint
+
+The completed attempt at checkpoint
+`649eb65ec199cfea5c5efcf4b26805c870bce4ba` with execution
+`8a0478bf45cd46b99b759d1bed32ab15` correctly removes the contradictory
+multi-stage progress/component API from `tools/package_standalone.py`. The
+standalone archive packager is now unambiguously a raw atomic tool behind the
+distribution-level `standalone/package` leaf.
+
+The attempt does not complete the rest of the previous review requirements.
+
+### 1. Production-adapter regressions were not added
+
+The checkpoint does not add new tests beyond the previous state. In particular, the
+required regressions are still missing for the real target adapters:
+
+- run the real `_component_for_target("standalone", ...)` with expensive work
+  stubbed and prove multiple `standalone/build/*` events plus
+  `standalone/package`, `standalone/validate`, and `standalone/prove` match
+  the frozen target plan;
+- run the real `_component_for_target("deb", ...)` with work stubbed and prove
+  `deb/package/*` is followed by `deb/validate-deb` and `deb/prove-deb` in
+  exact frozen-plan order;
+- exercise the supplied-wheel standalone path and assert typed skip events for the
+  skipped reproducibility-wheel leaves;
+- exercise a compound target through `ProgressReporter` with work stubbed and
+  assert deterministic captured/non-interactive output and a fixed denominator.
+
+The generic toy nested-tree regression is useful but is not a substitute for these
+production-boundary tests, because the integration between real target construction,
+component-owned events, hierarchical scoping, and the global reporter was the source
+of repeated regressions in this ticket.
+
+### 2. Exact-head Ruff is still red
+
+GitHub Actions run `36275216163` passed the full tests and coverage, but failed
+`./dev lint` with the same four Ruff errors as the preceding attempt:
+
+- `tools/build_standalone.py`: two E501 overlong skip-event lines;
+- `tools/validate_standalone_package.py`: two I001 import-block formatting errors.
+
+Fix these mechanical lint failures and require the exact-head workflow to complete
+green before review acceptance.
+
+No further packaging-progress architecture change is requested here unless one of
+the required real-adapter regressions exposes a concrete defect.
