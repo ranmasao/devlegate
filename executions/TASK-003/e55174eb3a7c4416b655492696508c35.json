@@ -1,0 +1,25 @@
+{
+  "code_base_head": "8f343296cadeabde48187c5a2394dd6f664c150f",
+  "conclusion": "completed",
+  "control_head": "019cd12e0405d070af460639e4b4688b4ad1c0ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-003",
+  "execution_id": "e55174eb3a7c4416b655492696508c35",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-003",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-003",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Decoupled external systemd readiness reporting from the internal startup fd so externally hosted attached services pass readiness into run_service even without DEVLEGATE_STARTUP_FD. Added regression coverage for that boundary and made the direct-host test deterministic against ambient host-control environment variables; existing worker environment sanitization remains explicit for notify, watchdog, startup, host-mode, and restart authority state."
+  },
+  "workspace_head": "c7087aab3773493185d017056e79975c15afa33d"
+}
