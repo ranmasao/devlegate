@@ -27,6 +27,7 @@ def load_tool(name):
 
 
 VALIDATOR = load_tool("validate_deb")
+BUILDER = load_tool("package_deb")
 
 
 def make_package(
@@ -92,6 +93,61 @@ def make_package(
     report = tmp_path / "report.json"
     report.write_text(json.dumps({"wheel": {"version": "0.5.5.dev0"}}))
     return package, report
+
+
+def make_standalone_payload(root: Path) -> Path:
+    extracted = root / "standalone"
+    extracted.mkdir()
+    binary = extracted / "devlegate"
+    binary.write_bytes(b"standalone")
+    binary.chmod(0o755)
+    for name in (
+        "LICENSE",
+        "NOTICE",
+        "LICENSING.md",
+        "THIRD_PARTY_NOTICES.md",
+        "BUILD-PROVENANCE.json",
+    ):
+        (extracted / name).write_text(f"{name}\n", encoding="ascii")
+    licenses = extracted / "LICENSES"
+    licenses.mkdir()
+    (licenses / "standalone-compliance-manifest.json").write_text(
+        "{}\n", encoding="ascii"
+    )
+    return extracted
+
+
+def test_production_deb_builder_sets_maintainer_and_passes_validator(
+    tmp_path, monkeypatch
+):
+    extracted = make_standalone_payload(tmp_path)
+    report = tmp_path / "build-report.json"
+    report.write_text(
+        json.dumps(
+            {"source_commit": "a" * 40, "wheel": {"version": "0.5.5.dev0"}}
+        ),
+        encoding="ascii",
+    )
+    monkeypatch.setattr(BUILDER, "validate", lambda *args: extracted)
+    monkeypatch.setattr(BUILDER, "git_timestamp", lambda *args: 1)
+
+    package = BUILDER.package(
+        repo=tmp_path,
+        archive=tmp_path / "standalone.tar.gz",
+        sidecar=tmp_path / "standalone.tar.gz.sha256",
+        build_report=report,
+        output_dir=tmp_path / "output",
+    )
+
+    fields = VALIDATOR.fields(package)
+    assert fields["Maintainer"] == "Daniil Romanov <romanov.at.bg@gmail.com>"
+    assert "devlegate.invalid" not in subprocess.run(
+        ["dpkg-deb", "--info", str(package)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    VALIDATOR.validate(package, report, tmp_path / "validated")
 
 
 def test_deb_validator_accepts_dependency_free_payload(tmp_path):

@@ -89,7 +89,7 @@ def package(
             "Priority: optional\n"
             "Architecture: amd64\n"
             f"Installed-Size: {installed_size}\n"
-            "Maintainer: Devlegate maintainers <maintainers@devlegate.invalid>\n"
+            "Maintainer: Daniil Romanov <romanov.at.bg@gmail.com>\n"
             "Description: deterministic local agent orchestrator\n"
             " Dependency-free standalone Devlegate executable.\n",
             encoding="ascii",
