@@ -1,0 +1,25 @@
+{
+  "code_base_head": "10dccef7fc36b7e7a2ac474fe3b8d21c070592cf",
+  "conclusion": "completed",
+  "control_head": "b53a714aed2a99519ca9be23261f4cc58cfc7832",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-002",
+  "execution_id": "255d954daf794a159bb6541b8655619f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-002",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-002",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Implemented human-readable checkpoint and lifecycle commit messages using ticket titles and worker summaries, with Devlegate-Execution trailers. Removed checkpoint recovery dependence on commit subject prose and updated focused regressions for message content and exact replay behavior. Focused tests, Ruff, compileall, and diff checks pass. Full suite reached 935 passed; remaining 6 failures are pre-existing environment/fake-service issues requiring the missing .venv or unrelated test fixture updates."
+  },
+  "workspace_head": "8158ce49b7fa5fb30433f11894959ac8636d3bc9"
+}
