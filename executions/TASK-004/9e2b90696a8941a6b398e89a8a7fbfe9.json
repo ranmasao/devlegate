@@ -1,0 +1,25 @@
+{
+  "code_base_head": "c7087aab3773493185d017056e79975c15afa33d",
+  "conclusion": "completed",
+  "control_head": "556e11cad5ae1b17c14725b9e8e2bb701bdad67a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-004",
+  "execution_id": "9e2b90696a8941a6b398e89a8a7fbfe9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-004",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-004",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Hardened owner-side status refresh failure handling and removed unsafe refresh points that caused shutdown and control-generation races. Active execution status now has lifecycle-aware CLI success semantics, and the admitted-retry regression expectation reflects the required running phase."
+  },
+  "workspace_head": "71db110944768aa767aa8888a1b3ee887a85650a"
+}
