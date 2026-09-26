@@ -30,6 +30,17 @@ The existing design goal that IPC readers consume owner-published immutable stat
 valuable. Do not fix this by allowing IPC request threads to perform ad-hoc Git or
 workflow observation.
 
+The first implementation reached checkpoint
+`d34de9cc51fa7e5735ab6b0ad45ee5176736a26d` and produced a valid worker claim,
+but review found that both exact-head CI runs `36263067818` and `36263068173`
+failed in the full test-with-coverage step. The worker's completed claim therefore
+does not satisfy the exact-head acceptance boundary.
+
+Keep the useful owner-side publication work and harden the same ticket. Determine
+the exact failing regressions on the checkpoint, fix them without weakening snapshot
+coherence or fail-closed behavior, and prove the resulting exact head with the full
+CI suite. Do not dismiss the failures as unrelated without evidence.
+
 ## Required behavior
 
 - The service owner publishes a coherent operator status after material workflow and
@@ -46,6 +57,8 @@ workflow observation.
   acquire repository ownership or perform live Git I/O from the request thread.
 - Snapshot publication must preserve fail-closed behavior when a coherent view
   cannot be proven.
+- Exact-head full-suite failures introduced or exposed by this implementation must
+  be understood and corrected before acceptance.
 
 ## Acceptance criteria
 
@@ -57,6 +70,8 @@ workflow observation.
   generation-consistent.
 - Status remains usable through worker completion and lifecycle transition without
   requiring a service restart.
+- Exact-head CI for the resulting checkpoint is green, including the full
+  test-with-coverage step and lint.
 - Full tests and lint remain green.
 
 ## Required regressions
@@ -71,3 +86,5 @@ workflow observation.
   workflow snapshot.
 - Given an IPC status request, then the IPC thread does not perform repository
   mutation or owner-only observation I/O.
+- Given the exact full CI suite, the failures from runs `36263067818` and
+  `36263068173` do not recur.
