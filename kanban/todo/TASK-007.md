@@ -418,3 +418,71 @@ Acceptance still requires the exact-head workflow, including lint, to be green.
   dependency-only wheel construction for standalone/Debian preserves the previous
   selection semantics.
 - Exact-head tests, coverage, and Ruff all pass.
+
+
+## Review hardening — remove stale component contract and prove real adapters
+
+The completed attempt at checkpoint
+`91e9b8eb49233337cc9efce33f372db9fd8cdbcf` with execution
+`c1253f89c78a41898755ef6360685682` fixes the previous runtime-tree mismatches:
+standalone now has a scoped build subtree plus package/validate/prove leaves, Debian
+post-build validation and extracted-binary proof are restored, and dependency-only
+wheel construction no longer includes the direct Python install proof.
+
+Two blocking review findings remain.
+
+### 1. package_standalone still exposes a contradictory multi-step component plan
+
+`tools/package_standalone.py` still exports `semantic_plan()` and
+`component_plan()` describing several internal standalone-packaging stages.
+
+However the selected distribution tree deliberately treats the entire
+`package_standalone.package()` call as one thin-wrapper leaf:
+
+`standalone/package` — `package standalone archive`.
+
+That is a valid design choice, but the raw tool must then not simultaneously
+advertise a second, unused multi-leaf component contract. This is exactly the
+plan/execution ambiguity prohibited by the earlier review hardening.
+
+Choose one model and make it unambiguous. For 0.6 the simplest acceptable result is:
+
+- keep `package_standalone.py` as a raw atomic tool;
+- remove its unused progress-plan/component API and related imports;
+- let the distribution-level thin wrapper own the single
+  `standalone/package` leaf.
+
+Alternatively, if its internal stages are intentionally exposed, then its execution
+must emit those stages and the distribution tree must freeze that same plan. Do not
+keep both models.
+
+### 2. Required regressions still prove only the generic toy tree, not the real target adapters
+
+The new nested-component regression correctly proves the generic scoping machinery,
+but the required production-adapter regressions from the previous review are still
+missing.
+
+Add focused tests that exercise the real target component construction with expensive
+operations mocked/stubbed:
+
+- Standalone: construct/run the real `_component_for_target("standalone", ...)`
+  adapter and prove at least two internal `standalone/build/*` events can flow
+  through the scoped build subtree followed by outer package/validate/prove leaves,
+  with emitted IDs matching the frozen `_target_plan("standalone")`.
+- Debian: construct/run the real `_component_for_target("deb", ...)` adapter and
+  prove package internal leaves are followed by `deb/validate-deb` and
+  `deb/prove-deb` in the same order as the frozen plan.
+- Real skip: exercise the supplied-wheel standalone path and prove the component
+  emits typed skips for the skipped reproducibility-wheel leaves without advancing
+  unrelated work.
+- Captured output: run a compound target through the reporter with subprocess/build
+  work stubbed and assert the non-interactive output remains a deterministic
+  readable sequence with the fixed denominator.
+
+These tests should validate the integration boundary that repeatedly regressed, not
+only the standalone `ComponentPlan`/TreeComponent primitives in isolation.
+
+### CI
+
+Exact-head GitHub Actions run `36274320406` was still running at review time.
+Acceptance requires its tests, coverage, and Ruff steps all to complete successfully.
