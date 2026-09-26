@@ -31,11 +31,18 @@ def test_target_expansion_and_dependency_order():
 
 def test_semantic_plan_is_frozen_and_in_dependency_order():
     plan = GRAPH.semantic_plan(("deb",))
-    assert [step.target for step in plan] == ["wheel"] * 3 + ["standalone"] * 11 + [
+    assert [step.target for step in plan] == ["wheel"] * 2 + ["standalone"] * 11 + [
         "deb"
-    ] * 5
+    ] * 7
     assert plan[0].name == "build wheel"
-    assert plan[-1].name == "write Debian package checksum"
+    assert plan[-1].name == "prove Debian extracted binary"
+
+
+def test_direct_wheel_includes_install_proof_but_dependency_wheel_does_not():
+    direct = GRAPH.semantic_plan(("wheel",))
+    dependency = GRAPH.semantic_plan(("deb",))
+    assert direct[-1].name == "prove Python wheel installation"
+    assert all(step.name != "prove Python wheel installation" for step in dependency)
 
 
 def test_progress_reports_named_completion_skip_and_failure(capsys):
@@ -87,6 +94,48 @@ def test_component_tree_freezes_nested_ids_and_rejects_future_failure():
     reporter.emit(GRAPH.ProgressEvent("start", steps[0]))
     with pytest.raises(GRAPH.DistributionError, match="not started"):
         reporter.emit(GRAPH.ProgressEvent("fail", steps[1]))
+
+
+def test_nested_component_execution_emits_frozen_hierarchical_ids():
+    first = GRAPH.ComponentStep("same label", key="first")
+    second = GRAPH.ComponentStep("same label", key="second")
+    left = GRAPH.ComponentPlan("left", (GRAPH.ComponentPlan.leaf(first),), key="left")
+    right = GRAPH.ComponentPlan(
+        "right", (GRAPH.ComponentPlan.leaf(second),), key="right"
+    )
+    root = GRAPH.ComponentPlan("root", (left, right))
+
+    def leaf(step):
+        return GRAPH.FunctionComponent(
+            GRAPH.ComponentPlan.leaf(step),
+            lambda emit: (
+                emit(GRAPH.ComponentEvent("start", step, step.identity)),
+                emit(GRAPH.ComponentEvent("complete", step, step.identity)),
+            ),
+        )
+
+    component = GRAPH.TreeComponent(
+        root,
+        (
+            GRAPH.TreeComponent(left, (leaf(first),)),
+            GRAPH.TreeComponent(right, (leaf(second),)),
+        ),
+    )
+    frozen = GRAPH.freeze_plan(root)
+    steps = tuple(
+        GRAPH.SemanticStep("root", step.name, leaf_id)
+        for leaf_id, step in frozen
+    )
+    reporter = GRAPH.ProgressReporter(steps)
+    component.run(
+        lambda event: reporter.emit(
+            GRAPH.ProgressEvent(
+                event.action,
+                GRAPH.SemanticStep("root", event.step.name, event.leaf_id),
+            )
+        )
+    )
+    assert reporter.completed == len(steps)
 
 
 def test_target_parser_rejects_pip():

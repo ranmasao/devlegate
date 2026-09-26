@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import contextlib
 import hashlib
 import json
 import os
@@ -31,16 +30,16 @@ except ModuleNotFoundError:  # Imported as tools.build_standalone by test client
 def semantic_plan() -> tuple[ComponentStep, ...]:
     """Return the deterministic stages owned by the standalone builder."""
     return tuple(
-        ComponentStep(name)
-        for name in (
-            "download standalone toolchain",
-            "build reproducibility wheel A",
-            "build reproducibility wheel B",
-            "validate reproducibility wheels",
-            "build standalone executable A",
-            "build standalone executable B",
-            "validate reproducibility executables",
-            "write standalone build report",
+        ComponentStep(name, key=key)
+        for key, name in (
+            ("download-toolchain", "download standalone toolchain"),
+            ("wheel-a", "build reproducibility wheel A"),
+            ("wheel-b", "build reproducibility wheel B"),
+            ("validate-wheels", "validate reproducibility wheels"),
+            ("executable-a", "build standalone executable A"),
+            ("executable-b", "build standalone executable B"),
+            ("validate-executables", "validate reproducibility executables"),
+            ("report", "write standalone build report"),
         )
     )
 

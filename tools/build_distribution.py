@@ -181,7 +181,7 @@ class TreeComponent:
     def run(self, emit: Callable[[ComponentEvent], None]) -> tuple[object, ...]:
         results = []
         for child, child_plan in zip(self._children, self._plan.children, strict=True):
-            child_leaves = freeze_plan(child_plan)
+            child_leaves = freeze_plan(child_plan, child_plan.key or "")
             by_identity = {step.identity: leaf_id for leaf_id, step in child_leaves}
 
             def scoped(
@@ -542,6 +542,47 @@ def build_standalone(
     }
 
 
+def validate_standalone_archive(
+    source: Source, standalone: dict[str, Artifact], work: Path
+) -> Path:
+    try:
+        from validate_standalone_package import validate
+    except ModuleNotFoundError:
+        from tools.validate_standalone_package import validate
+    return validate(
+        standalone["archive"].path,
+        standalone["sidecar"].path,
+        source.repo,
+        standalone["report"].path,
+        None,
+        work / "standalone-validated",
+    )
+
+
+def prove_standalone(validated_root: Path, work: Path) -> None:
+    validated = validated_root / "devlegate"
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(work / "smoke-home"),
+        "XDG_CONFIG_HOME": str(work / "smoke-config"),
+        "XDG_STATE_HOME": str(work / "smoke-state"),
+        "XDG_CACHE_HOME": str(work / "smoke-cache"),
+        "PEX_ROOT": str(work / "smoke-pex-root"),
+    }
+    result = subprocess.run(
+        [str(validated), "version"],
+        cwd=work,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise DistributionError(
+            f"standalone isolated execution proof failed:\n{result.stderr}"
+        )
+
+
 def build_deb(
     source: Source,
     standalone: dict[str, Artifact],
@@ -552,9 +593,11 @@ def build_deb(
     require_tools(("dpkg-deb",))
     try:
         from package_deb import package as deb_package
+        from validate_deb import validate as validate_deb
     except ModuleNotFoundError:
         from tools.package_deb import package as deb_package
-    return Artifact(
+        from tools.validate_deb import validate as validate_deb
+    package = Artifact(
         deb_package(
             repo=source.repo,
             archive=standalone["archive"].path,
@@ -565,6 +608,29 @@ def build_deb(
         ),
         "Debian package",
     )
+    validated = work / "deb-validated"
+    binary = component_step(
+        emit,
+        "validate-deb",
+        "validate Debian package",
+        lambda: validate_deb(package.path, standalone["report"].path, validated),
+    )
+
+    def prove() -> None:
+        result = subprocess.run(
+            [str(binary), "version"],
+            cwd=work,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            raise DistributionError(
+                f"Debian extracted-binary proof failed:\n{result.stderr}"
+            )
+
+    component_step(emit, "prove-deb", "prove Debian extracted binary", prove)
+    return package
 
 
 def build_full_source(
@@ -689,15 +755,15 @@ def _leaf_plan(key: str, name: str) -> ComponentPlan:
     return ComponentPlan.leaf(ComponentStep(name, key=key))
 
 
-def _target_plan(target: str) -> ComponentPlan:
+def _target_plan(target: str, *, include_proof: bool = False) -> ComponentPlan:
     """Compose the exact executable tree for one distribution target."""
     if target == "standalone":
         owned = _owned_component_plan(target)
         return ComponentPlan(
             target,
-            owned.children
+            (ComponentPlan(owned.name, owned.children, key="build"),
+             _leaf_plan("package", "package standalone archive"))
             + (
-                _leaf_plan("package", "package standalone archive"),
                 _leaf_plan("validate", "validate standalone archive"),
                 _leaf_plan("prove", "prove standalone execution"),
             ),
@@ -705,26 +771,33 @@ def _target_plan(target: str) -> ComponentPlan:
         )
     if target == "deb":
         owned = _owned_component_plan(target)
-        return ComponentPlan(target, owned.children, key=target)
+        return ComponentPlan(
+            target,
+            (ComponentPlan(owned.name, owned.children, key="package"),
+             _leaf_plan("validate-deb", "validate Debian package"),
+             _leaf_plan("prove-deb", "prove Debian extracted binary")),
+            key=target,
+        )
     plans = {
         "wheel": (
             ("build", "build wheel"),
             ("validate", "validate wheel"),
-            ("prove", "prove Python wheel installation"),
         ),
         "sdist": (
             ("build", "build source distribution"),
             ("validate", "validate source distribution"),
-            ("prove", "prove Python source installation"),
         ),
         "full-source": (
             ("build", "build full-source archive"),
             ("validate", "validate full-source archive"),
         ),
     }
+    children = tuple(_leaf_plan(key, name) for key, name in plans[target])
+    if include_proof and target in {"wheel", "sdist"}:
+        children += (_leaf_plan("prove", f"prove Python {target} installation"),)
     return ComponentPlan(
         target,
-        tuple(_leaf_plan(key, name) for key, name in plans[target]),
+        children,
         key=target,
     )
 
@@ -739,9 +812,16 @@ def semantic_plan(targets: tuple[str, ...]) -> tuple[SemanticStep, ...]:
 
 def component_tree(targets: tuple[str, ...]) -> ComponentPlan:
     """Return the selected graph as one deterministic component tree."""
+    direct = set(targets)
     return ComponentPlan(
         "distribution",
-        tuple(_target_plan(node) for node in dependency_order(targets)),
+        tuple(
+            _target_plan(
+                node,
+                include_proof=node in direct or "all" in direct,
+            )
+            for node in dependency_order(targets)
+        ),
     )
 
 
@@ -767,12 +847,16 @@ def _component_for_target(
     source: Source,
     work: Path,
     values: dict[str, object],
+    *,
+    include_proof: bool = False,
 ) -> Component:
     """Build the executable component tree without repeating its stage list."""
-    plan = _target_plan(target)
+    plan = _target_plan(target, include_proof=include_proof)
 
-    def leaf(key: str, action: Callable[[], object]) -> FunctionComponent:
-        child_plan = next(child for child in plan.children if child.key == key)
+    def leaf(
+        key: str, action: Callable[[], object], parent: ComponentPlan = plan
+    ) -> FunctionComponent:
+        child_plan = next(child for child in parent.children if child.key == key)
         return FunctionComponent(
             child_plan, lambda emit: _event_leaf(child_plan, emit, action)
         )
@@ -789,8 +873,14 @@ def _component_for_target(
                 lambda: values.__setitem__("wheel", artifact()) or values["wheel"],
             ),
             leaf("validate", lambda: validate_wheel(values["wheel"], source)),
-            leaf("prove", lambda: prove_python_install(values["wheel"], source, work)),
         )
+        if include_proof:
+            children += (
+                leaf(
+                    "prove",
+                    lambda: prove_python_install(values["wheel"], source, work),
+                ),
+            )
     elif target == "sdist":
 
         def artifact() -> Artifact:
@@ -803,43 +893,139 @@ def _component_for_target(
                 lambda: values.__setitem__("sdist", artifact()) or values["sdist"],
             ),
             leaf("validate", lambda: validate_sdist(values["sdist"], source)),
-            leaf("prove", lambda: prove_python_install(values["sdist"], source, work)),
         )
+        if include_proof:
+            children += (
+                leaf(
+                    "prove",
+                    lambda: prove_python_install(values["sdist"], source, work),
+                ),
+            )
     elif target == "full-source":
         return FunctionComponent(
             plan,
-            lambda emit: (
-                values.__setitem__(
-                    "full-source", build_full_source(source, work, emit=emit)
-                )
-                or values["full-source"]
-            ),
+            lambda emit: values.__setitem__(
+                "full-source", build_full_source(source, work, emit=emit)
+            )
+            or values["full-source"],
         )
     elif target == "standalone":
+        try:
+            from package_standalone import package as standalone_package
+        except ModuleNotFoundError:
+            from tools.package_standalone import package as standalone_package
+        try:
+            from build_standalone import build as standalone_build
+        except ModuleNotFoundError:
+            from tools.build_standalone import build as standalone_build
+        build_plan = next(child for child in plan.children if child.key == "build")
+        def build_action(emit: Callable[[ComponentEvent], None]) -> object:
+            import argparse
+
+            output = work / "standalone-build"
+            output.mkdir()
+            standalone_build(
+                argparse.Namespace(
+                    repo=source.repo,
+                    output=output,
+                    python=source.python,
+                    wheel=values["wheel"].path,
+                ),
+                emit=emit,
+            )
+            executable = artifact_in(
+                output, "devlegate-*-linux-x86_64", "standalone executable"
+            )
+            report = output / "standalone-build.json"
+            values["standalone-executable"] = executable
+            values["standalone-report"] = Artifact(report, "standalone report")
+            return values["standalone-report"]
+
+        def package_action() -> object:
+            package_output = work / "standalone-package"
+            archive, sidecar = standalone_package(
+                source.repo,
+                values["standalone-executable"].path,
+                values["standalone-report"].path,
+                package_output,
+            )
+            values["standalone"] = {
+                "archive": Artifact(archive, "standalone archive"),
+                "sidecar": Artifact(sidecar, "standalone checksum"),
+                "executable": values["standalone-executable"],
+                "report": values["standalone-report"],
+            }
+            return values["standalone"]
+
         children = (
             FunctionComponent(
-                plan,
-                lambda emit: (
-                    values.__setitem__(
-                        "standalone",
-                        build_standalone(source, values["wheel"], work, emit=emit),
-                    )
-                    or values["standalone"]
-                ),
+                build_plan, build_action
+            ),
+            leaf("package", package_action),
+            leaf(
+                "validate",
+                lambda: values.__setitem__(
+                    "standalone-root",
+                    validate_standalone_archive(source, values["standalone"], work),
+                )
+                or values["standalone-root"],
+            ),
+            leaf(
+                "prove",
+                lambda: prove_standalone(values["standalone-root"], work),
             ),
         )
     elif target == "deb":
-        component = FunctionComponent(
-            plan,
-            lambda emit: (
-                values.__setitem__(
-                    "deb",
-                    build_deb(source, values["standalone"], work, emit=emit),
-                )
-                or values["deb"]
-            ),
+        try:
+            from package_deb import package as deb_package
+            from validate_deb import validate as validate_deb
+        except ModuleNotFoundError:
+            from tools.package_deb import package as deb_package
+            from tools.validate_deb import validate as validate_deb
+        package_component_plan = next(
+            child for child in plan.children if child.key == "package"
         )
-        return component
+
+        def package_action(emit: Callable[[ComponentEvent], None]) -> object:
+            values["deb"] = Artifact(
+                deb_package(
+                    repo=source.repo,
+                    archive=values["standalone"]["archive"].path,
+                    sidecar=values["standalone"]["sidecar"].path,
+                    build_report=values["standalone"]["report"].path,
+                    output_dir=work / "deb",
+                    emit=emit,
+                ),
+                "Debian package",
+            )
+            return values["deb"]
+
+        def validate_action() -> object:
+            values["deb-binary"] = validate_deb(
+                values["deb"].path,
+                values["standalone"]["report"].path,
+                work / "deb-validated",
+            )
+            return values["deb-binary"]
+
+        def prove_action() -> None:
+            result = subprocess.run(
+                [str(values["deb-binary"]), "version"],
+                cwd=work,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode:
+                raise DistributionError(
+                    f"Debian extracted-binary proof failed:\n{result.stderr}"
+                )
+
+        children = (
+            FunctionComponent(package_component_plan, package_action),
+            leaf("validate-deb", validate_action),
+            leaf("prove-deb", prove_action),
+        )
     else:
         raise DistributionError(f"unsupported component target: {target}")
     return TreeComponent(plan, tuple(children))
@@ -942,7 +1128,7 @@ def package(args: argparse.Namespace) -> int:
         require_tools(("dpkg-deb",))
     selected = expand_targets(args.target)
     order = dependency_order(selected)
-    frozen = freeze_plan(component_tree(order))
+    frozen = freeze_plan(component_tree(selected))
     plan_steps = tuple(
         SemanticStep(leaf_id.split("/", 1)[0], step.name, leaf_id)
         for leaf_id, step in frozen
@@ -953,8 +1139,15 @@ def package(args: argparse.Namespace) -> int:
     print(f"Version: {source.version}")
     values: dict[str, object] = {}
     try:
+        direct_targets = set(selected)
         for node in order:
-            _component_for_target(node, source, workspace_path, values).run(
+            _component_for_target(
+                node,
+                source,
+                workspace_path,
+                values,
+                include_proof=node in direct_targets or "all" in direct_targets,
+            ).run(
                 lambda event, node=node: reporter.emit(
                     ProgressEvent(
                         event.action,
