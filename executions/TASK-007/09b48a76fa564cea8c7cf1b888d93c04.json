@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "edeeccb41f4b0174d92c8da21e49b4661786e467",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "09b48a76fa564cea8c7cf1b888d93c04",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Implemented frozen semantic distribution plans and a single event-driven progress reporter covering wheel, standalone, Debian, full-source, validation, and proof stages. Added deterministic plan and complete/skip/fail regression coverage while preserving dependency ordering and packaging operations."
+  },
+  "workspace_head": "b42bc0ff6aa0f94c643146c25e132a1f029381c3"
+}
