@@ -2228,6 +2228,9 @@ def test_operational_cli_constructs_service_engine_directly(git_fixture, monkeyp
 
 def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
     calls = []
+    monkeypatch.delenv("DEVLEGATE_HOST_MODE", raising=False)
+    monkeypatch.delenv("DEVLEGATE_REQUIRE_NOTIFY", raising=False)
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
 
     def host(
         engine,
@@ -2236,9 +2239,11 @@ def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
         once=False,
         startup_fd=None,
         startup_report=None,
+        readiness_report=None,
     ):
         assert startup_fd is None
         assert host_mode is cli.HostingMode.DIRECT
+        assert readiness_report is None
         calls.append((engine, once))
         return 0
 
@@ -2253,6 +2258,33 @@ def test_once_uses_canonical_service_host(git_fixture, monkeypatch):
     assert main() == 0
     assert len(calls) == 1
     assert calls[0][1] is True
+
+
+def test_external_attached_host_reports_readiness_without_startup_fd(monkeypatch):
+    target = Namespace(env_file=Path("/tmp/service.env"), repo=Path("/tmp/repo"))
+    readiness_report = object()
+    captured = {}
+
+    monkeypatch.setattr(cli, "hosted_runtime_supported", lambda: True)
+    monkeypatch.setattr(cli, "_service_engine", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "_systemd_readiness_report", lambda: readiness_report)
+    monkeypatch.setattr(
+        cli,
+        "run_service",
+        lambda engine, **kwargs: captured.update(kwargs) or 0,
+    )
+
+    assert (
+        cli._run_attached_target(
+            target,
+            host_mode=cli.HostingMode.EXTERNAL,
+            once=False,
+            startup_fd=None,
+        )
+        == 0
+    )
+    assert captured["startup_fd"] is None
+    assert captured["readiness_report"] is readiness_report
 
 
 def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(

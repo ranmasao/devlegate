@@ -1451,7 +1451,7 @@ def _run_attached_target(
         ),
     }
     readiness_report = _systemd_readiness_report()
-    if readiness_report is not None and startup_fd is not None:
+    if readiness_report is not None:
         run_arguments["readiness_report"] = readiness_report
     return run_service(engine, **run_arguments)
 
