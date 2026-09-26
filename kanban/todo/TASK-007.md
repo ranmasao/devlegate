@@ -308,3 +308,113 @@ The third failure is the previously observed unrelated live-service drop race, t
 time in the T-1 variant during a control-worktree Git commit.
 
 Acceptance still requires exact-head tests with coverage and lint to be green.
+
+
+## Review hardening — executable tree fidelity
+
+The completed attempt at checkpoint
+`4d3d321926ccc912c06160060e8fc229cd407edc` with execution
+`45c1aad4f1c344329d0fdf70acaf2010` is still not acceptable.
+
+This attempt moves the architecture materially closer to the required model: the
+global denominator is now frozen from `component_tree()`, exact identity fallback by
+display name was removed, stable component keys are present, Debian emits internal
+events, and the licensing header regression was fixed. However the executable tree
+and actual target semantics still diverge in several blocking ways.
+
+### Blocking findings
+
+1. Standalone composite execution is structurally invalid
+
+`_target_plan("standalone")` produces a plan with all standalone executable leaves.
+But `_component_for_target("standalone")` constructs:
+
+- one `FunctionComponent` whose plan is the whole standalone plan, wrapped inside
+- a `TreeComponent` whose own plan has many direct children.
+
+`TreeComponent.run()` pairs `self._children` and `self._plan.children` using
+`zip(..., strict=True)`. The standalone component therefore has one runtime child
+for many plan children. The first child's event scope is bound only to the first plan
+child, so the second internal standalone event cannot resolve correctly; strict zip
+cardinality is also inconsistent.
+
+Do not represent one compound executor as one child of a composite plan containing
+many unrelated direct leaves. Either make the compound builder itself a component
+whose `plan()` and `run()` correspond exactly, or recursively construct runtime
+children that mirror the plan tree one-for-one.
+
+Add an execution regression that runs a multi-leaf composite through the real
+component adapter and proves that all emitted leaf IDs match the frozen plan in
+order. A plan-only regression is insufficient.
+
+2. Debian post-build validation/proof semantics were lost
+
+Before this refactor, distribution-level Debian handling performed, after package
+creation:
+
+- `validate_deb.py` against the produced package and standalone build report;
+- extraction of the installed binary path;
+- execution of the extracted binary with `devlegate version`;
+- failure if that execution proof failed.
+
+The new `build_deb()` only calls `package_deb.package()`, whose component plan
+covers input validation, package assembly, control metadata, `dpkg-deb`, and
+checksum creation. The previous post-build Debian package validation and extracted
+payload execution proof are no longer performed.
+
+Restore those semantics as components/leaves in the same tree. They may be thin
+wrappers, but they must remain in both the frozen plan and execution path. Do not
+satisfy progress architecture by deleting existing validation work.
+
+3. Dependency-only wheel behavior changed
+
+`_target_plan("wheel")` always includes the Python installation proof. Therefore a
+wheel built only as an automatically added dependency of `standalone` or `deb`
+now runs work that the previous distribution graph did not run. Previously the
+isolated Python wheel installation proof was selected for direct `wheel`,
+`python`, and `all` requests, not merely because another target depended on the
+wheel.
+
+Make component selection context-sensitive where existing semantics require it:
+the frozen tree for a selected invocation must contain exactly the work that invocation
+will execute, including optional/direct-target proofs, without adding or dropping
+validation stages merely because the representation changed.
+
+4. The executable component tree must mirror the plan tree
+
+The current implementation still allows a `FunctionComponent` to advertise an
+arbitrary multi-leaf `ComponentPlan` while its runtime action is unconstrained
+except by emitted events. This is useful as an adapter for a genuinely compound
+builder, but then that builder's `run()` must be the source of those same events and
+the adapter must bind the whole subtree consistently.
+
+Strengthen the common component contract/regressions so a component's frozen plan and
+its emitted execution sequence cannot silently disagree in structure or scope.
+
+### Exact-head CI
+
+GitHub Actions run `36273351410` completed the full test suite and coverage
+successfully, but the workflow still failed at Ruff.
+
+Ruff reported six errors, including:
+
+- duplicate `import contextlib` in `tools/build_standalone.py`;
+- two overlong skip-event lines in `tools/build_standalone.py`;
+- import formatting failures in `tools/validate_standalone_package.py`.
+
+Acceptance still requires the exact-head workflow, including lint, to be green.
+
+### Additional required regressions
+
+- Execute a real nested/compound component adapter with multiple leaves and assert
+  its emitted exact hierarchical IDs are the same ordered leaves frozen from its
+  plan.
+- Execute the standalone target through the component abstraction far enough to
+  prove more than the first internal standalone leaf can be emitted without scope or
+  cardinality failure.
+- Assert the Debian target tree contains and executes post-build package validation
+  and extracted-binary execution proof after package construction.
+- Assert direct `wheel`/Python selections include the isolated-install proof while
+  dependency-only wheel construction for standalone/Debian preserves the previous
+  selection semantics.
+- Exact-head tests, coverage, and Ruff all pass.
