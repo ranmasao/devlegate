@@ -1561,6 +1561,13 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     assert (working / "implementation.txt").is_file()
     assert not (control / "kanban/accepted/T-1.md").exists()
     assert (control / "kanban/done/T-1.md").is_file()
+    integration_message = git(control, "log", "-1", "--format=%B").stdout
+    assert git(control, "log", "-1", "--pretty=%s").stdout.strip() == (
+        "T-1: Control ticket (integrated)"
+    )
+    assert "Worker result:\nimplemented" in integration_message
+    assert "Devlegate-Execution:" in integration_message
+    assert "Devlegate integrate T-1" not in integration_message
     assert (
         git(working, "rev-parse", "HEAD").stdout.strip()
         == git(working, "rev-parse", "origin/main").stdout.strip()

@@ -23,7 +23,7 @@ from devlegate.agent_protocol import (
     initialize_project,
     render_project,
 )
-from devlegate.commit_messages import lifecycle_message
+from devlegate.commit_messages import integration_message, lifecycle_message
 from devlegate.execution_result import (
     ExecutionReport,
     ExecutionReportError,
@@ -4159,7 +4159,7 @@ class ServiceEngine:
         fields = remote.stdout.split()
         return fields[0] if fields else None
 
-    def _accepted_checkpoint(self, ticket_id: str) -> str:
+    def _accepted_execution_report(self, ticket_id: str) -> ExecutionReport:
         root = self.control_worktree / "executions" / ticket_id
         if not root.is_dir() or root.is_symlink():
             raise WorkflowBlockedError(
@@ -4194,7 +4194,8 @@ class ServiceEngine:
                 f"accepted ticket {ticket_id} has ambiguous or missing completed "
                 "execution evidence"
             )
-        checkpoint = matches[0].workspace_head
+        report = matches[0]
+        checkpoint = report.workspace_head
         assert checkpoint is not None
         if not all(
             len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
@@ -4207,6 +4208,11 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted execution evidence has invalid Git identity"
             )
+        return report
+
+    def _accepted_checkpoint(self, ticket_id: str) -> str:
+        checkpoint = self._accepted_execution_report(ticket_id).workspace_head
+        assert checkpoint is not None
         return checkpoint
 
     def _integrate_accepted(
@@ -4220,7 +4226,9 @@ class ServiceEngine:
         self._validate_control_worktree()
         if not code.working_tree_clean or not control.working_tree_clean:
             raise WorkflowBlockedError("product or control working tree is dirty")
-        checkpoint = self._accepted_checkpoint(ticket_id)
+        report = self._accepted_execution_report(ticket_id)
+        checkpoint = report.workspace_head
+        assert checkpoint is not None
         product_ref = f"refs/heads/{self.remote_branch}"
         observed = _git(
             self.repo, "ls-remote", self.remote_name, product_ref, check=False
@@ -4316,9 +4324,11 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
             )
-        return self._complete_accepted(ticket_id, expected_head)
+        return self._complete_accepted(ticket_id, expected_head, report)
 
-    def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
+    def _complete_accepted(
+        self, ticket_id: str, expected_head: str, report: ExecutionReport
+    ) -> str:
         current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
         if not _is_git_identity(expected_head):
             raise WorkflowBlockedError(
@@ -4366,7 +4376,17 @@ class ServiceEngine:
             self.control_worktree,
             "commit",
             "-m",
-            f"Devlegate integrate {ticket_id}",
+            integration_message(
+                ticket_id,
+                ticket.title,
+                report.execution_id,
+                (
+                    report.result.claim.summary
+                    if report.result.claim is not None
+                    else report.result.reason
+                ),
+                report.workspace_head or "",
+            ),
             check=False,
         )
         if commit.returncode:
@@ -4463,18 +4483,6 @@ class ServiceEngine:
             f"A\t{self.done_path}/{ticket_id}.md",
         }
         if names.returncode or set(names.stdout.splitlines()) != expected:
-            return False
-        subject = _git(
-            self.control_worktree,
-            "log",
-            "-1",
-            "--format=%s",
-            commit,
-            check=False,
-        )
-        if subject.returncode or subject.stdout.strip() != (
-            f"Devlegate integrate {ticket_id}"
-        ):
             return False
         before = _git(
             self.control_worktree,
