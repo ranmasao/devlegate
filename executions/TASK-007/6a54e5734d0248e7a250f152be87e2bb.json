@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "bb7f31d42c954150ebd7b3938174276dc647cb6e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "6a54e5734d0248e7a250f152be87e2bb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Added real standalone and Debian adapter regressions covering frozen hierarchical event order, supplied-wheel skip events, Debian post-build validation/proof, and deterministic captured progress output. Fixed the reported standalone skip-event line wrapping and standalone validation import formatting issues."
+  },
+  "workspace_head": "ebf67e0a7eee214a3b41dc68f122e54238820c05"
+}
