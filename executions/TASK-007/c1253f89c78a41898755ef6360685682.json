@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "b4c696df26958314ad5ec8b8c8a98e55b7d61b13",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "c1253f89c78a41898755ef6360685682",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Aligned distribution planning and execution around mirrored component trees, including hierarchical standalone and Debian leaves. Restored Debian package validation and extracted-binary proof, preserved direct-vs-dependency wheel proof semantics, added nested execution regression coverage, and assigned stable standalone stage keys."
+  },
+  "workspace_head": "91e9b8eb49233337cc9efce33f372db9fd8cdbcf"
+}
