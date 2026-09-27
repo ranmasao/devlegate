@@ -61,3 +61,34 @@ policy.
   then the vendor path is absent from measured files/totals.
 - Given a Devlegate-owned module, when coverage runs, then it remains present with
   branch metrics.
+
+## Review feedback
+
+The implementation direction is appropriately small: the centralized
+`[tool.coverage.run]` omit rule
+
+```toml
+omit = ["*/devlegate/_vendor/*"]
+```
+
+addresses the intended coverage boundary without modifying NanoYAML.
+
+The result is not yet acceptable because the ticket's required regressions were not
+implemented. The checkpoint changes only `pyproject.toml`; no automated check proves
+that:
+
+- an imported vendored NanoYAML module is absent from generated coverage files/totals;
+- a Devlegate-owned module remains present and retains branch metrics.
+
+A normal CI coverage run is not itself a regression for this contract unless it
+asserts those properties: coverage generation can succeed while silently counting
+vendor code again.
+
+Keep the configuration-based solution. Add a focused automated regression around the
+coverage configuration/report result that would fail if the omit rule were removed
+or broadened so far that Devlegate-owned modules disappeared. Do not modify NanoYAML
+or its upstream tests.
+
+The worker's local full-suite run timing out is not by itself a review failure; the
+authoritative CI result may complete separately. The missing regression is the
+reason for returning this ticket to `todo`.
