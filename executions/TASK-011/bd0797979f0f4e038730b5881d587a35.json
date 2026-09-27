@@ -1,0 +1,25 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "completed",
+  "control_head": "a8406aeeaec9c89f450343c4cbe7c2448f7fc7a9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "bd0797979f0f4e038730b5881d587a35",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Hardened launcher identity selection so stale inherited SCIE metadata cannot redirect a source-launched graceful restart to the outer installed executable. Sanitized standalone packaging metadata from worker environments and added regressions for stale launcher identity and worker isolation."
+  },
+  "workspace_head": "30c7b23738a2f2a20e428e2a2ac43f2a92851605"
+}
