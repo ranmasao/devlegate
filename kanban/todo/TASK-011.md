@@ -593,3 +593,52 @@ defect.
 
 This note intentionally creates a new todo generation because the installed
 pre-TASK-011 runtime leaves the valid `incomplete` handoff in `todo`.
+
+
+## Review feedback after execution bd0797979f0f4e038730b5881d587a35
+
+The implementation is very close, but one durability requirement is still not
+satisfied.
+
+### Long-form report persistence is not replay-safe across a mid-write crash
+
+`ExecutionReportStore.write()` currently publishes the immutable JSON report first
+with `os.link(..., <execution>.json)` and only afterwards publishes the optional
+`<execution>.md` artifact.
+
+That creates a recoverability hole:
+
+1. the JSON link succeeds;
+2. the process crashes before the Markdown link is created;
+3. durable control state now contains a JSON report whose
+   `report_artifact/report_sha256` require a Markdown artifact that is absent;
+4. `read()` / `list()` correctly reject that state as incomplete;
+5. replaying `write(report)` cannot heal it because the existing JSON causes
+   `execution report already exists` before the missing artifact can be restored.
+
+This violates TASK-011's explicit requirement that optional report persistence be
+non-overwriting **and replay/recovery safe**.
+
+Fix the pair publication so a crash at every persistence boundary is recoverable
+without overwriting conflicting evidence. One acceptable shape is to treat the JSON
+as the final commit marker: make any pre-existing artifact handling exact/content
+verified and idempotent, then publish the JSON last. Equivalent designs are fine as
+long as partial states are either safely resumable or never become authoritative.
+
+Add focused fault/replay regressions covering at least:
+
+- crash/failure after the artifact becomes durable but before JSON publication;
+- a pre-existing identical artifact being safely reused on replay;
+- a pre-existing conflicting artifact failing closed;
+- no authoritative JSON report being left that references an unavailable artifact.
+
+Do not relax the existing integrity checks in `read()` or `list()`.
+
+Everything else reviewed in this execution is in good shape: the launcher metadata
+isolation is narrowly scoped, exact checkpoint CI is green (`972 passed, 1 skipped`,
+lint green), valid handoffs enter review, historical v1 reports remain readable,
+accepted-result binding is tied to the review transition, and zero-delta
+finalization remains fail-closed.
+
+Return to review after this durability hole is closed and the full exact-checkpoint
+suite/lint remain green.
