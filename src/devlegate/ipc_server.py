@@ -121,6 +121,25 @@ def dispatch_mutation(
         return engine.submit_drop(
             ticket_id, execution_id, request_id=request.request_id
         )
+    if request.method == "recover":
+        if set(request.payload) != {"ticket_id", "execution_id", "observed_head"}:
+            raise IPCProtocolError(
+                "invalid_request", "recover payload fields are invalid"
+            )
+        ticket_id = request.payload["ticket_id"]
+        execution_id = request.payload["execution_id"]
+        observed_head = request.payload["observed_head"]
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, execution_id, observed_head)
+        ):
+            raise IPCProtocolError(
+                "invalid_request",
+                "recover identity fields must be non-empty text",
+            )
+        return engine.submit_recover(
+            ticket_id, execution_id, observed_head, request_id=request.request_id
+        )
     if request.method == "reconcile-update-base":
         if set(request.payload) != {"ticket_id", "onto"}:
             raise IPCProtocolError(

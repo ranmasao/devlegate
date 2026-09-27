@@ -360,6 +360,53 @@ def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> i
     return 0
 
 
+def _recover_daemon(
+    env_file: Path,
+    ticket_id: str,
+    execution_id: str,
+    observed_head: str,
+    output_format: str,
+) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "service is not running for this checkout; start `devlegate`"
+            )
+        result = request(
+            locator.socket_path,
+            "recover",
+            {
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+                "observed_head": observed_head,
+            },
+            mutable=True,
+        )
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    expected = {"accepted", "ticket_id", "execution_id", "observed_head"}
+    if set(result) != expected or result.get("accepted") is not True:
+        raise DevlegateError("service returned an invalid recovery acknowledgement")
+    expected_identity = {
+        "ticket_id": ticket_id,
+        "execution_id": execution_id,
+        "observed_head": observed_head,
+    }
+    if any(result.get(key) != value for key, value in expected_identity.items()):
+        raise DevlegateError("service returned an invalid recovery identity")
+    emit(
+        {
+            "result": "accepted",
+            "ticket_id": ticket_id,
+            "execution_id": execution_id,
+        },
+        output_format,
+        f"recovery accepted: {ticket_id}",
+    )
+    return 0
+
+
 def _reconcile_daemon(
     env_file: Path, ticket_id: str, onto: str, output_format: str
 ) -> int:
@@ -2288,6 +2335,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="ticket to drop; omit it to choose from current candidates",
     )
     add_output_arguments(drop_parser)
+    recover_parser = commands.add_parser(
+        "recover",
+        help="recover an unsafe pre-worker execution workspace",
+        description="Authorize one exact identity-bound pre-worker workspace recovery.",
+    )
+    recover_parser.add_argument("ticket_id")
+    recover_parser.add_argument("execution_id")
+    recover_parser.add_argument(
+        "--observed-head", required=True, help="exact conflicting branch HEAD"
+    )
+    add_output_arguments(recover_parser)
     reconcile_parser = commands.add_parser(
         "reconcile",
         help="handle pending product-base changes",
@@ -2652,6 +2710,14 @@ def main() -> int:
             return _retry_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
+        if args.command == "recover":
+            return _recover_daemon(
+                env_file,
+                args.ticket_id,
+                args.execution_id,
+                args.observed_head,
+                args.output_format,
+            )
         if args.command == "reconcile":
             if args.reconcile_command == "control":
                 return _reconcile_control(

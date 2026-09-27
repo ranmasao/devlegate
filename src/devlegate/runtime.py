@@ -408,6 +408,18 @@ def _drop_request_fingerprint(ticket_id: str, execution_id: str) -> str:
     )
 
 
+def _recover_request_fingerprint(
+    ticket_id: str, execution_id: str, observed_head: str
+) -> str:
+    return _mutation_fingerprint(
+        "recover", {
+            "ticket_id": ticket_id,
+            "execution_id": execution_id,
+            "observed_head": observed_head,
+        }
+    )
+
+
 def _reconcile_request_fingerprint(ticket_id: str, onto: str) -> str:
     return _mutation_fingerprint(
         "reconcile-update-base", {"ticket_id": ticket_id, "onto": onto}
@@ -842,6 +854,21 @@ class ServiceEngine:
             fingerprint=_drop_request_fingerprint(ticket_id, execution_id),
         )
 
+    def submit_recover(
+        self, ticket_id: str, execution_id: str, observed_head: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit an exact, operator-authorized pre-worker workspace recovery."""
+        return self._submit_operator_command(
+            method="recover",
+            ticket_id=ticket_id,
+            execution_id=execution_id,
+            onto=observed_head,
+            request_id=request_id,
+            fingerprint=_recover_request_fingerprint(
+                ticket_id, execution_id, observed_head
+            ),
+        )
+
     def submit_reconcile_update_base(
         self, ticket_id: str, onto: str, *, request_id: str
     ) -> dict[str, object]:
@@ -1019,6 +1046,86 @@ class ServiceEngine:
                 self._read_drop_disposition(ticket_id, execution_id) is not None
             ),
         )
+
+    def _validate_recover_admission(
+        self, ticket_id: str, execution_id: str, observed_head: str
+    ) -> None:
+        state = self._state
+        if state.get("phase") != "agent_pending":
+            raise DevlegateError("workspace recovery requires pre-worker state")
+        if state.get("execution_ticket_id") != ticket_id:
+            raise DevlegateError("requested ticket does not match the active execution")
+        if state.get("execution_id") != execution_id:
+            raise DevlegateError("requested execution is no longer active")
+        if state.get("worker_identity") is not None:
+            raise DevlegateError("cannot recover an execution with worker ownership")
+        if state.get("pending_execution_report") is not None:
+            raise DevlegateError("cannot recover an execution with a durable result")
+        if not _is_git_identity(observed_head):
+            raise DevlegateError("observed branch HEAD is not a Git identity")
+        inspection = self._inspect_bound_execution_workspace(state)
+        if inspection.classification != "UNSAFE":
+            raise DevlegateError(
+                "explicit recovery is allowed only for an UNSAFE workspace binding"
+            )
+        branch = state.get("execution_branch")
+        if not isinstance(branch, str) or not branch:
+            raise DevlegateError("persisted execution branch identity is incomplete")
+        current = _git(self.repo, "rev-parse", "--verify", f"refs/heads/{branch}", check=False)
+        if current.returncode or current.stdout.strip() != observed_head:
+            raise DevlegateError("execution branch does not match the authorized HEAD")
+
+    def _recover_unsafe_bound_execution_workspace(
+        self, ticket_id: str, execution_id: str, observed_head: str
+    ) -> None:
+        state = self._state
+        base_head = state.get("execution_base_head")
+        branch = state.get("execution_branch")
+        path = state.get("execution_path")
+        if not all(isinstance(value, str) and value for value in (base_head, branch, path)):
+            raise DevlegateError("persisted execution workspace identity is incomplete")
+        manager = ExecutionWorkspaceManager(self.repo, self.execution_worktree_root, ticket_id)
+        if branch != manager.branch or Path(path) != manager.path:
+            raise DevlegateError("persisted execution workspace binding is invalid")
+        branch_ref = f"refs/heads/{branch}"
+        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if current.returncode or current.stdout.strip() != observed_head:
+            raise DevlegateError("execution branch changed before explicit recovery")
+        evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
+        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        if existing.returncode == 0 and existing.stdout.strip() != observed_head:
+            raise DevlegateError("operator recovery evidence has conflicting identity")
+        if existing.returncode:
+            pinned = _git(self.repo, "update-ref", evidence_ref, observed_head, "", check=False)
+            if pinned.returncode:
+                raise DevlegateError("cannot preserve the authorized branch HEAD")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        branch_path = next(
+            (item_path for item_path, item in registrations.items() if item.get("branch") == branch),
+            None,
+        )
+        if branch_path is not None and branch_path != manager.path.resolve():
+            raise DevlegateError("execution branch is attached to an unexpected worktree")
+        if manager.path.exists() and registration is None:
+            raise DevlegateError("execution worktree path is not safely registered")
+        if registration is not None:
+            workspace = manager._validate_existing(registration, str(base_head))
+            if workspace.head != observed_head or workspace.dirty:
+                raise DevlegateError("authorized execution worktree is not clean")
+            removed = _git(self.repo, "worktree", "remove", "--force", str(manager.path), check=False)
+            if removed.returncode:
+                raise DevlegateError("cannot remove authorized execution worktree")
+        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if current.returncode or current.stdout.strip() != observed_head:
+            raise DevlegateError("execution branch changed during explicit recovery")
+        moved = _git(self.repo, "update-ref", branch_ref, str(base_head), observed_head, check=False)
+        if moved.returncode:
+            raise DevlegateError("execution branch changed before explicit recovery CAS")
+        repaired = manager.prepare(str(base_head))
+        final = manager.inspect(str(base_head), repaired.head)
+        if final.classification != "REUSABLE":
+            raise DevlegateError(f"recovered execution workspace is not reusable: {final.reason}")
 
     def _drop_candidate_from_state(self) -> tuple[dict[str, str], ...]:
         state = self._state
@@ -1246,6 +1353,15 @@ class ServiceEngine:
         if command.method == "drop":
             self._validate_drop_admission(command.ticket_id, command.execution_id)
             return
+        if command.method == "recover":
+            if command.execution_id is None or command.onto is None:
+                raise DevlegateError(
+                    "recover requires an exact execution and observed branch HEAD"
+                )
+            self._validate_recover_admission(
+                command.ticket_id, command.execution_id, command.onto
+            )
+            return
         if command.method == "reconcile-update-base":
             if command.onto is None:
                 raise DevlegateError(
@@ -1281,6 +1397,17 @@ class ServiceEngine:
                 "accepted": True,
                 "ticket_id": ticket_id,
                 "execution_id": execution_id,
+            }
+        if method == "recover":
+            if execution_id is None or onto is None:
+                raise DevlegateError(
+                    "recover requires an exact execution and observed branch HEAD"
+                )
+            return {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+                "observed_head": onto,
             }
         if method == "reconcile-control":
             if onto is None:
@@ -5867,6 +5994,13 @@ class ServiceEngine:
             return self._retry_owned(command.ticket_id, stop_event)
         if command.method == "drop":
             return 0
+        if command.method == "recover":
+            if command.execution_id is None or command.onto is None:
+                raise DevlegateError("recover identity is incomplete")
+            self._recover_unsafe_bound_execution_workspace(
+                command.ticket_id, command.execution_id, command.onto
+            )
+            return 0
         if command.method == "reconcile-resume":
             return self._reconcile_resume_owned(command.ticket_id)
         if command.method == "reconcile-update-base":
@@ -6766,15 +6900,28 @@ class ServiceEngine:
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
         ticket_id = state.get("execution_ticket_id")
+        execution_id = state.get("execution_id")
         base_head = state.get("execution_base_head")
         branch = state.get("execution_branch")
         path = state.get("execution_path")
         if not all(
             isinstance(value, str) and value
-            for value in (ticket_id, base_head, branch, path)
+            for value in (ticket_id, execution_id, base_head, branch, path)
         ):
             return WorkspaceInspection(
                 "UNSAFE", "persisted execution workspace binding is incomplete"
+            )
+        if state.get("phase") != "agent_pending":
+            return WorkspaceInspection(
+                "UNSAFE", "automatic workspace recovery is limited to pre-worker state"
+            )
+        if state.get("worker_identity") is not None:
+            return WorkspaceInspection(
+                "UNSAFE", "persisted worker ownership prevents workspace recovery"
+            )
+        if state.get("pending_execution_report") is not None:
+            return WorkspaceInspection(
+                "UNSAFE", "durable worker result prevents workspace recovery"
             )
         try:
             manager = ExecutionWorkspaceManager(
@@ -6787,8 +6934,69 @@ class ServiceEngine:
                 "UNSAFE", "persisted execution workspace binding is invalid"
             )
         expected_head = state.get("execution_start_head")
-        return manager.inspect(
+        topology = manager.inspect(
             str(base_head), expected_head if isinstance(expected_head, str) else None
+        )
+        if topology.classification == "REUSABLE":
+            return topology
+        # Topology alone is only a repair candidate.  A recoverable result also
+        # needs a durable, exact prior-generation receipt for any conflicting
+        # branch head.  This is deliberately read-only and mirrors the proof
+        # required by _repair_bound_execution_workspace().
+        branch_ref = f"refs/heads/{manager.branch}"
+        observed = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if observed.returncode:
+            if topology.reason == "execution branch is missing":
+                try:
+                    registrations = manager._registrations()
+                except (
+                    ExecutionWorkspaceError,
+                    OSError,
+                    subprocess.SubprocessError,
+                ) as error:
+                    return WorkspaceInspection("UNSAFE", str(error))
+                attached = next(
+                    (
+                        item_path
+                        for item_path, item in registrations.items()
+                        if item.get("branch") == manager.branch
+                    ),
+                    None,
+                )
+                if attached is not None or manager.path.exists():
+                    return WorkspaceInspection(
+                        "UNSAFE",
+                        "execution branch is missing but workspace material remains attached",
+                    )
+                return WorkspaceInspection(
+                    "RECOVERABLE",
+                    "execution branch is missing; exact workspace can be rebuilt",
+                )
+            return WorkspaceInspection("UNSAFE", topology.reason)
+        old_head = observed.stdout.strip()
+        try:
+            reports = ExecutionReportStore(self.control_worktree).list(str(ticket_id))
+        except (ExecutionReportError, OSError, WorkflowBlockedError) as error:
+            return WorkspaceInspection(
+                "UNSAFE", f"cannot prove branch provenance: {error}"
+            )
+        prior = [
+            report
+            for report in reports
+            if report.execution_id != execution_id
+            and report.execution_branch == manager.branch
+            and report.workspace_head == old_head
+        ]
+        if len(prior) != 1:
+            return WorkspaceInspection(
+                "UNSAFE",
+                "conflicting execution branch ownership cannot be proven; "
+                "operator recovery required",
+            )
+        return WorkspaceInspection(
+            "RECOVERABLE",
+            "conflicting branch is exactly attributable to a prior execution "
+            "generation",
         )
 
     @staticmethod
