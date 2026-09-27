@@ -112,6 +112,87 @@ A `RECOVERABLE` pre-worker failure is expected to heal automatically. Operator
 involvement is a fallback for `UNSAFE` ambiguity, not the normal path for an
 unrelated or stale execution branch discovered before worker start.
 
+### Concrete stale-generation reproduction
+
+The rslab2 state has now been traced to an older, fully identified execution
+generation rather than an unknown unrelated branch.
+
+The previous LAB-153 execution was:
+
+```text
+execution=be7ce77dab48436db7b92f4164506538
+base=96083c32b71ac671dec59a347908d980e818f7de
+checkpoint=bf0de8dbd477ee2e25b726d50195a16253637190
+branch=devlegate/work/LAB-153
+```
+
+Its durable control-plane receipt still exists at
+`executions/LAB-153/be7ce77dab48436db7b92f4164506538.json` and binds that
+execution to checkpoint `bf0de8db...`.
+
+That execution completed successfully, but review explicitly rejected it as a
+completion result because its participant-binding authority depended on work later
+assigned to LAB-154. The canonical LAB-153 ticket records that the old checkpoint
+is diagnostic only and must not be accepted or reused as the completion result.
+
+LAB-154 later completed at product revision:
+
+```text
+95215689f5db9e8e7e3e1189bfc2c7b2435bed1f
+```
+
+A fresh LAB-153 execution was then admitted:
+
+```text
+execution=a97c6db5f41e4c349171d756b67ad26a
+phase=agent_pending
+stage=lifecycle
+execution_base_head=95215689f5db9e8e7e3e1189bfc2c7b2435bed1f
+```
+
+Before that new worker ever ran, the conventional work branch still pointed to the
+old execution checkpoint:
+
+```text
+devlegate/work/LAB-153 -> bf0de8dbd477ee2e25b726d50195a16253637190
+```
+
+Git proves the generations diverged:
+
+```text
+merge-base = 96083c32b71ac671dec59a347908d980e818f7de
+old branch = one commit ahead from the old base
+new admitted base = three commits ahead from the same merge-base
+```
+
+After updating/restarting Devlegate, startup still failed with the same unrelated
+branch error and the systemd service exited with status 1. This confirms that the
+current failure is an unhandled stale-generation workspace condition at startup,
+not a worker failure.
+
+This concrete case should classify as RECOVERABLE when the following provenance can
+be proven:
+
+- the current bound execution is the new pre-worker generation
+  `a97c6db5...`;
+- the conflicting branch HEAD `bf0de8db...` is exactly attributable to the prior
+  durable LAB-153 execution `be7ce77d...`;
+- the current execution has no worker ownership or result that could be lost;
+- the old checkpoint can be preserved under a real product-repository ref before
+  the conventional work branch is moved.
+
+A SHA recorded only in control-plane JSON is not by itself a Git reachability root
+for the product repository. If the conventional work branch is the last product
+ref keeping an old checkpoint reachable, automatic recovery must create or verify a
+durable product-repository evidence/checkpoint ref before repointing or deleting
+that branch. Do not rely on the textual SHA in the control receipt as object
+retention.
+
+The recovery operation must preserve the distinction between the old rejected
+execution and the new admitted execution. It must not reinterpret the old checkpoint
+as work belonging to the new generation merely because both use the same
+`devlegate/work/LAB-153` branch name.
+
 ## Required behavior
 
 - A bound `agent_pending` plan may return `run-worker` only when the exact
@@ -140,6 +221,10 @@ unrelated or stale execution branch discovered before worker start.
     ref-moving mutation;
   - the observed branch/worktree identity has not changed between inspection and
     mutation.
+- When a conflicting conventional work branch is proven to belong to an older
+  execution generation of the same ticket, preserve that older generation under a
+  durable product-repository ref bound to its execution/checkpoint identity before
+  reusing the conventional branch name for the current generation.
 - Before moving, replacing, or deleting a conflicting execution branch containing
   commits, preserve the exact observed HEAD under an immutable recovery/evidence
   reference bound to the ticket and execution identity, or an equivalent durable
@@ -218,6 +303,15 @@ unrelated or stale execution branch discovered before worker start.
   mutation can be guarded by exact identity/CAS checks, classify it as RECOVERABLE,
   preserve the old HEAD, rebuild from the exact admitted base, re-prove the workspace,
   and execute the same ticket without operator intervention.
+- Given a stale `devlegate/work/<ticket>` branch that exactly matches a durable
+  checkpoint from a previous reviewed/rejected execution of the same ticket, while a
+  newer execution is still `agent_pending` on a later admitted base, classify the
+  state as RECOVERABLE, preserve the old checkpoint under a durable product ref,
+  rebuild the conventional branch/worktree for the new base, and launch only the
+  new execution.
+- Given only a textual old checkpoint SHA in control evidence and no durable product
+  ref retaining that object, recovery must establish the product-repository
+  retention ref before moving the last known conventional branch reference.
 - Given branch/worktree drift between RECOVERABLE inspection and effect, automatic
   recovery refuses the mutation and does not launch a worker.
 - Given a missing or wrong registered execution worktree/branch, use the same shared
