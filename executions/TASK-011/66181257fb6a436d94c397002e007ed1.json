@@ -1,0 +1,25 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "completed",
+  "control_head": "588646cf9d463e94b6a9c8f2404c43f420c8473d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "66181257fb6a436d94c397002e007ed1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Valid completed, incomplete, and blocked worker claims now persist immutable evidence and transition the same ticket to review. Typed egress supports optional Devlegate-persisted long-form reports with integrity binding, and accepted finalization now binds the reviewed lifecycle result and supports lease-safe proven zero-delta retirement before done. Reviewer and architect guidance now reflects review, accepted, and Devlegate-owned finalization semantics."
+  },
+  "workspace_head": "3a0e39df180b69de54fbce5158b4126ac6e693ee"
+}
