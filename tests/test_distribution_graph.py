@@ -181,13 +181,15 @@ def test_real_standalone_adapter_emits_frozen_internal_steps(monkeypatch, tmp_pa
     events = []
     component.run(events.append)
 
-    assert [event.leaf_id for event in events if event.action == "complete"] == [
-        leaf_id for leaf_id, _step in frozen if "wheel" not in leaf_id
+    skipped = {"build/wheel-a", "build/wheel-b"}
+    assert [
+        (event.action, event.leaf_id)
+        for event in events
+        if event.action in {"complete", "skip"}
+    ] == [
+        ("skip" if leaf_id in skipped else "complete", leaf_id)
+        for leaf_id, _step in frozen
     ]
-    assert {event.leaf_id for event in events if event.action == "skip"} == {
-        "build/wheel-a",
-        "build/wheel-b",
-    }
 
 
 def test_real_debian_adapter_emits_package_and_post_build_steps(monkeypatch, tmp_path):
