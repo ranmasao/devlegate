@@ -300,3 +300,88 @@ Devlegate owns accepted finalization and the terminal transition.
   latest-report guessing.
 - Given failed/invalid worker egress, the ticket stays outside review and existing
   failed-execution/retry behavior remains intact.
+
+
+## Review feedback
+
+The first implementation is not acceptable yet.
+
+### Durable execution-report compatibility is broken
+
+The checkpoint keeps `schema = "devlegate.execution-report.v1"` but changes
+`ExecutionReport.from_dict()` so that every v1 report must contain two new top-level
+fields:
+
+```text
+report_artifact
+report_sha256
+```
+
+Existing durable v1 reports do not contain those fields. GitHub Actions demonstrates
+the consequence directly: existing log-reader fixtures fail with
+`ExecutionReportError: execution report fields are invalid`.
+
+This is a control-plane durability and self-hosting blocker, not merely a stale test.
+Historical execution evidence must remain readable after upgrading Devlegate. The
+current TASK-011 receipt itself was written by the pre-TASK-011 runtime and therefore
+also lacks the new fields.
+
+Preserve backward compatibility explicitly. Either:
+
+- keep v1 readable with the new report fields treated as absent/None for old
+  payloads while emitting one canonical compatible form for new reports; or
+- introduce a new schema version while retaining strict v1 parsing and a supported
+  v1 -> internal-model read path.
+
+Do not silently reinterpret malformed evidence, but valid historical v1 evidence
+must remain valid.
+
+### Required regressions were not implemented
+
+The product checkpoint changes runtime/protocol/role files but does not add or update
+the test suite for TASK-011's required behavior. GitHub Actions currently reports:
+
+```text
+13 failed, 951 passed, 1 skipped
+```
+
+The failures include both obsolete expectations and genuine compatibility/recovery
+breakage.
+
+In particular, the existing
+`test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch` still
+expects the old `incomplete -> todo` behavior. Under this ticket it must be
+deliberately replaced/updated to prove that a valid incomplete claim moves the same
+ticket to review while preserving remaining work.
+
+Add focused regressions for the ticket's required cases, including at minimum:
+
+- completed, incomplete, and blocked valid claims each moving `todo -> review`
+  exactly once with semantic fields preserved;
+- failed/invalid egress remaining outside review;
+- blocked/questions and incomplete/remaining surviving replay/restart and
+  review -> todo rework;
+- optional long-form report persistence, exact artifact identity/digest binding,
+  replay safety, and historical report compatibility;
+- exact reviewed-result binding when multiple historical reports exist for one
+  ticket;
+- effectful accepted finalization remaining ancestry-safe;
+- proven zero-product-delta accepted finalization leaving product HEAD unchanged,
+  retiring execution state lease-safely, and reaching done;
+- stale/ambiguous zero-delta finalization failing closed.
+
+The accepted-integration subprocess regression
+`test_real_service_accepted_integration_restart_is_idempotent` also times out in
+the current checkpoint. Re-run and resolve that failure after restoring report
+compatibility; do not assume it is only an obsolete assertion because it protects
+restart/idempotence behavior this ticket must preserve.
+
+### Validation
+
+The ticket explicitly requires full tests, lint, recovery tests, and control-plane
+exactness checks to remain green. Do not return this ticket to review until the full
+suite and lint pass on the exact checkpoint.
+
+Keep the existing state-machine direction and avoid broad redesign. The central
+review/accepted/zero-delta model is still the intended one; this return is for
+durability compatibility, missing regressions, and recovery correctness.
