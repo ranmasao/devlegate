@@ -1,0 +1,25 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "completed",
+  "control_head": "3611c251b3d7d696eebbfcf9048caea5aca4fbcd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-010",
+  "execution_id": "14c80a844e4643be992240df517dd7e9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-010",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-010",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Generated fresh branch coverage and HTML, and inspected the annotated runtime.py source rather than relying only on aggregate percentages. Coverage debt is concentrated in _run_iteration_body, _validate_state_invariant, checkpoint/publication and lifecycle recovery, drop evidence, and reconciliation; the highest-value follow-up tests are scheduler divergence/zero-delta recovery, malformed persisted-state rejection, checkpoint publication replay, lifecycle races, and reconciliation success/conflict paths, while many malformed-input and Git/OS failure branches are legitimately defensive. No tracked product files were changed or staged; generated .venv, coverage.json, .coverage data, and htmlcov are ignored artifacts."
+  },
+  "workspace_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa"
+}
