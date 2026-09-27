@@ -1,0 +1,28 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "completed",
+  "control_head": "8913755ad7f4a78e8f5a105979c012f88b056e97",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "872b0c1f06174351b978fe16e72ee77f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-019/872b0c1f06174351b978fe16e72ee77f.md",
+  "report_sha256": "758ce9a8b23dfe3e08e93fb976183649c1d37397d97ce6f668dcbc60171aaaa6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation preserves unsafe or unproven conflicting workspaces and keeps the existing execution identity when a pre-worker repair succeeds.",
+    "summary": "Added a shared read-only execution workspace inspection that classifies bound pre-worker state as REUSABLE, RECOVERABLE, or UNSAFE, preventing plans from advertising invalid resumes. Added identity-bound automatic repair for attributable stale execution branches, including durable checkpoint evidence, exact-head re-observation, CAS branch replacement from the persisted base, workspace reconstruction, and final revalidation."
+  },
+  "workspace_head": "97ac62b44850617ea522151b8f2a49705b1688a4"
+}
