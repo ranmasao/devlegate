@@ -1,0 +1,29 @@
+{
+  "code_base_head": "9413c814f1966aef962860dc2cece8d8e0877c60",
+  "conclusion": "completed",
+  "control_head": "24345820306080fd0f5fa5d4261eb42e5e886822",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-008",
+  "execution_id": "88aac70c862e4637afa39fde71126aea",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-008",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full pytest suite exceeded the available command timeout; focused regressions and compile validation completed."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-008",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Full pytest suite exceeded the available command timeout; focused regressions and compile validation completed."
+    ],
+    "summary": "Updated idle scheduler diagnostics to use the execution-plan barrier reason and centralized dependency-blocked ticket detection shared with status projection. Added regressions covering review-barrier diagnostics and genuine unfinished dependency diagnostics without changing scheduling behavior."
+  },
+  "workspace_head": "e2297512c43181b1e129be434f3ca51ff79cdbc5"
+}
