@@ -48,6 +48,7 @@ pythonpath = ["src"]
 [tool.coverage.run]
 branch = true
 source_pkgs = ["devlegate"]
+omit = ["*/devlegate/_vendor/*"]
 patch = ["subprocess"]
 parallel = true
 sigterm = true
