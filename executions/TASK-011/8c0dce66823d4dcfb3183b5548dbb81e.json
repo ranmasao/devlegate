@@ -1,0 +1,33 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "blocked",
+  "control_head": "c0b8e86b9ff80f7444921fc7e1a1554bb7a0158b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "8c0dce66823d4dcfb3183b5548dbb81e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [
+    "Should the post-checkpoint pending-report failure be handled in this task despite the continuation scope identifying only the authority handoff race?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Diagnose and fix the replacement service's invalid post-checkpoint pending execution report recovery failure, then rerun the graceful restart regression and full validation."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Should the post-checkpoint pending-report failure be handled in this task despite the continuation scope identifying only the authority handoff race?"
+    ],
+    "remaining": [
+      "Diagnose and fix the replacement service's invalid post-checkpoint pending execution report recovery failure, then rerun the graceful restart regression and full validation."
+    ],
+    "summary": "No implementation changes were retained. The graceful internal restart regression reproduces locally, but the replacement service fails during post-checkpoint recovery with an invalid pending execution report before readiness, so a lifecycle-only fix cannot be safely completed from this checkpoint."
+  },
+  "workspace_head": "944168c56f7a0e7be4474f743e01a86f14a0b7b2"
+}
