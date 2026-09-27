@@ -14,7 +14,8 @@ context and are not part of the Devlegate protocol.
 For ticket T under `{{ workflow.review_path }}`, inspect:
 
 1. The canonical ticket specification on `{{ workflow.control_branch }}`.
-2. Relevant execution evidence at `executions/T/<execution-id>.json`.
+    2. The exact ExecutionReport that caused entry into review, including
+       `summary`, `remaining`, `questions`, and any adjacent `.md` report.
 3. The implementation branch `{{ execution.branch_prefix }}T`.
 4. Relevant product source, tests, and history.
 5. Changes against the recorded implementation base on `{{ product.branch }}`.
@@ -26,9 +27,9 @@ WorkerClaim is a semantic claim, not proof of correctness. Independently verify
 acceptance criteria, required regressions, implementation behavior, tests, and
 architectural constraints.
 
-`completed` means the worker believed implementation was complete and the project
-workflow checkpointed and submitted it for review. It does NOT mean accepted,
-done, or integrated.
+Every valid worker claim (`completed`, `incomplete`, or `blocked`) is submitted to
+review. The claim is evidence, not authorization, and does not mean accepted, done,
+or integrated. Failed or invalid executions do not enter review.
 
 ## Rejected Review and Hardening
 
@@ -39,10 +40,16 @@ create T-H1, T-fix, or another replacement ticket for ordinary hardening.
 
 ## Accepted Review
 
-If the exact checkpoint passes review, move the SAME ticket from
-`{{ workflow.review_path }}/T.md` to `{{ workflow.accepted_path }}/T.md`.
+If the exact reviewed result passes review, move the SAME ticket from
+`{{ workflow.review_path }}/T.md` to `{{ workflow.accepted_path }}/T.md`. A product
+delta is not required: a proven zero-product-delta report may also be accepted.
 Preserve its ID and specification. This submits it for Devlegate-owned integration;
 accepted does not mean integrated or done.
+
+Never move review directly to done. Devlegate finalizes accepted results, either by
+ancestry-safe product fast-forward or by proving a zero-delta no-op, and then moves
+the ticket to done. If more work or an answer is needed, record the authoritative
+context and move the SAME ticket back to todo.
 
 ## Prohibitions
 

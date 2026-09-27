@@ -17,6 +17,7 @@ class WorkerClaim:
     summary: str
     remaining: tuple[str, ...]
     questions: tuple[str, ...]
+    report: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,16 +51,20 @@ class WorkerRunResult:
 
 
 _OUTCOMES = {"completed", "incomplete", "blocked"}
-_CLAIM_FIELDS = {"outcome", "summary", "remaining", "questions"}
+_CLAIM_FIELDS = {"outcome", "summary", "remaining", "questions", "report"}
 
 
 def _claim(arguments: Any) -> WorkerClaim:
-    if not isinstance(arguments, dict) or set(arguments) != _CLAIM_FIELDS:
+    if not isinstance(arguments, dict) or set(arguments) not in (
+        _CLAIM_FIELDS,
+        _CLAIM_FIELDS - {"report"},
+    ):
         raise WorkerProtocolError("devlegate_report arguments must have exact fields")
     outcome = arguments["outcome"]
     summary = arguments["summary"]
     remaining = arguments["remaining"]
     questions = arguments["questions"]
+    report = arguments.get("report")
     if not isinstance(outcome, str) or outcome not in _OUTCOMES:
         raise WorkerProtocolError("devlegate_report outcome is invalid")
     if not isinstance(summary, str):
@@ -72,7 +77,9 @@ def _claim(arguments: Any) -> WorkerClaim:
         isinstance(item, str) for item in questions
     ):
         raise WorkerProtocolError("devlegate_report questions must be list[string]")
-    return WorkerClaim(outcome, summary, tuple(remaining), tuple(questions))
+    if report is not None and not isinstance(report, str):
+        raise WorkerProtocolError("devlegate_report report must be a string or null")
+    return WorkerClaim(outcome, summary, tuple(remaining), tuple(questions), report)
 
 
 class WorkerEgressParser:

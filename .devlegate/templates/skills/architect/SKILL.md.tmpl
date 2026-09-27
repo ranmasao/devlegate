@@ -89,7 +89,7 @@ execution evidence, or integrate product branches.
 
 ## Integration Limit
 
-Completed worker execution is ready for review. `accepted` means review passed and
-Devlegate is waiting to integrate the exact checkpoint. `done` means that checkpoint
-is present in published product history. Devlegate owns integration; do not rebase,
-merge, or resolve conflicts automatically.
+Every valid worker execution is ready for review, including `incomplete` and
+`blocked` claims. `accepted` means the reviewer approved the exact reviewed result;
+it may be a product checkpoint or a proven zero-delta result. Devlegate owns
+finalization and the transition to `done`; do not move review directly to done.

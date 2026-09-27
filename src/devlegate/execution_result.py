@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -51,6 +52,8 @@ class ExecutionReport:
     execution_path: str
     workspace_head: str | None
     result: ExecutionResult
+    report_artifact: str | None = None
+    report_sha256: str | None = None
 
     @property
     def schema(self) -> str:
@@ -78,6 +81,7 @@ class ExecutionReport:
                     "summary": claim.summary,
                     "remaining": list(claim.remaining),
                     "questions": list(claim.questions),
+                    "report": claim.report,
                 }
                 if claim is not None
                 else None
@@ -86,6 +90,8 @@ class ExecutionReport:
             "questions": list(self.result.questions),
             "remaining": list(self.result.remaining),
             "reason": self.result.reason,
+            "report_artifact": self.report_artifact,
+            "report_sha256": self.report_sha256,
         }
 
     def to_json(self) -> str:
@@ -114,6 +120,8 @@ class ExecutionReport:
             "questions",
             "remaining",
             "reason",
+            "report_artifact",
+            "report_sha256",
         }
         if set(payload) != expected:
             raise ExecutionReportError("execution report fields are invalid")
@@ -137,6 +145,19 @@ class ExecutionReport:
             payload["workspace_head"], str
         ):
             raise ExecutionReportError("execution report workspace head is invalid")
+        if payload["report_artifact"] is not None and not isinstance(
+            payload["report_artifact"], str
+        ):
+            raise ExecutionReportError("execution report artifact is invalid")
+        if payload["report_artifact"] not in {
+            None,
+            f"executions/{payload['ticket_id']}/{payload['execution_id']}.md",
+        }:
+            raise ExecutionReportError("execution report artifact identity is invalid")
+        if payload["report_sha256"] is not None and not isinstance(
+            payload["report_sha256"], str
+        ):
+            raise ExecutionReportError("execution report digest is invalid")
         if not isinstance(payload["process_returncode"], int) or isinstance(
             payload["process_returncode"], bool
         ):
@@ -153,6 +174,17 @@ class ExecutionReport:
             )
         claim_payload = payload["worker_claim"]
         claim = _parse_claim(claim_payload) if claim_payload is not None else None
+        has_report = claim is not None and claim.report is not None
+        if (payload["report_artifact"] is None) != (not has_report) or (
+            payload["report_sha256"] is None
+        ) != (not has_report):
+            raise ExecutionReportError(
+                "execution report artifact binding is inconsistent"
+            )
+        if has_report and payload["report_sha256"] != hashlib.sha256(
+            claim.report.encode("utf-8")
+        ).hexdigest():
+            raise ExecutionReportError("execution report digest is inconsistent")
         if not isinstance(payload["egress_ok"], bool) or payload["egress_ok"] != (
             claim is not None and payload["egress_error"] is None
         ):
@@ -199,6 +231,8 @@ class ExecutionReport:
             payload["execution_path"],
             payload["workspace_head"],
             result,
+            payload["report_artifact"],
+            payload["report_sha256"],
         )
 
 
@@ -209,12 +243,12 @@ def _strings(value: object, field: str) -> tuple[str, ...]:
 
 
 def _parse_claim(value: object) -> WorkerClaim:
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) not in ({
         "outcome",
         "summary",
         "remaining",
         "questions",
-    }:
+    }, {"outcome", "summary", "remaining", "questions", "report"}):
         raise ExecutionReportError("execution report worker claim is invalid")
     if not isinstance(value["outcome"], str) or value["outcome"] not in {
         "completed",
@@ -224,11 +258,15 @@ def _parse_claim(value: object) -> WorkerClaim:
         raise ExecutionReportError("execution report worker claim outcome is invalid")
     if not isinstance(value["summary"], str):
         raise ExecutionReportError("execution report worker claim summary is invalid")
+    report = value.get("report")
+    if report is not None and not isinstance(report, str):
+        raise ExecutionReportError("execution report worker claim report is invalid")
     return WorkerClaim(
         value["outcome"],
         value["summary"],
         _strings(value["remaining"], "worker claim remaining"),
         _strings(value["questions"], "worker claim questions"),
+        report,
     )
 
 
@@ -285,6 +323,16 @@ def build_execution_report(
     run: WorkerRunResult,
 ) -> ExecutionReport:
     """Build a report from Devlegate-owned identity and worker observations."""
+    result = build_execution_result(run)
+    long_report = result.claim.report if result.claim is not None else None
+    artifact = (
+        f"executions/{ticket_id}/{execution_id}.md" if long_report is not None else None
+    )
+    digest = (
+        hashlib.sha256(long_report.encode("utf-8")).hexdigest()
+        if long_report is not None
+        else None
+    )
     return ExecutionReport(
         execution_id,
         ticket_id,
@@ -293,7 +341,9 @@ def build_execution_report(
         execution_branch,
         execution_path,
         workspace_head,
-        build_execution_result(run),
+        result,
+        artifact,
+        digest,
     )
 
 
@@ -349,6 +399,26 @@ class ExecutionReportStore:
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.link(temporary_name, path)
+            if report.result.claim is not None and report.result.claim.report is not None:
+                artifact = path.with_suffix(".md")
+                content = report.result.claim.report
+                temporary_report = tempfile.NamedTemporaryFile(
+                    mode="w", dir=path.parent, prefix=f".{report.execution_id}.",
+                    suffix=".tmp", delete=False
+                )
+                try:
+                    with temporary_report:
+                        temporary_report.write(content)
+                        temporary_report.flush()
+                        os.fsync(temporary_report.fileno())
+                    os.link(temporary_report.name, artifact)
+                except FileExistsError as error:
+                    raise ExecutionReportError("execution report artifact already exists") from error
+                finally:
+                    try:
+                        os.unlink(temporary_report.name)
+                    except FileNotFoundError:
+                        pass
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory_fd)
@@ -382,6 +452,13 @@ class ExecutionReportStore:
         report = ExecutionReport.from_dict(payload)
         if (report.ticket_id, report.execution_id) != (ticket_id, execution_id):
             raise ExecutionReportError("execution report identity does not match path")
+        if report.report_artifact is not None:
+            artifact = path.with_suffix(".md")
+            if artifact.is_symlink() or not artifact.is_file():
+                raise ExecutionReportError("execution report artifact is unavailable")
+            content = artifact.read_text()
+            if hashlib.sha256(content.encode("utf-8")).hexdigest() != report.report_sha256:
+                raise ExecutionReportError("execution report artifact integrity mismatch")
         return report
 
     def list(self, ticket_id: str | None = None) -> tuple[ExecutionReport, ...]:
@@ -410,5 +487,16 @@ class ExecutionReportStore:
                     raise ExecutionReportError(
                         "execution report identity does not match path"
                     )
+                if report.report_artifact is not None:
+                    artifact = path.with_suffix(".md")
+                    if artifact.is_symlink() or not artifact.is_file():
+                        raise ExecutionReportError(
+                            "execution report artifact is unavailable"
+                        )
+                    digest = hashlib.sha256(
+                        artifact.read_text().encode("utf-8")
+                    ).hexdigest()
+                    if digest != report.report_sha256:
+                        raise ExecutionReportError("execution report artifact integrity mismatch")
                 reports.append(report)
         return tuple(reports)

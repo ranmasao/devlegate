@@ -16,7 +16,8 @@ context and are not part of the Devlegate protocol.
 For ticket T under `kanban/review`, inspect:
 
 1. The canonical ticket specification on `devlegate/control`.
-2. Relevant execution evidence at `executions/T/<execution-id>.json`.
+2. The exact ExecutionReport that caused entry into review, including
+   `summary`, `remaining`, `questions`, and any adjacent `.md` report.
 3. The implementation branch `devlegate/work/T`.
 4. Relevant product source, tests, and history.
 5. Changes against the recorded implementation base on `release/0.5.5`.
@@ -28,9 +29,9 @@ WorkerClaim is a semantic claim, not proof of correctness. Independently verify
 acceptance criteria, required regressions, implementation behavior, tests, and
 architectural constraints.
 
-`completed` means the worker believed implementation was complete and the project
-workflow checkpointed and submitted it for review. It does NOT mean accepted,
-done, or integrated.
+Every valid worker claim (`completed`, `incomplete`, or `blocked`) is submitted to
+review. The claim is evidence, not authorization, and does not mean accepted, done,
+or integrated. Failed or invalid executions do not enter review.
 
 ## Rejected Review and Hardening
 
@@ -45,6 +46,11 @@ If the exact checkpoint passes review, move the SAME ticket from
 `kanban/review/T.md` to `kanban/accepted/T.md`.
 Preserve its ID and specification. This submits it for Devlegate-owned integration;
 accepted does not mean integrated or done.
+
+A product delta is not required for acceptance. Devlegate finalizes an accepted
+result either by ancestry-safe product fast-forward or by proving a zero-delta
+no-op, then moves it to done. Never move review directly to done; return the SAME
+ticket to todo when more work or an authoritative answer is needed.
 
 ## Prohibitions
 

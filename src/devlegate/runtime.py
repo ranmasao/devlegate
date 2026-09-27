@@ -3854,9 +3854,25 @@ class ServiceEngine:
         )
         remote = self._execution_remote_head(report.execution_branch)
         if remote is not None:
-            raise WorkflowBlockedError(
-                "zero-delta execution has published execution history"
+            if remote != checkpoint:
+                raise WorkflowBlockedError(
+                    "zero-delta execution branch changed before retirement"
+                )
+            retired = _git(
+                self.repo,
+                "push",
+                f"--force-with-lease=refs/heads/{report.execution_branch}:{remote}",
+                self.remote_name,
+                f":refs/heads/{report.execution_branch}",
+                check=False,
             )
+            if (
+                retired.returncode
+                and self._execution_remote_head(report.execution_branch) is not None
+            ):
+                raise WorkflowBlockedError(
+                    retired.stderr.strip() or "cannot retire zero-delta execution branch"
+                )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is not None:
@@ -4217,21 +4233,64 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 f"accepted ticket {ticket_id} has no durable execution evidence"
             )
-        reports: list[ExecutionReport] = []
-        for path in sorted(root.glob("*.json")):
-            if path.is_symlink() or not path.is_file():
-                raise WorkflowBlockedError("accepted execution evidence is unsafe")
-            try:
-                report = ExecutionReport.from_dict(json.loads(path.read_text()))
-            except (OSError, json.JSONDecodeError, ExecutionReportError) as error:
-                raise WorkflowBlockedError(
-                    f"malformed execution evidence for accepted ticket {ticket_id}"
-                ) from error
-            if (
-                report.ticket_id == ticket_id
-                and report.result.conclusion == "completed"
-            ):
-                reports.append(report)
+        try:
+            reports = [
+                report
+                for report in ExecutionReportStore(self.control_worktree).list(ticket_id)
+                if report.result.conclusion != "failed"
+            ]
+        except ExecutionReportError as error:
+            raise WorkflowBlockedError(
+                f"malformed execution evidence for accepted ticket {ticket_id}"
+            ) from error
+        accepted_commit = _git(
+            self.control_worktree,
+            "log",
+            "-1",
+            "--format=%H",
+            "HEAD",
+            "--",
+            f"{self.accepted_path}/{ticket_id}.md",
+            check=False,
+        )
+        if accepted_commit.returncode or not accepted_commit.stdout.strip():
+            raise WorkflowBlockedError("accepted ticket transition is unavailable")
+        parent = _git(
+            self.control_worktree,
+            "rev-parse",
+            f"{accepted_commit.stdout.strip()}^",
+            check=False,
+        )
+        if parent.returncode:
+            raise WorkflowBlockedError("accepted ticket transition parent is unavailable")
+        review_commit = _git(
+            self.control_worktree,
+            "log",
+            "-1",
+            "--format=%H",
+            parent.stdout.strip(),
+            "--",
+            f"{self.review_path}/{ticket_id}.md",
+            check=False,
+        )
+        if review_commit.returncode or not review_commit.stdout.strip():
+            raise WorkflowBlockedError("review admission transition is unavailable")
+        exact_review_commit = review_commit.stdout.strip()
+        reports = [
+            report
+            for report in reports
+            if _git(
+                self.control_worktree,
+                "log",
+                "-1",
+                "--format=%H",
+                parent.stdout.strip(),
+                "--",
+                f"executions/{ticket_id}/{report.execution_id}.json",
+                check=False,
+            ).stdout.strip()
+            == exact_review_commit
+        ]
         expected_branch = f"devlegate/work/{ticket_id}"
         remote_head = self._execution_remote_head(expected_branch)
         matches = [
@@ -4239,9 +4298,15 @@ class ServiceEngine:
             for report in reports
             if report.execution_branch == expected_branch
             and isinstance(report.workspace_head, str)
-            and report.workspace_head == remote_head
+            and (
+                report.workspace_head == remote_head
+                or (
+                    remote_head is None
+                    and report.workspace_head == report.code_base_head
+                )
+            )
         ]
-        if remote_head is None or len(matches) != 1:
+        if len(matches) != 1:
             raise WorkflowBlockedError(
                 f"accepted ticket {ticket_id} has ambiguous or missing completed "
                 "execution evidence"
@@ -4293,6 +4358,14 @@ class ServiceEngine:
         if not fields:
             raise WorkflowBlockedError("configured product branch is unavailable")
         product_head = fields[0]
+
+        if checkpoint == report.code_base_head:
+            if product_head != report.code_base_head:
+                raise WorkflowBlockedError(
+                    "zero-delta accepted result is stale or product history changed"
+                )
+            self._retire_zero_delta_execution(report)
+            return self._complete_accepted(ticket_id, control.local_head)
 
         def is_ancestor(older: str, newer: str) -> bool:
             return (
@@ -5327,7 +5400,9 @@ class ServiceEngine:
         )
         report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
         expected = {f"A\t{report_path}"}
-        if apply_conclusion and report.result.conclusion == "completed":
+        if report.report_artifact is not None:
+            expected.add(f"A\t{report.report_artifact}")
+        if apply_conclusion and report.result.conclusion != "failed":
             expected.update(
                 {
                     f"D\t{self.todo_path}/{report.ticket_id}.md",
@@ -5342,7 +5417,20 @@ class ServiceEngine:
         )
         if report_bytes.returncode or report_bytes.stdout != report.to_json():
             return False
-        if apply_conclusion and report.result.conclusion == "completed":
+        if report.report_artifact is not None:
+            artifact_bytes = _git(
+                self.control_worktree,
+                "show",
+                f"{commit}:{report.report_artifact}",
+                check=False,
+            )
+            if (
+                artifact_bytes.returncode
+                or report.result.claim is None
+                or artifact_bytes.stdout != report.result.claim.report
+            ):
+                return False
+        if apply_conclusion and report.result.conclusion != "failed":
             parent_blob = _git(
                 self.control_worktree,
                 "rev-parse",
@@ -5501,7 +5589,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "execution ticket is not in its expected todo state"
             )
-        if apply_conclusion and report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion != "failed":
             boundary = tuple(
                 item
                 for item in ticket_store.tickets
@@ -5513,7 +5601,7 @@ class ServiceEngine:
                 )
         report_store = ExecutionReportStore(self.control_worktree)
         report_store.write(report)
-        if apply_conclusion and report.result.conclusion == "completed":
+        if apply_conclusion and report.result.conclusion != "failed":
             review = self.control_worktree / self.review_path / f"{ticket.id}.md"
             if review.exists() or review.is_symlink():
                 raise WorkflowBlockedError("review ticket already exists")

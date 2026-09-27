@@ -601,6 +601,7 @@ export default tool({
     summary: tool.schema.string(),
     remaining: tool.schema.array(tool.schema.string()),
     questions: tool.schema.array(tool.schema.string()),
+     report: tool.schema.string().optional(),
   },
   async execute() {
     return "devlegate_report accepted"
