@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Guide workers with focused validation profiles"
-"depends_on": ["TASK-026"]
+"depends_on": ["TASK-026", "TASK-030"]
 ---
 
 ## Milestone
@@ -42,6 +42,9 @@ catalog from TASK-026 should provide stable runnable profile IDs.
   mechanism with the same explicit semantics.
 - The worker prompt lists the relevant profile IDs, descriptions, and intended proof
   scope without embedding project-specific test commands in Devlegate core logic.
+- When TASK-030's reserved test tool is available, worker guidance presents that tool
+  as the normal way to run named focused-test profiles rather than teaching the worker
+  to reconstruct those commands through the generic shell.
 - Architect guidance distinguishes:
   - worker-focused validation needed for implementation feedback;
   - QA-owned deterministic validators;
@@ -67,7 +70,8 @@ catalog from TASK-026 should provide stable runnable profile IDs.
 ## Acceptance criteria
 
 - A runtime-recovery ticket can tell a worker to run the runtime/workspace focused
-  profiles without implying all production-topology tests.
+  profiles through the reserved test tool without implying all production-topology
+  tests.
 - A packaging ticket can expose packaging-focused validation independently.
 - A ticket with no focused profile does not cause an implicit full-suite run.
 - The worker prompt clearly states that full CI occurs outside the worker loop and

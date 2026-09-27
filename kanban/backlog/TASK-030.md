@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Add an agent-only long-running test tool"
-"depends_on": ["TASK-026", "TASK-029"]
+"depends_on": ["TASK-026"]
 ---
 
 ## Milestone
@@ -40,8 +40,15 @@ separate concerns:
 
 - Materialize/expose a reserved worker tool, tentatively `devlegate_test`, through
   the supported worker adapter.
+- Implement against the current worker/OpenCode adapter boundary; do not wait for
+  TASK-012's later adapter extraction. TASK-012 must be able to relocate the finished
+  tool integration without changing its test-run semantics.
 - The tool can invoke only project-defined **agent test profiles** from the exact
-  validation-policy generation; it cannot execute arbitrary shell commands.
+  validation-policy generation supplied by TASK-026; it cannot execute arbitrary
+  shell commands.
+- The tool is usable before TASK-029 adds richer ticket/prompt guidance: a worker can
+  discover/list the project-defined agent test profiles through the reserved tool or
+  equivalent adapter surface and invoke them explicitly.
 - Every test run is bound to the current ticket, execution ID, exact execution
   workspace, and selected profile.
 - The test process runs in the exact execution workspace and tests the worker's
