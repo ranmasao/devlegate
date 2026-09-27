@@ -3861,7 +3861,7 @@ def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
     )
 
 
-def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
+def test_incomplete_report_enters_review_and_preserves_remaining_work(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -3883,8 +3883,45 @@ def test_incomplete_report_preserves_todo_and_prevents_immediate_redispatch(
     assert run_test_iteration(devlegate) == 0
     assert calls == 1
     control = next((state / "worktrees").glob("*/control"))
-    assert (control / "kanban/todo/T-1.md").is_file()
-    assert not (control / "kanban/review/T-1.md").exists()
+    assert not (control / "kanban/todo/T-1.md").exists()
+    assert (control / "kanban/review/T-1.md").is_file()
+    report = next((control / "executions/T-1").glob("*.json"))
+    assert json.loads(report.read_text())["remaining"] == ["finish"]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "remaining", "questions"),
+    [
+        ("completed", (), ()),
+        ("incomplete", ("finish",), ()),
+        ("blocked", (), ("Which API?",)),
+    ],
+)
+def test_every_valid_worker_claim_enters_review_with_claim_fields(
+    tmp_path, monkeypatch, outcome, remaining, questions
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(_workspace, _prompt, **_kwargs):
+        return WorkerRunResult(
+            0,
+            None,
+            WorkerClaim(outcome, "semantic result", remaining, questions),
+            None,
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/review/T-1.md").is_file()
+    payload = json.loads(next((control / "executions/T-1").glob("*.json")).read_text())
+    assert payload["conclusion"] == outcome
+    assert payload["remaining"] == list(remaining)
+    assert payload["questions"] == list(questions)
 
 
 def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(

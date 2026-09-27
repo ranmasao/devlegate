@@ -23,8 +23,9 @@ def run(
     egress_error=None,
     remaining=(),
     questions=(),
+    report=None,
 ):
-    claim = WorkerClaim(outcome, "worker summary", remaining, questions)
+    claim = WorkerClaim(outcome, "worker summary", remaining, questions, report)
     return WorkerRunResult(process, transport_error, claim, egress_error)
 
 
@@ -89,6 +90,49 @@ def test_execution_report_round_trips_all_facts():
     assert restored.schema == "devlegate.execution-report.v1"
     assert restored.result.claim is not None
     assert restored.result.questions == ("Need input",)
+
+
+def test_historical_v1_report_without_optional_artifact_fields_remains_readable():
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code-base",
+        control_head="control-head",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=run(),
+    )
+    payload = report.as_dict()
+    payload.pop("report_artifact")
+    payload.pop("report_sha256")
+
+    restored = report.from_dict(payload)
+
+    assert restored == report
+    assert restored.report_artifact is None
+    assert restored.report_sha256 is None
+
+
+def test_historical_v1_report_with_long_form_claim_is_not_reinterpreted():
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code-base",
+        control_head="control-head",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("completed", "summary", (), (), "details"), None
+        ),
+    )
+    payload = report.as_dict()
+    payload.pop("report_artifact")
+    payload.pop("report_sha256")
+
+    with pytest.raises(ExecutionReportError, match="artifact binding"):
+        report.from_dict(payload)
 
 
 @pytest.mark.parametrize(
@@ -196,6 +240,27 @@ def test_report_store_is_control_plane_only_and_never_overwrites(tmp_path):
     with pytest.raises(ExecutionReportError, match="already exists"):
         store.write(report)
     assert not (tmp_path / "control/kanban").exists()
+
+
+def test_report_store_persists_long_form_report_with_exact_binding(tmp_path):
+    store = ExecutionReportStore(tmp_path / "control")
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code-base",
+        control_head="control-head",
+        execution_branch="branch",
+        execution_path="workspace",
+        workspace_head="head",
+        run=run(report="# Findings\n\nEvidence\n"),
+    )
+
+    store.write(report)
+
+    artifact = tmp_path / "control/executions/T-1/attempt-1.md"
+    assert artifact.read_text() == "# Findings\n\nEvidence\n"
+    assert store.read("T-1", "attempt-1") == report
+    assert store.list("T-1") == (report,)
 
 
 def test_report_store_lists_immutable_history(tmp_path):
