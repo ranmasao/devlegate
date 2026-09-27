@@ -1,0 +1,29 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "completed",
+  "control_head": "06b9ce53a822bf56da5ed57e3b6445857bb6049b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "48bad8db70014ca481134770a316c198",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the coverage-specific test once the optional `coverage` package is available in the test interpreter."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Run the coverage-specific test once the optional `coverage` package is available in the test interpreter."
+    ],
+    "summary": "Made long-form execution report persistence crash-safe by publishing the artifact before the JSON authority marker, reusing identical orphan artifacts on replay, and rejecting conflicting artifacts. Added regressions for mid-publication recovery and conflicting evidence."
+  },
+  "workspace_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa"
+}
