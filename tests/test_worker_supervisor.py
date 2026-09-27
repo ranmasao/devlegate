@@ -47,12 +47,30 @@ def test_worker_environment_removes_host_control_state():
         "DEVLEGATE_RESTART_AUTHORITY_KEY": "key",
         "DEVLEGATE_RESTART_REQUEST": "request",
         "DEVLEGATE_RESTART_INSTANCE": "instance",
+        "PEX": "/outer/devlegate",
+        "SCIE": "/outer/devlegate",
+        "SCIE_ARGV0": "/outer/devlegate",
+        "__PEX_ENTRY_POINT__": "/outer/pex",
+        "_PEX_CACHE_ACCESS_LOCK": "0|3|/outer/cache",
     }
 
     sanitized = worker_environment(parent_environment)
 
     assert sanitized == {"PROJECT_SETTING": "available"}
     assert parent_environment["NOTIFY_SOCKET"] == "/run/notify"
+
+
+def test_worker_environment_does_not_inherit_outer_packaging_launcher_identity():
+    sanitized = worker_environment(
+        {
+            "PEX": "/usr/bin/devlegate",
+            "SCIE": "/usr/bin/devlegate",
+            "SCIE_ARGV0": "/usr/bin/devlegate",
+            "__PEX_ENTRY_POINT__": "/outer/pex",
+        }
+    )
+
+    assert sanitized == {}
 
 
 def test_sanitized_environment_does_not_enable_nested_hosting(monkeypatch):

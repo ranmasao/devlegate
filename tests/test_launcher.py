@@ -32,8 +32,28 @@ def test_proven_eager_scie_metadata_selects_outer_executable(monkeypatch, tmp_pa
     executable.chmod(0o755)
     monkeypatch.setenv("PEX", str(executable))
     monkeypatch.setenv("SCIE", str(executable))
+    monkeypatch.setenv("SCIE_ARGV0", str(executable))
+    monkeypatch.setattr(sys, "argv", [str(executable)])
 
     assert product_launcher().argv() == [str(executable)]
+
+
+def test_stale_scie_argv0_keeps_source_launcher(monkeypatch, tmp_path):
+    executable = tmp_path / "devlegate"
+    executable.write_bytes(b"\x7fELFstandalone")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PEX", str(executable))
+    monkeypatch.setenv("SCIE", str(executable))
+    monkeypatch.setenv("SCIE_ARGV0", str(executable))
+    monkeypatch.setattr(sys, "argv", ["/worktree/src/devlegate/__main__.py"])
+    monkeypatch.setattr("devlegate.launcher.sys.executable", "/python/bin/python")
+
+    assert product_launcher().argv() == [
+        "/python/bin/python",
+        "-P",
+        "-m",
+        "devlegate",
+    ]
 
 
 def test_spoofed_or_ambiguous_scie_metadata_keeps_python_launcher(

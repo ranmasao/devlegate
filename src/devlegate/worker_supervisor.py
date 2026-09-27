@@ -235,6 +235,13 @@ _HOST_CONTROL_ENVIRONMENT = frozenset(
         "DEVLEGATE_RESTART_AUTHORITY_KEY",
         "DEVLEGATE_RESTART_REQUEST",
         "DEVLEGATE_RESTART_INSTANCE",
+        # Do not let a worker inherit the outer standalone launch identity.
+        # Nested service restarts must resolve the worker's own checkpoint.
+        "PEX",
+        "SCIE",
+        "SCIE_ARGV0",
+        "__PEX_ENTRY_POINT__",
+        "_PEX_CACHE_ACCESS_LOCK",
     }
 )
 
