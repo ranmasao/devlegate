@@ -379,6 +379,7 @@ class ExecutionReportStore:
         ExecutionReport.from_dict(report.as_dict())
         path = self._path(report.ticket_id, report.execution_id)
         temporary_name = None
+        temporary_report_name = None
         try:
             self._validate_roots()
             self.root.mkdir(parents=True, exist_ok=True)
@@ -388,6 +389,45 @@ class ExecutionReportStore:
                     "execution report ticket directory is a symlink"
                 )
             path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Publish the optional artifact before JSON. The JSON is the final
+            # commit marker, so recovery can safely replay an orphan artifact.
+            if (
+                report.result.claim is not None
+                and report.result.claim.report is not None
+            ):
+                artifact = path.with_suffix(".md")
+                content = report.result.claim.report
+                temporary_report = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    dir=path.parent,
+                    prefix=f".{report.execution_id}.",
+                    suffix=".tmp",
+                    delete=False,
+                )
+                temporary_report_name = temporary_report.name
+                try:
+                    with temporary_report:
+                        temporary_report.write(content)
+                        temporary_report.flush()
+                        os.fsync(temporary_report.fileno())
+                    try:
+                        os.link(temporary_report_name, artifact)
+                    except FileExistsError:
+                        if (
+                            artifact.is_symlink()
+                            or not artifact.is_file()
+                            or artifact.read_text() != content
+                        ):
+                            raise ExecutionReportError(
+                                "execution report artifact already exists"
+                            )
+                finally:
+                    try:
+                        os.unlink(temporary_report_name)
+                    except FileNotFoundError:
+                        pass
+
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 dir=path.parent,
@@ -400,31 +440,6 @@ class ExecutionReportStore:
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.link(temporary_name, path)
-            if (
-                report.result.claim is not None
-                and report.result.claim.report is not None
-            ):
-                artifact = path.with_suffix(".md")
-                content = report.result.claim.report
-                temporary_report = tempfile.NamedTemporaryFile(
-                    mode="w", dir=path.parent, prefix=f".{report.execution_id}.",
-                    suffix=".tmp", delete=False
-                )
-                try:
-                    with temporary_report:
-                        temporary_report.write(content)
-                        temporary_report.flush()
-                        os.fsync(temporary_report.fileno())
-                    os.link(temporary_report.name, artifact)
-                except FileExistsError as error:
-                    raise ExecutionReportError(
-                        "execution report artifact already exists"
-                    ) from error
-                finally:
-                    try:
-                        os.unlink(temporary_report.name)
-                    except FileNotFoundError:
-                        pass
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory_fd)
@@ -441,6 +456,11 @@ class ExecutionReportStore:
             if temporary_name is not None:
                 try:
                     os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+            if temporary_report_name is not None:
+                try:
+                    os.unlink(temporary_report_name)
                 except FileNotFoundError:
                     pass
 

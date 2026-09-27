@@ -2,9 +2,11 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import json
+import os
 
 import pytest
 
+import devlegate.execution_result as execution_result_module
 from devlegate.execution_result import (
     ExecutionReportError,
     ExecutionReportStore,
@@ -261,6 +263,65 @@ def test_report_store_persists_long_form_report_with_exact_binding(tmp_path):
     assert artifact.read_text() == "# Findings\n\nEvidence\n"
     assert store.read("T-1", "attempt-1") == report
     assert store.list("T-1") == (report,)
+
+
+def test_report_store_replays_after_artifact_published_before_json(
+    tmp_path, monkeypatch
+):
+    store = ExecutionReportStore(tmp_path / "control")
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code-base",
+        control_head="control-head",
+        execution_branch="branch",
+        execution_path="workspace",
+        workspace_head="head",
+        run=run(report="# Findings\n"),
+    )
+    original_link = execution_result_module.os.link
+    calls = 0
+
+    def fail_before_json(source, destination):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated crash before JSON publication")
+        original_link(source, destination)
+
+    monkeypatch.setattr(execution_result_module.os, "link", fail_before_json)
+    with pytest.raises(ExecutionReportError, match="cannot persist"):
+        store.write(report)
+
+    json_path = tmp_path / "control/executions/T-1/attempt-1.json"
+    artifact = tmp_path / "control/executions/T-1/attempt-1.md"
+    assert not json_path.exists()
+    assert artifact.read_text() == "# Findings\n"
+
+    monkeypatch.setattr(execution_result_module.os, "link", os.link)
+    assert store.write(report) == json_path
+    assert store.read("T-1", "attempt-1") == report
+
+
+def test_report_store_rejects_conflicting_orphan_artifact(tmp_path):
+    store = ExecutionReportStore(tmp_path / "control")
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code-base",
+        control_head="control-head",
+        execution_branch="branch",
+        execution_path="workspace",
+        workspace_head="head",
+        run=run(report="# Expected\n"),
+    )
+    artifact = tmp_path / "control/executions/T-1/attempt-1.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("# Conflicting\n")
+
+    with pytest.raises(ExecutionReportError, match="artifact already exists"):
+        store.write(report)
+    assert not artifact.with_suffix(".json").exists()
 
 
 def test_report_store_lists_immutable_history(tmp_path):
