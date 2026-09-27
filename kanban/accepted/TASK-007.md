@@ -635,3 +635,22 @@ Re-run exact-head CI after correcting the regression and require:
 - Ruff green;
 - the real standalone and Debian adapter regressions passing through the canonical
   import seam.
+
+
+## Acceptance
+
+Accepted against execution `381bc4b609154f2cb41364d8184c1c34` and checkpoint
+`9413c814f1966aef962860dc2cece8d8e0877c60`.
+
+Exact-head GitHub Actions run `36295118051` is green:
+
+- 960 passed, 1 skipped;
+- coverage generation succeeded;
+- Ruff reported `All checks passed!`.
+
+The final review confirms that the selected distribution graph is frozen from the
+component tree, executable leaves use stable hierarchical identities, standalone
+and Debian compound stages emit through the same component contract, direct-vs-
+dependency proof semantics are preserved, skip/fail handling remains fail-closed,
+and real production-adapter regressions cover standalone, Debian, supplied-wheel
+skip behavior, and deterministic captured output.
