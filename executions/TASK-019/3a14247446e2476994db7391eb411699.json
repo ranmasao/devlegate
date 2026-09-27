@@ -1,0 +1,34 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "incomplete",
+  "control_head": "34184da470ba582e0e501dd71e44c954bf4b4203",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "3a14247446e2476994db7391eb411699",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add and run the required regression tests for reusable, recoverable, unsafe, drift, evidence retention, and operator recovery scenarios.",
+    "Run the repository's pytest and ruff suites in an environment with those tools installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add and run the required regression tests for reusable, recoverable, unsafe, drift, evidence retention, and operator recovery scenarios.",
+      "Run the repository's pytest and ruff suites in an environment with those tools installed."
+    ],
+    "report": null,
+    "summary": "Moved bound agent_pending workspace classification to a provenance-aware runtime boundary that requires exact pre-worker identity, absent ownership/results, and unique durable prior-generation attribution before reporting RECOVERABLE. Added an identity-bound recover CLI/IPC operation for UNSAFE bindings with evidence pinning, CAS checks, exact-base rebuild, and final workspace revalidation."
+  },
+  "workspace_head": "0a1f0970fed7134455f3044b0aed3c5086e301f0"
+}
