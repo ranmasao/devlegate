@@ -1,0 +1,29 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "incomplete",
+  "control_head": "0100c3755cd46de4cf6ceb5117ecc80c2c74c26b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "4300bd0ca90047fba80de4bb9cc6de44",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full suite still has one reproducible failure in test_real_service_graceful_lifecycle_waits_for_active_worker[restart], where the restart client reports lost service authority during replacement handoff."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Full suite still has one reproducible failure in test_real_service_graceful_lifecycle_waits_for_active_worker[restart], where the restart client reports lost service authority during replacement handoff."
+    ],
+    "summary": "Fixed accepted-integration restart recovery so a locally finalized accepted-to-done rename does not shift exact review-report binding to the terminal commit; the exact reviewed execution remains recoverable and the four accepted-integration crash-point regressions pass. Ruff passes and the focused accepted-integration tests pass."
+  },
+  "workspace_head": "944168c56f7a0e7be4474f743e01a86f14a0b7b2"
+}
