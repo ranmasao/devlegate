@@ -48,6 +48,7 @@ from devlegate.runtime_locator import (
 )
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.tickets import (
+    Ticket,
     TicketError,
     TicketStore,
     is_canonical_ticket_name,
@@ -3228,10 +3229,20 @@ class ServiceEngine:
                     handled_control_head=control_head,
                     handled_todo_fingerprint=todo_fingerprint,
                 )
-                if todo_count and ticket_store.tickets:
-                    _log(
-                        "todo tickets are currently blocked by unfinished dependencies"
-                    )
+                dependency_blocked = self._dependency_blocked_tickets(ticket_store)
+                if todo_count and ticket_store.tickets and (
+                    execution_plan.reason != "no runnable tickets"
+                    or dependency_blocked
+                ):
+                    if execution_plan.reason != "no runnable tickets":
+                        _log(
+                            "todo tickets are currently blocked by "
+                            f"{execution_plan.reason}"
+                        )
+                    else:
+                        _log(
+                            "todo tickets are currently blocked by unfinished dependencies"
+                        )
                 elif local_ahead:
                     _log(
                         "local branch is ahead; no actionable ticket files in "
@@ -6216,6 +6227,21 @@ class ServiceEngine:
             ticket.id,
         )
 
+    @staticmethod
+    def _dependency_blocked_tickets(
+        ticket_store: TicketStore,
+    ) -> tuple[Ticket, ...]:
+        """Return todo tickets excluded by the ticket store's runnable predicate."""
+        return tuple(
+            ticket
+            for ticket in ticket_store.tickets
+            if ticket.state == "todo"
+            and any(
+                ticket_store.by_id[dependency].state != "done"
+                for dependency in ticket.depends_on
+            )
+        )
+
     def _make_status_snapshot(
         self,
         state: dict[str, object],
@@ -6275,12 +6301,7 @@ class ServiceEngine:
                     if ticket_store.by_id[dependency].state != "done"
                 ),
             )
-            for ticket in ticket_store.tickets
-            if ticket.state == "todo"
-            and any(
-                ticket_store.by_id[dependency].state != "done"
-                for dependency in ticket.depends_on
-            )
+            for ticket in self._dependency_blocked_tickets(ticket_store)
         )
         integration_ticket_id = (
             lifecycle_integration[0] if lifecycle_integration is not None else None

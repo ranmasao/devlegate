@@ -368,6 +368,51 @@ def test_dependency_state_change_on_control_changes_plan(tmp_path, monkeypatch):
     assert snapshot.blocked == ()
 
 
+def test_idle_diagnostic_uses_scheduler_barrier_reason(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").rename(control / "kanban/review/T-1.md")
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Independent"\n---\nwork\n'
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "add review barrier")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    messages = []
+    monkeypatch.setattr(runtime, "service_log", messages.append)
+
+    assert run_test_iteration(Devlegate(config)) == 0
+
+    assert any("waiting for review: T-1" in message for message in messages)
+    assert not any("unfinished dependencies" in message for message in messages)
+
+
+def test_idle_diagnostic_reports_unfinished_dependencies(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").unlink()
+    (control / "kanban/backlog/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwork\n'
+    )
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Waiting"\n'
+        '"depends_on":\n  - "D-1"\n---\nwork\n'
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "add dependency barrier")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    messages = []
+    monkeypatch.setattr(runtime, "service_log", messages.append)
+
+    assert run_test_iteration(Devlegate(config)) == 0
+
+    assert any("unfinished dependencies" in message for message in messages)
+
+
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
