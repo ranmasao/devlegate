@@ -3241,7 +3241,8 @@ class ServiceEngine:
                         )
                     else:
                         _log(
-                            "todo tickets are currently blocked by unfinished dependencies"
+                            "todo tickets are currently blocked by unfinished "
+                            "dependencies"
                         )
                 elif local_ahead:
                     _log(

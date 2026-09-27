@@ -413,6 +413,35 @@ def test_idle_diagnostic_reports_unfinished_dependencies(tmp_path, monkeypatch):
     assert any("unfinished dependencies" in message for message in messages)
 
 
+def test_accepted_boundary_diagnostic_is_not_reported_as_dependencies(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Independent"\n---\nwork\n'
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "add accepted boundary")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    messages = []
+    monkeypatch.setattr(runtime, "service_log", messages.append)
+    monkeypatch.setattr(
+        Devlegate, "_accepted_checkpoint", lambda self, _ticket_id: "a" * 40
+    )
+    monkeypatch.setattr(
+        Devlegate, "_integrate_accepted", lambda self, *_args: "control-head"
+    )
+
+    assert run_test_iteration(Devlegate(config)) == 0
+
+    assert any("accepted ticket T-1 integrated" in message for message in messages)
+    assert not any("unfinished dependencies" in message for message in messages)
+
+
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
