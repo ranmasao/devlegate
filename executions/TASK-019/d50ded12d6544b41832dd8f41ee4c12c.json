@@ -1,0 +1,32 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "completed",
+  "control_head": "84bb55c94371e0e0c8c1464034cd786397d1fb3a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "d50ded12d6544b41832dd8f41ee4c12c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Install the repository development dependencies, including coverage and the local .venv console entry points, to rerun the three environment-dependent full-suite tests."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Install the repository development dependencies, including coverage and the local .venv console entry points, to rerun the three environment-dependent full-suite tests."
+    ],
+    "report": null,
+    "summary": "Hardened stale-generation workspace repair to validate conflicting registered worktrees against their observed old HEAD before removal, and added focused regressions for reusable, recoverable, unsafe, evidence-order, status/plan, and identity-bound operator recovery behavior."
+  },
+  "workspace_head": "994d3bfbc8e83dbd240f0bd0baef64585bd6cdb3"
+}
