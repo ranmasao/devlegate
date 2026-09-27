@@ -586,3 +586,52 @@ skip behavior, and captured output rather than merely avoiding the real builder.
 
 No new packaging-progress architecture is requested. Re-run exact-head CI and require
 tests, coverage, and Ruff all to be green before acceptance.
+
+
+## Review hardening — correct the final standalone adapter expectation
+
+The completed attempt at checkpoint
+`3fa9908a2ff84e5b94f8911c7e14b1d057a7bc98` with execution
+`0de177f367b6485c927d6134d16116d7` correctly fixes the adapter import seam by
+preferring canonical `tools.*` modules and retaining top-level imports only as
+script-execution fallbacks.
+
+The real adapter regressions now reach the intended production boundary. Exact-head
+CI run `36277898759` failed with 959 passed, 1 skipped, and one task-specific
+failure in
+`test_real_standalone_adapter_emits_frozen_internal_steps`.
+
+The failure is in the regression expectation, not the observed production event
+sequence.
+
+The test currently constructs expected completed leaves with a substring filter:
+
+`if "wheel" not in leaf_id`
+
+That incorrectly removes `build/validate-wheels`, which is not skipped. Only the
+two supplied-wheel reproducibility build leaves are skipped:
+
+- `build/wheel-a`
+- `build/wheel-b`
+
+`build/validate-wheels` still executes and must emit a normal complete event, as
+the observed event stream does.
+
+Fix the regression to distinguish the exact skipped IDs rather than filtering every
+leaf whose hierarchical ID happens to contain the word `wheel`.
+
+Prefer asserting the complete terminal sequence against the frozen plan, for
+example by deriving for each frozen leaf whether its terminal action should be
+`skip` or `complete`. This proves both ordering and skip semantics and avoids
+name-substring coupling.
+
+No production packaging-progress architecture change is requested.
+
+### Final gate
+
+Re-run exact-head CI after correcting the regression and require:
+
+- full tests and coverage green;
+- Ruff green;
+- the real standalone and Debian adapter regressions passing through the canonical
+  import seam.
