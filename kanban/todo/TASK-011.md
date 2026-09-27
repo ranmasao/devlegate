@@ -385,3 +385,65 @@ suite and lint pass on the exact checkpoint.
 Keep the existing state-machine direction and avoid broad redesign. The central
 review/accepted/zero-delta model is still the intended one; this return is for
 durability compatibility, missing regressions, and recovery correctness.
+
+
+## Continuation after execution fbdbd74e403c42599a55452cb8f08f6a
+
+The second execution made substantial progress and intentionally returned
+`incomplete`.
+
+Checkpoint:
+
+```text
+470a68dfa948d27b2ba009228b74b0afe530b806
+```
+
+Confirmed improvements:
+
+- historical `devlegate.execution-report.v1` payloads without long-form artifact
+  metadata are readable again;
+- old v1 payloads are not silently reinterpreted as long-form reports;
+- valid `completed`, `incomplete`, and `blocked` claims now have focused
+  regressions proving `todo -> review` with semantic fields preserved;
+- long-form report persistence and exact artifact/digest binding have focused
+  regression coverage.
+
+Authoritative GitHub Actions for this checkpoint reports:
+
+```text
+1 failed, 969 passed, 1 skipped
+```
+
+The remaining confirmed CI blocker is:
+
+```text
+tests/test_cli.py::
+test_real_service_accepted_integration_restart_is_idempotent[
+    integration_control_commit_after_effect
+]
+```
+
+The failure is a timeout after service restart. Resolve this accepted-integration
+restart/idempotence path rather than weakening or deleting the regression.
+
+The worker also reported a possible graceful-restart service-authority race. Keep
+that in scope if it is independently reproducible while fixing the failing restart
+path, but do not broaden the task without evidence.
+
+The worker's remaining note about environment-dependent coverage/namespace checks is
+not currently an authoritative CI blocker: GitHub Actions successfully created the
+development environment and ran the full coverage suite through the single failure
+above. Re-run the relevant checks after the restart fix, but do not treat local
+tooling limitations as a separate product defect unless they reproduce.
+
+Before returning this ticket to review:
+
+- the full test suite must pass on the exact checkpoint;
+- lint must pass;
+- the accepted-integration restart/idempotence regression must remain enabled and
+  green;
+- the newly added historical-report and valid-handoff regressions must remain green.
+
+Because the currently installed pre-TASK-011 runtime still leaves an
+`incomplete` claim in `todo`, this continuation note intentionally changes the
+canonical todo generation so the existing runtime may launch the next execution.
