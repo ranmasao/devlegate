@@ -465,3 +465,74 @@ The previous receipt's local note that pytest was unavailable is superseded by t
 authoritative exact-head GitHub run above, so no environment issue remains as a
 release blocker. Add the missing tests, run the full validation again, and report
 the exact result.
+
+
+## Review continuation after execution d50ded12d6544b41832dd8f41ee4c12c
+
+The implementation is now semantically close to acceptance and exact-head CI is
+green at checkpoint `994d3bfbc8e83dbd240f0bd0baef64585bd6cdb3`:
+
+- `982 passed, 1 skipped`;
+- coverage completed at 79%;
+- Ruff completed with `All checks passed!`.
+
+The previous major semantic blockers remain resolved. The current code has
+provenance-aware REUSABLE / RECOVERABLE / UNSAFE classification, durable evidence
+pinning before ref movement, exact expected-head CAS, same-execution reconstruction,
+and an identity-bound operator recovery implementation.
+
+Do not redesign these mechanisms. Finish the remaining required proof cases only.
+
+### 1. Prove inspection-to-mutation drift fails closed
+
+The implementation re-observes the conventional branch before/after worktree
+retirement and uses `update-ref <ref> <new> <old>` CAS, but no focused regression
+currently mutates the branch/worktree after RECOVERABLE inspection and proves that
+automatic repair refuses the stale effect.
+
+Add a deterministic race regression that changes the observed branch/worktree
+identity between inspection and mutation and proves:
+
+- the newer/unexpected material is not overwritten;
+- the repair does not launch a worker;
+- preserved recovery evidence does not authorize mutation of the drifted state.
+
+### 2. Prove automatic repair continues the same execution exactly once
+
+`test_prior_generation_is_repaired_with_evidence_and_same_execution_id` proves the
+same execution ID survives manual invocation of the repair helper and that the plan
+becomes runnable, but it never exercises the normal runtime path through repair into
+worker launch.
+
+Add one focused runtime/integration regression proving a provenance-attributed stale
+generation is automatically repaired and then launches exactly one worker under the
+same current execution ID.
+
+### 3. Exercise the supported operator recovery boundary
+
+The new test covers private engine admission/recovery helpers and observed-head
+mismatch, but TASK-019 requires a supported CLI recovery route. The new
+`devlegate recover <ticket> <execution> --observed-head <sha>` and IPC dispatch
+currently have no regression in `test_cli.py` / `test_ipc_server.py`.
+
+Add focused public-boundary coverage proving:
+
+- CLI/IPC carries the exact ticket/execution/observed-head identity;
+- wrong ticket, wrong execution ID, or stale observed HEAD is rejected before the
+  recovery effect;
+- the exact authorized identity reaches the owner-side recovery path.
+
+### 4. Cover wrong registered-worktree classification through the shared boundary
+
+The existing historical low-level workspace test proves `prepare()` rejects a work
+branch attached to an unexpected worktree, and the new tests cover a missing
+worktree candidate. Add the TASK-019-level assertion that the shared bound-workspace
+inspection/status/plan path classifies a wrong registered worktree as non-runnable
+(UNSAFE unless the exact recovery proof permits otherwise) rather than advertising
+bound resume.
+
+The worker's local note about unavailable development dependencies is not a blocker:
+the authoritative exact-head GitHub run above supersedes it.
+
+Once these focused regressions are present and the new exact-head CI remains green,
+TASK-019 should be ready for review -> accepted.
