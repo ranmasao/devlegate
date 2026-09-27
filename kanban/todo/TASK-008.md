@@ -68,3 +68,19 @@ plan/admission model.
 - Given an accepted ticket awaiting integration plus additional todo work, when the
   scheduler is blocked by the accepted boundary, then diagnostics identify that
   boundary rather than dependency blocking.
+
+## Review feedback
+
+The execution result is not yet acceptable.
+
+- GitHub Actions ran the full test suite successfully (`962 passed, 1 skipped`),
+  but `./dev lint` failed with E501 in `src/devlegate/runtime.py` because the
+  unfinished-dependencies diagnostic string exceeds the configured line length.
+- The implementation added service-log regressions for review blocking and genuine
+  dependency blocking, but did not add the required accepted/integration-boundary
+  service-diagnostic regression. Existing plan/status tests for accepted state do
+  not prove this logging path.
+
+Rework the existing implementation rather than redesigning the scheduler:
+fix the lint failure, add the missing accepted/integration service-log regression,
+and run the full test and lint validation.
