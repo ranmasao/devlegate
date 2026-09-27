@@ -1,0 +1,25 @@
+{
+  "code_base_head": "9413c814f1966aef962860dc2cece8d8e0877c60",
+  "conclusion": "completed",
+  "control_head": "b4dd2559f2af75290b3fce955aac142be58e211b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-008",
+  "execution_id": "fe3b7f519e7847928d612740ef1e053f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-008",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-008",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Fixed the unfinished-dependencies diagnostic formatting to satisfy lint and added an accepted-boundary service diagnostic regression covering independent todo work. Scheduler and admission behavior remain unchanged."
+  },
+  "workspace_head": "621de027383ef9ad38054a4da6e17798e3bdcaa7"
+}
