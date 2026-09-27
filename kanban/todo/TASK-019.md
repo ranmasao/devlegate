@@ -9,12 +9,17 @@ Devlegate 0.5.5 self-hosting recovery hardening.
 
 ## Goal
 
-Make persisted bound-execution planning and operator recovery fail closed when an
+Make persisted bound-execution planning and recovery fail closed when an
 `agent_pending` execution workspace can no longer be proven to descend from its
-planned product revision.
+planned product revision, while automatically repairing pre-worker workspace
+corruption whenever Devlegate can prove that the repair is lossless and
+identity-safe.
 
 A read-only plan must never claim that a bound execution can be resumed when the
 same persisted execution state will fail workspace validation at service startup.
+Conversely, an invalid pre-worker workspace binding must not turn an otherwise
+valid ticket into an operator-managed dead end when Devlegate has enough evidence
+to reconstruct the admitted workspace safely.
 
 ## Context
 
@@ -85,6 +90,28 @@ Current implementation explains the mismatch:
 Thus an invalid pre-worker binding can produce an impossible resume plan and an
 operator recovery dead-end.
 
+### Clarified recovery semantics
+
+`LAB-153` itself is still expected to execute. The observed failure happened
+before worker ownership, so the invalid execution workspace is infrastructure
+state to recover, not a reason to abandon the ticket or require an operator to
+re-authorize ordinary execution.
+
+For bound `agent_pending` recovery, distinguish three material states:
+
+- **REUSABLE** — the exact persisted workspace binding already satisfies all
+  resume invariants and the worker may be launched from that proven workspace;
+- **RECOVERABLE** — the binding is invalid, but Devlegate can prove the exact
+  persisted execution identity, prove that no worker result can be lost, preserve
+  the conflicting Git state losslessly, reconstruct the workspace from the exact
+  admitted product revision, and re-prove all resume invariants;
+- **UNSAFE** — ownership, preservation, or material identity cannot be proven
+  strongly enough for automatic mutation.
+
+A `RECOVERABLE` pre-worker failure is expected to heal automatically. Operator
+involvement is a fallback for `UNSAFE` ambiguity, not the normal path for an
+unrelated or stale execution branch discovered before worker start.
+
 ## Required behavior
 
 - A bound `agent_pending` plan may return `run-worker` only when the exact
@@ -93,67 +120,117 @@ operator recovery dead-end.
   workspace recovery, including the exact planned product base and execution branch
   ancestry.
 - Planning and execution must not maintain divergent definitions of "resumable".
-  Prefer one shared read-only validation boundary or equivalent common semantics.
+  Prefer one shared read-only inspection/validation boundary or equivalent common
+  semantics.
+- Read-only planning remains non-mutating. When it observes an invalid but
+  automatically recoverable binding, it may report a recovery action/state, but it
+  must not report executable `run-worker` until the repaired workspace has been
+  re-proven.
+- Service/runtime recovery classifies the persisted binding as REUSABLE,
+  RECOVERABLE, or UNSAFE before launching a worker.
+- A RECOVERABLE `agent_pending` binding is repaired automatically without requiring
+  an operator command.
+- Automatic repair is permitted only when Devlegate can prove all of the following:
+  - the persisted execution/ticket/base/control identity is exact;
+  - no worker currently owns the execution and no durable worker result is being
+    discarded;
+  - the conflicting branch/worktree material can be attributed strongly enough to
+    the persisted execution to authorize repair;
+  - any conflicting commit state can be preserved losslessly before destructive or
+    ref-moving mutation;
+  - the observed branch/worktree identity has not changed between inspection and
+    mutation.
+- Before moving, replacing, or deleting a conflicting execution branch containing
+  commits, preserve the exact observed HEAD under an immutable recovery/evidence
+  reference bound to the ticket and execution identity, or an equivalent durable
+  provenance mechanism. Evidence preservation must succeed before mutation.
+- After evidence preservation, re-observe the branch/worktree state and use
+  compare-and-swap / exact expected-head semantics so concurrent drift causes the
+  repair to fail closed rather than overwrite newer material.
+- Automatic repair reconstructs the execution branch/worktree from the exact
+  persisted `execution_base_head`, not from a guessed/current product HEAD.
+- The reconstructed workspace is fully revalidated before worker launch: repository
+  identity, expected branch, expected path/registration, exact admitted base
+  lineage, checkout HEAD, required cleanliness, and relevant submodule invariants
+  must all satisfy the normal resume contract.
+- If no worker ever owned the execution and the exact admitted workspace can be
+  reconstructed and re-proven, the same execution identity may continue. Do not
+  manufacture a replacement execution generation merely because infrastructure
+  state was repaired.
+- Automatic recovery must not change the canonical ticket workflow state merely
+  because the workspace was invalid. In the reproduced case, `LAB-153` remains the
+  same pending ticket and proceeds to normal worker execution after repair.
 - If the persisted workspace/branch is missing, unrelated, registered to the wrong
   branch/path, dirty in a way recovery forbids, or otherwise cannot be proven safe,
-  `plan` returns a blocked/recovery action rather than `run-worker`.
-- The blocked plan reason identifies the concrete failed invariant when it is safe to
-  do so; for the reproduced case it must not say `resume persisted bound execution`.
-- `status` and `plan` remain semantically coherent for the same persisted
-  generation: a `recovery-required` execution cannot simultaneously advertise an
-  executable bound resume unless live/current evidence proves that resume.
-- Provide a supported explicit operator recovery path for this pre-worker
-  `agent_pending` failure class without requiring manual SQLite/state-file edits.
-- That recovery path must be identity-bound and fail closed. It must not guess that an
-  unrelated branch/worktree belongs to the current execution, silently delete
-  unproven work, or rewrite product/control history.
-- It is acceptable to extend an existing operator concept such as retry/drop, or to
-  introduce a narrowly scoped recovery operation, provided the semantics are explicit
-  and proven. Do not choose an operation solely to reuse its name.
-- The recovery path must remain usable when ordinary service startup cannot complete
-  because this exact persisted workspace validation fails. This may be achieved by
-  keeping the service alive in a blocked state or by a safe offline operator path.
-- After explicit recovery, Devlegate can either safely resume the same exact bound
-  execution if its binding becomes provable, or retire/replace that execution
-  according to explicit operator intent and admit a fresh execution. It must never
-  launch a worker against an unproven workspace.
+  read-only plan/status must not advertise `run-worker`. The runtime may repair it
+  only when the condition satisfies the RECOVERABLE proof above.
+- If ownership or lossless preservation cannot be proven, classify the condition as
+  UNSAFE, keep the worker stopped, surface a concrete recovery-required reason, and
+  provide a supported explicit operator recovery path without requiring manual
+  SQLite/state-file edits.
+- The UNSAFE operator path must itself be identity-bound and fail closed. It must not
+  guess that an unrelated branch/worktree belongs to the current execution,
+  silently delete unproven work, or rewrite product/control history.
+- That fallback recovery path must remain usable when normal service startup cannot
+  complete ordinary execution. Prefer keeping the service alive in a blocked state
+  when practical; otherwise provide a safe offline operator path.
 - Existing valid `agent_pending` restart/resume behavior remains unchanged.
 
 ## Acceptance criteria
 
 - Reproducing an `agent_pending` execution whose
   `devlegate/work/<ticket>` branch is not descended from its persisted
-  `execution_base_head` no longer yields `plan.action=run-worker`.
-- The plan is blocked/recovery-required with a reason consistent with the workspace
-  lineage failure.
-- Starting the service does not create a worker, checkpoint, branch mutation,
-  lifecycle transition, or ticket transition while the binding is invalid.
-- The operator has one documented supported CLI recovery route for the invalid
-  pre-worker binding.
-- Recovery refuses destructive action if the observed branch/worktree identity has
-  changed since authorization or cannot be proven to match the operator-selected
-  object.
+  `execution_base_head` never launches a worker against that invalid workspace.
+- Before repair, read-only plan/status do not claim an executable bound resume.
+- For a provably RECOVERABLE pre-worker mismatch, service/runtime recovery completes
+  without operator action, preserves conflicting Git evidence before mutation,
+  reconstructs the workspace from the exact persisted base, revalidates it, and
+  then launches the worker at most once.
+- The automatic RECOVERABLE path keeps the same ticket eligible for execution and
+  does not route it through drop/abandon semantics.
+- When no worker ever owned the execution and the workspace is reconstructed to the
+  same admitted generation, continuing with the same execution identity is allowed
+  and is covered by tests.
+- Automatic repair refuses mutation if the observed branch/worktree identity changes
+  after inspection or if exact expected-head/evidence conditions no longer hold.
+- An unrelated branch containing commits is never destroyed merely because its
+  conventional name matches the ticket. Automatic replacement is allowed only after
+  exact ownership/identity proof plus durable preservation of the observed commit
+  state.
+- If the invalid binding is UNSAFE rather than RECOVERABLE, no worker is launched,
+  no unproven Git material is destroyed, and one documented supported CLI recovery
+  route remains available.
 - A valid persisted `agent_pending` workspace still resumes exactly once and keeps
   the same execution identity.
 - Status text, status YAML/JSON, and plan text/YAML/JSON agree on whether the bound
-  execution is resumable.
+  execution is reusable, being recovered, or recovery-required.
 - Full tests, lint, and relevant recovery/subprocess tests remain green.
 
 ## Required regressions
 
 - Given persisted `agent_pending` state with a valid execution branch descended
-  from the exact planned base and matching registered worktree, plan reports the
-  existing bound resume and restart launches at most one worker.
+  from the exact planned base and matching registered worktree, classify it as
+  REUSABLE, report the existing bound resume, and launch at most one worker.
 - Given the same state but an execution branch unrelated to the exact planned base,
-  plan reports blocked/recovery rather than `run-worker`, and no worker is launched.
-- Given a missing or wrong registered execution worktree/branch for the persisted
-  binding, plan fails closed with the same semantic result as actual recovery.
-- Given an invalid bound workspace and a stopped service after startup recovery
-  failure, the supported operator recovery command remains available and performs
-  only its explicitly authorized identity-bound effect.
-- Given branch/worktree drift between recovery inspection and effect, the recovery
-  operation refuses the mutation.
-- Given an unrelated branch containing commits, no automatic cleanup deletes or
-  rewrites it merely because its conventional branch name matches the ticket.
+  never launch the worker before recovery.
+- Given that unrelated branch is exactly attributable to the persisted execution,
+  no worker has owned it, its observed HEAD can be pinned durably, and branch/worktree
+  mutation can be guarded by exact identity/CAS checks, classify it as RECOVERABLE,
+  preserve the old HEAD, rebuild from the exact admitted base, re-prove the workspace,
+  and execute the same ticket without operator intervention.
+- Given branch/worktree drift between RECOVERABLE inspection and effect, automatic
+  recovery refuses the mutation and does not launch a worker.
+- Given a missing or wrong registered execution worktree/branch, use the same shared
+  inspection semantics as actual recovery; automatically reconstruct only when
+  ownership and lossless preservation are provable, otherwise classify UNSAFE.
+- Given an unrelated branch containing commits whose ownership cannot be proven,
+  do not automatically clean, rewrite, or delete it merely because its conventional
+  branch name matches the ticket.
+- Given an UNSAFE invalid bound workspace and a stopped/blocked service, the supported
+  operator recovery command remains available and performs only its explicitly
+  authorized identity-bound effect.
+- Given successful automatic reconstruction before any worker ran, the canonical
+  ticket remains pending/eligible, the execution may retain its existing execution
+  id, and the worker subsequently performs the ticket normally.
 - Given status and plan produced from one stable persisted generation, they cannot
   disagree as `recovery-required` versus executable bound resume.
