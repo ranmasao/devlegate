@@ -501,3 +501,41 @@ Before returning to review, run the full suite and lint on the exact checkpoint.
 Because the currently installed pre-TASK-011 runtime still leaves an
 `incomplete` claim in `todo`, this continuation note intentionally changes the
 canonical todo generation so the current runtime can launch another execution.
+
+
+## Architect answer after blocked execution 8c0dce66823d4dcfb3183b5548dbb81e
+
+Yes. The post-checkpoint pending-report recovery failure is in scope for TASK-011.
+
+The continuation note narrowed the next investigation to the locally reproducible
+graceful-restart authority handoff race, but it did not authorize bypassing a
+different failure discovered on the same required restart path. TASK-011 explicitly
+requires restart/replay correctness, accepted finalization recovery, exact reviewed
+result binding, and green recovery/subprocess tests. If the replacement service
+cannot become ready because post-checkpoint recovery rejects the pending execution
+report, that is a blocker for the same workflow change.
+
+Do not split this into a new ticket merely to preserve the earlier narrow
+continuation scope.
+
+For the next execution:
+
+- reproduce the post-checkpoint pending-report failure from the graceful restart
+  regression;
+- determine whether the report is actually invalid or whether recovery is applying
+  the wrong lifecycle/generation expectation after checkpoint creation;
+- preserve fail-closed behavior for genuinely malformed, stale, or ambiguous
+  pending reports;
+- fix only the proven recovery/authority interaction needed for the required
+  restart path;
+- keep the already-green accepted-integration crash-point, historical-report,
+  valid-handoff, and long-form report regressions intact;
+- rerun the graceful restart regression, full suite, and lint.
+
+If the replacement service reaches readiness and the full exact-checkpoint
+validation is green, complete TASK-011. Do not retain speculative changes unrelated
+to the reproduced failure.
+
+Because the installed pre-TASK-011 runtime leaves a valid `blocked` claim in
+`todo`, this answer intentionally changes the canonical todo generation so the
+current runtime can launch the same ticket again.
