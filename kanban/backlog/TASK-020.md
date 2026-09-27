@@ -1,0 +1,106 @@
+---
+"type": "devlegate.ticket"
+"title": "Preserve durable standalone launch identity"
+---
+
+## Milestone
+
+Devlegate 0.5.5 standalone/runtime hardening.
+
+## Goal
+
+Ensure that a Devlegate standalone executable always relaunches the installed
+outer product artifact, never the extracted/bundled CPython interpreter used
+internally by PEX/scie.
+
+Systemd units and every other persisted relaunch boundary must serialize a durable
+Devlegate product identity. Internal cache/extraction paths are implementation
+details and must never become the installed service command.
+
+## Context
+
+Dogfooding after TASK-011 exposed a regression in the current standalone launcher
+selection.
+
+A newly rendered managed systemd unit contained an ExecStart equivalent to:
+
+```text
+/home/daniil/.cache/nce/.../python/bin/python3.12 -P -m devlegate --env ... foreground
+```
+
+Starting the unit failed immediately:
+
+```text
+python3.12: No module named devlegate
+```
+
+The path is wrong even independently of the import failure: it points into the
+scie/NCE extraction cache rather than to the durable installed standalone
+executable.
+
+The regression is related to launch-identity hardening added while fixing worker
+environment contamination. `product_launcher()` now accepts the outer standalone
+identity only when PEX/scie metadata also satisfies an extra
+`SCIE_ARGV0 == sys.argv[0]`-style identity check. That assumption is not valid
+for all PEX/scie execution modes. A real standalone process can therefore fall
+through to `LaunchCommand.current_python()`, whose `sys.executable` is the
+bundled cached CPython.
+
+Worker-boundary sanitation added by TASK-011 is still required. A nested/source
+Devlegate started by a worker must not inherit the parent standalone's PEX/scie
+identity and relaunch the wrong outer executable.
+
+The distribution proof currently records the generated systemd ExecStart but does
+not fail when it resolves to the bundled Python instead of the outer artifact.
+
+## Required behavior
+
+- When running from the supported standalone artifact, `product_launcher()`
+  returns the durable outer Devlegate executable as the relaunch command.
+- The standalone relaunch identity is independent of the extracted CPython path,
+  PEX_ROOT/NCE cache location, and the value of `sys.executable`.
+- A managed systemd unit rendered by a standalone Devlegate uses the installed
+  outer Devlegate executable directly in `ExecStart`.
+- No generated persistent relaunch command for a standalone installation may
+  contain the bundled/extracted Python interpreter path followed by
+  `-m devlegate`.
+- Source/wheel/development execution continues to use an appropriate Python
+  relaunch form such as `<python> -P -m devlegate` where that is the actual
+  product form.
+- Worker subprocesses continue to remove inherited PEX/scie/service-host metadata
+  so nested Devlegate processes cannot mistake a parent standalone executable for
+  their own launch identity.
+- Fix the launcher identity model itself. Do not special-case the observed cache
+  path or add a version-specific migration.
+- The selected relaunch command must remain stable enough to persist in systemd
+  and other durable host configuration until the installed product location
+  itself changes.
+
+## Acceptance criteria
+
+- Running the current standalone executable and rendering its systemd unit yields
+  an `ExecStart` whose executable is the exact outer standalone artifact used to
+  invoke Devlegate.
+- Starting that generated unit succeeds without host Python, PYTHONPATH, a venv,
+  or access to a Devlegate module outside the standalone artifact.
+- Removing or changing the NCE/PEX extraction cache does not invalidate the
+  persisted systemd command as long as the installed outer executable remains.
+- A source/development invocation still produces a valid Python/module relaunch
+  command and does not falsely claim a standalone identity.
+- A nested Devlegate launched under WorkerSupervisor does not inherit the outer
+  standalone launch identity.
+- Full tests, lint, standalone proof, and distribution validation are green.
+
+## Required regressions
+
+- Standalone launcher selection returns the outer executable even when
+  `sys.argv[0]` does not equal the outer scie path in an interpreter/tool mode
+  representative of the supported artifact.
+- Standalone systemd rendering asserts the exact outer executable in
+  `ExecStart`; merely recording the rendered value is insufficient.
+- Starting a generated standalone systemd command (or an equivalent isolated
+  subprocess proof) loads Devlegate successfully with no host-installed package.
+- Source/wheel launcher selection retains the Python `-P -m devlegate` form.
+- WorkerSupervisor sanitation prevents inherited `PEX`, `SCIE`,
+  `SCIE_ARGV0`, and related packaging metadata from selecting a parent
+  standalone executable.
