@@ -29,6 +29,15 @@ class ExecutionWorkspace:
 
 
 @dataclasses.dataclass(frozen=True)
+class WorkspaceInspection:
+    """Read-only classification of a persisted execution workspace binding."""
+
+    classification: str
+    reason: str
+    workspace: ExecutionWorkspace | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class ExecutionCheckpoint:
     before_head: str
     after_head: str
@@ -127,6 +136,63 @@ class ExecutionWorkspaceManager:
         workspace = self._validate_existing(registration, base_head)
         self._prepare_submodules(workspace.path)
         return workspace
+
+    def inspect(
+        self, base_head: str, expected_head: str | None = None
+    ) -> WorkspaceInspection:
+        """Inspect resume topology without creating, removing, or moving Git state."""
+        try:
+            self._validate_base(base_head)
+            registrations = self._registrations()
+            branch = _git(
+                self.repo,
+                "show-ref",
+                "--verify",
+                f"refs/heads/{self.branch}",
+                check=False,
+            )
+            if branch.returncode:
+                return WorkspaceInspection("RECOVERABLE", "execution branch is missing")
+            try:
+                self._validate_branch(base_head)
+            except ExecutionWorkspaceError as error:
+                return WorkspaceInspection("RECOVERABLE", str(error))
+            expected_path = self.path.resolve()
+            branch_path = next(
+                (
+                    path
+                    for path, item in registrations.items()
+                    if item.get("branch") == self.branch
+                ),
+                None,
+            )
+            if branch_path is not None and branch_path != expected_path:
+                return WorkspaceInspection(
+                    "UNSAFE", f"execution branch is attached to {branch_path}"
+                )
+            registration = registrations.get(expected_path)
+            if registration is None or not self.path.is_dir():
+                if self.path.exists():
+                    return WorkspaceInspection(
+                        "UNSAFE", "execution worktree path is not a registered worktree"
+                    )
+                return WorkspaceInspection(
+                    "RECOVERABLE", "execution worktree is missing"
+                )
+            workspace = self._validate_existing(registration, base_head)
+            if expected_head is not None and workspace.head != expected_head:
+                return WorkspaceInspection(
+                    "UNSAFE",
+                    "execution worktree HEAD does not match persisted start HEAD",
+                )
+            self.verify_submodules(workspace)
+            if workspace.dirty:
+                return WorkspaceInspection("UNSAFE", "execution worktree is dirty")
+            return WorkspaceInspection(
+                "REUSABLE", "persisted execution workspace is reusable", workspace
+            )
+        except (ExecutionWorkspaceError, OSError, subprocess.SubprocessError) as error:
+            return WorkspaceInspection("UNSAFE", str(error))
 
     def verify_submodules(self, workspace: ExecutionWorkspace) -> None:
         """Verify immutable submodules after worker execution."""
@@ -582,6 +648,7 @@ __all__ = [
     "ExecutionWorkspace",
     "ExecutionWorkspaceError",
     "ExecutionWorkspaceManager",
+    "WorkspaceInspection",
     "WorktreeRegistration",
     "parse_worktree_porcelain",
 ]

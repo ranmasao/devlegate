@@ -35,6 +35,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspace,
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
+    WorkspaceInspection,
     parse_worktree_porcelain,
 )
 from devlegate.operational_log import service_log
@@ -590,9 +591,7 @@ class ServiceEngine:
         self.env_file = env_file.expanduser().resolve()
         config = _read_env(self.env_file)
         try:
-            self.repo = (
-                repository or repository_root(self.env_file.parent)
-            ).resolve()
+            self.repo = (repository or repository_root(self.env_file.parent)).resolve()
         except RuntimeLocatorError as error:
             raise DevlegateError(str(error)) from error
 
@@ -1127,9 +1126,7 @@ class ServiceEngine:
 
     def _discard_ineligible_zero_delta_retry(self, ticket_store: TicketStore) -> None:
         retry = self._state.get("automatic_retry")
-        if not isinstance(retry, dict) or retry.get("status") != (
-            "pending_admission"
-        ):
+        if not isinstance(retry, dict) or retry.get("status") != ("pending_admission"):
             return
         ticket_id = retry.get("ticket_id")
         if not isinstance(ticket_id, str):
@@ -1317,17 +1314,22 @@ class ServiceEngine:
             receipt = receipts.get(request_id)
             if receipt is None:
                 return None
-            if not isinstance(receipt, dict) or not set(receipt).issubset(
-                {
-                "method",
-                "fingerprint",
-                "ticket_id",
-                "accepted",
-                "execution_id",
-                }
-            ) or set(receipt) not in (
-                {"method", "fingerprint", "ticket_id", "accepted"},
-                {"method", "fingerprint", "ticket_id", "accepted", "execution_id"},
+            if (
+                not isinstance(receipt, dict)
+                or not set(receipt).issubset(
+                    {
+                        "method",
+                        "fingerprint",
+                        "ticket_id",
+                        "accepted",
+                        "execution_id",
+                    }
+                )
+                or set(receipt)
+                not in (
+                    {"method", "fingerprint", "ticket_id", "accepted"},
+                    {"method", "fingerprint", "ticket_id", "accepted", "execution_id"},
+                )
             ):
                 raise DevlegateError("invalid mutable request receipt")
             if not all(
@@ -2270,9 +2272,7 @@ class ServiceEngine:
         ):
             raise DevlegateError("invalid state: failed execution metadata is invalid")
 
-        def validate_automatic_retry(
-            value: object, *, current: bool
-        ) -> None:
+        def validate_automatic_retry(value: object, *, current: bool) -> None:
             if value is None:
                 return
             if not isinstance(value, dict):
@@ -2327,9 +2327,7 @@ class ServiceEngine:
                 raise DevlegateError("automatic retry conclusion is invalid")
 
         validate_automatic_retry(state.get("automatic_retry"), current=True)
-        validate_automatic_retry(
-            state.get("last_automatic_retry"), current=False
-        )
+        validate_automatic_retry(state.get("last_automatic_retry"), current=False)
         identity = _worker_identity_from_value(
             state.get("worker_identity"), state.get("execution_id")
         )
@@ -2725,11 +2723,12 @@ class ServiceEngine:
             ):
                 dropped_ticket = self._state.get("execution_ticket_id")
                 dropped_execution = self._state.get("execution_id")
-                if isinstance(dropped_ticket, str) and isinstance(
-                    dropped_execution, str
-                ) and self._read_drop_disposition(
-                    dropped_ticket, dropped_execution
-                ) is not None:
+                if (
+                    isinstance(dropped_ticket, str)
+                    and isinstance(dropped_execution, str)
+                    and self._read_drop_disposition(dropped_ticket, dropped_execution)
+                    is not None
+                ):
                     recovery_key = f"{dropped_ticket}:{dropped_execution}"
                     if self._automatic_drop_recovery_execution != recovery_key:
                         _log(
@@ -3078,6 +3077,39 @@ class ServiceEngine:
                 ),
             },
         )
+        if (
+            pending_agent_execution
+            and execution_plan.action == "blocked"
+            and execution_plan.reason.startswith(
+                "bound execution workspace is recoverable:"
+            )
+        ):
+            self._repair_bound_execution_workspace()
+            execution_plan = self._make_execution_plan(
+                self._state,
+                ticket_store,
+                False,
+                observation={
+                    "code": GitObservation(
+                        self.current_branch,
+                        False,
+                        local_head,
+                        remote_ref,
+                        remote_head,
+                        True,
+                        _status_fingerprint(""),
+                    ),
+                    "control": GitObservation(
+                        self.control_branch,
+                        False,
+                        control_head,
+                        f"{self.remote_name}/{self.control_branch}",
+                        control_remote_head,
+                        True,
+                        _status_fingerprint(""),
+                    ),
+                },
+            )
         self._publish_ticket_projection(
             ticket_store,
             product=execution_plan.code,
@@ -3233,9 +3265,13 @@ class ServiceEngine:
                     handled_todo_fingerprint=todo_fingerprint,
                 )
                 dependency_blocked = self._dependency_blocked_tickets(ticket_store)
-                if todo_count and ticket_store.tickets and (
-                    execution_plan.reason != "no runnable tickets"
-                    or dependency_blocked
+                if (
+                    todo_count
+                    and ticket_store.tickets
+                    and (
+                        execution_plan.reason != "no runnable tickets"
+                        or dependency_blocked
+                    )
                 ):
                     if execution_plan.reason != "no runnable tickets":
                         _log(
@@ -3598,9 +3634,7 @@ class ServiceEngine:
         if self._lifecycle_drain_pending():
             self._publish_service_snapshot(
                 lifecycle=(
-                    "restarting"
-                    if self.lifecycle_intent() == "restart"
-                    else "stopping"
+                    "restarting" if self.lifecycle_intent() == "restart" else "stopping"
                 ),
                 worker_running=False,
             )
@@ -4479,9 +4513,7 @@ class ServiceEngine:
             )
         return self._complete_accepted(ticket_id, expected_head)
 
-    def _complete_accepted(
-        self, ticket_id: str, expected_head: str
-    ) -> str:
+    def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
         if not _is_git_identity(expected_head):
             raise WorkflowBlockedError(
@@ -4676,9 +4708,7 @@ class ServiceEngine:
         if resolved.returncode:
             return None
         object_id = resolved.stdout.strip()
-        object_type = _git(
-            self.repo, "cat-file", "-t", object_id, check=False
-        )
+        object_type = _git(self.repo, "cat-file", "-t", object_id, check=False)
         if object_type.returncode or object_type.stdout.strip() != "blob":
             raise DevlegateError("drop disposition ref does not point to a blob")
         content = _git(self.repo, "cat-file", "-p", object_id, check=False)
@@ -4753,15 +4783,11 @@ class ServiceEngine:
             check=False,
         )
         if updated.returncode:
-            reread = self._read_drop_disposition(
-                report.ticket_id, report.execution_id
-            )
+            reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
             if reread != payload:
                 raise DevlegateError("cannot publish drop disposition intent")
 
-    def _pin_drop_evidence(
-        self, report: ExecutionReport
-    ) -> dict[str, object]:
+    def _pin_drop_evidence(self, report: ExecutionReport) -> dict[str, object]:
         checkpoint = report.workspace_head
         if not isinstance(checkpoint, str) or not checkpoint:
             raise DevlegateError("drop execution checkpoint identity is missing")
@@ -4822,9 +4848,7 @@ class ServiceEngine:
             check=False,
         )
         if updated.returncode:
-            reread = self._read_drop_disposition(
-                report.ticket_id, report.execution_id
-            )
+            reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
             if reread != payload:
                 raise DevlegateError("cannot publish drop disposition evidence")
         return payload
@@ -5266,11 +5290,8 @@ class ServiceEngine:
             if report.workspace_head == report.code_base_head
             else None
         )
-        if (
-            product is not None
-            and self._is_zero_delta_stale_product_drift(
-                report.code_base_head, report.workspace_head, product
-            )
+        if product is not None and self._is_zero_delta_stale_product_drift(
+            report.code_base_head, report.workspace_head, product
         ):
             retry = self._zero_delta_retry_payload(report, product)
             self._save_state(
@@ -6690,6 +6711,19 @@ class ServiceEngine:
                     f"{ticket.id} has unexpected bound execution state {ticket.state}",
                     **identity,
                 )
+            if state["phase"] == "agent_pending":
+                inspection = self._inspect_bound_execution_workspace(state)
+                if inspection.classification != "REUSABLE":
+                    return ExecutionPlan(
+                        "blocked",
+                        "bound execution workspace is "
+                        f"{inspection.classification.lower()}: {inspection.reason}",
+                        ticket.id,
+                        ticket.title,
+                        ticket.state,
+                        True,
+                        **identity,
+                    )
             return ExecutionPlan(
                 "run-worker",
                 "resume persisted bound execution",
@@ -6727,6 +6761,152 @@ class ServiceEngine:
             False,
             **identity,
         )
+
+    def _inspect_bound_execution_workspace(
+        self, state: dict[str, object]
+    ) -> WorkspaceInspection:
+        ticket_id = state.get("execution_ticket_id")
+        base_head = state.get("execution_base_head")
+        branch = state.get("execution_branch")
+        path = state.get("execution_path")
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, base_head, branch, path)
+        ):
+            return WorkspaceInspection(
+                "UNSAFE", "persisted execution workspace binding is incomplete"
+            )
+        try:
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, str(ticket_id)
+            )
+        except (ExecutionWorkspaceError, OSError) as error:
+            return WorkspaceInspection("UNSAFE", str(error))
+        if branch != manager.branch or Path(path) != manager.path:
+            return WorkspaceInspection(
+                "UNSAFE", "persisted execution workspace binding is invalid"
+            )
+        expected_head = state.get("execution_start_head")
+        return manager.inspect(
+            str(base_head), expected_head if isinstance(expected_head, str) else None
+        )
+
+    @staticmethod
+    def _workspace_recovery_ref(ticket_id: str, execution_id: str) -> str:
+        return f"refs/devlegate/recovery/workspace/{ticket_id}/{execution_id}"
+
+    def _repair_bound_execution_workspace(self) -> None:
+        """Repair only a pre-worker branch proven to be an older generation."""
+        state = self._state
+        if (
+            state.get("phase") != "agent_pending"
+            or state.get("worker_identity") is not None
+        ):
+            raise DevlegateError("bound execution ownership is not proven absent")
+        ticket_id = state.get("execution_ticket_id")
+        execution_id = state.get("execution_id")
+        base_head = state.get("execution_base_head")
+        branch = state.get("execution_branch")
+        path = state.get("execution_path")
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, execution_id, base_head, branch, path)
+        ):
+            raise DevlegateError("persisted execution identity is incomplete")
+        if state.get("pending_execution_report") is not None:
+            raise DevlegateError(
+                "durable worker result prevents automatic workspace repair"
+            )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if branch != manager.branch or Path(path) != manager.path:
+            raise DevlegateError("persisted execution workspace binding is invalid")
+        branch_ref = f"refs/heads/{manager.branch}"
+        observed = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if observed.returncode:
+            manager.prepare(base_head)
+            return
+        old_head = observed.stdout.strip()
+        reports = ExecutionReportStore(self.control_worktree).list(ticket_id)
+        prior = [
+            report
+            for report in reports
+            if report.execution_id != execution_id
+            and report.execution_branch == manager.branch
+            and report.workspace_head == old_head
+        ]
+        if len(prior) != 1:
+            raise DevlegateError(
+                "conflicting execution branch ownership cannot be proven; "
+                "operator recovery required"
+            )
+        old_execution = prior[0].execution_id
+        evidence_ref = self._workspace_recovery_ref(ticket_id, old_execution)
+        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        if existing.returncode == 0 and existing.stdout.strip() != old_head:
+            raise DevlegateError(
+                "workspace recovery evidence ref has conflicting identity"
+            )
+        if existing.returncode:
+            pinned = _git(
+                self.repo, "update-ref", evidence_ref, old_head, "", check=False
+            )
+            if pinned.returncode:
+                reread = _git(
+                    self.repo, "rev-parse", "--verify", evidence_ref, check=False
+                )
+                if reread.returncode or reread.stdout.strip() != old_head:
+                    raise DevlegateError(
+                        "cannot preserve conflicting execution checkpoint"
+                    )
+        reobserved = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if reobserved.returncode or reobserved.stdout.strip() != old_head:
+            raise DevlegateError("execution branch changed before automatic repair")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        branch_path = next(
+            (
+                item_path
+                for item_path, item in registrations.items()
+                if item.get("branch") == manager.branch
+            ),
+            None,
+        )
+        if branch_path is not None and branch_path != manager.path.resolve():
+            raise DevlegateError("execution branch moved to an unexpected worktree")
+        if manager.path.exists() and registration is None:
+            raise DevlegateError("execution worktree path is not safely registered")
+        if registration is not None:
+            workspace = manager._validate_existing(registration, base_head)
+            if workspace.head != old_head or workspace.dirty:
+                raise DevlegateError(
+                    "conflicting execution worktree is not clean and exact"
+                )
+            removed = _git(
+                self.repo,
+                "worktree",
+                "remove",
+                "--force",
+                str(manager.path),
+                check=False,
+            )
+            if removed.returncode:
+                raise DevlegateError("cannot remove conflicting execution worktree")
+        reobserved = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        if reobserved.returncode or reobserved.stdout.strip() != old_head:
+            raise DevlegateError("execution branch changed during automatic repair")
+        moved = _git(
+            self.repo, "update-ref", branch_ref, base_head, old_head, check=False
+        )
+        if moved.returncode:
+            raise DevlegateError("execution branch changed before CAS repair")
+        repaired = manager.prepare(base_head)
+        final = manager.inspect(base_head, repaired.head)
+        if final.classification != "REUSABLE":
+            raise DevlegateError(
+                f"repaired execution workspace is not reusable: {final.reason}"
+            )
 
     def status_view(self) -> StatusSnapshot:
         """Collect a stable, read-only external status view."""
