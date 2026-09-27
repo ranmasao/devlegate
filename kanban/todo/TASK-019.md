@@ -328,3 +328,69 @@ as work belonging to the new generation merely because both use the same
   id, and the worker subsequently performs the ticket normally.
 - Given status and plan produced from one stable persisted generation, they cannot
   disagree as `recovery-required` versus executable bound resume.
+
+
+## Review feedback after execution 872b0c1f06174351b978fe16e72ee77f
+
+The implementation has useful pieces that should be retained: shared read-only
+workspace inspection, durable recovery refs for prior-generation checkpoints,
+re-observation before mutation, exact expected-head CAS branch replacement, rebuild
+from the persisted admitted base, and final REUSABLE revalidation.
+
+However, this result does not yet satisfy TASK-019.
+
+### 1. RECOVERABLE is classified too early
+
+`ExecutionWorkspaceManager.inspect()` currently returns `RECOVERABLE` whenever
+the conventional execution branch is missing or fails the admitted-base ancestry
+check. That inspection does not prove the material conditions that define
+RECOVERABLE in this ticket: exact current execution identity, absence of worker
+ownership/result, attribution of the conflicting HEAD to one prior durable
+execution generation, and lossless evidence preservation capability.
+
+As a result, read-only plan/status can advertise an unrelated or unowned branch as
+"recoverable" even though `_repair_bound_execution_workspace()` will later reject it
+because prior-generation ownership cannot be proven. Such a state is UNSAFE by the
+ticket definition. Keep one shared classification boundary: topology alone may
+identify a repair candidate, but the externally reported REUSABLE / RECOVERABLE /
+UNSAFE classification must incorporate the same provenance/ownership proof used by
+the mutation path.
+
+### 2. UNSAFE agent_pending still has no supported operator recovery route
+
+The ticket explicitly requires an identity-bound supported CLI fallback that remains
+usable when automatic repair is unsafe. The current existing paths still do not
+cover this state:
+
+- interrupted retry candidates require `phase == agent_running`;
+- drop candidates require `phase == agent_running` and lifecycle/report evidence;
+- this checkpoint adds no CLI/operator command or documented offline/service-blocked
+  recovery path.
+
+Therefore an unproven unrelated pre-worker branch can still become the same
+operator dead-end this ticket is intended to remove. Add a narrow explicit recovery
+operation whose admission is bound to the exact ticket/execution/base and observed
+workspace/branch identity, preserves any explicitly authorized conflicting material
+before mutation, and fails closed on drift. Do not broaden drop semantics or guess
+ownership.
+
+### 3. Required regressions are missing
+
+Checkpoint `97ac62b44850617ea522151b8f2a49705b1688a4` changes only
+`execution_workspace.py` and `runtime.py`; no tests were added. TASK-019 requires
+regressions for, at minimum:
+
+- valid bound workspace -> REUSABLE and exactly one resumed worker;
+- stale prior-generation checkpoint -> RECOVERABLE only after exact durable
+  attribution;
+- evidence ref established before moving the last conventional product ref;
+- branch/worktree drift between inspection and mutation -> fail closed;
+- unowned unrelated branch with commits -> UNSAFE and untouched;
+- missing/wrong worktree classification through the shared inspection semantics;
+- successful repair retaining the same current execution id;
+- status/plan agreement;
+- supported UNSAFE operator recovery with exact identity binding.
+
+Please keep the existing evidence-pin/CAS/rebuild work, move the full
+REUSABLE/RECOVERABLE/UNSAFE proof into a shared read-only classification boundary,
+add the explicit UNSAFE recovery path, and cover the required scenarios with tests.
