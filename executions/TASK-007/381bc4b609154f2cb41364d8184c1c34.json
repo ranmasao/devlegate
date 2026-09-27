@@ -1,0 +1,25 @@
+{
+  "code_base_head": "788f767240b63f2021832c2fe63ccb7e1d091fb2",
+  "conclusion": "completed",
+  "control_head": "3b7375f38ad708f38c250888dde85ae0a8894f4c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-007",
+  "execution_id": "381bc4b609154f2cb41364d8184c1c34",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-007",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-007",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Updated the standalone adapter regression to distinguish only the exact supplied-wheel skip leaves and assert the complete ordered terminal event sequence from the frozen plan. This preserves normal completion of build/validate-wheels while verifying typed skips and all other leaves."
+  },
+  "workspace_head": "9413c814f1966aef962860dc2cece8d8e0877c60"
+}
