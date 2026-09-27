@@ -1,0 +1,29 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "incomplete",
+  "control_head": "08231a6609dacf775a32a91c7b5da4c87a999ab2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "7e01401e304945b9b88df6862bb69d12",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Make graceful restart use the exact current runtime image/checkpoint, or otherwise provide backward-compatible pending-report recovery in the replacement runtime, then rerun the restart regression and full suite."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Make graceful restart use the exact current runtime image/checkpoint, or otherwise provide backward-compatible pending-report recovery in the replacement runtime, then rerun the restart regression and full suite."
+    ],
+    "summary": "Reproduced the graceful restart failure and traced it to the replacement process loading an older installed Devlegate runtime that rejects the valid new-format pending execution report. No speculative source changes were retained; the worktree is unchanged."
+  },
+  "workspace_head": "944168c56f7a0e7be4474f743e01a86f14a0b7b2"
+}
