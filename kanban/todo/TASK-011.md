@@ -539,3 +539,57 @@ to the reproduced failure.
 Because the installed pre-TASK-011 runtime leaves a valid `blocked` claim in
 `todo`, this answer intentionally changes the canonical todo generation so the
 current runtime can launch the same ticket again.
+
+
+## Architect guidance after execution 7e01401e304945b9b88df6862bb69d12
+
+The latest execution reproduced the local graceful-restart failure and traced the
+replacement process to an older installed Devlegate runtime while retaining no new
+product changes. Treat this as a launch-identity/environment-boundary investigation
+before changing TASK-011 recovery semantics.
+
+Current source inspection gives a concrete hypothesis:
+
+- `product_launcher()` selects the eager standalone executable whenever inherited
+  `PEX` and `SCIE` agree and name an executable ELF;
+- `WorkerSupervisor.worker_environment()` strips Devlegate service-authority
+  variables but currently does not strip `PEX` or `SCIE`;
+- a Devlegate dogfooding worker may therefore inherit launcher metadata from the
+  outer installed Devlegate process;
+- a nested Python test service can then call `product_launcher()` during graceful
+  restart and select the outer installed executable rather than its worktree Python
+  invocation.
+
+Verify this hypothesis directly. Record the relevant environment and replacement
+argv/path without weakening the test.
+
+If inherited outer-product launcher metadata is the cause:
+
+- do not change TASK-011's pending-report compatibility or restart semantics merely
+  to make an older replacement runtime understand a newer report;
+- do not make graceful restart generally pin arbitrary worktree source instead of the
+  product launch identity defined by the distribution contract;
+- isolate the outer product packaging metadata at the appropriate worker/test
+  boundary, or record the proven environment-isolation defect separately if that
+  change is outside TASK-011;
+- rerun the graceful restart regression in an environment that is provably executing
+  the same checkpoint source across the nested restart.
+
+The exact product checkpoint `944168c56f7a0e7be4474f743e01a86f14a0b7b2`
+already has authoritative GitHub Actions validation:
+
+```text
+970 passed, 1 skipped
+All checks passed!
+```
+
+If the local failure is proven to be inherited outer-product metadata rather than a
+TASK-011 product defect, and the regression passes once the nested runtime identity
+is correct, return TASK-011 as `completed` without speculative lifecycle changes.
+
+If the failure still reproduces with the replacement process proven to execute the
+same checkpoint implementation, continue diagnosing it as a TASK-011 recovery
+defect.
+
+This note intentionally creates a new todo generation because the installed
+pre-TASK-011 runtime leaves the valid `incomplete` handoff in `todo`.
