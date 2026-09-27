@@ -447,3 +447,57 @@ Before returning this ticket to review:
 Because the currently installed pre-TASK-011 runtime still leaves an
 `incomplete` claim in `todo`, this continuation note intentionally changes the
 canonical todo generation so the existing runtime may launch the next execution.
+
+
+## Continuation after execution 4300bd0ca90047fba80de4bb9cc6de44
+
+The third execution intentionally returned `incomplete` after fixing the previously
+confirmed accepted-integration restart blocker.
+
+Checkpoint:
+
+```text
+944168c56f7a0e7be4474f743e01a86f14a0b7b2
+```
+
+Confirmed improvements:
+
+- accepted-integration restart recovery now preserves binding to the exact reviewed
+  execution when the accepted-to-done control rename was already committed locally;
+- the four accepted-integration crash-point regressions pass;
+- historical v1 execution-report compatibility and long-form report regressions from
+  the previous iteration remain present.
+
+Authoritative GitHub Actions for this exact checkpoint is green:
+
+```text
+970 passed, 1 skipped
+All checks passed!
+```
+
+The worker nevertheless reported one locally reproducible remaining issue:
+
+```text
+tests/test_cli.py::
+test_real_service_graceful_lifecycle_waits_for_active_worker[restart]
+```
+
+with the restart client reporting lost service authority during replacement handoff.
+
+For the next execution, keep the scope narrow:
+
+- try to reproduce this graceful-restart authority race deterministically;
+- if it reproduces, fix the underlying lifecycle/authority handoff while preserving
+  the existing restart semantics and regression;
+- if it does not reproduce and the full authoritative suite remains green, do not
+  invent speculative lifecycle changes merely to satisfy a flaky/local observation;
+  report the evidence and complete the ticket;
+- keep the accepted-integration crash-point regressions, historical-report
+  compatibility regressions, valid-handoff regressions, and long-form report
+  integrity regressions enabled and green.
+
+Before returning to review, run the full suite and lint on the exact checkpoint.
+
+Because the currently installed pre-TASK-011 runtime still leaves an
+`incomplete` claim in `todo`, this continuation note intentionally changes the
+canonical todo generation so the current runtime can launch another execution.
