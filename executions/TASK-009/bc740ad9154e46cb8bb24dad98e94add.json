@@ -1,0 +1,25 @@
+{
+  "code_base_head": "915506b92bc88a3a7dccb5e36bd5d932cc4a85b9",
+  "conclusion": "completed",
+  "control_head": "4a06515e6a8daf16e2891c083e75b8201da0af5d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-009",
+  "execution_id": "bc740ad9154e46cb8bb24dad98e94add",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-009",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-009",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Added a focused coverage regression that starts coverage before importing NanoYAML and a Devlegate module, generates both text and JSON reports, and verifies vendored files are excluded while Devlegate branch metrics remain present. The centralized vendor omit configuration remains unchanged."
+  },
+  "workspace_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913"
+}
