@@ -1,0 +1,33 @@
+{
+  "code_base_head": "43f4bdabaaa53fceff310c85aeaeb8a0b2a0d913",
+  "conclusion": "incomplete",
+  "control_head": "505012518248dcdbf2b8ab96574b5112fdbb0778",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-011",
+  "execution_id": "fbdbd74e403c42599a55452cb8f08f6a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-011",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve the real-service accepted-integration restart timeout at integration_control_commit_after_effect.",
+    "Resolve the graceful restart service-authority race.",
+    "Run the environment-dependent coverage and namespace-isolation checks with the repository virtualenv and coverage dependency available."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-011",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve the real-service accepted-integration restart timeout at integration_control_commit_after_effect.",
+      "Resolve the graceful restart service-authority race.",
+      "Run the environment-dependent coverage and namespace-isolation checks with the repository virtualenv and coverage dependency available."
+    ],
+    "summary": "Restored backward-compatible parsing for historical v1 execution reports with absent long-form artifact metadata, while retaining strict artifact binding validation for new reports. Added regressions for all valid worker outcomes entering review, semantic field preservation, historical compatibility, and durable long-form report integrity."
+  },
+  "workspace_head": "470a68dfa948d27b2ba009228b74b0afe530b806"
+}
