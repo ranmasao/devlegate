@@ -3871,7 +3871,8 @@ class ServiceEngine:
                 and self._execution_remote_head(report.execution_branch) is not None
             ):
                 raise WorkflowBlockedError(
-                    retired.stderr.strip() or "cannot retire zero-delta execution branch"
+                    retired.stderr.strip()
+                    or "cannot retire zero-delta execution branch"
                 )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
@@ -4236,7 +4237,9 @@ class ServiceEngine:
         try:
             reports = [
                 report
-                for report in ExecutionReportStore(self.control_worktree).list(ticket_id)
+                for report in ExecutionReportStore(self.control_worktree).list(
+                    ticket_id
+                )
                 if report.result.conclusion != "failed"
             ]
         except ExecutionReportError as error:
@@ -4255,14 +4258,39 @@ class ServiceEngine:
         )
         if accepted_commit.returncode or not accepted_commit.stdout.strip():
             raise WorkflowBlockedError("accepted ticket transition is unavailable")
+        accepted_revision = accepted_commit.stdout.strip()
+        accepted_path = f"{self.accepted_path}/{ticket_id}.md"
+        if (
+            _git(
+                self.control_worktree,
+                "cat-file",
+                "-e",
+                f"{accepted_revision}:{accepted_path}",
+                check=False,
+            ).returncode
+            != 0
+        ):
+            previous = _git(
+                self.control_worktree,
+                "rev-parse",
+                f"{accepted_revision}^",
+                check=False,
+            )
+            if previous.returncode:
+                raise WorkflowBlockedError(
+                    "accepted ticket transition parent is unavailable"
+                )
+            accepted_revision = previous.stdout.strip()
         parent = _git(
             self.control_worktree,
             "rev-parse",
-            f"{accepted_commit.stdout.strip()}^",
+            f"{accepted_revision}^",
             check=False,
         )
         if parent.returncode:
-            raise WorkflowBlockedError("accepted ticket transition parent is unavailable")
+            raise WorkflowBlockedError(
+                "accepted ticket transition parent is unavailable"
+            )
         review_commit = _git(
             self.control_worktree,
             "log",
