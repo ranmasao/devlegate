@@ -123,3 +123,30 @@ control-plane evidence is preserved.
   finalized to `done` without changing the product branch.
 - The long-form report remains recoverable from control history after execution
   workspace/branch retirement.
+
+
+## Review feedback after execution 14c80a844e4643be992240df517dd7e9
+
+The analysis itself is useful and the zero-product-delta condition is proven:
+`code_base_head == workspace_head == 68cf5526618913d52bf542e84ddd3936e7ea8faa`.
+
+However, this execution ran under the pre-TASK-011 service process and did not
+persist the required long-form typed report. Control history contains only:
+
+`executions/TASK-010/14c80a844e4643be992240df517dd7e9.json`
+
+and no corresponding `.md` durable report artifact.
+
+That fails TASK-010's explicit reporting and acceptance criteria. The operational
+worker log contains a rendered coverage review, but the ticket requires the detailed
+analysis to be recoverable from control-plane execution evidence independently of
+operational log retention.
+
+The service has now been restarted under the post-TASK-011 runtime. Re-run this
+analysis-only ticket normally. Preserve the zero-delta constraint, generate fresh
+coverage/HTML from the current source, and return the detailed analysis through the
+long-form report payload so Devlegate persists both the immutable JSON receipt and
+its bound Markdown artifact.
+
+No product change should be manufactured. The prior analysis may be used as a
+consistency reference, but the new execution must produce its own durable report.
