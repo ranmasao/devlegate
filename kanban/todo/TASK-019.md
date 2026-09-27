@@ -394,3 +394,38 @@ regressions for, at minimum:
 Please keep the existing evidence-pin/CAS/rebuild work, move the full
 REUSABLE/RECOVERABLE/UNSAFE proof into a shared read-only classification boundary,
 add the explicit UNSAFE recovery path, and cover the required scenarios with tests.
+
+
+## Review continuation after execution 3a14247446e2476994db7391eb411699
+
+This incomplete handoff moves the implementation materially in the right direction
+and should be continued, not redesigned.
+
+The prior review's two semantic blockers are now substantially addressed:
+
+- externally visible bound-workspace classification is provenance-aware rather than
+  treating topology alone as sufficient for RECOVERABLE; an unrelated branch with
+  no unique durable prior-generation attribution is reported UNSAFE;
+- an explicit `devlegate recover <ticket> <execution> --observed-head <sha>`
+  service/IPC path now exists for UNSAFE pre-worker recovery, with exact active
+  execution identity checks, evidence pinning, re-observation, CAS branch movement,
+  exact-base reconstruction, and final REUSABLE validation.
+
+Do not discard these changes.
+
+The execution correctly reported itself incomplete. Finish the remaining acceptance
+work:
+
+1. Add the required focused regressions for REUSABLE, provenance-proven
+   RECOVERABLE, unattributable UNSAFE, evidence retention before ref movement,
+   inspection-to-mutation drift/CAS refusal, same execution-id continuation,
+   status/plan agreement, and the explicit operator recovery path. Include the
+   missing/wrong worktree cases called out by the ticket.
+2. Fix the current lint failures in `runtime.py`. Exact-head CI for
+   `0a1f0970fed7134455f3044b0aed3c5086e301f0` ran the full suite successfully
+   (`974 passed, 1 skipped`) but then failed Ruff with 11 E501 line-length errors.
+3. Re-run the full repository validation and report the exact result.
+
+The absence of a long-form report is not a blocker for this incomplete handoff; the
+durable JSON receipt already preserves its summary and remaining work. Acceptance
+still requires the finished regressions and green exact-head CI.
