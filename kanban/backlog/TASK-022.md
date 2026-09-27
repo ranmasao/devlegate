@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Prepare Devlegate 0.5.5 for manual release"
-"depends_on": ["TASK-019", "TASK-020", "TASK-021"]
+"depends_on": ["TASK-019", "TASK-020", "TASK-021", "TASK-023"]
 ---
 
 ## Milestone
