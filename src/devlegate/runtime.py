@@ -1071,7 +1071,9 @@ class ServiceEngine:
         branch = state.get("execution_branch")
         if not isinstance(branch, str) or not branch:
             raise DevlegateError("persisted execution branch identity is incomplete")
-        current = _git(self.repo, "rev-parse", "--verify", f"refs/heads/{branch}", check=False)
+        current = _git(
+            self.repo, "rev-parse", "--verify", f"refs/heads/{branch}", check=False
+        )
         if current.returncode or current.stdout.strip() != observed_head:
             raise DevlegateError("execution branch does not match the authorized HEAD")
 
@@ -1082,9 +1084,13 @@ class ServiceEngine:
         base_head = state.get("execution_base_head")
         branch = state.get("execution_branch")
         path = state.get("execution_path")
-        if not all(isinstance(value, str) and value for value in (base_head, branch, path)):
+        if not all(
+            isinstance(value, str) and value for value in (base_head, branch, path)
+        ):
             raise DevlegateError("persisted execution workspace identity is incomplete")
-        manager = ExecutionWorkspaceManager(self.repo, self.execution_worktree_root, ticket_id)
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("persisted execution workspace binding is invalid")
         branch_ref = f"refs/heads/{branch}"
@@ -1096,36 +1102,62 @@ class ServiceEngine:
         if existing.returncode == 0 and existing.stdout.strip() != observed_head:
             raise DevlegateError("operator recovery evidence has conflicting identity")
         if existing.returncode:
-            pinned = _git(self.repo, "update-ref", evidence_ref, observed_head, "", check=False)
+            pinned = _git(
+                self.repo, "update-ref", evidence_ref, observed_head, "", check=False
+            )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve the authorized branch HEAD")
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         branch_path = next(
-            (item_path for item_path, item in registrations.items() if item.get("branch") == branch),
+            (
+                item_path
+                for item_path, item in registrations.items()
+                if item.get("branch") == branch
+            ),
             None,
         )
         if branch_path is not None and branch_path != manager.path.resolve():
-            raise DevlegateError("execution branch is attached to an unexpected worktree")
+            raise DevlegateError(
+                "execution branch is attached to an unexpected worktree"
+            )
         if manager.path.exists() and registration is None:
             raise DevlegateError("execution worktree path is not safely registered")
         if registration is not None:
             workspace = manager._validate_existing(registration, str(base_head))
             if workspace.head != observed_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
-            removed = _git(self.repo, "worktree", "remove", "--force", str(manager.path), check=False)
+            removed = _git(
+                self.repo,
+                "worktree",
+                "remove",
+                "--force",
+                str(manager.path),
+                check=False,
+            )
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
         current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
         if current.returncode or current.stdout.strip() != observed_head:
             raise DevlegateError("execution branch changed during explicit recovery")
-        moved = _git(self.repo, "update-ref", branch_ref, str(base_head), observed_head, check=False)
+        moved = _git(
+            self.repo,
+            "update-ref",
+            branch_ref,
+            str(base_head),
+            observed_head,
+            check=False,
+        )
         if moved.returncode:
-            raise DevlegateError("execution branch changed before explicit recovery CAS")
+            raise DevlegateError(
+                "execution branch changed before explicit recovery CAS"
+            )
         repaired = manager.prepare(str(base_head))
         final = manager.inspect(str(base_head), repaired.head)
         if final.classification != "REUSABLE":
-            raise DevlegateError(f"recovered execution workspace is not reusable: {final.reason}")
+            raise DevlegateError(
+                f"recovered execution workspace is not reusable: {final.reason}"
+            )
 
     def _drop_candidate_from_state(self) -> tuple[dict[str, str], ...]:
         state = self._state
@@ -6966,7 +6998,8 @@ class ServiceEngine:
                 if attached is not None or manager.path.exists():
                     return WorkspaceInspection(
                         "UNSAFE",
-                        "execution branch is missing but workspace material remains attached",
+                        "execution branch is missing but workspace material remains "
+                        "attached",
                     )
                 return WorkspaceInspection(
                     "RECOVERABLE",

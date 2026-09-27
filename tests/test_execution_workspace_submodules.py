@@ -86,6 +86,27 @@ def test_linked_execution_materializes_and_resumes_submodule(
     manager.verify_submodules(resumed)
 
 
+def test_clean_bound_workspace_inspection_is_reusable(linked_submodule_fixture):
+    manager, base, _s1, _dependency_path = linked_submodule_fixture
+    workspace = manager.prepare(base)
+
+    inspection = manager.inspect(base, workspace.head)
+
+    assert inspection.classification == "REUSABLE"
+    assert inspection.workspace == workspace
+
+
+def test_missing_execution_worktree_is_a_rebuild_candidate(linked_submodule_fixture):
+    manager, base, _s1, _dependency_path = linked_submodule_fixture
+    workspace = manager.prepare(base)
+    manager.retire(workspace, workspace.head)
+
+    inspection = manager.inspect(base)
+
+    assert inspection.classification == "RECOVERABLE"
+    assert "missing" in inspection.reason
+
+
 def test_dirty_submodule_is_preserved_and_rejected(linked_submodule_fixture):
     manager, base, _s1, dependency_path = linked_submodule_fixture
     workspace = manager.prepare(base)
