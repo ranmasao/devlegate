@@ -1,0 +1,29 @@
+{
+  "code_base_head": "915506b92bc88a3a7dccb5e36bd5d932cc4a85b9",
+  "conclusion": "completed",
+  "control_head": "f3992df2fb863aaff62ac96edc8a2fdf48d5b9a9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-009",
+  "execution_id": "d5eb85c7cb734d6f93357c7dc12b2974",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-009",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "The full 964-test suite was not completed within the available five-minute validation window; it continued in long-running integration tests."
+  ],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-009",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "The full 964-test suite was not completed within the available five-minute validation window; it continued in long-running integration tests."
+    ],
+    "summary": "Added a centralized coverage.py omit rule for the Devlegate vendor namespace in pyproject.toml. Vendored NanoYAML is excluded from collection and reporting while Devlegate-owned modules retain branch coverage measurement."
+  },
+  "workspace_head": "26a507375a2385ea62d9a3623cfb21554e5f0973"
+}
