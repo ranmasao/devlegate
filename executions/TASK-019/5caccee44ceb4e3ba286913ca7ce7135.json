@@ -1,0 +1,34 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "incomplete",
+  "control_head": "37838be186fa9190b63e9ca168ea1b748ef32b28",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "5caccee44ceb4e3ba286913ca7ce7135",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the full required runtime/integration regression coverage for provenance-proven RECOVERABLE, unattributable UNSAFE, evidence retention/CAS drift, same execution identity continuation, status/plan agreement, and operator recovery.",
+    "Run the full pytest suite once pytest is available in the validation environment."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the full required runtime/integration regression coverage for provenance-proven RECOVERABLE, unattributable UNSAFE, evidence retention/CAS drift, same execution identity continuation, status/plan agreement, and operator recovery.",
+      "Run the full pytest suite once pytest is available in the validation environment."
+    ],
+    "report": null,
+    "summary": "Fixed all reported Ruff E501 failures in the runtime recovery path and added workspace regressions covering exact reusable inspection and missing-worktree rebuild candidacy. Existing provenance-aware automatic repair and identity-bound operator recovery code remains intact."
+  },
+  "workspace_head": "5577db1a6d6b87957b83164d3c0ca16bef7ce5a4"
+}
