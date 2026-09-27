@@ -1,0 +1,25 @@
+{
+  "code_base_head": "9413c814f1966aef962860dc2cece8d8e0877c60",
+  "conclusion": "completed",
+  "control_head": "1ad1ef1f358c004df0c4c97dc18b83398b7610d6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-008",
+  "execution_id": "5c8413d4e7f84a9b907b63be9188beef",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-008",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-008",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "summary": "Updated accepted-integration recovery diagnostics to emit the execution plan's no-worker reason instead of falling through to heuristic dependency reporting. Reworked the accepted-boundary regression to persist accepted-integration recovery state with an independent todo ticket and assert the accepted recovery reason is emitted without unfinished-dependency text."
+  },
+  "workspace_head": "915506b92bc88a3a7dccb5e36bd5d932cc4a85b9"
+}
