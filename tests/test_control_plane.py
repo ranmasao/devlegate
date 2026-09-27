@@ -427,18 +427,28 @@ def test_accepted_boundary_diagnostic_is_not_reported_as_dependencies(
     git(control, "add", "-A")
     git(control, "commit", "-m", "add accepted boundary")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    engine = Devlegate(config)
+    engine._save_state(
+        "idle",
+        accepted_integration={
+            "ticket_id": "T-1",
+            "checkpoint": checkpoint,
+            "control_head": control_head,
+        },
+    )
     messages = []
     monkeypatch.setattr(runtime, "service_log", messages.append)
-    monkeypatch.setattr(
-        Devlegate, "_accepted_checkpoint", lambda self, _ticket_id: "a" * 40
-    )
-    monkeypatch.setattr(
-        Devlegate, "_integrate_accepted", lambda self, *_args: "control-head"
-    )
+    monkeypatch.setattr(Devlegate, "_recover_accepted_integration", lambda _self: 0)
 
-    assert run_test_iteration(Devlegate(config)) == 0
+    assert run_test_iteration(engine) == 0
 
-    assert any("accepted ticket T-1 integrated" in message for message in messages)
+    assert any(
+        "no worker scheduled: accepted integration recovery in progress: T-1"
+        in message
+        for message in messages
+    )
     assert not any("unfinished dependencies" in message for message in messages)
 
 

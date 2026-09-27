@@ -2694,6 +2694,9 @@ class ServiceEngine:
             self._state.get("phase") == "idle"
             and self._state.get("accepted_integration") is not None
         ):
+            plan = self.status_view().plan
+            if plan.action == "none":
+                _log(f"no worker scheduled: {plan.reason}")
             return self._recover_accepted_integration()
         reconciliation = self._state.get("reconciliation")
         if (
