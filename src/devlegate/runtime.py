@@ -1124,7 +1124,9 @@ class ServiceEngine:
         if manager.path.exists() and registration is None:
             raise DevlegateError("execution worktree path is not safely registered")
         if registration is not None:
-            workspace = manager._validate_existing(registration, str(base_head))
+            # Validate the authorized conflicting checkout by its observed old
+            # generation; the new admitted base is intentionally unrelated.
+            workspace = manager._validate_existing(registration, observed_head)
             if workspace.head != observed_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
             removed = _git(
@@ -7119,7 +7121,9 @@ class ServiceEngine:
         if manager.path.exists() and registration is None:
             raise DevlegateError("execution worktree path is not safely registered")
         if registration is not None:
-            workspace = manager._validate_existing(registration, base_head)
+            # Validate the conflicting generation by its observed identity. It
+            # is expected to be unrelated to the current admitted base.
+            workspace = manager._validate_existing(registration, old_head)
             if workspace.head != old_head or workspace.dirty:
                 raise DevlegateError(
                     "conflicting execution worktree is not clean and exact"

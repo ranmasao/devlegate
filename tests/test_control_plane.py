@@ -4447,3 +4447,208 @@ def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_
     assert result.returncode in {0, 1}
     assert state_payload(state) == before
     assert not execution.exists()
+
+
+def _persist_pending_execution(
+    devlegate, state, workspace, base_head, execution_id, *, start_head=None
+):
+    control = next((state / "worktrees").glob("*/control"))
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "agent_pending",
+        local_head=base_head,
+        remote_head=base_head,
+        changed_paths="",
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=base_head,
+        execution_control_head=control_head,
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        execution_id=execution_id,
+        execution_start_head=start_head or getattr(workspace, "head", base_head),
+        execution_remote_head=None,
+    )
+
+
+def _write_prior_execution_receipt(control, *, execution_id, base, path, head):
+    report = build_execution_report(
+        execution_id=execution_id,
+        ticket_id="T-1",
+        code_base_head=base,
+        control_head=git(control, "rev-parse", "HEAD").stdout.strip(),
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(path),
+        workspace_head=head,
+        run=WorkerRunResult(1, None, None, None),
+    )
+    ExecutionReportStore(control).write(report)
+
+
+def test_pending_workspace_plan_is_reusable_only_for_exact_binding(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(devlegate, state, workspace, base, "current")
+
+    plan = devlegate.plan_view()
+
+    assert plan.action == "run-worker"
+    assert plan.bound is True
+    assert devlegate.status_view().plan.action == plan.action
+    assert (
+        devlegate._inspect_bound_execution_workspace(devlegate._state).classification
+        == "REUSABLE"
+    )
+
+
+def test_unattributable_pending_branch_is_unsafe_and_untouched(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    orphan = tmp_path / "orphan"
+    git(working, "worktree", "add", "--detach", orphan, base)
+    git(orphan, "switch", "--orphan", "unowned")
+    (orphan / "unowned.txt").write_text("unowned\n")
+    git(orphan, "add", "unowned.txt")
+    git(orphan, "commit", "-m", "unowned branch")
+    unrelated = git(orphan, "rev-parse", "HEAD").stdout.strip()
+    git(working, "worktree", "remove", "--force", orphan)
+    git(working, "branch", "devlegate/work/T-1", unrelated)
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager
+    _persist_pending_execution(devlegate, state, workspace, base, "current")
+
+    plan = devlegate.plan_view()
+
+    assert plan.action == "blocked"
+    assert "unsafe" in plan.reason
+    assert devlegate.status_view().plan.reason == plan.reason
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == unrelated
+
+
+def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    _write_prior_execution_receipt(
+        control,
+        execution_id="old-generation",
+        base=old_base,
+        path=workspace.path,
+        head=old_head,
+    )
+    git(control, "add", "executions/T-1")
+    git(control, "commit", "-m", "retain prior execution receipt")
+    git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "push", "origin", "HEAD:main")
+    devlegate = Devlegate(config)
+    _persist_pending_execution(
+        devlegate, state, workspace, new_base, "current", start_head=new_base
+    )
+    calls = []
+
+    def worker(_workspace, _prompt, **_kwargs):
+        calls.append(True)
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    monkeypatch.setattr(
+        devlegate,
+        "_sync_control",
+        lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
+    )
+
+    assert devlegate.plan_view().action == "blocked"
+    assert "recoverable" in devlegate.plan_view().reason
+    assert [
+        report.workspace_head
+        for report in ExecutionReportStore(control).list("T-1")
+    ] == [old_head]
+    effects = []
+    real_git = runtime._git
+
+    def observe_effect(repo, *args, **kwargs):
+        if args[:2] == (
+            "update-ref",
+            "refs/devlegate/recovery/workspace/T-1/old-generation",
+        ):
+            effects.append("evidence")
+        elif args[:2] == ("update-ref", "refs/heads/devlegate/work/T-1"):
+            effects.append("branch")
+        return real_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_git", observe_effect)
+    devlegate._repair_bound_execution_workspace()
+    assert devlegate.plan_view().action == "run-worker"
+    assert effects.index("evidence") < effects.index("branch")
+
+    evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
+    assert git(working, "rev-parse", evidence).stdout.strip() == old_head
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
+    assert devlegate._state["execution_id"] == "current"
+
+
+def test_operator_recovery_requires_exact_observed_head_and_preserves_identity(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    old_head = workspace.head
+
+    with pytest.raises(DevlegateError, match="authorized HEAD"):
+        devlegate._validate_recover_admission("T-1", "current", "0" * 40)
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == old_head
+
+    devlegate._recover_unsafe_bound_execution_workspace("T-1", "current", old_head)
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == base
+    assert (
+        git(
+            working,
+            "rev-parse",
+            "refs/devlegate/recovery/operator/T-1/current",
+        ).stdout.strip()
+        == old_head
+    )
