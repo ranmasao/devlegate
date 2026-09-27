@@ -84,3 +84,26 @@ The execution result is not yet acceptable.
 Rework the existing implementation rather than redesigning the scheduler:
 fix the lint failure, add the missing accepted/integration service-log regression,
 and run the full test and lint validation.
+
+## Review feedback — second pass
+
+The lint issue is fixed and GitHub Actions is green, but the newly added
+`test_accepted_boundary_diagnostic_is_not_reported_as_dependencies` still does
+not prove the required diagnostic behavior.
+
+That test places `T-1` in `accepted`, stubs accepted integration, and then
+asserts that the iteration logs `accepted ticket T-1 integrated`. The runtime
+handles `execution_plan.action == "integrate"` and returns before reaching the
+idle/no-selection diagnostic path changed by this ticket. Therefore this test
+would also pass against the pre-fix implementation and cannot regress the original
+false-cause bug.
+
+Add a regression that actually exercises an accepted/integration barrier through
+the no-worker diagnostic path. A suitable case is persisted
+`accepted_integration` recovery with an independent todo ticket: the execution
+plan has no worker action and carries the accepted-integration recovery reason, so
+the service diagnostic must identify that reason and must not mention unfinished
+dependencies.
+
+The regression must fail against the old heuristic implementation and pass with
+the TASK-008 fix. Keep the scheduler/admission behavior unchanged.
