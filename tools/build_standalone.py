@@ -743,6 +743,16 @@ def prove(args: argparse.Namespace) -> int:
             ],
             env={**environment, "PEX_INTERPRETER": "1"},
         ).stdout
+        escaped_executable = str(executable).replace("%", "%%").replace("$", "$$")
+        expected_exec_prefix = f'ExecStart="{escaped_executable}" --env '
+        exec_start = next(
+            line for line in unit.splitlines() if line.startswith("ExecStart=")
+        )
+        if not exec_start.startswith(expected_exec_prefix):
+            raise BuildError(
+                "standalone systemd unit does not relaunch the outer artifact: "
+                f"{exec_start}"
+            )
         repo = root / "repo"
         remote = root / "remote.git"
         run([str(git), "init", "--bare", str(remote)])
@@ -809,9 +819,7 @@ def prove(args: argparse.Namespace) -> int:
             "path": str(artifact),
             "runtime_executable": str(executable),
             "path_has_spaces_percent_dollar": True,
-            "systemd_exec_start": next(
-                line for line in unit.splitlines() if line.startswith("ExecStart=")
-            ),
+            "systemd_exec_start": exec_start,
             "systemd_working_directory": next(
                 line
                 for line in unit.splitlines()

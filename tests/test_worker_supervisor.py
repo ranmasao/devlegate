@@ -73,6 +73,21 @@ def test_worker_environment_does_not_inherit_outer_packaging_launcher_identity()
     assert sanitized == {}
 
 
+def test_worker_environment_removes_related_pex_and_scie_metadata():
+    sanitized = worker_environment(
+        {
+            "PROJECT_SETTING": "available",
+            "PEX_ROOT": "/outer/cache",
+            "PEX_INTERPRETER": "1",
+            "SCIE_BINDING_JSON": "/outer/binding.json",
+            "_PEX_EXTRA_SYS_PATH": "/outer/path",
+            "__PEX_UNVENDORED__": "1",
+        }
+    )
+
+    assert sanitized == {"PROJECT_SETTING": "available"}
+
+
 def test_sanitized_environment_does_not_enable_nested_hosting(monkeypatch):
     from devlegate import cli
 

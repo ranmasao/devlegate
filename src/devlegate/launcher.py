@@ -33,16 +33,10 @@ def product_launcher() -> LaunchCommand:
     """Return the launcher for the currently installed product form."""
     pex = os.environ.get("PEX")
     scie = os.environ.get("SCIE")
-    scie_argv0 = os.environ.get("SCIE_ARGV0")
-    launch_identity_matches = not scie_argv0
-    if scie_argv0:
-        try:
-            launch_identity_matches = Path(scie_argv0).resolve() == Path(
-                sys.argv[0]
-            ).resolve()
-        except OSError:
-            launch_identity_matches = False
-    if pex and scie and pex == scie and launch_identity_matches:
+    # PEX and SCIE identify the durable outer artifact.  argv[0] can instead
+    # identify an interpreter/tool mode inside that artifact, so it is not a
+    # reliable test for the product identity.
+    if pex and scie and pex == scie:
         candidate = Path(pex)
         try:
             if not candidate.is_file() or candidate.stat().st_mode & 0o111 == 0:

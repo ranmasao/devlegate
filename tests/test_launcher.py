@@ -38,7 +38,7 @@ def test_proven_eager_scie_metadata_selects_outer_executable(monkeypatch, tmp_pa
     assert product_launcher().argv() == [str(executable)]
 
 
-def test_stale_scie_argv0_keeps_source_launcher(monkeypatch, tmp_path):
+def test_interpreter_mode_scie_argv0_still_selects_outer_launcher(monkeypatch, tmp_path):
     executable = tmp_path / "devlegate"
     executable.write_bytes(b"\x7fELFstandalone")
     executable.chmod(0o755)
@@ -48,12 +48,7 @@ def test_stale_scie_argv0_keeps_source_launcher(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["/worktree/src/devlegate/__main__.py"])
     monkeypatch.setattr("devlegate.launcher.sys.executable", "/python/bin/python")
 
-    assert product_launcher().argv() == [
-        "/python/bin/python",
-        "-P",
-        "-m",
-        "devlegate",
-    ]
+    assert product_launcher().argv() == [str(executable)]
 
 
 def test_spoofed_or_ambiguous_scie_metadata_keeps_python_launcher(

@@ -251,8 +251,11 @@ def worker_environment(
 ) -> dict[str, str]:
     """Copy the environment without service-owned process authority."""
     worker_env = dict(os.environ if environment is None else environment)
-    for name in _HOST_CONTROL_ENVIRONMENT:
-        worker_env.pop(name, None)
+    for name in tuple(worker_env):
+        if name in _HOST_CONTROL_ENVIRONMENT or name.startswith(
+            ("PEX_", "SCIE_")
+        ) or name.startswith("__PEX") or name.startswith("_PEX_"):
+            worker_env.pop(name, None)
     return worker_env
 
 
