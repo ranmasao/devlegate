@@ -210,3 +210,32 @@ results in the next worker report.
 
 No additional ordinary unit-test or lint work is currently known to be needed;
 exact-head CI at this checkpoint is already green.
+
+
+## Review acceptance after execution 8cd7f1f7a8c64348acae91c7427db096
+
+Accepted checkpoint: `7efdae418222e873d383509a358bfa6923d69e27`.
+
+Final review confirms:
+
+- standalone launcher selection preserves the durable outer PEX/scie executable
+  identity without relying on `sys.argv[0]`;
+- source/development execution retains the Python `-P -m devlegate` fallback;
+- WorkerSupervisor removes inherited PEX/SCIE packaging identity before nested
+  worker execution;
+- standalone systemd rendering proves that `ExecStart` uses the exact outer
+  artifact rather than extracted/bundled CPython;
+- the authentic standalone proof builds and launches the real artifact in an
+  isolated environment, observes readiness, exercises status/restart/status/stop,
+  and therefore covers the durable relaunch path without host Python/module
+  installation;
+- wheel/sdist build and wheel install/import validation succeeded in an isolated
+  declared build environment.
+
+The first exact-head CI attempt encountered one unrelated nondeterministic failure in
+the existing drop integration test while the TASK-020 diff touched only
+`tools/build_standalone.py`. Re-running the exact same checkpoint completed fully
+green: `993 passed, 1 skipped`, coverage 79%, and Ruff reports
+`All checks passed!`.
+
+The exact reviewed result is approved for Devlegate-owned accepted finalization.
