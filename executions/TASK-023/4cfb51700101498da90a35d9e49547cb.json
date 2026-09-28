@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7883c27078d75d95d78156b7eb14ee820f11c779",
+  "conclusion": "completed",
+  "control_head": "35f4f3cec225335ff0151a4de68a3758b57d20f5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-023",
+  "execution_id": "4cfb51700101498da90a35d9e49547cb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-023",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-023/4cfb51700101498da90a35d9e49547cb.md",
+  "report_sha256": "22b3cc99caf86641a3473c3c2f2e75d33705ed423b3e305c444bca07aa312e81",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-023",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused full-source tests and Ruff checks pass. The repository-wide pytest run exceeded the available execution timeout twice without producing a test failure.",
+    "summary": "Hardened the distribution boundary against symlinked path components during manifest, template, and generated-target inspection, preventing ownership checks or cleanup from escaping the selected tree. Full-source cleanup now always applies the fixed Architect and Reviewer targets even when no project manifest exists, with regressions covering both cases."
+  },
+  "workspace_head": "06d665b2fab557d6dd0cdd4ec840f25925bdfc72"
+}
