@@ -203,3 +203,93 @@ transitions after this ticket is reviewed and finalized.
   changed by a separate human-authorized task.
 - Running release preparation twice on the same final candidate is idempotent apart
   from already-finalized textual/version state and generated ignored build outputs.
+
+
+## Review continuation after execution c454925057c047ed9dbe20ac12dc58d6
+
+Checkpoint `22cc635a0d042a9be469f88b77533c3d110bb696` contains the intended
+0.5.5 release-candidate changes:
+
+- canonical shipped version metadata is finalized to `0.5.5`;
+- the 0.5.5 changelog entry is finalized for 2026-09-28 and summarizes the
+  integrated release behavior rather than superseded attempts;
+- version-sensitive distribution/package fixtures were updated consistently;
+- the existing release workflow still requires an already existing annotated tag
+  and GitHub Release;
+- the existing policy gate still keeps standalone/Debian publication disabled for
+  versions below 0.6.0.
+
+No additional release-preparation design or product-code change is requested unless
+the clean-candidate validation below exposes a real defect.
+
+The execution correctly reported itself `incomplete` because the guarded
+distribution proof could not be completed while the release-candidate edits were
+still uncheckpointed. A temporary-clone workaround also lost the repository-relative
+NanoYAML submodule resolution context. Do not work around this by changing submodule
+policy or packaging semantics.
+
+### Exact candidate identity
+
+The previous worker summary states that the candidate is
+`ea76996e296233b241dcfb98dafd0b78de1ab4d1`. That SHA is the execution's
+`code_base_head`, before the 0.5.5 release-preparation changes.
+
+The exact release-candidate checkpoint to validate is:
+
+```text
+22cc635a0d042a9be469f88b77533c3d110bb696
+```
+
+The next execution should preserve this checkpoint unchanged unless validation
+reveals an actual release defect.
+
+### Remaining work: clean exact-candidate validation
+
+Run validation from the normal execution workspace bound to the exact checkpoint
+above, now that it is a clean committed tree. Use the repository's canonical
+development environment and commands.
+
+At minimum complete and record concrete results for:
+
+```sh
+./dev test-parallel
+./dev coverage -n 4 --dist=worksteal
+./dev lint
+./dev package all
+```
+
+`./dev package all` is the canonical distribution graph and must complete its
+wheel, sdist, standalone, Debian proof, and full-source paths from the clean exact
+candidate. It must not create or require the final release tag or GitHub Release.
+
+If the repository-local development environment is absent or incomplete, use
+`./dev setup` first.
+
+The full-source path must be exercised through the normal repository/workspace
+context so the relative `../nanoyaml.git` submodule URL resolves through the
+repository's real origin. Do not substitute an ad-hoc temporary clone whose origin
+changes that resolution context.
+
+### Final readiness report
+
+On successful validation, return a durable report that explicitly states:
+
+- exact candidate product/checkpoint HEAD:
+  `22cc635a0d042a9be469f88b77533c3d110bb696`;
+- observed final version: `0.5.5`;
+- final changelog state/date;
+- full tests, lint, and coverage results;
+- `./dev package all` result, including full-source, standalone, and Debian proof;
+- that 0.5.5 standalone/Debian artifacts are readiness proofs only and remain
+  intentionally non-published under the current `>=0.6.0` policy;
+- remaining human-owned release steps: review/integration, annotated `v0.5.5`
+  tag creation/push, GitHub Release creation/publication, workflow-driven upload of
+  policy-eligible assets, announcement, and any later branch/configuration
+  transition.
+
+Do not create or push a tag, create/edit/publish a GitHub Release, upload assets,
+move release/product branches, change the configured product branch, or change
+repository default-branch settings.
+
+If the clean exact-candidate validation is green and no real release defect is
+found, TASK-022 should return to review without further product changes.
