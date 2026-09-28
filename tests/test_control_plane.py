@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -4652,6 +4653,116 @@ def test_operator_recovery_requires_exact_observed_head_and_preserves_identity(
         ).stdout.strip()
         == old_head
     )
+
+
+@pytest.mark.parametrize(
+    ("ticket_id", "execution_id", "observed_head", "expected_error"),
+    [
+        ("wrong-ticket", "current", "old", "requested ticket"),
+        ("T-1", "wrong-execution", "old", "requested execution"),
+        ("T-1", "current", "0" * 40, "authorized HEAD"),
+    ],
+)
+def test_public_recover_owner_admission_is_identity_bound(
+    tmp_path,
+    monkeypatch,
+    ticket_id,
+    execution_id,
+    observed_head,
+    expected_error,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    errors = []
+
+    def submit():
+        try:
+            devlegate.submit_recover(
+                ticket_id, execution_id, observed_head, request_id="recover-boundary"
+            )
+        except DevlegateError as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=submit)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while (
+        not devlegate._operator_command_pending()
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    command = devlegate._take_operator_command()
+    assert command is not None
+    with pytest.raises(DevlegateError, match=expected_error):
+        devlegate._admit_operator_command(command)
+    thread.join(timeout=2)
+    assert len(errors) == 1
+
+
+def test_public_recover_owner_admission_reaches_exact_matching_operation(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    observed_head = workspace.head
+    calls = []
+    monkeypatch.setattr(
+        devlegate,
+        "_recover_unsafe_bound_execution_workspace",
+        lambda ticket, execution, head: calls.append((ticket, execution, head)),
+    )
+    result = []
+
+    def submit():
+        result.append(
+            devlegate.submit_recover(
+                "T-1", "current", observed_head, request_id="recover-boundary"
+            )
+        )
+
+    thread = threading.Thread(target=submit)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while (
+        not devlegate._operator_command_pending()
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    command = devlegate._take_operator_command()
+    assert command is not None
+    devlegate._admit_operator_command(command)
+    devlegate._dispatch_operator_command(command, None)
+    thread.join(timeout=2)
+
+    assert result == [
+        {
+            "accepted": True,
+            "ticket_id": "T-1",
+            "execution_id": "current",
+            "observed_head": observed_head,
+        }
+    ]
+    assert calls == [("T-1", "current", observed_head)]
 
 
 def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
