@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7883c27078d75d95d78156b7eb14ee820f11c779",
+  "conclusion": "completed",
+  "control_head": "3e22058dc26905047359cb6b7776369d3848f9ed",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-023",
+  "execution_id": "26f6bc0d604f4a25b47cd0e3338dd488",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-023",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-023",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a shared, fail-closed distribution boundary that removes repository self-hosting integration from curated full-source archives and validates wheel, sdist, standalone, and Debian members. Preserved packaged default templates, added boundary regression coverage, and documented the GitHub source snapshot exception."
+  },
+  "workspace_head": "c3bbfc97821a3482fdbedc700972642077d9a70c"
+}
