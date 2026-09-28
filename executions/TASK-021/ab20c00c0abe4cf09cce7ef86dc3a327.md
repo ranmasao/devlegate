@@ -1,0 +1,1 @@
+Focused systemd, host-installation, and project-registry tests pass (63 total), and Ruff passes for src/tests. The full suite reached 999 passed and 3 environment-only failures because coverage and the repository's .venv executables are unavailable.

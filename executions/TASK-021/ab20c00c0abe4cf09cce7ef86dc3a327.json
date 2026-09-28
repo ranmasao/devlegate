@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7efdae418222e873d383509a358bfa6923d69e27",
+  "conclusion": "completed",
+  "control_head": "0c71253a896649c6137b942724b2018c7b4a7a40",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-021",
+  "execution_id": "ab20c00c0abe4cf09cce7ef86dc3a327",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-021",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-021/ab20c00c0abe4cf09cce7ef86dc3a327.md",
+  "report_sha256": "04680fdbba814cb9acbdd640345ea14e18e3fff4f65bf8b6aea4cefd85a8f6d6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-021",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused systemd, host-installation, and project-registry tests pass (63 total), and Ruff passes for src/tests. The full suite reached 999 passed and 3 environment-only failures because coverage and the repository's .venv executables are unavailable.",
+    "summary": "Completed bidirectional systemd representation reconciliation hardening. Persisted authority is validated before mutation, stale owned units restart after atomic refresh, legacy binding adoption requires explicit durable authority, and reporting preserves the canonical unit path. Added fail-closed ownership, lifecycle, and daemon-reload recovery regressions."
+  },
+  "workspace_head": "6edb49e2eeaffe24d8e419185dcbae8005b0a184"
+}
