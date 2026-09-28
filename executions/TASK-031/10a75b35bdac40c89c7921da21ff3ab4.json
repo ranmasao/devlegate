@@ -1,0 +1,28 @@
+{
+  "code_base_head": "063ef24bf126ec297a32b577b646f6238273ac0b",
+  "conclusion": "completed",
+  "control_head": "21fb999e39d3e469bd617aa99a6ee5207008a4c7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-031",
+  "execution_id": "10a75b35bdac40c89c7921da21ff3ab4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-031",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-031/10a75b35bdac40c89c7921da21ff3ab4.md",
+  "report_sha256": "3ff86362c9b5651fd469e430c8d13634a2e2f79bdc3135be64d7a1d02746eae5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-031",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Recovery now resumes safely after evidence/remote/local/worktree effect prefixes, keeps exact observed-head evidence, and continues through the normal owner path.",
+    "summary": "Made explicit pre-worker recovery restartable across durable effect boundaries by persisting the exact authorized recovery intent, replaying only authorized prefixes, and clearing that intent after coherent pending-state normalization. Added a regression covering restart after local reconstruction while preserving execution identity and avoiding repeated branch mutation."
+  },
+  "workspace_head": "2684ef3b132af0228ec1306a331144b163a1f7cb"
+}
