@@ -189,6 +189,50 @@ def test_unowned_manifest_target_fails_closed(tmp_path: Path) -> None:
     assert "not Devlegate-owned" in result.stderr
 
 
+def test_symlinked_generated_target_parent_fails_closed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    init_repo(project)
+    outside.mkdir()
+    sentinel = outside / "custom/SKILL.md"
+    sentinel.parent.mkdir()
+    sentinel.write_text("<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\nexternal\n")
+    templates = project / ".devlegate/templates/skills/custom"
+    templates.mkdir(parents=True)
+    (project / ".devlegate/templates/artifacts.toml").write_text(
+        '[[artifact]]\nsource = "skills/custom/SKILL.md.tmpl"\n'
+        'target = "skills/custom/SKILL.md"\n'
+    )
+    (templates / "SKILL.md.tmpl").write_text("template\n")
+    (project / "skills").symlink_to(outside, target_is_directory=True)
+    commit_all(project, "symlinked generated target parent")
+
+    result = build(project, "v6.1.1", tmp_path / "output")
+
+    assert result.returncode != 0
+    assert "contains a symlink" in result.stderr
+    assert sentinel.read_text() == (
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\nexternal\n"
+    )
+    assert not (tmp_path / "output/devlegate-6.1.1-full-source.tar.gz").exists()
+
+
+def test_fixed_generated_targets_are_excluded_without_manifest(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    target = project / "skills/architect/SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("repository integration\n")
+    commit_all(project, "fixed integration without manifest")
+
+    output = tmp_path / "output"
+    result = build(project, "v6.1.2", output)
+
+    assert result.returncode == 0, result.stderr
+    names = archive_files(output / "devlegate-6.1.2-full-source.tar.gz")
+    assert "devlegate-6.1.2/skills/architect/SKILL.md" not in names
+
+
 def test_dynamic_generated_target_is_validated_against_injected_archive(
     tmp_path: Path,
 ) -> None:

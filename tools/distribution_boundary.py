@@ -22,8 +22,19 @@ DEFAULT_GENERATED_TARGETS = {
 GENERATED_MARKER = "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n"
 
 
+def _reject_symlink_components(root: Path, relative: str) -> None:
+    current = root
+    for component in PurePosixPath(relative).parts:
+        current /= component
+        if current.is_symlink():
+            raise BoundaryError(
+                f"repository integration path contains a symlink: {relative!r}"
+            )
+
+
 def generated_targets(root: Path) -> set[str]:
     manifest = root / ".devlegate/templates/artifacts.toml"
+    _reject_symlink_components(root, ".devlegate/templates/artifacts.toml")
     if not manifest.is_file():
         return set()
     try:
@@ -58,9 +69,13 @@ def generated_targets(root: Path) -> set[str]:
             or not source.endswith(".tmpl")
         ):
             raise BoundaryError(f"unsafe generated project target: {target!r}")
+        _reject_symlink_components(root, f".devlegate/templates/{source}")
+        _reject_symlink_components(root, target)
         template = root / ".devlegate/templates" / source
         if template.is_symlink() or not template.is_file():
-            raise BoundaryError(f"generated project template is unavailable: {source!r}")
+            raise BoundaryError(
+                f"generated project template is unavailable: {source!r}"
+            )
         generated = root / target
         if not generated.exists():
             continue
@@ -106,7 +121,10 @@ def validate_members(members: set[str], root: Path, label: str) -> None:
 
 
 def remove_integration(root: Path) -> None:
-    for relative in (".env", ".devlegate", *sorted(generated_targets(root))):
+    targets = set(DEFAULT_GENERATED_TARGETS)
+    targets.update(generated_targets(root))
+    for relative in (".env", ".devlegate", *sorted(targets)):
+        _reject_symlink_components(root, relative.rsplit("/", 1)[0] or ".")
         path = root / relative
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)
