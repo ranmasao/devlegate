@@ -127,7 +127,9 @@ def test_tty_progress_fits_a_narrow_terminal(monkeypatch):
     rendered = output.getvalue()
     assert "0/1" in rendered
     assert "1/1" in rendered
-    assert all(len(part) <= 8 for part in rendered.split("\r") if part)
+    assert all(
+        len(part.rstrip("\n")) <= 8 for part in rendered.split("\r") if part
+    )
 
 
 def test_component_tree_freezes_nested_ids_and_rejects_future_failure():
@@ -452,6 +454,178 @@ def test_failed_workspace_is_removed_without_keep(monkeypatch, tmp_path):
     args = GRAPH.parser().parse_args(["wheel"])
     with pytest.raises(GRAPH.DistributionError):
         GRAPH.package(args)
+    assert not workspace.exists()
+
+
+def test_package_tty_success_keeps_progress_transient_and_log_durable(
+    monkeypatch, tmp_path
+):
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    workspace = tmp_path / "workspace"
+    output_dir = tmp_path / "dist"
+    step = GRAPH.ComponentStep("fake package", key="fake")
+    plan = GRAPH.ComponentPlan(
+        "distribution",
+        (GRAPH.ComponentPlan("wheel", (GRAPH.ComponentPlan.leaf(step),), key="wheel"),),
+    )
+
+    class FakeComponent:
+        def __init__(self, package_values):
+            self.package_values = package_values
+
+        def run(self, emit):
+            emit(GRAPH.ComponentEvent("start", step, step.identity))
+            workspace.mkdir()
+            artifact = workspace / "fake.whl"
+            artifact.write_bytes(b"fake package")
+            self.package_values["wheel"] = GRAPH.Artifact(artifact, "wheel")
+            emit(GRAPH.ComponentEvent("complete", step, step.identity))
+
+    values = {}
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
+    monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("wheel",))
+    monkeypatch.setattr(
+        GRAPH,
+        "_component_for_target",
+        lambda *_args, **_kwargs: FakeComponent(_args[3]),
+    )
+    monkeypatch.setattr(GRAPH.tempfile, "mkdtemp", lambda **_kwargs: str(workspace))
+    output = TTYBuffer()
+    monkeypatch.setattr(sys, "stdout", output)
+
+    args = GRAPH.parser().parse_args(
+        ["wheel", "--repo", str(tmp_path), "--output-dir", str(output_dir)]
+    )
+    assert GRAPH.package(args) == 0
+
+    rendered = output.getvalue()
+    assert "package ready: " in rendered
+    assert "details: " in rendered
+    assert "DONE" not in rendered
+    assert "fake package" not in rendered.rsplit("\n", 1)[-1]
+    log = output_dir / "devlegate-wheel-build.log"
+    assert log.is_file()
+    published = output_dir / "fake.whl"
+    assert published.read_bytes() == b"fake package"
+    assert not workspace.exists()
+    assert str(log) in rendered
+
+
+def test_package_tty_failure_reports_diagnostic_without_counting_failed_leaf(
+    monkeypatch, tmp_path
+):
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    workspace = tmp_path / "workspace"
+    output_dir = tmp_path / "dist"
+    step = GRAPH.ComponentStep("fake package", key="fake")
+    plan = GRAPH.ComponentPlan(
+        "distribution",
+        (GRAPH.ComponentPlan("wheel", (GRAPH.ComponentPlan.leaf(step),), key="wheel"),),
+    )
+    diagnostic = "distinctive fake packaging failure"
+
+    class FakeComponent:
+        def run(self, emit):
+            emit(GRAPH.ComponentEvent("start", step, step.identity))
+            emit(GRAPH.ComponentEvent("fail", step, step.identity))
+            raise RuntimeError(diagnostic)
+
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
+    monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("wheel",))
+    monkeypatch.setattr(
+        GRAPH,
+        "_component_for_target",
+        lambda *_args, **_kwargs: FakeComponent(),
+    )
+    monkeypatch.setattr(GRAPH.tempfile, "mkdtemp", lambda **_kwargs: str(workspace))
+    output = TTYBuffer()
+    monkeypatch.setattr(sys, "stdout", output)
+
+    args = GRAPH.parser().parse_args(
+        ["wheel", "--repo", str(tmp_path), "--output-dir", str(output_dir)]
+    )
+    with pytest.raises(RuntimeError, match=diagnostic):
+        GRAPH.package(args)
+
+    rendered = output.getvalue()
+    assert "build failed at wheel: fake package" in rendered
+    assert "details: " in rendered
+    assert "package ready:" not in rendered
+    assert "[##########] 1/1" not in rendered
+    log = output_dir / "devlegate-wheel-build.log"
+    assert f"FAILED at wheel: fake package: RuntimeError: {diagnostic}" in log.read_text()
+    assert not workspace.exists()
+
+
+def test_standalone_package_retains_structured_report_and_evidence_path(
+    monkeypatch, tmp_path
+):
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    workspace = tmp_path / "workspace"
+    output_dir = tmp_path / "dist"
+    step = GRAPH.ComponentStep("fake standalone", key="fake")
+    plan = GRAPH.ComponentPlan(
+        "distribution",
+        (
+            GRAPH.ComponentPlan(
+                "standalone", (GRAPH.ComponentPlan.leaf(step),), key="standalone"
+            ),
+        ),
+    )
+    values = {}
+
+    class FakeComponent:
+        def __init__(self, package_values):
+            self.package_values = package_values
+
+        def run(self, emit):
+            emit(GRAPH.ComponentEvent("start", step, step.identity))
+            package_dir = workspace / "standalone"
+            package_dir.mkdir(parents=True)
+            archive = package_dir / "standalone.tar.gz"
+            sidecar = package_dir / "standalone.sha256"
+            report = package_dir / "standalone-build.json"
+            archive.write_bytes(b"archive")
+            sidecar.write_text("checksum")
+            report.write_text(json.dumps({"diagnostic": "retained structured report"}))
+            self.package_values["standalone"] = {
+                "archive": GRAPH.Artifact(archive, "archive"),
+                "sidecar": GRAPH.Artifact(sidecar, "checksum"),
+                "report": GRAPH.Artifact(report, "report"),
+            }
+            emit(GRAPH.ComponentEvent("complete", step, step.identity))
+
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
+    monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("standalone",))
+    monkeypatch.setattr(
+        GRAPH,
+        "_component_for_target",
+        lambda *_args, **_kwargs: FakeComponent(_args[3]),
+    )
+    monkeypatch.setattr(GRAPH.tempfile, "mkdtemp", lambda **_kwargs: str(workspace))
+    output = TTYBuffer()
+    monkeypatch.setattr(sys, "stdout", output)
+
+    args = GRAPH.parser().parse_args(
+        ["standalone", "--repo", str(tmp_path), "--output-dir", str(output_dir)]
+    )
+    assert GRAPH.package(args) == 0
+
+    retained = output_dir / "devlegate-standalone-standalone-build.json"
+    log = output_dir / "devlegate-standalone-build.log"
+    assert retained.is_file()
+    assert json.loads(retained.read_text()) == {
+        "diagnostic": "retained structured report"
+    }
+    assert f"Standalone build report: {retained}" in log.read_text()
+    assert (output_dir / "standalone.tar.gz").read_bytes() == b"archive"
+    assert (output_dir / "standalone.sha256").read_text() == "checksum"
     assert not workspace.exists()
 
 
