@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import hashlib
+import io
 import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
@@ -137,10 +138,16 @@ def test_repository_integration_is_excluded_but_product_templates_remain(
         '[[artifact]]\nsource = "skills/architect/SKILL.md.tmpl"\n'
         'target = "skills/architect/SKILL.md"\n'
     )
+    (project / ".devlegate/templates/skills/architect").mkdir(parents=True)
+    (project / ".devlegate/templates/skills/architect/SKILL.md.tmpl").write_text(
+        "template\n"
+    )
     (project / ".devlegate/project.md").write_text("project integration\n")
     (project / ".env").write_text("SECRET=not-a-product-input\n")
     (project / "skills/architect").mkdir(parents=True)
-    (project / "skills/architect/SKILL.md").write_text("generated\n")
+    (project / "skills/architect/SKILL.md").write_text(
+        "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n generated\n"
+    )
     (project / "src/devlegate/default_templates").mkdir(parents=True)
     (project / "src/devlegate/default_templates/generated_marker.txt").write_text(
         "GENERATED FILE. DO NOT EDIT DIRECTLY.\n"
@@ -159,6 +166,67 @@ def test_repository_integration_is_excluded_but_product_templates_remain(
         "devlegate-6.0.0/src/devlegate/default_templates/generated_marker.txt"
         in names
     )
+
+
+def test_unowned_manifest_target_fails_closed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    templates = project / ".devlegate/templates"
+    templates.mkdir(parents=True)
+    (templates / "artifacts.toml").write_text(
+        '[[artifact]]\nsource = "skills/product.tmpl"\n'
+        'target = "skills/product-data/README.md"\n'
+    )
+    (templates / "skills").mkdir()
+    (templates / "skills/product.tmpl").write_text("template\n")
+    (project / "skills/product-data").mkdir(parents=True)
+    (project / "skills/product-data/README.md").write_text("product\n")
+    commit_all(project, "unowned target")
+
+    result = build(project, "v6.1.0", tmp_path / "output")
+
+    assert result.returncode != 0
+    assert "not Devlegate-owned" in result.stderr
+
+
+def test_dynamic_generated_target_is_validated_against_injected_archive(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    templates = project / ".devlegate/templates/skills/custom"
+    templates.mkdir(parents=True)
+    (project / ".devlegate/templates/artifacts.toml").write_text(
+        '[[artifact]]\nsource = "skills/custom/SKILL.md.tmpl"\n'
+        'target = "skills/custom/SKILL.md"\n'
+    )
+    (templates / "SKILL.md.tmpl").write_text("template\n")
+    target = project / "skills/custom/SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\ncontent\n")
+    commit_all(project, "dynamic generated target")
+    output = tmp_path / "output"
+    assert build(project, "v6.2.0", output).returncode == 0
+    archive = output / "devlegate-6.2.0-full-source.tar.gz"
+    injected = output / "injected.tar.gz"
+    with tarfile.open(archive, "r:gz") as source, tarfile.open(
+        injected, "w:gz"
+    ) as target_archive:
+        for member in source.getmembers():
+            content = source.extractfile(member) if member.isfile() else None
+            target_archive.addfile(member, content)
+        extra = tarfile.TarInfo("devlegate-6.2.0/skills/custom/SKILL.md")
+        payload = b"injected\n"
+        extra.size = len(payload)
+        target_archive.addfile(extra, io.BytesIO(payload))
+    injected.with_name(f"{injected.name}.sha256").write_text(
+        f"{hashlib.sha256(injected.read_bytes()).hexdigest()}  {injected.name}\n"
+    )
+
+    result = validate(injected, project, "v6.2.0", tmp_path / "injected-extracted")
+
+    assert result.returncode != 0
+    assert "repository self-hosting integration" in result.stderr
 
 
 def test_vendored_tree_is_packaged_without_submodule_manifest(tmp_path: Path) -> None:

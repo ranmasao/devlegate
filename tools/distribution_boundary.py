@@ -19,6 +19,7 @@ DEFAULT_GENERATED_TARGETS = {
     "skills/architect/SKILL.md",
     "skills/reviewer/SKILL.md",
 }
+GENERATED_MARKER = "<!-- GENERATED FILE. DO NOT EDIT DIRECTLY. -->\n"
 
 
 def generated_targets(root: Path) -> set[str]:
@@ -45,13 +46,40 @@ def generated_targets(root: Path) -> set[str]:
         if not isinstance(source, str) or not isinstance(target, str):
             raise BoundaryError("project artifact entry lacks source or target")
         target_path = PurePosixPath(target)
+        source_path = PurePosixPath(source)
         if (
             not target
             or target_path.is_absolute()
             or ".." in target_path.parts
             or not target.startswith("skills/")
+            or source_path.is_absolute()
+            or ".." in source_path.parts
+            or not source.startswith("skills/")
+            or not source.endswith(".tmpl")
         ):
             raise BoundaryError(f"unsafe generated project target: {target!r}")
+        template = root / ".devlegate/templates" / source
+        if template.is_symlink() or not template.is_file():
+            raise BoundaryError(f"generated project template is unavailable: {source!r}")
+        generated = root / target
+        if not generated.exists():
+            continue
+        if generated.is_symlink() or not generated.is_file():
+            raise BoundaryError(
+                f"generated project target is not a regular file: {target!r}"
+            )
+        try:
+            owned = generated.read_text(encoding="utf-8").startswith(
+                GENERATED_MARKER
+            )
+        except (OSError, UnicodeError) as error:
+            raise BoundaryError(
+                f"cannot inspect generated project target: {target!r}"
+            ) from error
+        if not owned:
+            raise BoundaryError(
+                f"generated project target is not Devlegate-owned: {target!r}"
+            )
         targets.add(target)
     return targets
 

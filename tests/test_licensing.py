@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -14,7 +15,9 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
+import pytest
 from devlegate import __version__
+from tools import build_distribution as DISTRIBUTION
 
 ROOT = Path(__file__).parents[1]
 DEFAULT_TEMPLATE_FILES = {
@@ -247,6 +250,51 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
             f"{root}/src/devlegate/_vendor/nanoyaml/LICENSE"
         )
         assert member is not None and b"MIT License" in member.read()
+
+
+def _distribution_source() -> DISTRIBUTION.Source:
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return DISTRIBUTION.Source(ROOT, commit, __version__, sys.executable)
+
+
+def test_wheel_validator_rejects_injected_repository_integration(tmp_path) -> None:
+    wheel, _sdist = _build_distribution_artifacts(tmp_path)
+    injected = tmp_path / "injected.whl"
+    with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(injected, "w") as target:
+        for info in source.infolist():
+            target.writestr(info, source.read(info.filename))
+        target.writestr("skills/architect/SKILL.md", b"injected\n")
+
+    with pytest.raises(DISTRIBUTION.DistributionError, match="repository integration"):
+        DISTRIBUTION.validate_wheel(
+            DISTRIBUTION.Artifact(injected, "wheel"), _distribution_source()
+        )
+
+
+def test_sdist_validator_rejects_injected_repository_integration(tmp_path) -> None:
+    _wheel, sdist = _build_distribution_artifacts(tmp_path)
+    injected = tmp_path / "injected.tar.gz"
+    with tarfile.open(sdist, "r:gz") as source, tarfile.open(
+        injected, "w:gz"
+    ) as target:
+        for member in source.getmembers():
+            content = source.extractfile(member) if member.isfile() else None
+            target.addfile(member, content)
+        extra = tarfile.TarInfo(f"devlegate-{__version__}/.devlegate/project.md")
+        payload = b"injected\n"
+        extra.size = len(payload)
+        target.addfile(extra, io.BytesIO(payload))
+
+    with pytest.raises(DISTRIBUTION.DistributionError, match="repository integration"):
+        DISTRIBUTION.validate_sdist(
+            DISTRIBUTION.Artifact(injected, "sdist"), _distribution_source()
+        )
 
 
 def test_licensing_and_contribution_docs_cover_current_scopes() -> None:

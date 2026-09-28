@@ -175,7 +175,7 @@ def validate_archive(
             str(path.relative_to(root))
             for path in root.rglob("*")
         }
-        if any(is_prohibited(name) for name in names):
+        if any(is_prohibited(name, selected_source) for name in names):
             raise BuildError("archive contains repository self-hosting integration")
         if any(path.name == ".git" for path in root.rglob("*")):
             raise BuildError("archive contains Git metadata")
