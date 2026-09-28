@@ -79,7 +79,7 @@ def make_package(
     )
     installed_size_field = f"Installed-Size: {size}\n" if include_installed_size else ""
     (control / "control").write_text(
-        "Package: devlegate\nVersion: 0.5.5.dev0\nArchitecture: amd64\n"
+        "Package: devlegate\nVersion: 0.5.5\nArchitecture: amd64\n"
         f"{installed_size_field}"
         f"{dependency}Description: test\n test\n",
         encoding="ascii",
@@ -96,7 +96,7 @@ def make_package(
         text=True,
     )
     report = tmp_path / "report.json"
-    report.write_text(json.dumps({"wheel": {"version": "0.5.5.dev0"}}))
+    report.write_text(json.dumps({"wheel": {"version": "0.5.5"}}))
     return package, report
 
 
@@ -129,7 +129,7 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     report = tmp_path / "build-report.json"
     report.write_text(
         json.dumps(
-            {"source_commit": "a" * 40, "wheel": {"version": "0.5.5.dev0"}}
+            {"source_commit": "a" * 40, "wheel": {"version": "0.5.5"}}
         ),
         encoding="ascii",
     )

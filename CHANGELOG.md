@@ -5,23 +5,35 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
-## 0.5.5.dev0 -- unreleased
+## 0.5.5 -- 2026-09-28
 
-Automatic retry safety for product drift during zero-delta execution.
+Operationally hardened self-hosting, recovery, observability, and distribution
+for reliable local agent orchestration.
 
 ### Added
 
-- Added a narrowly scoped automatic retry when a worker leaves its execution
-  checkpoint unchanged while the canonical product advances to a verified
-  descendant of the admitted base during that execution.
-- Preserved the original execution report and provenance, retired the stale
-  zero-delta workspace, and admitted the fresh execution under a new durable
-  execution identity without creating reconciliation state.
+- Added a safe automatic retry when zero-delta execution detects verified
+  descendant product drift, while preserving the original report and machine
+  provenance.
+- Added human-readable generated commit history without losing machine
+  provenance, plus coherent live status, active execution-log access, and
+  accurate scheduler blocking diagnostics.
+- Added worker and service-host environment isolation and diagnostics for
+  externally supervised readiness and hosting.
+- Added detailed semantic package-build progress and hardened Debian/package
+  metadata, while excluding vendored NanoYAML from Devlegate coverage metrics.
+- Added universal worker handoff through review and accepted finalization,
+  including zero-product-delta accepted completion and durable long-form
+  reports.
+- Added bound pre-worker execution-workspace recovery, durable standalone launch
+  identity, bidirectional managed-systemd and host representation
+  reconciliation, and end-to-end operator-recovery continuation with coherent
+  recovery status.
 
 ### Fixed
 
 - Kept no-drift, divergent-history, unpublished-worker, and ticket-state races
-  on the existing fail-closed or reconciliation paths.
+  on fail-closed or reconciliation paths while hardening recovery boundaries.
 
 ## 0.5.4 -- 2026-09-26
 
