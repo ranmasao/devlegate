@@ -17,10 +17,18 @@ wait for the current execution checkpoint.
 
 ## Context
 
-The current top-level `stop` parser mechanically receives `--json` and
-`--yaml` through the shared output helper. They only affect the success payload;
-lifecycle errors are still emitted as ordinary stderr text, so the switches do not
-provide a coherent machine protocol for this command.
+The current top-level `stop` and `restart` parsers mechanically receive
+`--json` and `--yaml` through the shared output helper.
+
+For these lifecycle actions, the structured success payload currently carries no
+new machine-useful result beyond the command exit status and a fixed acknowledgement
+such as `stopped` or `restarted`. Machine-readable runtime state is already
+available through the read/query surface (`status --json/--yaml`).
+
+Do not generalize this rule to every mutation command: some mutations return
+meaningful identities, idempotence outcomes, resolved paths, or other data that a
+caller did not already supply. This ticket cleans only the two top-level lifecycle
+actions whose structured output is redundant.
 
 More importantly, systemd-hosted graceful stop currently combines incompatible
 timeouts:
@@ -104,10 +112,18 @@ with explicit immediate-shutdown semantics.
 
 ### CLI surface
 
-- Remove `--json` and `--yaml` from the top-level `stop` command.
-- `devlegate stop --json` and `devlegate stop --yaml` must fail at argument
-  parsing before any lifecycle side effect.
-- Keep stop output concise human-readable operator output.
+- Remove `--json` and `--yaml` from both top-level lifecycle actions:
+  - `devlegate stop`;
+  - `devlegate restart`.
+- The structured payloads for these commands currently add no information beyond
+  successful completion/acceptance already represented by exit status and concise
+  operator text.
+- `devlegate stop --json`, `devlegate stop --yaml`,
+  `devlegate restart --json`, and `devlegate restart --yaml` must fail at
+  argument parsing before any lifecycle side effect.
+- Keep stop/restart output concise and human-readable.
+- Preserve machine-readable lifecycle observation through `status --json/--yaml`;
+  do not weaken or remove those query formats.
 - Do not change structured output policy for unrelated commands in this ticket.
 
 ## Acceptance criteria
@@ -123,6 +139,7 @@ with explicit immediate-shutdown semantics.
   workspace or ticket lineage.
 - No foreign/unproven process or systemd unit can be killed through either path.
 - `stop` help exposes `--force` and no longer exposes `--json`/`--yaml`.
+- `restart` help no longer exposes `--json`/`--yaml`.
 - Tests, Ruff, and coverage remain green.
 
 ## Required regressions
@@ -139,3 +156,5 @@ with explicit immediate-shutdown semantics.
 - Worker ignores termination -> bounded escalation retires the owned group.
 - Foreign/mismatched systemd authority -> force refuses to operate.
 - `stop --json` and `stop --yaml` -> parser failure with no stop request sent.
+- `restart --json` and `restart --yaml` -> parser failure with no restart
+  request sent.
