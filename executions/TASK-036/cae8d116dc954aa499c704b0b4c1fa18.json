@@ -1,0 +1,28 @@
+{
+  "code_base_head": "47c08f117b6da939793d9b6c8f1b314f2bee3aeb",
+  "conclusion": "completed",
+  "control_head": "b5ac783f222baf59b2f46fcac077a2ea29ab3fe0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-036",
+  "execution_id": "cae8d116dc954aa499c704b0b4c1fa18",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-036",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-036",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Bootstrapped the project identity to 0.5.6.dev0 across canonical metadata, runtime version reporting, and current packaging fixtures. Full-source packaging now supports the development archive version while stable release-tag parsing remains strict and rejects v0.5.6.dev0."
+  },
+  "workspace_head": "6c80e9784ca39208c6a5769b0d263540d6b885f9"
+}
