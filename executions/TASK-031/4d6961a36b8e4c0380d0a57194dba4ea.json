@@ -1,0 +1,28 @@
+{
+  "code_base_head": "063ef24bf126ec297a32b577b646f6238273ac0b",
+  "conclusion": "completed",
+  "control_head": "2fcf0f847f79bda6be46f14e2d8f0ea0bd3cf3e5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-031",
+  "execution_id": "4d6961a36b8e4c0380d0a57194dba4ea",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-031",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-031",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added maintained TASK-031 regressions covering replay after evidence, remote reconciliation, and state normalization boundaries; remote ref drift fail-closed behavior; and real-service blocked recovery authority after the startup window. Added shared stale-generation fixture coverage while retaining evidence identity, execution identity, workspace reusability, and public recovery assertions."
+  },
+  "workspace_head": "5118ee3316fc0a57c6c7ca72b5423e9df0717e22"
+}
