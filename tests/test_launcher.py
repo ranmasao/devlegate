@@ -103,14 +103,18 @@ def test_unmanaged_systemd_unit_is_normal_cli_error_for_stop_and_restart(
     calls: list[str] = []
 
     class UnmanagedSupervisor:
-        def inspect(self, _locator):
+        def inspect(self, _locator, **_kwargs):
             calls.append("inspect")
             raise cli.SystemdSupervisorError("refusing to operate on unmanaged unit")
 
     monkeypatch.setattr(cli, "SystemdSupervisor", UnmanagedSupervisor)
     monkeypatch.setattr(cli, "_project_target", lambda **_kwargs: target)
     monkeypatch.setattr(cli.RuntimeLocator, "from_env", lambda _env: locator)
-    monkeypatch.setattr(cli, "_host_installation", lambda: HostInstallation("internal"))
+    monkeypatch.setattr(
+        cli,
+        "_host_installation",
+        lambda **_kwargs: HostInstallation("internal"),
+    )
 
     for action in ("stop", "restart"):
         monkeypatch.setattr(sys, "argv", ["devlegate", "@foo", action])

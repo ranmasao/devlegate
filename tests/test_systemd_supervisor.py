@@ -163,6 +163,57 @@ def test_reconciliation_is_symmetric_and_current_is_noop(tmp_path: Path) -> None
     assert len([call for call in calls if call[-1] == "daemon-reload"]) == 3
 
 
+def test_reconciliation_uses_same_unit_through_lifecycle(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "active", "")
+
+    first = LaunchCommand.executable(Path("/opt/devlegate/a"))
+    second = LaunchCommand.executable(Path("/opt/devlegate/b"))
+    supervisor_a = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=first
+    )
+    path = supervisor_a.install(item, tmp_path / "project.env")
+    supervisor_a.wait_ready = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    supervisor_b = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=second
+    )
+    supervisor_b.wait_ready = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    assert (
+        supervisor_b.classify(
+            item, env_file=tmp_path / "project.env", name=path.name
+        )
+        is UnitClassification.RECONCILABLE
+    )
+    supervisor_b.install(item, tmp_path / "project.env", name=path.name)
+    supervisor_b.restart(item, name=path.name)
+    assert "ExecStart=/opt/devlegate/b" in path.read_text()
+
+    assert (
+        supervisor_a.classify(
+            item, env_file=tmp_path / "project.env", name=path.name
+        )
+        is UnitClassification.RECONCILABLE
+    )
+    supervisor_a.install(item, tmp_path / "project.env", name=path.name)
+    supervisor_a.restart(item, name=path.name)
+    assert "ExecStart=/opt/devlegate/a" in path.read_text()
+
+    before = path.read_text()
+    supervisor_a.install(item, tmp_path / "project.env", name=path.name)
+    assert path.read_text() == before
+    lifecycle = [call for call in calls if call[2] in {"start", "restart"}]
+    assert lifecycle == [
+        ["systemctl", "--user", "restart", path.name],
+        ["systemctl", "--user", "restart", path.name],
+    ]
+
+
 def test_foreign_unit_is_ambiguous_and_untouched(tmp_path: Path) -> None:
     item = locator(tmp_path)
     directory = tmp_path / "units"

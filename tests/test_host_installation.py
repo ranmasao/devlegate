@@ -20,6 +20,7 @@ from devlegate.host_installation import (
 )
 from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime_locator import RuntimeLocator
+from devlegate.runtime_store import SQLiteRuntimeStore
 from devlegate.systemd_supervisor import MANAGED_MARKER, unit_name
 
 
@@ -219,3 +220,134 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
         == 0
     )
     assert calls == ["inspect", "probe", "install", "start"]
+
+
+def test_systemd_start_adopts_missing_host_record_after_success(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = cli.ProjectTarget(
+        "foo",
+        tmp_path / ".env",
+        tmp_path,
+        RuntimeLocator(tmp_path, tmp_path / "state", "a" * 64),
+    )
+    calls: list[str] = []
+
+    class FakeSupervisor:
+        def install(self, _locator, _env_file, **_kwargs):
+            calls.append("install")
+            return tmp_path / "units" / unit_name(target.locator)
+
+        def start(self, _locator, **_kwargs):
+            calls.append("start")
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
+    monkeypatch.setattr(cli, "_project_target", lambda **_kwargs: target)
+
+    assert cli._start_systemd(target) == 0
+    assert calls == ["install", "start"]
+    assert read() == HostInstallation("systemd")
+    assert (
+        str(tmp_path / "units" / unit_name(target.locator))
+        in capsys.readouterr().out
+    )
+
+
+def test_systemd_start_failure_does_not_adopt_host_record(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = cli.ProjectTarget(
+        "foo",
+        tmp_path / ".env",
+        tmp_path,
+        RuntimeLocator(tmp_path, tmp_path / "state", "a" * 64),
+    )
+
+    class FakeSupervisor:
+        def install(self, _locator, _env_file, **_kwargs):
+            return tmp_path / "units" / unit_name(target.locator)
+
+        def start(self, _locator, **_kwargs):
+            raise cli.SystemdSupervisorError("start failed")
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
+
+    with pytest.raises(cli.DevlegateError, match="start failed"):
+        cli._start_systemd(target)
+    assert not installation_path().exists()
+
+
+def test_systemd_start_rejects_conflicting_host_policy_before_rewrite(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    write(installation_path(), HostInstallation("internal"))
+    target = cli.ProjectTarget(
+        "foo",
+        tmp_path / ".env",
+        tmp_path,
+        RuntimeLocator(tmp_path, tmp_path / "state", "a" * 64),
+    )
+    calls: list[str] = []
+
+    class FakeSupervisor:
+        def install(self, *_args, **_kwargs):
+            calls.append("install")
+            return tmp_path / "units" / unit_name(target.locator)
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
+
+    with pytest.raises(cli.DevlegateError, match="internal supervision"):
+        cli._start_systemd(target)
+    assert calls == []
+    assert read() == HostInstallation("internal")
+
+
+def test_systemd_start_recovers_after_post_rewrite_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = cli.ProjectTarget(
+        "foo",
+        tmp_path / ".env",
+        tmp_path,
+        RuntimeLocator(tmp_path, tmp_path / "state", "a" * 64),
+    )
+    authority_name = unit_name(target.locator)
+    store = SQLiteRuntimeStore(target.locator.state_dir, target.locator.state_key)
+    store.establish_systemd_authority(
+        unit_name=authority_name,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+    starts = 0
+
+    class RecoveringSupervisor:
+        def classify(self, _locator, **_kwargs):
+            return (
+                cli.UnitClassification.RECONCILABLE
+                if starts == 0
+                else cli.UnitClassification.CURRENT
+            )
+
+        def install(self, _locator, _env_file, **_kwargs):
+            return tmp_path / "units" / authority_name
+
+        def start(self, locator, **kwargs):
+            self.restart(locator, **kwargs)
+
+        def restart(self, _locator, **_kwargs):
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                raise cli.SystemdSupervisorError("start failed after rewrite")
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", RecoveringSupervisor)
+
+    with pytest.raises(cli.DevlegateError, match="start failed after rewrite"):
+        cli._start_systemd(target)
+    assert not installation_path().exists()
+    assert store.supervision_authority()["unit_name"] == authority_name
+
+    assert cli._start_systemd(target) == 0
+    assert starts == 2
+    assert read() == HostInstallation("systemd")
