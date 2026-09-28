@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7efdae418222e873d383509a358bfa6923d69e27",
+  "conclusion": "completed",
+  "control_head": "b7f36f10a6b14ed37ebeff8ed1a252f8f9d3a5c0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-021",
+  "execution_id": "5296ef5c7c594e3da0f11c38295f173a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-021",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-021/5296ef5c7c594e3da0f11c38295f173a.md",
+  "report_sha256": "1ef35b5bb7676565000fa9664704a6627e8f44e104bdffd32e927c1b9d90b1bd",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-021",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Systemd reconciliation now separates stable ownership proof from deployment representation, preserves authoritative unit names, and avoids rewriting already-current units. Host startup safely reconstructs a missing systemd installation record while rejecting an existing non-systemd policy.",
+    "summary": "Implemented explicit systemd unit ownership classification and bidirectional reconciliation. Owned units with stale launcher, binding, or other deployment-render details are atomically refreshed in place, while foreign or ambiguous units remain fail-closed; missing host installation metadata is adopted after successful systemd startup when no conflicting policy exists. Added regressions for launcher replacement, downgrade symmetry, idempotent reconciliation, and foreign-unit protection."
+  },
+  "workspace_head": "51b7bb03818f6766849fc0b68eabf8e37eed668d"
+}
