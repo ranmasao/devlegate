@@ -433,4 +433,21 @@ def test_invalid_version_is_rejected(tmp_path: Path) -> None:
     commit_all(project, "project")
     result = build(project, "release-1", tmp_path / "output")
     assert result.returncode != 0
-    assert "version must match vX.Y.Z" in result.stderr
+    assert "version must match vX.Y.Z or X.Y.Z.devN" in result.stderr
+
+
+def test_stable_tag_parser_rejects_development_tag(tmp_path: Path) -> None:
+    result = build(
+        Path(__file__).parents[1], "v0.5.6.dev0", tmp_path / "output"
+    )
+    assert result.returncode != 0
+
+
+def test_development_version_is_valid_archive_version(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / "README.md").write_text("fixture\n")
+    commit_all(project, "project")
+    result = build(project, "0.5.6.dev0", tmp_path / "output")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "output/devlegate-0.5.6.dev0-full-source.tar.gz").is_file()

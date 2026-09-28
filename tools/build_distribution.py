@@ -756,7 +756,11 @@ def build_full_source(
 ) -> dict[str, Artifact]:
     output = work / "full-source"
     output.mkdir()
-    release_ref = f"v{source.version}"
+    release_ref = (
+        source.version
+        if source.version.endswith(".dev0")
+        else f"v{source.version}"
+    )
     component_step(
         emit,
         "build",

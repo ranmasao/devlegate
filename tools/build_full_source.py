@@ -22,7 +22,8 @@ try:
 except ModuleNotFoundError:
     from tools.distribution_boundary import BoundaryError, remove_integration
 
-VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$")
+VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+DEV_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\.dev[0-9]+$")
 MANIFEST_NAME = "SOURCE-MANIFEST"
 
 
@@ -34,6 +35,15 @@ def public_version(version: str) -> str:
     if not VERSION_RE.fullmatch(version):
         raise BuildError("version must match vX.Y.Z")
     return version[1:]
+
+
+def archive_version(version: str) -> str:
+    """Return the archive version for a stable tag or dev project version."""
+    if VERSION_RE.fullmatch(version):
+        return version[1:]
+    if DEV_VERSION_RE.fullmatch(version):
+        return version
+    raise BuildError("version must match vX.Y.Z or X.Y.Z.devN")
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -225,14 +235,14 @@ def normalized_tar(source: Path, archive: Path, timestamp: int, top_level: str) 
 
 
 def build(repo: Path, ref: str, version: str, output_dir: Path) -> tuple[Path, Path]:
-    archive_version = public_version(version)
+    archive_name_version = archive_version(version)
     repo = repo.resolve()
     if not repo.exists():
         raise BuildError(f"repository does not exist: {repo}")
     commit = resolve_commit(repo, ref)
     timestamp = commit_timestamp(repo, commit)
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive_name = f"devlegate-{archive_version}-full-source.tar.gz"
+    archive_name = f"devlegate-{archive_name_version}-full-source.tar.gz"
     archive = output_dir / archive_name
     sidecar = output_dir / f"{archive_name}.sha256"
 
@@ -246,7 +256,9 @@ def build(repo: Path, ref: str, version: str, output_dir: Path) -> tuple[Path, P
         except BoundaryError as error:
             raise BuildError(str(error)) from error
         remove_git_metadata(checkout)
-        normalized_tar(checkout, archive, timestamp, f"devlegate-{archive_version}")
+        normalized_tar(
+            checkout, archive, timestamp, f"devlegate-{archive_name_version}"
+        )
 
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     sidecar.write_text(f"{digest}  {archive.name}\n", encoding="ascii")

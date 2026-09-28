@@ -20,9 +20,9 @@ try:
     from build_full_source import (
         MANIFEST_NAME,
         BuildError,
+        archive_version,
         checkout_source,
         git,
-        public_version,
         resolve_commit,
         verify_materialized_submodules,
     )
@@ -30,9 +30,9 @@ except ModuleNotFoundError:
     from tools.build_full_source import (
         MANIFEST_NAME,
         BuildError,
+        archive_version,
         checkout_source,
         git,
-        public_version,
         resolve_commit,
         verify_materialized_submodules,
     )
@@ -152,8 +152,7 @@ def validate_archive(
     version: str,
     extract_dir: Path,
 ) -> Path:
-    archive_version = public_version(version)
-    expected_root = f"devlegate-{archive_version}"
+    expected_root = f"devlegate-{archive_version(version)}"
     expected_commit = resolve_commit(source_repo, ref)
     expected_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     sidecar_text = sidecar.read_text(encoding="ascii").strip()
