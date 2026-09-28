@@ -461,3 +461,98 @@ Do not redesign the recovery model. Keep the service-liveness, targeted
 pre-worker-state normalization, lease/CAS, evidence preservation, and status changes.
 Fix the current-generation remote predecessor invariant, add the missing end-to-end
 regressions, and rerun exact-head tests, coverage, and Ruff.
+
+
+## Review continuation after execution 45dfb5e86de343be9372951070b8aa71
+
+Checkpoint `36ca734dda3e8e4e44aae42c8e41c17fb5ec698a` fixes the
+previous current-generation remote predecessor bug and adds a useful end-to-end
+happy-path regression, but TASK-031 is still incomplete.
+
+Confirmed:
+
+- after explicit recovery, the persisted `execution_remote_head` now matches the
+  actually observed reconciled conventional remote branch;
+- the new regression carries the same current execution ID through recovery, worker
+  admission, checkpointing, and successful normal remote publication;
+- stale `execution_stage` / `execution_start_head` metadata is cleared on the
+  successful path;
+- exact-head CI is green: `1022 passed, 1 skipped`, Ruff clean.
+
+A crash/replay blocker remains.
+
+### 1. Recovery is not replay-safe after local branch reconstruction
+
+The explicit recovery effect currently performs these durable mutations in order:
+
+1. pin operator evidence for the authorized old local branch HEAD;
+2. preserve/reconcile the old remote generation;
+3. remove the old registered worktree;
+4. CAS the conventional local branch from `observed_head` to `base_head`;
+5. recreate/inspect the worktree at `base_head`;
+6. only then normalize persisted runtime state with
+   `clear_pre_worker_generation=True`.
+
+The operator evidence ref remains bound to the original `observed_head`:
+
+```text
+refs/devlegate/recovery/operator/<ticket>/<execution> = old_head
+```
+
+If the process crashes after step 4 or 5 but before step 6, durable state still says
+the execution is the old UNSAFE pre-worker generation, while the conventional local
+branch now points at `base_head`.
+
+On restart, the exact public recover path cannot resume:
+
+- retrying with `observed_head=old_head` fails because the conventional local branch
+  is already `base_head`;
+- retrying with `observed_head=base_head` reaches
+  `_recover_unsafe_bound_execution_workspace()`, where the existing operator
+  evidence is still `old_head`, and fails with
+  `operator recovery evidence has conflicting identity`.
+
+That leaves the execution requiring recovery but with no admissible recovery request.
+This violates the required crash/restart replay semantics.
+
+Make the recovery transaction restartable across the durable effect boundaries.
+Do not weaken the original authorization proof or overwrite old evidence. A replay
+must be able to recognize that the exact previously authorized recovery has already
+completed some prefix of its effects and continue the remaining exact suffix.
+
+Add deterministic fault-injection regressions at least after:
+
+- old-generation evidence preservation;
+- remote conventional-branch reconciliation;
+- local branch CAS/reconstruction;
+- persisted-state normalization.
+
+For each boundary, restart from durable state and prove the exact same execution can
+either finish the remaining recovery suffix or return a precise safe terminal state.
+No duplicate destructive ref mutation, evidence loss, new execution ID, or manual
+SQLite edit is acceptable.
+
+### 2. Remaining TASK-031 regressions are still missing
+
+The new test closes the LAB-153 happy-path continuation through checkpoint
+publication. Keep it.
+
+Still add the explicit required proofs that are not covered by this checkpoint:
+
+- **reachable blocked-service recovery:** start the real service in an UNSAFE bound
+  `agent_pending` state, wait beyond the former startup race window, prove the
+  daemon remains alive and no worker launches, then submit the public CLI/IPC
+  `recover` command successfully;
+- **remote ref drift:** change the conventional remote branch after observation but
+  before the leased mutation and prove recovery fails closed, unexpected remote
+  material remains untouched, and already-preserved old-generation evidence remains
+  valid;
+- **recovery replay/idempotence:** repeat the same authorized recovery across the
+  crash points above and prove material Git state is not destructively replayed;
+- **status/plan agreement:** retain explicit maintained coverage that REUSABLE bound
+  pending + `run-worker` is not `recovery-required`, while UNSAFE remains
+  `recovery-required`.
+
+Do not redesign the successful remote-predecessor fix or the normal publication
+path. The remaining work is to make the explicit recovery effect transactional/
+replay-safe and prove the required operator-facing paths.
