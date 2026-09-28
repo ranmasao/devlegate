@@ -1,6 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Define project validation domains and execution profiles"
+"depends_on": ["TASK-038"]
 ---
 
 ## Milestone

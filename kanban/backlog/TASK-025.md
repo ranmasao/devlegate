@@ -1,6 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Introduce a canonical QA workflow stage"
+"depends_on": ["TASK-038"]
 ---
 
 ## Milestone
