@@ -216,3 +216,150 @@ target-specific terminal exceptions.
   testable without requiring a real terminal.
 - Existing frozen-plan validation still rejects unknown/out-of-order progress
   events exactly as before.
+
+
+## Review continuation after execution c51a83951e7a48d2b84ef27cb256e167
+
+Checkpoint `9deab8c2e741217230a13363afcbd27516068a5b` has the right
+presentation direction and should be continued rather than redesigned.
+
+Confirmed good work:
+
+- semantic completion accounting still advances only on exact complete/skip events;
+- TTY selection is based on the actual supplied stream;
+- interactive progress uses one rewritten line and preserves deterministic non-TTY
+  START/DONE/SKIP/FAILED output;
+- interactive component stdout/stderr is redirected away from the terminal;
+- concise TTY success/failure result text points to a retained build log;
+- no spinner, ETA, time interpolation, background animation, or external progress
+  dependency was introduced.
+
+The checkpoint is not ready for acceptance because the retained-evidence contract
+and required end-to-end regressions are incomplete.
+
+### 1. The retained log can omit the actual failure reason
+
+The main packaging failure handler currently does:
+
+```python
+except Exception:
+    ...
+    evidence.write(f"FAILED at {stage}")
+```
+
+For failures raised directly by in-process Python validation/build functions, there
+may be no subprocess stdout/stderr to have been captured by `run()`. In that case
+the detailed file named by:
+
+```text
+build failed at <stage>
+details: <path>
+```
+
+can contain the stage name but not the exception type/message that explains why the
+stage failed.
+
+Record the actual caught exception in retained evidence, with enough context to make
+the file useful for diagnosis. Do not re-dump it into the interactive terminal.
+
+Add a focused TTY package failure regression where an in-process stage raises a
+distinct diagnostic string and prove:
+
+- the terminal contains only concise progress/failure/result text;
+- the detailed log contains the exact diagnostic reason;
+- the failed semantic leaf is not counted complete.
+
+### 2. Structured standalone build evidence is still temporary
+
+`build_standalone()` creates:
+
+```text
+<temporary-workspace>/standalone-build/standalone-build.json
+```
+
+and returns it as `standalone["report"]`, but `selected_final_files()` publishes
+only the standalone archive and checksum. The run-level evidence log does not copy,
+embed, or durably reference the structured report.
+
+On normal successful cleanup, the temporary workspace is deleted, so the structured
+build report disappears even though TASK-024 explicitly requires useful structured
+stage reports to be retained or referenced from durable evidence.
+
+Preserve this report for standalone/deb/all runs, either by:
+
+- publishing/copying it to a deterministic durable path associated with the run; or
+- embedding its complete useful content into the retained run-level report/log.
+
+The same rule applies to any other stage-specific diagnostic artifact that would
+otherwise be lost with the temporary workspace.
+
+Add a regression proving that after successful workspace cleanup the reported
+details path still contains or references the standalone structured report.
+
+### 3. Retained evidence is incomplete in non-TTY mode
+
+The new stdout/stderr redirection into `EvidenceLog` is enabled only when
+`reporter.interactive` is true. In non-TTY mode, direct in-process diagnostic
+output remains visible in CI/logs but is not necessarily duplicated into the
+retained build log; only subprocesses that happen to use the shared `run()` helper
+are copied there.
+
+TASK-024 requires a retained run-level report/log for every packaging invocation,
+while allowing CI/non-TTY to *also* expose detailed diagnostics directly.
+
+Make retained evidence complete independently of presentation mode. A tee-like
+boundary is appropriate if non-TTY should both print and retain diagnostics; do not
+make diagnostic retention depend on whether stdout is a TTY.
+
+### 4. The required package-level TTY success/failure regressions are missing
+
+The added tests exercise `ProgressReporter` directly, but the new behavior that
+matters most lives in `package()`: stdout/stderr capture, durable log creation,
+artifact publication, concise final result, workspace cleanup, and exception
+handling.
+
+Add end-to-end/focused package-level regressions covering at least:
+
+- TTY success: only transient progress plus
+  `package ready: <path>` / `details: <path>`, with no detailed transcript;
+- TTY failure: only transient progress plus
+  `build failed at <stage>` / `details: <path>`, with diagnostic detail retained
+  in the file;
+- retained evidence exists on both success and failure after workspace cleanup;
+- non-TTY preserves deterministic line-oriented progress and retained diagnostics.
+
+### 5. Narrow-terminal behavior is not actually covered
+
+TASK-024 explicitly requires a narrow-terminal regression. The new test fixes width
+at 40 columns only.
+
+`ProgressReporter._width()` currently forces a minimum of 20 columns:
+
+```python
+return max(20, shutil.get_terminal_size(...).columns)
+```
+
+so a real terminal narrower than 20 columns causes the renderer to emit more columns
+than the reported terminal width. That contradicts the bounded-width requirement.
+
+Add a genuinely narrow-width test and make the renderer degrade deterministically:
+preserve an intact counter/minimal bar and truncate/drop only the human label rather
+than pretending the terminal is wider than it is.
+
+### 6. Preserve useful non-TTY final artifact reporting
+
+Before this checkpoint, successful packaging printed the produced artifact paths and
+digests. The new implementation prints `package ready: ...` only in TTY mode and
+returns silently after line-oriented progress in non-TTY mode.
+
+TASK-024 changes interactive presentation; it does not require removing useful
+machine/log-facing final artifact information. Preserve a deterministic non-TTY
+final result containing produced artifact paths (and existing digest/size information
+where appropriate), without CR/ANSI transient behavior.
+
+Add a regression so CI/redirected logs retain a stable final artifact summary.
+
+Do not redesign the semantic plan or component event model. The current renderer and
+presentation split are appropriate; finish the durable evidence/result boundary and
+the required integration regressions, then rerun full exact-head tests, coverage,
+and Ruff.
