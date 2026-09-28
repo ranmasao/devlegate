@@ -1,0 +1,28 @@
+{
+  "code_base_head": "28070e7951756da867640027f6142edfea3efb02",
+  "conclusion": "completed",
+  "control_head": "f2e3fa02d1e23bd936d37a57ba51bd6ae04fb5de",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-020",
+  "execution_id": "0427f7cd6c264097b0899efca9d5d83e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-020",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-020/0427f7cd6c264097b0899efca9d5d83e.md",
+  "report_sha256": "efd3ead766628b8728d7280462acc75ffd19cc4eeed4056280a74a2dbe24f224",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-020",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated launcher and worker sanitation logic, adjusted launcher regression coverage, added related packaging metadata coverage, and hardened standalone systemd proof validation. Focused launcher, worker, and systemd tests pass; full-suite execution exceeded the available command timeout.",
+    "summary": "Standalone launcher detection now treats validated PEX/SCIE metadata as the durable outer executable identity without relying on sys.argv[0]. Worker subprocess environments strip inherited PEX/SCIE packaging metadata, and the standalone distribution proof now asserts that rendered systemd ExecStart uses the exact outer artifact."
+  },
+  "workspace_head": "03058e7f5927cc144d6a1744cee5c5c317e3abd5"
+}
