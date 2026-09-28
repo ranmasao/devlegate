@@ -1782,6 +1782,45 @@ def test_retry_fails_closed_when_authority_exists_but_socket_is_unavailable(
         authority.close()
 
 
+def test_recover_cli_forwards_ticket_execution_and_observed_head(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    observed_head = "a" * 40
+    calls = []
+    monkeypatch.setattr(
+        cli_daemon,
+        "submit_recover",
+        lambda ticket_id, execution_id, observed, *, request_id: (
+            calls.append((ticket_id, execution_id, observed, request_id))
+            or {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+                "observed_head": observed,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "recover",
+            "T-1",
+            "execution-1",
+            "--observed-head",
+            observed_head,
+        ],
+    )
+
+    assert main() == 0
+    assert calls[0][:3] == ("T-1", "execution-1", observed_head)
+    assert calls[0][3]
+    assert "recovery accepted: T-1" in capsys.readouterr().out
+
+
 def test_retry_interactive_candidates_are_rendered_and_selected_locally(
     cli_daemon, git_fixture, monkeypatch, capsys
 ):

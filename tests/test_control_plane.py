@@ -4652,3 +4652,134 @@ def test_operator_recovery_requires_exact_observed_head_and_preserves_identity(
         ).stdout.strip()
         == old_head
     )
+
+
+def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    root = state / "worktrees" / next(state.glob("worktrees/*")).name
+    manager = ExecutionWorkspaceManager(working, root, "T-1")
+    workspace = manager.prepare(base)
+    wrong_path = tmp_path / "wrong-worktree"
+    git(working, "worktree", "move", workspace.path, wrong_path)
+    _persist_pending_execution(devlegate, state, workspace, base, "current")
+
+    inspection = devlegate._inspect_bound_execution_workspace(devlegate._state)
+
+    assert inspection.classification == "UNSAFE"
+    assert devlegate.plan_view().action == "blocked"
+    assert "unsafe" in devlegate.plan_view().reason
+
+
+def test_automatic_repair_refuses_branch_drift_before_cas(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    root = state / "worktrees" / next(state.glob("worktrees/*")).name
+    manager = ExecutionWorkspaceManager(working, root, "T-1")
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    _write_prior_execution_receipt(
+        control,
+        execution_id="old-generation",
+        base=old_base,
+        path=workspace.path,
+        head=old_head,
+    )
+    git(control, "add", "executions/T-1")
+    git(control, "commit", "-m", "retain prior execution receipt")
+    git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    devlegate = Devlegate(config)
+    _persist_pending_execution(devlegate, state, workspace, new_base, "current")
+
+    original = ExecutionWorkspaceManager._validate_existing
+    drifted = []
+
+    def drift(registration_manager, registration, base_head):
+        workspace = original(registration_manager, registration, base_head)
+        if not drifted:
+            drifted.append(True)
+            git(
+                working,
+                "update-ref",
+                "refs/heads/devlegate/work/T-1",
+                new_base,
+                old_head,
+            )
+        return workspace
+
+    monkeypatch.setattr(ExecutionWorkspaceManager, "_validate_existing", drift)
+    with pytest.raises(DevlegateError, match="changed"):
+        devlegate._repair_bound_execution_workspace()
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
+    assert devlegate.plan_view().action == "blocked"
+
+
+def test_automatic_repair_launches_one_worker_with_same_execution_id(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    root = state / "worktrees" / next(state.glob("worktrees/*")).name
+    manager = ExecutionWorkspaceManager(working, root, "T-1")
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    _write_prior_execution_receipt(
+        control,
+        execution_id="old-generation",
+        base=old_base,
+        path=workspace.path,
+        head=old_head,
+    )
+    git(control, "add", "executions/T-1")
+    git(control, "commit", "-m", "retain prior execution receipt")
+    git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "push", "origin", "HEAD:main")
+    devlegate = Devlegate(config)
+    _persist_pending_execution(
+        devlegate, state, workspace, new_base, "current", start_head=new_base
+    )
+    calls = []
+
+    def worker(_workspace, _prompt, **_kwargs):
+        calls.append(devlegate._state["execution_id"])
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    monkeypatch.setattr(
+        devlegate,
+        "_sync_control",
+        lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
+    )
+
+    assert run_test_iteration(devlegate) in {0, 1}
+    assert calls == ["current"]
+    assert devlegate._state["execution_id"] == "current"

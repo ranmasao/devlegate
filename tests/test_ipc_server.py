@@ -1747,6 +1747,50 @@ def test_wrong_ticket_is_rejected_for_recoverable_execution(
     assert not engine._operator_command_pending()
 
 
+def test_recover_mutation_forwards_exact_identity_to_owner():
+    calls = []
+
+    class FakeEngine:
+        def submit_recover(self, ticket_id, execution_id, observed_head, *, request_id):
+            calls.append((ticket_id, execution_id, observed_head, request_id))
+            return {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                "execution_id": execution_id,
+                "observed_head": observed_head,
+            }
+
+    result = dispatch_mutation(
+        FakeEngine(),
+        _request(
+            "recover",
+            {
+                "ticket_id": "T-1",
+                "execution_id": "execution-1",
+                "observed_head": "a" * 40,
+            },
+        ),
+    )
+
+    assert result["accepted"] is True
+    assert calls == [("T-1", "execution-1", "a" * 40, "id")]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ticket_id": "T-1", "execution_id": "execution-1", "observed_head": ""},
+    ],
+)
+def test_recover_mutation_rejects_non_exact_identity(payload):
+    class FakeEngine:
+        def submit_recover(self, *_args, **_kwargs):
+            pytest.fail("invalid recovery identity was queued")
+
+    with pytest.raises(IPCProtocolError):
+        dispatch_mutation(FakeEngine(), _request("recover", payload))
+
+
 def test_worker_launch_stage_is_rejected_before_durable_ack(
     tmp_path, monkeypatch, short_state_dir
 ):
