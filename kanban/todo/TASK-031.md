@@ -747,3 +747,66 @@ contain `unsafe` while the execution projection itself is wrong.
 After these proof corrections, rerun the exact-head full suite, coverage, and Ruff.
 If they remain green and no corrected regression exposes a new functional defect,
 no further recovery redesign is requested.
+
+
+## Review continuation after execution 1fab42ef5efb4cee9a79b0889f8d8e4e
+
+Checkpoint `ea76996e296233b241dcfb98dafd0b78de1ab4d1` addresses the four
+proof corrections from the previous review without changing production recovery
+code.
+
+Confirmed from the checkpoint:
+
+- the premature second-remote-observation fault injection was removed, so the
+  `boundary="remote"` replay case now faults after the successful
+  `--force-with-lease` effect;
+- the remote-drift regression now asserts that the drifted remote HEAD is not adopted
+  as `execution_remote_head` and that replay with the stale authorization fails
+  closed;
+- the real-service regression now asserts exact machine-readable UNSAFE
+  status/plan semantics, waits for the admitted recovery effect to be processed,
+  preserves the same execution ID, and proves the resumed plan is `run-worker`;
+- the resumed machine-readable status is explicitly asserted not to remain
+  `recovery-required`.
+
+No additional recovery-model or production-code change is requested unless final
+validation exposes a real defect.
+
+The execution correctly reported itself `incomplete` because the acceptance
+validation was not completed:
+
+- the full pytest suite did not finish within the worker's available command
+  timeouts;
+- coverage could not run because the worker environment did not have the
+  `coverage` module installed.
+
+There is no external exact-head CI/status evidence for this checkpoint that can
+substitute for those missing checks.
+
+### Remaining work: validation only
+
+Use the repository's canonical source-development environment rather than the
+worker's ambient Python environment.
+
+If the repository-local development environment is absent or does not contain the
+declared development tools, run:
+
+```sh
+./dev setup
+```
+
+Then validate the exact checkpoint with the maintained project commands, using the
+parallel form where appropriate to avoid the previous serial timeout:
+
+```sh
+./dev test-parallel
+./dev coverage -n 4 --dist=worksteal
+./dev lint
+```
+
+All tests, coverage execution/report generation, and Ruff must succeed on the exact
+implementation checkpoint. Record the concrete results in the worker report.
+
+Do not modify runtime recovery semantics merely to obtain a completed claim. If this
+validation remains green, TASK-031 should return to review with no further recovery
+hardening requested.
