@@ -1,0 +1,28 @@
+{
+  "code_base_head": "ea76996e296233b241dcfb98dafd0b78de1ab4d1",
+  "conclusion": "completed",
+  "control_head": "d48c1c1801a40839d5a56cb54a53e49e1eca8406",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-022",
+  "execution_id": "7981538e22ec4124836a84c57559d84e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-022",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-022/7981538e22ec4124836a84c57559d84e.md",
+  "report_sha256": "7019e11fcc193b073ccb061252af298f8714f3dcfc1be25b197d73b9a75f0ed9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-022",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Exact candidate HEAD: 22cc635a0d042a9be469f88b77533c3d110bb696. Observed version: 0.5.5. Full tests: ./dev test-parallel passed (1029 tests). Lint: ./dev lint passed. Coverage: ./dev coverage -n 4 --dist=worksteal passed with vendored NanoYAML excluded, 79% total reported. ./dev package all passed all 26 steps, including wheel/sdist build and install proofs, reproducible standalone build and execution proof, Debian package build/validation/extracted-binary proof, and full-source archive build/validation. Standalone and Debian 0.5.5 artifacts remain readiness proofs only and are intentionally non-published under the current >=0.6.0 policy. Remaining human-owned release steps are review/integration, creation and push of annotated v0.5.5, GitHub Release creation/publication, workflow-driven upload of policy-eligible assets, release announcement, and any later branch/configuration transition.",
+    "summary": "Validated the clean 0.5.5 release candidate at checkpoint 22cc635a0d042a9be469f88b77533c3d110bb696. The final changelog is dated 2026-09-28, version metadata is 0.5.5, and the release workflow retains existing annotated-tag/release requirements and the >=0.6.0 standalone publication gate."
+  },
+  "workspace_head": "22cc635a0d042a9be469f88b77533c3d110bb696"
+}
