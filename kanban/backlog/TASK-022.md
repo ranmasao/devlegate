@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Prepare Devlegate 0.5.5 for manual release"
-"depends_on": ["TASK-019", "TASK-020", "TASK-021", "TASK-023", "TASK-024"]
+"depends_on": ["TASK-019", "TASK-020", "TASK-021", "TASK-023", "TASK-024", "TASK-031"]
 ---
 
 ## Milestone
@@ -36,7 +36,8 @@ additional self-hosting, review/finalization, observability, packaging,
 distribution, recovery, and operational hardening.
 
 By the time this task runs, all product work intended to block the 0.5.5 release
-must already be complete through TASK-019, TASK-020, and TASK-021. Post-0.6
+must already be complete through TASK-019, TASK-020, TASK-021, TASK-023, TASK-024,
+and TASK-031. Post-0.6
 architecture and infrastructure backlog items TASK-012 through TASK-018 are not
 0.5.5 release blockers.
 
@@ -84,7 +85,9 @@ covering:
   zero-product-delta accepted completion and durable long-form reports;
 - bound pre-worker execution-workspace recovery hardening from TASK-019;
 - durable standalone launch identity from TASK-020;
-- bidirectional managed-systemd/host representation reconciliation from TASK-021.
+- bidirectional managed-systemd/host representation reconciliation from TASK-021;
+- end-to-end pre-worker operator-recovery continuation and coherent recovery status
+  from TASK-031.
 
 Do not claim behavior that is not present in the final integrated product.
 Do not enumerate superseded failed implementation attempts.
