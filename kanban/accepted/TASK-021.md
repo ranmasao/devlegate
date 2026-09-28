@@ -337,3 +337,38 @@ Add a CLI/supervisor-level regression where:
 
 Do not add migration tables or weaken ownership checks. The remaining work is proof
 and compatibility cleanup around the current implementation, not a redesign.
+
+
+## Review acceptance after execution f314d8eec5b14bbbae24bc6eb0872359
+
+Accepted checkpoint: `7883c27078d75d95d78156b7eb14ee820f11c779`.
+
+Final review confirms:
+
+- managed systemd ownership is classified separately from deployment representation
+  using CURRENT / RECONCILABLE / AMBIGUOUS_FOREIGN semantics;
+- launcher/path representation changes reconcile bidirectionally without
+  version-specific migration tables;
+- repository, env-file, state-key, managed-marker, and persisted-authority
+  mismatches remain fail closed and are not silently rewritten;
+- legacy units lacking newer binding comments require explicit durable systemd
+  authority before reconciliation;
+- A -> B -> A reconciliation keeps the same authoritative unit identity, rewrites
+  the desired representation, uses restart/start lifecycle semantics, and exercises
+  the readiness seam; CURRENT representation remains idempotent;
+- persisted authority plus missing unit is deterministically reprovisioned using the
+  authoritative unit name;
+- missing host-installation metadata is adopted only after successful systemd
+  startup, is not written after startup failure, and conflicting non-systemd host
+  policy is rejected before mutation;
+- failure after representation rewrite but before successful restart/start leaves
+  durable authority intact and a subsequent invocation can converge without manual
+  cleanup;
+- the systemd success message reports the canonical unit path rather than the host
+  installation record path.
+
+Exact-head GitHub validation is fully green:
+`1006 passed, 1 skipped`, coverage generated at 79%, and Ruff reports
+`All checks passed!`.
+
+The exact reviewed result is approved for Devlegate-owned accepted finalization.
