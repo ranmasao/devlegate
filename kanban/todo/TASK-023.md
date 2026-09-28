@@ -369,3 +369,44 @@ exact-head validation after the two boundary fixes above.
 Do not redesign the shared boundary. Keep the current ownership-marker, dynamic
 validator, wheel/sdist, standalone, Debian, reproducibility, and documentation work;
 finish these fail-closed edge cases and rerun the full suite plus Ruff.
+
+
+## Review continuation after execution 4cfb51700101498da90a35d9e49547cb
+
+Checkpoint `06d665b2fab557d6dd0cdd4ec840f25925bdfc72` closes the two
+remaining distribution-boundary findings from the prior review.
+
+Confirmed:
+
+- manifest/template/generated-target ownership inspection now rejects symlinked path
+  components before following or removing repository integration material;
+- the focused external-sentinel regression proves a symlinked generated-target
+  parent fails closed without modifying the external file and without producing a
+  curated archive;
+- `remove_integration()` now resolves the unconditional fixed Architect/Reviewer
+  targets independently of whether the project manifest exists;
+- the no-manifest regression proves the fixed prohibited Architect target is
+  excluded by the builder itself;
+- all prior ownership-marker, dynamic-validator, wheel/sdist, standalone, Debian,
+  default-template, reproducibility, documentation, and source-manifest work remains
+  intact.
+
+Exact-head GitHub pytest/coverage is green:
+
+```text
+1015 passed, 1 skipped
+```
+
+One mechanical validation blocker remains. Ruff fails with exactly one `I001`:
+
+```text
+tests/test_licensing.py:5:1
+Import block is un-sorted or un-formatted
+```
+
+This import block was introduced by the preceding TASK-023 continuation. Fix only
+the import ordering/formatting required by Ruff, then rerun the exact-head validation.
+
+No additional TASK-023 semantic blocker is known after this checkpoint. If the next
+checkpoint changes only that lint issue and exact-head tests plus Ruff are green, the
+task should be ready for acceptance.
