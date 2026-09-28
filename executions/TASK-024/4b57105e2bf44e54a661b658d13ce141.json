@@ -1,0 +1,28 @@
+{
+  "code_base_head": "73831989ce2e962f3a64d8fce689260438028f73",
+  "conclusion": "completed",
+  "control_head": "8d4ffd12ea29f43f7d187da2c2f329b53e9d62ac",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-024",
+  "execution_id": "4b57105e2bf44e54a661b658d13ce141",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-024",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-024/4b57105e2bf44e54a661b658d13ce141.md",
+  "report_sha256": "3f52a01434d3bdefe19269ebd34611b043968086180840544bffd8c2acaee2a2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-024",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Only tests/test_distribution_graph.py changed. Focused distribution tests pass via python -m pytest, and git diff --check is clean.",
+    "summary": "Added package-level regressions covering TTY success and failure presentation, retained diagnostics, cleanup, artifact publication, and durable standalone structured reports. Also corrected the narrow-terminal assertion to account for the required terminating newline."
+  },
+  "workspace_head": "05b196bc02b82daf6836baa13a963bfb8e37e47e"
+}
