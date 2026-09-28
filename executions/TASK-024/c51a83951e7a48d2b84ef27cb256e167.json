@@ -1,0 +1,28 @@
+{
+  "code_base_head": "73831989ce2e962f3a64d8fce689260438028f73",
+  "conclusion": "completed",
+  "control_head": "d2ddc86e31930dbe81beb3358ff74f8c85ff07e6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-024",
+  "execution_id": "c51a83951e7a48d2b84ef27cb256e167",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-024",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-024/c51a83951e7a48d2b84ef27cb256e167.md",
+  "report_sha256": "2c52bf09d37181af5a018d7402d0615b5882ff965609a2d7719f2351fa518f96",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-024",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation preserves frozen-plan validation and exact completion accounting, including skipped and failed semantic leaves. Python compilation, diff checks, and direct reporter smoke validation passed; the environment does not provide pytest.",
+    "summary": "Implemented stream-aware semantic progress rendering with a compact rewriting TTY bar and preserved deterministic non-TTY START/DONE/SKIP/FAILED output. Added durable per-invocation build evidence logs, concise TTY success/failure results, diagnostic suppression for interactive runs, and focused TTY regression coverage."
+  },
+  "workspace_head": "9deab8c2e741217230a13363afcbd27516068a5b"
+}
