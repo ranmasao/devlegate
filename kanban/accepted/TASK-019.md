@@ -572,3 +572,29 @@ through the supported mutation path and proves, before any recovery effect:
 Do not change the recovery implementation unless this test exposes a real defect.
 After this boundary proof and another green exact-head CI run, no other TASK-019
 review blocker is known.
+
+
+## Review acceptance after execution f6ed90345c4e4010b90f5d7ed4ec76df
+
+Accepted checkpoint: `28070e7951756da867640027f6142edfea3efb02`.
+
+Final review confirms:
+
+- bound pre-worker workspace classification is shared and fail closed across
+  REUSABLE / RECOVERABLE / UNSAFE states;
+- stale prior-generation recovery preserves exact product evidence before ref
+  movement, re-observes identity, uses expected-head CAS, rebuilds from the exact
+  admitted base, and retains the current execution identity;
+- unattributable or wrongly registered workspace material remains non-runnable and
+  untouched automatically;
+- automatic repair is exercised through the normal runtime path and launches at most
+  one worker for the same execution generation;
+- the supported operator `recover` path is exact ticket/execution/observed-head
+  bound, and public owner-side admission rejects wrong ticket, wrong execution, and
+  stale observed HEAD before recovery effects;
+- read-only status/plan no longer advertise an invalid bound resume.
+
+Exact-head GitHub validation is green: `992 passed, 1 skipped`, coverage generated
+at 79%, and Ruff reports `All checks passed!`.
+
+The exact reviewed result is approved for Devlegate-owned accepted finalization.
