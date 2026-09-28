@@ -15,6 +15,7 @@ from devlegate.systemd_supervisor import (
     MANAGED_MARKER,
     SystemdSupervisor,
     SystemdSupervisorError,
+    UnitClassification,
     notify_ready,
     render_unit,
     unit_name,
@@ -107,6 +108,75 @@ def test_install_is_atomic_and_uses_user_manager(tmp_path: Path) -> None:
         ["systemctl", "--user", "show-environment"],
         ["systemctl", "--user", "daemon-reload"],
     ]
+
+
+def test_owned_stale_launcher_is_reconciled_in_place(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    old = LaunchCommand.current_python(Path("/opt/devlegate/a/python"))
+    new = LaunchCommand.executable(Path("/opt/devlegate/b/devlegate"))
+    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+    supervisor = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=old
+    )
+    path = supervisor.install(item, tmp_path / "project.env")
+
+    supervisor = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=new
+    )
+    assert supervisor.classify(
+        item, env_file=tmp_path / "project.env", name=path.name
+    ) is UnitClassification.RECONCILABLE
+    assert supervisor.inspect(item, env_file=tmp_path / "project.env", name=path.name)
+    supervisor.install(item, tmp_path / "project.env", name=path.name)
+
+    assert path.name == unit_name(item)
+    assert "ExecStart=/opt/devlegate/b/devlegate" in path.read_text()
+    assert f"# state_key={item.state_key}" in path.read_text()
+
+
+def test_reconciliation_is_symmetric_and_current_is_noop(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    first = LaunchCommand.executable(Path("/opt/devlegate/a"))
+    second = LaunchCommand.executable(Path("/opt/devlegate/b"))
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    supervisor_a = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=first
+    )
+    path = supervisor_a.install(item, tmp_path / "project.env")
+    supervisor_b = SystemdSupervisor(
+        unit_directory=directory, runner=runner, launcher=second
+    )
+    supervisor_b.install(item, tmp_path / "project.env", name=path.name)
+    supervisor_a.install(item, tmp_path / "project.env", name=path.name)
+    assert len([call for call in calls if call[-1] == "daemon-reload"]) == 3
+    before = path.read_text()
+    supervisor_a.install(item, tmp_path / "project.env", name=path.name)
+    assert path.read_text() == before
+    assert len([call for call in calls if call[-1] == "daemon-reload"]) == 3
+
+
+def test_foreign_unit_is_ambiguous_and_untouched(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    path = directory / unit_name(item)
+    path.parent.mkdir()
+    path.write_text("# Managed by someone else\n# state_key=" + item.state_key + "\n")
+    supervisor = SystemdSupervisor(unit_directory=directory)
+
+    assert (
+        supervisor.classify(item, env_file=tmp_path / "project.env")
+        is UnitClassification.AMBIGUOUS_FOREIGN
+    )
+    with pytest.raises(SystemdSupervisorError, match="unmanaged"):
+        supervisor.install(item, tmp_path / "project.env", name=path.name)
+    assert path.read_text().startswith("# Managed by someone else")
 
 
 def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> None:

@@ -1445,6 +1445,15 @@ def _start_background(
 def _start_systemd(target: ProjectTarget) -> int:
     supervisor = SystemdSupervisor()
     try:
+        current_installation = _host_installation(required=False)
+        if (
+            current_installation is not None
+            and current_installation.supervisor != "systemd"
+        ):
+            raise DevlegateError(
+                "Devlegate host is installed with "
+                f"{current_installation.supervisor} supervision"
+            )
         store = _supervision_store(target)
         authority = store.supervision_authority()
         unit = (
@@ -1460,7 +1469,14 @@ def _start_systemd(target: ProjectTarget) -> int:
             env_file=target.env_file.resolve(),
             repository=target.repo.resolve(),
         )
+        if current_installation is None:
+            path = installation_path()
+            with installation_lock(exclusive=True, path=path):
+                if _host_installation_locked(required=False) is None:
+                    write_installation(path, HostInstallation("systemd"))
     except RuntimeStoreError as error:
+        raise DevlegateError(str(error)) from error
+    except HostInstallationError as error:
         raise DevlegateError(str(error)) from error
     except SystemdSupervisorError as error:
         raise DevlegateError(str(error)) from error

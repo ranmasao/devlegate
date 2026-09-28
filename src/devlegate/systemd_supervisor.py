@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 
 from devlegate.ipc_client import IPCClientError, request
@@ -21,6 +22,14 @@ from devlegate.runtime_locator import RuntimeLocator
 
 class SystemdSupervisorError(RuntimeError):
     """A systemd user-service operation could not be completed safely."""
+
+
+class UnitClassification(Enum):
+    """Whether a unit may safely be converged to the current product render."""
+
+    CURRENT = "current"
+    RECONCILABLE = "reconcilable"
+    AMBIGUOUS_FOREIGN = "ambiguous/foreign"
 
 
 MANAGED_MARKER = "# Managed by Devlegate systemd backend"
@@ -93,6 +102,8 @@ def render_unit(
         (
             MANAGED_MARKER,
             f"# state_key={locator.state_key}",
+            f"# repository={repository}",
+            f"# env_file={env_file.resolve()}",
             "[Unit]",
             f"Description=Devlegate project {locator.state_key}",
             "After=default.target",
@@ -208,11 +219,22 @@ class SystemdSupervisor:
                 else self.allocate_unit_name(locator)
             )
         path = unit_path(locator, self.unit_directory, name=name)
+        desired = render_unit(locator, env_file, launcher=self.launcher)
+        classification = UnitClassification.RECONCILABLE
         if path.exists():
-            self.inspect(locator, name=path.name)
+            classification = self.classify(
+                locator, env_file=env_file, name=path.name, desired=desired
+            )
+            if classification is UnitClassification.AMBIGUOUS_FOREIGN:
+                raise SystemdSupervisorError(
+                    "refusing to operate on systemd unit with unexpected "
+                    f"identity {path}"
+                )
         self.probe_user_manager()
+        if classification is UnitClassification.CURRENT:
+            return path
         try:
-            _write_atomic(path, render_unit(locator, env_file, launcher=self.launcher))
+            _write_atomic(path, desired)
         except OSError as error:
             raise SystemdSupervisorError(
                 f"cannot write systemd unit {path}: {error}"
@@ -245,26 +267,55 @@ class SystemdSupervisor:
         path = unit_path(locator, self.unit_directory, name=name)
         if not path.exists():
             return False
+        classification = self.classify(locator, env_file=env_file, name=name)
+        if classification is UnitClassification.AMBIGUOUS_FOREIGN:
+            raise SystemdSupervisorError(
+                f"refusing to operate on unmanaged or unexpected identity {path}"
+            )
+        return True
+
+    def classify(
+        self,
+        locator: RuntimeLocator,
+        *,
+        env_file: Path | None = None,
+        name: str | None = None,
+        desired: str | None = None,
+    ) -> UnitClassification:
+        """Classify ownership separately from the current deployment render."""
+        path = unit_path(locator, self.unit_directory, name=name)
+        if not path.exists():
+            return UnitClassification.AMBIGUOUS_FOREIGN
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as error:
             raise SystemdSupervisorError(
                 f"cannot read systemd unit {path}: {error}"
             ) from error
-        if (
-            MANAGED_MARKER not in content
-            or f"# state_key={locator.state_key}" not in content
-        ):
-            raise SystemdSupervisorError(
-                f"refusing to operate on unmanaged systemd unit {path}"
+        lines = content.splitlines()
+        marker_owned = bool(lines) and lines[0] == MANAGED_MARKER
+        state_line = f"# state_key={locator.state_key}"
+        state_owned = state_line in lines
+        if not marker_owned or not state_owned:
+            return UnitClassification.AMBIGUOUS_FOREIGN
+        expected_bindings = {"# repository=": str(locator.repo.resolve())}
+        if env_file is not None:
+            expected_bindings["# env_file="] = str(env_file.resolve())
+        for prefix, expected in expected_bindings.items():
+            actual = next(
+                (line[len(prefix) :] for line in lines if line.startswith(prefix)),
+                None,
             )
-        if env_file is not None and content != render_unit(
-            locator, env_file, launcher=self.launcher
-        ):
-            raise SystemdSupervisorError(
-                f"refusing to operate on systemd unit with unexpected identity {path}"
-            )
-        return True
+            if actual is not None and actual != expected:
+                return UnitClassification.AMBIGUOUS_FOREIGN
+        if env_file is None:
+            return UnitClassification.CURRENT
+        expected = desired or render_unit(locator, env_file, launcher=self.launcher)
+        return (
+            UnitClassification.CURRENT
+            if content == expected
+            else UnitClassification.RECONCILABLE
+        )
 
     def remove(
         self,
@@ -360,8 +411,8 @@ class SystemdSupervisor:
                 f"cannot read systemd unit {path}: {error}"
             ) from error
         return (
-            MANAGED_MARKER in content
-            and f"# state_key={state_key}" in content
+            content.splitlines()[:1] == [MANAGED_MARKER]
+            and f"# state_key={state_key}" in content.splitlines()
         )
 
     def wait_ready(self, locator: RuntimeLocator, *, timeout: float = 15) -> None:
