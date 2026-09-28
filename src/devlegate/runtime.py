@@ -1107,6 +1107,78 @@ class ServiceEngine:
             )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve the authorized branch HEAD")
+        # Reconcile the conventional remote branch as a separate, leased effect.
+        # A reused branch name is not evidence that its remote tip belongs to
+        # this execution generation.
+        remote_head = self._execution_remote_head(branch)
+        if remote_head is not None and remote_head != str(base_head):
+            remote_evidence = evidence_ref
+            try:
+                prior_reports = ExecutionReportStore(self.control_worktree).list(
+                    ticket_id
+                )
+            except (ExecutionReportError, OSError, WorkflowBlockedError) as error:
+                raise DevlegateError(
+                    f"cannot prove prior remote branch ownership: {error}"
+                ) from error
+            prior = [
+                report
+                for report in prior_reports
+                if report.execution_id != execution_id
+                and report.execution_branch == branch
+                and report.workspace_head == remote_head
+            ]
+            if len(prior) == 1:
+                remote_evidence = self._workspace_recovery_ref(
+                    ticket_id, prior[0].execution_id
+                )
+            remote_existing = _git(
+                self.repo, "rev-parse", "--verify", remote_evidence, check=False
+            )
+            if (
+                remote_existing.returncode == 0
+                and remote_existing.stdout.strip() != remote_head
+            ):
+                raise DevlegateError(
+                    "operator recovery evidence has conflicting identity"
+                )
+            if remote_existing.returncode:
+                preserved = _git(
+                    self.repo,
+                    "update-ref",
+                    remote_evidence,
+                    remote_head,
+                    "",
+                    check=False,
+                )
+                if preserved.returncode:
+                    raise DevlegateError("cannot preserve the remote branch HEAD")
+                published = _git(
+                    self.repo,
+                    "push",
+                    self.remote_name,
+                    f"{remote_head}:{remote_evidence}",
+                    check=False,
+                )
+                if published.returncode:
+                    raise DevlegateError("cannot publish remote recovery evidence")
+            remote_again = self._execution_remote_head(branch)
+            if remote_again != remote_head:
+                raise DevlegateError(
+                    "execution remote branch changed before recovery CAS"
+                )
+            retired = _git(
+                self.repo,
+                "push",
+                f"--force-with-lease=refs/heads/{branch}:{remote_head}",
+                self.remote_name,
+                f"{base_head}:refs/heads/{branch}",
+                check=False,
+            )
+            if retired.returncode:
+                raise DevlegateError(
+                    "execution remote branch changed before recovery CAS"
+                )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         branch_path = next(
@@ -1160,6 +1232,15 @@ class ServiceEngine:
             raise DevlegateError(
                 f"recovered execution workspace is not reusable: {final.reason}"
             )
+        # A pre-worker generation owns no lifecycle stage or worker start head.
+        # Explicit recovery starts a new coherent pending generation while
+        # retaining the exact execution identity and binding.
+        self._save_state(
+            "agent_pending",
+            clear_pre_worker_generation=True,
+            execution_remote_head=None,
+            worker_identity=None,
+        )
 
     def _drop_candidate_from_state(self) -> tuple[dict[str, str], ...]:
         state = self._state
@@ -2647,7 +2728,12 @@ class ServiceEngine:
             )
 
     def _save_state(
-        self, phase: str, *, clear_execution: bool = False, **fields: object
+        self,
+        phase: str,
+        *,
+        clear_execution: bool = False,
+        clear_pre_worker_generation: bool = False,
+        **fields: object,
     ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
@@ -2668,6 +2754,14 @@ class ServiceEngine:
                 "execution_id",
                 "execution_remote_head",
                 "execution_start_head",
+                "resume_required",
+            ):
+                state.pop(field, None)
+        if clear_pre_worker_generation:
+            for field in (
+                "execution_stage",
+                "execution_start_head",
+                "execution_interruption_kind",
                 "resume_required",
             ):
                 state.pop(field, None)
@@ -6012,6 +6106,16 @@ class ServiceEngine:
             "execution_stage"
         ) in {"worker-launch", "worker-running"}
 
+    def _has_operator_recovery_required(self) -> bool:
+        """Keep IPC recovery available for an unsafe pending workspace."""
+        if self._state.get("phase") != "agent_pending":
+            return False
+        try:
+            inspection = self._inspect_bound_execution_workspace(self._state)
+            return inspection.classification == "UNSAFE"
+        except (DevlegateError, OSError, ExecutionWorkspaceError):
+            return True
+
     def _has_pending_reconciliation(self) -> bool:
         reconciliation = self._state.get("reconciliation")
         return isinstance(reconciliation, dict) and reconciliation.get("status") == (
@@ -6170,8 +6274,12 @@ class ServiceEngine:
                         elif not once and (
                             self._has_recoverable_execution_stage()
                             or self._has_blocked_execution_stage()
+                            or self._has_operator_recovery_required()
                         ):
-                            if self._has_blocked_execution_stage():
+                            if (
+                                self._has_blocked_execution_stage()
+                                or self._has_operator_recovery_required()
+                            ):
                                 workflow_blocked = True
                                 self._publish_service_snapshot(
                                     lifecycle="blocked",

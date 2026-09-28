@@ -1577,8 +1577,9 @@ def _execution_projection(
     )
     if phase == "idle":
         state = "idle"
-    elif phase == "agent_pending" and _service_owns_execution(
-        snapshot, live_execution
+    elif phase == "agent_pending" and (
+        snapshot.plan.action == "run-worker"
+        or _service_owns_execution(snapshot, live_execution)
     ):
         state = "preparing"
     elif (
