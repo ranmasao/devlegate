@@ -280,3 +280,92 @@ manifest-derived target boundary.
 Do not broaden this into packaging redesign. The current shared-boundary structure
 is appropriate; finish its ownership proof and validation/regression symmetry, then
 rerun the exact-head full suite and Ruff.
+
+
+## Review continuation after execution d1f2ab1528f84a6c928c6af0d2ed767d
+
+Checkpoint `a8cabc480eac78187c7ad832c0c6a84fbbd8f469` closes the three
+previous review findings in substance:
+
+- manifest-derived targets now require a template plus the Devlegate generated
+  marker rather than trusting the manifest declaration alone;
+- full-source validation now resolves dynamic prohibited targets against the same
+  selected source tree used by the builder;
+- explicit wheel and sdist injection regressions now exercise the supported
+  validators.
+
+The focused distribution work is good and should be retained. Two narrow
+distribution-boundary safety issues remain.
+
+### 1. Reject symlinked path components before manifest-derived inspection or removal
+
+The new ownership proof checks only the final `template` / `generated` path with
+`is_symlink()`. It does not reject symlinks in parent components.
+
+That is unsafe for a destructive source-boundary operation. A selected Git tree can
+contain, for example, a tracked `skills` symlink. Then a manifest target such as:
+
+```text
+skills/custom/SKILL.md
+```
+
+can resolve through that symlink. If the external file happens to carry the generated
+marker, `generated_targets()` can authorize it and `remove_integration()` can
+subsequently `unlink()` outside the temporary checkout.
+
+The same fail-closed rule should apply while locating
+`.devlegate/templates/artifacts.toml`, template sources, and generated targets:
+do not follow symlinked repository path components to establish ownership or perform
+removal.
+
+Reuse a component-wise containment/symlink check analogous to the project renderer's
+safe-path handling rather than checking only the final leaf.
+
+Add a regression with a symlinked parent component and an external sentinel proving:
+
+- the boundary fails closed;
+- the external file/directory is untouched;
+- no curated archive is produced from that unsafe ownership topology.
+
+### 2. The full-source builder must apply the fixed prohibited targets even if the manifest is absent
+
+`is_prohibited()` and the package validators always include:
+
+```text
+skills/architect/SKILL.md
+skills/reviewer/SKILL.md
+```
+
+through `DEFAULT_GENERATED_TARGETS`.
+
+But `remove_integration()` currently removes only:
+
+```python
+(".env", ".devlegate", *sorted(generated_targets(root)))
+```
+
+so if the project manifest is absent, those explicitly prohibited fixed targets are
+not removed by the builder. A later validator may reject the resulting archive, but
+the builder itself has already produced a distribution artifact that violates the
+declared boundary.
+
+Make builder and validator resolve the same fixed-plus-proven-dynamic prohibited set.
+The two fixed Architect/Reviewer targets are part of TASK-023's unconditional
+distribution invariant and must not depend on the manifest being present.
+
+Add a focused regression that builds from a source tree with a fixed prohibited
+target but no project manifest and proves the builder either excludes it or fails
+closed before producing the artifact.
+
+### Validation state
+
+The first exact-head GitHub run for this checkpoint reached
+`1012 passed, 1 skipped` and failed only in the already-known intermittent
+`test_real_service_drop_retire_old_lineage_and_runs_fresh[T-2]` Git commit race.
+That failure is unrelated to TASK-023. A same-SHA failed-job rerun was requested
+during review; regardless of that rerun, acceptance still requires a fresh green
+exact-head validation after the two boundary fixes above.
+
+Do not redesign the shared boundary. Keep the current ownership-marker, dynamic
+validator, wheel/sdist, standalone, Debian, reproducibility, and documentation work;
+finish these fail-closed edge cases and rerun the full suite plus Ruff.
