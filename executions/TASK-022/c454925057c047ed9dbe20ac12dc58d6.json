@@ -1,0 +1,36 @@
+{
+  "code_base_head": "ea76996e296233b241dcfb98dafd0b78de1ab4d1",
+  "conclusion": "incomplete",
+  "control_head": "b611695d5802e3c1995271a3dcc2198f3e8da00d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-022",
+  "execution_id": "c454925057c047ed9dbe20ac12dc58d6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-022",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the repository clean-worktree full-source archive build and validation on the integrated candidate; the worker workspace cannot satisfy this guard without committing or stashing, and the temporary clone could not resolve the repository's relative NanoYAML submodule URL.",
+    "Run the actual clean-worktree standalone executable, compliance archive, and Debian proof build for 0.5.5; the focused standalone/systemd/Debian proof tests pass, but the guarded builder was not completed for the same clean-tree/submodule reason.",
+    "Human release operations remain: review and integrate the candidate, create and push annotated tag v0.5.5, create/publish the GitHub Release, allow the existing workflow to upload only policy-eligible assets, and perform the final announcement."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-022",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the repository clean-worktree full-source archive build and validation on the integrated candidate; the worker workspace cannot satisfy this guard without committing or stashing, and the temporary clone could not resolve the repository's relative NanoYAML submodule URL.",
+      "Run the actual clean-worktree standalone executable, compliance archive, and Debian proof build for 0.5.5; the focused standalone/systemd/Debian proof tests pass, but the guarded builder was not completed for the same clean-tree/submodule reason.",
+      "Human release operations remain: review and integrate the candidate, create and push annotated tag v0.5.5, create/publish the GitHub Release, allow the existing workflow to upload only policy-eligible assets, and perform the final announcement."
+    ],
+    "report": null,
+    "summary": "Finalized the candidate metadata and changelog for 0.5.5, updated version-sensitive distribution fixtures, and preserved the existing release workflow policy and documentation assumptions. The candidate is at HEAD ea76996e296233b241dcfb98dafd0b78de1ab4d1."
+  },
+  "workspace_head": "22cc635a0d042a9be469f88b77533c3d110bb696"
+}
