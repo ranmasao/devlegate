@@ -153,3 +153,60 @@ retain the current implementation.
 
 Once Ruff is green, exact-head CI is green, and the authentic standalone
 proof/distribution validation succeeds, TASK-020 should be ready for acceptance.
+
+
+## Review continuation after execution e807ba8e05404011a17cc97ec4996a3e
+
+This incomplete handoff is healthy and should continue from checkpoint
+`8db5589c35b646b35d216a285f8061b5c2277553` without redesign.
+
+Confirmed progress:
+
+- the previous E501 failure is fixed without changing launcher semantics;
+- exact-head CI is now fully green: `993 passed, 1 skipped`, coverage generated at
+  79%, and Ruff reports `All checks passed!`;
+- a real standalone artifact was built successfully;
+- the real artifact exposes the expected standalone identity metadata;
+- the strengthened standalone proof verifies that generated systemd `ExecStart`
+  selects the exact outer standalone executable rather than bundled CPython.
+
+The task remains incomplete because the authentic lifecycle proof does not complete.
+
+### 1. Diagnose and finish the generated-service lifecycle proof
+
+`tools/build_standalone.py prove` currently reaches the generated standalone service
+start and then hangs in the worker environment.
+
+Do not bypass, mock away, or remove this lifecycle part: TASK-020 explicitly requires
+proof that the persisted outer-artifact command can actually relaunch Devlegate
+without host Python/module installation.
+
+Determine whether the hang is:
+
+- a real standalone/service-launch defect introduced or exposed by the launcher
+  identity change; or
+- a defect/assumption in the proof harness or its isolated environment.
+
+Fix only the responsible layer. Preserve the current launcher design unless the
+authentic proof demonstrates that it is wrong.
+
+The completed proof must demonstrate start/readiness and subsequent lifecycle
+operation using the generated outer-artifact launch command, not merely successful
+unit rendering.
+
+### 2. Finish standalone package/distribution validation
+
+The execution also reports that the Python `build` module is unavailable in its
+local command environment. That is a build-environment issue, not a reason to weaken
+the distribution gate.
+
+Use the repository-supported build/development environment (or another isolated
+build environment that satisfies the repository's declared build dependencies) and
+run the relevant standalone package/distribution validation on the same candidate.
+Do not add `build` or other packaging tools as Devlegate runtime dependencies.
+
+Record the exact successful standalone proof and package/distribution validation
+results in the next worker report.
+
+No additional ordinary unit-test or lint work is currently known to be needed;
+exact-head CI at this checkpoint is already green.
