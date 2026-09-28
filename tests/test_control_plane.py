@@ -5106,21 +5106,6 @@ def test_operator_recovery_replays_each_durable_prefix(
         return result
 
     monkeypatch.setattr(runtime, "_git", crash_after_effect)
-    if boundary == "remote":
-        original_remote = devlegate._execution_remote_head
-        remote_observations = 0
-
-        def crash_after_remote_reconciliation(branch):
-            nonlocal remote_observations
-            value = original_remote(branch)
-            remote_observations += 1
-            if remote_observations == 2:
-                raise RuntimeError("simulated recovery crash")
-            return value
-
-        monkeypatch.setattr(
-            devlegate, "_execution_remote_head", crash_after_remote_reconciliation
-        )
     if boundary == "normalization":
         original_save = devlegate._save_state
 
@@ -5215,6 +5200,14 @@ def test_operator_recovery_rejects_remote_drift_after_observation(
     )
     assert devlegate._state["execution_id"] == "current"
     assert devlegate._state["execution_base_head"] == base
+    assert devlegate._state.get("execution_remote_head") != drift_head
+
+    monkeypatch.setattr(devlegate, "_execution_remote_head", real_observe)
+    with pytest.raises(DevlegateError, match="conflicting identity"):
+        devlegate._recover_unsafe_bound_execution_workspace(
+            "T-1", "current", old_head
+        )
+    assert devlegate._state.get("execution_remote_head") != drift_head
 
 
 def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkeypatch):
@@ -5241,9 +5234,29 @@ def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkey
         status_payload = json.loads(status.stdout)
         assert status_payload["execution"]["phase"] == "agent_pending"
         assert status_payload["service"]["state"] == "running"
-        assert "recovery-required" in status.stdout or "unsafe" in status.stdout
+        assert status_payload["execution"]["state"] == "recovery-required"
+        blocked_plan = service.cli("plan", "--json")
+        assert blocked_plan.returncode in {0, 1}
+        assert json.loads(blocked_plan.stdout)["action"] == "blocked"
         recovered = service.cli(
             "recover", "T-1", "current", "--observed-head", observed
         )
         assert recovered.returncode == 0, recovered.stderr
         assert "recovery accepted: T-1" in recovered.stdout
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            payload = state_payload(state)
+            if "operator_recovery" not in payload:
+                break
+            time.sleep(0.05)
+        assert "operator_recovery" not in payload
+        assert payload["execution_id"] == "current"
+        resumed = service.cli("plan", "--json")
+        assert resumed.returncode == 0, resumed.stderr
+        assert json.loads(resumed.stdout)["action"] == "run-worker"
+        resumed_status = service.cli("status", "--json")
+        assert resumed_status.returncode in {0, 1}
+        resumed_payload = json.loads(resumed_status.stdout)
+        assert resumed_payload["plan"]["action"] == "run-worker"
+        assert resumed_payload["execution"]["state"] != "recovery-required"
+        assert service.process is not None and service.process.poll() is None
