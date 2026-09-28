@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7883c27078d75d95d78156b7eb14ee820f11c779",
+  "conclusion": "completed",
+  "control_head": "af213ec5ccca894168c6188ecdc208c84caeeb22",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-023",
+  "execution_id": "d1f2ab1528f84a6c928c6af0d2ed767d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-023",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-023/d1f2ab1528f84a6c928c6af0d2ed767d.md",
+  "report_sha256": "b7e8dcd998c7afec3f64f032ee0993714b18e5bf10cc1bc687b992d1ef085345",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-023",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused distribution tests pass. The full suite completed with 1011 passing and 3 unrelated environment failures caused by missing .venv executables and coverage in the subprocess interpreter; Ruff was unavailable in the environment.",
+    "summary": "Hardened manifest-derived repository-integration exclusion with fail-closed template and generated-marker ownership proof, and aligned full-source validation with the selected tree's dynamic boundary. Added regressions for unowned and dynamic targets plus injected wheel/sdist integration members."
+  },
+  "workspace_head": "a8cabc480eac78187c7ad832c0c6a84fbbd8f469"
+}
