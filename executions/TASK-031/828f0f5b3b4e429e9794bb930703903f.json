@@ -1,0 +1,28 @@
+{
+  "code_base_head": "063ef24bf126ec297a32b577b646f6238273ac0b",
+  "conclusion": "completed",
+  "control_head": "240fa390a8665799e82386d4aff33e7a2d0fbbbf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-031",
+  "execution_id": "828f0f5b3b4e429e9794bb930703903f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-031",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-031/828f0f5b3b4e429e9794bb930703903f.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-031",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Hardened explicit UNSAFE pre-worker recovery so the service remains alive and blocked for IPC recovery, normalizes stale pre-worker lifecycle identity, and resumes the same execution generation safely. Added exact remote execution-branch evidence preservation and force-with-lease reconciliation, and made status report a reusable bound pending execution as preparing rather than recovery-required."
+  },
+  "workspace_head": "59e3d223e7210ac6f1418db4ea4b3d13b6b7b0e5"
+}
