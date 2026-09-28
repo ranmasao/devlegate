@@ -1,7 +1,6 @@
 ---
 "type": "devlegate.ticket"
 "title": "Define project validation domains and execution profiles"
-"depends_on": ["TASK-038"]
 ---
 
 ## Milestone
@@ -31,10 +30,6 @@ answer to:
 
 Different projects may use pytest, CTest, Cargo, Go, npm, Meson, or other tooling.
 Devlegate runtime must remain stdlib-only.
-
-TASK-038 defines where a deterministic validation gate exists in a project's workflow;
-this ticket defines what project-owned validators and agent test profiles mean once
-such capabilities are selected.
 
 This work should compose with the future tracked-policy/local-configuration split in
 TASK-014 without requiring that larger migration to land first.
