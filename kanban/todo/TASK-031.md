@@ -651,3 +651,99 @@ Existing projection tests may be extended/reused if they already exercise the ex
 runtime semantics; do not add redundant presentation-only tests merely for count.
 
 After adding these proofs, rerun the exact-head full suite, coverage, and Ruff.
+
+
+## Review continuation after execution 4d6961a36b8e4c0380d0a57194dba4ea
+
+Checkpoint `5118ee3316fc0a57c6c7ca72b5423e9df0717e22` adds the intended
+proof-oriented hardening without redesigning the recovery implementation, but
+TASK-031 is not ready for acceptance yet.
+
+Confirmed:
+
+- production recovery code was not redesigned in this execution;
+- maintained regressions were added for evidence-prefix replay, remote drift, and
+  real-service recovery reachability;
+- prior happy-path coverage still carries the same execution ID through explicit
+  recovery, worker admission, checkpointing, and normal remote publication;
+- the previous local-reconstruction replay regression remains in place.
+
+The remaining work is limited to proof corrections and completion of the explicit
+TASK-031 regression contract.
+
+### 1. The new remote-prefix replay test crashes before remote reconciliation
+
+The parameterized
+`test_operator_recovery_replays_each_durable_prefix(..., boundary="remote")`
+installs two fault paths.
+
+One raises after a successful `push --force-with-lease`, which would model the
+required crash after the remote reconciliation effect.
+
+However, the test also wraps `_execution_remote_head()` and raises on its second
+observation. In the recovery sequence that second observation occurs before the
+leased `--force-with-lease` mutation. The test therefore exits before the durable
+remote-ref reconciliation effect happens, so it does not prove restartability after
+that boundary.
+
+Adjust the fault injection so the remote case crashes only after the successful
+leased remote mutation has returned. On restart prove that the already-reconciled
+remote ref is recognized as an already-completed exact prefix, is not destructively
+mutated again, and the remaining recovery suffix completes under the same execution
+identity.
+
+Do not change the recovery model unless this corrected regression exposes a real
+defect.
+
+### 2. Complete the real-service blocked-recovery proof
+
+The new real-service regression correctly proves that:
+
+- a persistent UNSAFE `agent_pending` service remains alive beyond the former
+  startup race window;
+- status remains reachable;
+- the public CLI/IPC `recover` request is accepted after that delay.
+
+But the public recovery acknowledgement proves owner-side admission, not completion
+of the recovery effect. Extend the maintained real-service regression far enough to
+observe the admitted recovery being processed by the service owner and the same
+execution returning to the normal continuation path.
+
+Reuse existing happy-path worker/checkpoint/publication coverage rather than building
+a redundant second full scenario if possible. The maintained service-level proof
+must nevertheless show that the admitted public request does not merely receive an
+ACK while leaving the service permanently blocked.
+
+### 3. Complete the remote-drift assertions
+
+The new remote-drift regression correctly injects remote movement after observation
+and before the leased mutation, and proves the unexpected remote material and the
+original operator evidence remain intact.
+
+Also assert the two remaining required invariants explicitly:
+
+- the drifted remote HEAD is not recorded as the current execution's
+  `execution_remote_head` / predecessor;
+- a later recovery attempt cannot silently reuse the stale authorization to accept
+  the drifted generation; it requires a fresh exact observation/authorization.
+
+Do not weaken the lease/CAS or observed-head identity checks.
+
+### 4. Make status/plan agreement an exact maintained assertion
+
+Keep explicit coverage for both sides of the projection invariant, preferably
+against the machine-readable status semantics:
+
+- REUSABLE bound `agent_pending` with `plan.action == "run-worker"` must not
+  report `execution.state == "recovery-required"` merely because no process-local
+  live owner has claimed it yet;
+- UNSAFE bound `agent_pending` must have a blocked plan and
+  `execution.state == "recovery-required"`.
+
+Avoid assertions such as
+`"recovery-required" in output or "unsafe" in output`, because a plan reason can
+contain `unsafe` while the execution projection itself is wrong.
+
+After these proof corrections, rerun the exact-head full suite, coverage, and Ruff.
+If they remain green and no corrected regression exposes a new functional defect,
+no further recovery redesign is requested.
