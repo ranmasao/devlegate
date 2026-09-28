@@ -38,6 +38,7 @@ def make_package(
     installed_size: int | None = None,
     include_installed_size: bool = True,
     legacy_layout: bool = False,
+    repository_integration: bool = False,
 ) -> tuple[Path, Path]:
     root = tmp_path / "root"
     control = root / "DEBIAN"
@@ -68,6 +69,10 @@ def make_package(
     (licenses / "standalone-compliance-manifest.json").write_text(
         "{}\n", encoding="ascii"
     )
+    if repository_integration:
+        integration = root / "skills/architect/SKILL.md"
+        integration.parent.mkdir(parents=True)
+        integration.write_text("generated\n", encoding="ascii")
     dependency = f"Depends: {depends}\n" if depends else ""
     size = (
         VALIDATOR.installed_size_kib(root) if installed_size is None else installed_size
@@ -219,4 +224,10 @@ def test_deb_validator_rejects_runtime_dependencies(tmp_path):
 def test_deb_validator_rejects_maintainer_scripts(tmp_path):
     package, report = make_package(tmp_path, maintainer_script=True)
     with pytest.raises(VALIDATOR.PackageError, match="maintainer scripts"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+def test_deb_validator_rejects_repository_integration(tmp_path):
+    package, report = make_package(tmp_path, repository_integration=True)
+    with pytest.raises(VALIDATOR.PackageError, match="repository integration"):
         VALIDATOR.validate(package, report, tmp_path / "extract")

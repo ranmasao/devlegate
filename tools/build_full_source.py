@@ -17,6 +17,11 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+try:
+    from distribution_boundary import BoundaryError, remove_integration
+except ModuleNotFoundError:
+    from tools.distribution_boundary import BoundaryError, remove_integration
+
 VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$")
 MANIFEST_NAME = "SOURCE-MANIFEST"
 
@@ -236,6 +241,10 @@ def build(repo: Path, ref: str, version: str, output_dir: Path) -> tuple[Path, P
         checkout_source(repo, commit, checkout)
         submodules = verify_materialized_submodules(checkout, commit)
         write_manifest(checkout, version, commit, submodules)
+        try:
+            remove_integration(checkout)
+        except BoundaryError as error:
+            raise BuildError(str(error)) from error
         remove_git_metadata(checkout)
         normalized_tar(checkout, archive, timestamp, f"devlegate-{archive_version}")
 

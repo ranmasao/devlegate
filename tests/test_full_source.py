@@ -127,6 +127,40 @@ def test_submodule_archive_is_reproducible_and_self_contained(tmp_path: Path) ->
     )
 
 
+def test_repository_integration_is_excluded_but_product_templates_remain(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    init_repo(project)
+    (project / ".devlegate/templates").mkdir(parents=True)
+    (project / ".devlegate/templates/artifacts.toml").write_text(
+        '[[artifact]]\nsource = "skills/architect/SKILL.md.tmpl"\n'
+        'target = "skills/architect/SKILL.md"\n'
+    )
+    (project / ".devlegate/project.md").write_text("project integration\n")
+    (project / ".env").write_text("SECRET=not-a-product-input\n")
+    (project / "skills/architect").mkdir(parents=True)
+    (project / "skills/architect/SKILL.md").write_text("generated\n")
+    (project / "src/devlegate/default_templates").mkdir(parents=True)
+    (project / "src/devlegate/default_templates/generated_marker.txt").write_text(
+        "GENERATED FILE. DO NOT EDIT DIRECTLY.\n"
+    )
+    commit_all(project, "integration boundary")
+    output = tmp_path / "output"
+    assert build(project, "v6.0.0", output).returncode == 0
+    names = archive_files(output / "devlegate-6.0.0-full-source.tar.gz")
+    assert not any(
+        name == "devlegate-6.0.0/.env"
+        or "/.devlegate/" in name
+        or name.endswith("/skills/architect/SKILL.md")
+        for name in names
+    )
+    assert (
+        "devlegate-6.0.0/src/devlegate/default_templates/generated_marker.txt"
+        in names
+    )
+
+
 def test_vendored_tree_is_packaged_without_submodule_manifest(tmp_path: Path) -> None:
     project = tmp_path / "project"
     init_repo(project)

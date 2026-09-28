@@ -16,15 +16,30 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from build_full_source import (
-    MANIFEST_NAME,
-    BuildError,
-    checkout_source,
-    git,
-    public_version,
-    resolve_commit,
-    verify_materialized_submodules,
-)
+try:
+    from build_full_source import (
+        MANIFEST_NAME,
+        BuildError,
+        checkout_source,
+        git,
+        public_version,
+        resolve_commit,
+        verify_materialized_submodules,
+    )
+except ModuleNotFoundError:
+    from tools.build_full_source import (
+        MANIFEST_NAME,
+        BuildError,
+        checkout_source,
+        git,
+        public_version,
+        resolve_commit,
+        verify_materialized_submodules,
+    )
+try:
+    from distribution_boundary import is_prohibited
+except ModuleNotFoundError:
+    from tools.distribution_boundary import is_prohibited
 
 
 def parse_manifest(path: Path) -> tuple[str, str, list[tuple[str, str]]]:
@@ -87,11 +102,16 @@ def tree_entries(repo: Path, commit: str) -> list[tuple[str, str, str, str]]:
 
 
 def verify_tree_content(
-    repo: Path, commit: str, extracted_root: Path, prefix: str
+    repo: Path, commit: str, extracted_root: Path, prefix: str, boundary_root: Path
 ) -> None:
     for mode, kind, object_id, relative_path in tree_entries(repo, commit):
         archive_path = extracted_root / prefix / relative_path
         archive_name = f"{prefix}/{relative_path}" if prefix else relative_path
+        boundary_name = (
+            relative_path if not prefix else f"{prefix}/{relative_path}"
+        )
+        if is_prohibited(boundary_name, boundary_root):
+            continue
         if mode == "160000":
             child_repo = repo / relative_path
             actual = git(child_repo, "rev-parse", "--verify", "HEAD").strip()
@@ -103,7 +123,9 @@ def verify_tree_content(
                 raise BuildError(
                     f"gitlink {archive_name} is not materially present as a directory"
                 )
-            verify_tree_content(child_repo, object_id, extracted_root, archive_name)
+            verify_tree_content(
+                child_repo, object_id, extracted_root, archive_name, boundary_root
+            )
             continue
         if not archive_path.exists() and not archive_path.is_symlink():
             raise BuildError(f"missing materialized source entry: {archive_name}")
@@ -149,6 +171,12 @@ def validate_archive(
             raise BuildError(
                 f"expected archive root {expected_root}, found {root.name}"
             )
+        names = {
+            str(path.relative_to(root))
+            for path in root.rglob("*")
+        }
+        if any(is_prohibited(name) for name in names):
+            raise BuildError("archive contains repository self-hosting integration")
         if any(path.name == ".git" for path in root.rglob("*")):
             raise BuildError("archive contains Git metadata")
         manifest_path = root / MANIFEST_NAME
@@ -163,7 +191,12 @@ def validate_archive(
             raise BuildError(
                 "SOURCE-MANIFEST gitlinks do not match selected source tree"
             )
-        verify_tree_content(selected_source, expected_commit, root, "")
+        verify_tree_content(selected_source, expected_commit, root, "", selected_source)
+        product_templates = selected_source / "src/devlegate/default_templates"
+        if product_templates.is_dir() and not any(
+            path.is_file() for path in product_templates.rglob("*")
+        ):
+            raise BuildError("source tree has no packaged default templates")
         return root
 
 

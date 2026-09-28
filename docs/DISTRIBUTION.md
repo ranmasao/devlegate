@@ -60,6 +60,19 @@ devlegate-X.Y.Z-full-source.tar.gz
 devlegate-X.Y.Z-full-source.tar.gz.sha256
 ```
 
+Devlegate-built distribution units are curated product boundaries. The full-source
+archive removes `.env`, `.devlegate/**`, and project-generated integration targets
+declared by `.devlegate/templates/artifacts.toml`; wheel, standalone, and Debian
+units likewise contain product material and the packaged defaults under
+`src/devlegate/default_templates/**`, not this repository's project configuration.
+The release validators reject repository-integration paths rather than relying on
+the current setuptools layout.
+
+GitHub's automatic `Source code.zip` and `Source code.tar.gz` files are different:
+they are literal snapshots of the tagged Git tree and may contain the repository's
+self-hosting integration. They are GitHub-generated snapshots, outside this curated
+Devlegate-built package guarantee.
+
 The release workflow builds and validates these units in read-only jobs, then
 passes only the exact validated pairs to a write-only upload job for the
 existing release.

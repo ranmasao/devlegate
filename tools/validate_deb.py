@@ -20,6 +20,11 @@ try:
 except ModuleNotFoundError:
     from tools.package_standalone import PackageError
 
+try:
+    from distribution_boundary import BoundaryError, validate_members
+except ModuleNotFoundError:
+    from tools.distribution_boundary import BoundaryError, validate_members
+
 
 def fields(package: Path) -> dict[str, str]:
     result = subprocess.run(
@@ -96,6 +101,14 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     )
     if result.returncode:
         raise PackageError(result.stderr.strip() or "cannot extract Debian package")
+    try:
+        validate_members(
+            {str(path.relative_to(extract_dir)) for path in extract_dir.rglob("*")},
+            extract_dir,
+            "Debian package",
+        )
+    except BoundaryError as error:
+        raise PackageError(str(error)) from error
     binary = extract_dir / "usr/bin/devlegate"
     private_binary = extract_dir / "usr/lib/devlegate/devlegate"
     try:

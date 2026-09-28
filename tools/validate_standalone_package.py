@@ -43,6 +43,11 @@ except ModuleNotFoundError:
         validate_manifest,
     )
 
+try:
+    from distribution_boundary import BoundaryError, validate_members
+except ModuleNotFoundError:
+    from tools.distribution_boundary import BoundaryError, validate_members
+
 FORBIDDEN_EPHEMERAL_PATHS = (b"/tmp/devlegate-standalone-", b"/tmp/devlegate-package-")
 
 
@@ -127,6 +132,14 @@ def validate(
     version = report["wheel"]["version"]
     root_name = f"devlegate-{version}-linux-x86_64"
     root = safe_extract(archive, extract_dir, root_name)
+    try:
+        validate_members(
+            {str(path.relative_to(root)) for path in root.rglob("*")},
+            repo,
+            "standalone archive",
+        )
+    except BoundaryError as error:
+        raise PackageError(str(error)) from error
     actual_files = {
         str(path.relative_to(root))
         for path in root.rglob("*")

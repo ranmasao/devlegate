@@ -268,6 +268,13 @@ def test_extracted_content_rejects_ephemeral_paths(tmp_path):
         VALIDATOR.reject_ephemeral_paths(tmp_path)
 
 
+def test_standalone_boundary_rejects_repository_integration():
+    with pytest.raises(VALIDATOR.BoundaryError, match="repository integration"):
+        VALIDATOR.validate_members(
+            {"skills/architect/SKILL.md"}, Path("/tmp/repository"), "standalone"
+        )
+
+
 def test_safe_extract_rejects_wrong_mode(tmp_path):
     archive = tmp_path / "mode.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:

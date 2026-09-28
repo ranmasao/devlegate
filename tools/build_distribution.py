@@ -25,6 +25,11 @@ from pathlib import Path
 from devlegate.cli_common import ConciseArgumentParser
 
 try:
+    from distribution_boundary import BoundaryError, validate_members
+except ModuleNotFoundError:
+    from tools.distribution_boundary import BoundaryError, validate_members
+
+try:
     from build_progress import (
         Component,
         ComponentEvent,
@@ -294,6 +299,10 @@ def validate_wheel(artifact: Artifact, source: Source) -> None:
             safe_member(name)
         metadata_name, metadata = metadata_from_zip(archive)
         names = set(archive.namelist())
+        try:
+            validate_members(names, source.repo, "wheel")
+        except BoundaryError as error:
+            raise DistributionError(str(error)) from error
         dist_info = metadata_name.removesuffix("/METADATA")
         if metadata.get("Name") != "devlegate":
             raise DistributionError("wheel metadata has the wrong project name")
@@ -339,6 +348,10 @@ def validate_sdist(artifact: Artifact, source: Source) -> None:
                     f"sdist contains unsupported member: {member.name}"
                 )
         names = {member.name.removeprefix(expected_root + "/") for member in members}
+        try:
+            validate_members(names, source.repo, "sdist")
+        except BoundaryError as error:
+            raise DistributionError(str(error)) from error
         required = {"pyproject.toml", "README.md", "LICENSE", "NOTICE", "LICENSING.md"}
         if not required <= names or not any(
             name.startswith("src/devlegate/") for name in names
