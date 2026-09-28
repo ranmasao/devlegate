@@ -363,3 +363,75 @@ Do not redesign the semantic plan or component event model. The current renderer
 presentation split are appropriate; finish the durable evidence/result boundary and
 the required integration regressions, then rerun full exact-head tests, coverage,
 and Ruff.
+
+
+## Review continuation after execution d94c8e02f25142578dc8300545dcd5a1
+
+Checkpoint `98f0bac08ee59f773f51974acd6e60e6b76b8226` closes the main
+implementation findings from the prior review and should be continued without
+redesign.
+
+Confirmed implementation improvements:
+
+- in-process package failures now retain exception type/message in the detailed log;
+- non-TTY diagnostic output is tee'd into retained evidence rather than being
+  presentation-only;
+- standalone structured build reports are copied to a durable output path before
+  temporary workspace cleanup and referenced from the run-level evidence;
+- non-TTY successful runs again print deterministic artifact path/size/SHA-256
+  summaries;
+- narrow terminal rendering no longer forces a synthetic 20-column width and the new
+  eight-column regression preserves a minimal bar plus exact counter;
+- semantic plan/event accounting remains unchanged.
+
+Two required end-to-end proof gaps remain.
+
+### 1. Add package-level TTY success/failure contract regressions
+
+The maintained tests still exercise the new TTY behavior primarily through
+`ProgressReporter`. Existing `GRAPH.package(args)` tests cover old workspace
+cleanup/keep-work behavior, but they do not exercise the new presentation/evidence
+contract.
+
+Add focused `package()` regressions with a supplied/faked TTY stdout proving:
+
+- success emits transient progress and then only the concise
+  `package ready: <path>` / `details: <path>` result, without ordinary builder
+  transcript;
+- failure from an in-process semantic stage emits only concise
+  `build failed at <stage>` / `details: <path>` terminal text;
+- the failure details file contains a distinctive exception diagnostic that is not
+  dumped to the TTY;
+- the failed semantic leaf is not counted complete;
+- success and failure details paths still exist after normal temporary-workspace
+  cleanup.
+
+These are explicitly required regressions in TASK-024 and are especially important
+because most of the new behavior lives in `package()`, stdout/stderr redirection,
+and the cleanup/failure paths rather than in `ProgressReporter` alone.
+
+### 2. Prove durable standalone structured evidence survives cleanup
+
+`retain_stage_reports()` now copies the standalone JSON report into the output
+directory and records its path in the run-level evidence, which is the correct
+implementation direction.
+
+Add a focused standalone/deb/all package regression proving that after the normal
+temporary workspace is removed:
+
+- the retained standalone report still exists at the durable path;
+- the reported details log contains/references that exact retained path;
+- the temporary original report is not required for later diagnosis.
+
+The current test delta adds only the narrow-terminal regression, so this durable
+structured-evidence continuation is not yet covered.
+
+### Validation
+
+The worker could not run pytest/Ruff locally. Exact-head GitHub validation for this
+checkpoint was still running when review completed. A green exact-head full suite,
+coverage, and Ruff remain required after the missing regressions are added.
+
+No new semantic redesign is requested. The evidence tee, exception retention,
+durable report copy, non-TTY artifact summary, and narrow renderer should all be
+retained.
