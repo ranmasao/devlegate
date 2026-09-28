@@ -11,11 +11,13 @@ import contextlib
 import hashlib
 import json
 import os
+import select
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
@@ -788,29 +790,68 @@ def prove(args: argparse.Namespace) -> int:
             env=environment,
             cwd=root,
         )
-        start = run(
-            [str(executable), "--env", str(env_file)], env=environment, cwd=root
-        )
-        status = run(
-            [str(executable), "--env", str(env_file), "status", "--json"],
-            env=environment,
-            cwd=root,
-        )
-        restart = run(
-            [str(executable), "--env", str(env_file), "restart"],
-            env=environment,
-            cwd=root,
-        )
-        restarted_status = run(
-            [str(executable), "--env", str(env_file), "status", "--json"],
-            env=environment,
-            cwd=root,
-        )
-        stop = run(
-            [str(executable), "--env", str(env_file), "stop"],
-            env=environment,
-            cwd=root,
-        )
+        read_fd, write_fd = os.pipe()
+        service_environment = {
+            **environment,
+            "DEVLEGATE_HOST_MODE": "internal",
+            "DEVLEGATE_STARTUP_FD": str(write_fd),
+        }
+        service_log = root / "service.log"
+        with service_log.open("w", encoding="utf-8") as log:
+            service = subprocess.Popen(
+                [str(executable), "--env", str(env_file), "foreground"],
+                env=service_environment,
+                cwd=root,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=(write_fd,),
+            )
+        os.close(write_fd)
+        try:
+            deadline = time.monotonic() + 10
+            ready = b""
+            while time.monotonic() < deadline:
+                readable, _writeable, _exceptional = select.select(
+                    [read_fd], [], [], max(0, deadline - time.monotonic())
+                )
+                if readable:
+                    ready += os.read(read_fd, 4096)
+                    if b"\n" in ready:
+                        break
+                if service.poll() is not None:
+                    break
+            if ready.splitlines()[:1] != [b"READY"]:
+                detail = service_log.read_text(encoding="utf-8")
+                raise BuildError(f"standalone service did not become ready: {detail}")
+            start = subprocess.CompletedProcess([], 0, "service started", "")
+            status = run(
+                [str(executable), "--env", str(env_file), "status", "--json"],
+                env=environment,
+                cwd=root,
+            )
+            restart = run(
+                [str(executable), "--env", str(env_file), "restart"],
+                env=environment,
+                cwd=root,
+            )
+            restarted_status = run(
+                [str(executable), "--env", str(env_file), "status", "--json"],
+                env=environment,
+                cwd=root,
+            )
+            stop = run(
+                [str(executable), "--env", str(env_file), "stop"],
+                env=environment,
+                cwd=root,
+            )
+        finally:
+            os.close(read_fd)
+            if service.poll() is None:
+                service.terminate()
+                service.wait(timeout=5)
         report = {
             "artifact": inspect,
             "version": version,
