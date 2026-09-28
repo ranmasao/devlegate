@@ -38,7 +38,9 @@ def test_proven_eager_scie_metadata_selects_outer_executable(monkeypatch, tmp_pa
     assert product_launcher().argv() == [str(executable)]
 
 
-def test_interpreter_mode_scie_argv0_still_selects_outer_launcher(monkeypatch, tmp_path):
+def test_interpreter_mode_scie_argv0_still_selects_outer_launcher(
+    monkeypatch, tmp_path
+):
     executable = tmp_path / "devlegate"
     executable.write_bytes(b"\x7fELFstandalone")
     executable.chmod(0o755)
