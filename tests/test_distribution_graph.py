@@ -481,7 +481,6 @@ def test_package_tty_success_keeps_progress_transient_and_log_durable(
             self.package_values["wheel"] = GRAPH.Artifact(artifact, "wheel")
             emit(GRAPH.ComponentEvent("complete", step, step.identity))
 
-    values = {}
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
     monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
@@ -557,7 +556,10 @@ def test_package_tty_failure_reports_diagnostic_without_counting_failed_leaf(
     assert "package ready:" not in rendered
     assert "[##########] 1/1" not in rendered
     log = output_dir / "devlegate-wheel-build.log"
-    assert f"FAILED at wheel: fake package: RuntimeError: {diagnostic}" in log.read_text()
+    assert (
+        f"FAILED at wheel: fake package: RuntimeError: {diagnostic}"
+        in log.read_text()
+    )
     assert not workspace.exists()
 
 
@@ -576,8 +578,6 @@ def test_standalone_package_retains_structured_report_and_evidence_path(
             ),
         ),
     )
-    values = {}
-
     class FakeComponent:
         def __init__(self, package_values):
             self.package_values = package_values

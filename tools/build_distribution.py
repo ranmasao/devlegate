@@ -1268,7 +1268,7 @@ def package(args: argparse.Namespace) -> int:
         evidence.close()
         _ACTIVE_EVIDENCE = previous_evidence
         if getattr(sys.stdout, "isatty", lambda: False)():
-            print(f"build failed at packaging", file=sys.stdout)
+            print("build failed at packaging", file=sys.stdout)
             print(f"details: {evidence.path}", file=sys.stdout)
         raise
     selected = expand_targets(args.target)
