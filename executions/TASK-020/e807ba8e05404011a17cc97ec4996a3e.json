@@ -1,0 +1,34 @@
+{
+  "code_base_head": "28070e7951756da867640027f6142edfea3efb02",
+  "conclusion": "incomplete",
+  "control_head": "2f3b820603841a05f092951167af3af02d73a7b3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-020",
+  "execution_id": "e807ba8e05404011a17cc97ec4996a3e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-020",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the lifecycle portion of tools/build_standalone.py prove; it currently hangs at the generated standalone service start in this environment.",
+    "Install or expose the Python build module, then rerun the standalone distribution target and full validation."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-020",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the lifecycle portion of tools/build_standalone.py prove; it currently hangs at the generated standalone service start in this environment.",
+      "Install or expose the Python build module, then rerun the standalone distribution target and full validation."
+    ],
+    "report": null,
+    "summary": "Wrapped the long standalone launcher regression test declaration so maintained-tree Ruff passes, without changing test semantics or launcher behavior. Built a reproducible standalone artifact and verified its identity metadata and exact outer-artifact systemd ExecStart selection."
+  },
+  "workspace_head": "8db5589c35b646b35d216a285f8061b5c2277553"
+}
