@@ -1,0 +1,28 @@
+{
+  "code_base_head": "28070e7951756da867640027f6142edfea3efb02",
+  "conclusion": "completed",
+  "control_head": "5fce2af52a347f10f4d58cff81ebda61502d7593",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-020",
+  "execution_id": "8cd7f1f7a8c64348acae91c7427db096",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-020",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-020/8cd7f1f7a8c64348acae91c7427db096.md",
+  "report_sha256": "b8904dcb79436f9be52cb4afed1fd860cea21bf6e2185f1c33ee8782e9e4ffe9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-020",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The updated authentic proof completed successfully against the 0.5.5.dev0 standalone artifact, including exact outer-artifact ExecStart validation, isolated startup readiness, status, restart, and stop with no host Python/module dependency. Focused tests passed: 40 passed. Ruff passed for tools/build_standalone.py. Distribution validation succeeded in an isolated venv with setuptools 84.0.0/build 1.6.1: wheel and sdist built, then the wheel installed and imported as devlegate 0.5.5.dev0.",
+    "summary": "Hardened the standalone lifecycle proof to launch the outer artifact directly in an isolated foreground child with startup readiness signaling, then exercise status, restart, and stop through the artifact. The launcher and systemd identity implementation remains unchanged."
+  },
+  "workspace_head": "7efdae418222e873d383509a358bfa6923d69e27"
+}
