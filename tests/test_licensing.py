@@ -16,6 +16,7 @@ from email.parser import Parser
 from pathlib import Path
 
 import pytest
+
 from devlegate import __version__
 from tools import build_distribution as DISTRIBUTION
 
