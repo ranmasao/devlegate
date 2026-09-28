@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from git_support import clone_world, control_publisher
 from runtime_helpers import run_test_iteration
+from service_harness import LiveService
 
 import devlegate.execution_workspace as execution_workspace
 import devlegate.runtime as runtime
@@ -4488,6 +4489,56 @@ def _write_prior_execution_receipt(control, *, execution_id, base, path, head):
     ExecutionReportStore(control).write(report)
 
 
+def _operator_recovery_fixture(tmp_path, monkeypatch, *, remote=False):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    if remote:
+        git(working, "push", "origin", f"{old_head}:refs/heads/{manager.branch}")
+        control = next((state / "worktrees").glob("*/control"))
+        _write_prior_execution_receipt(
+            control,
+            execution_id="old-generation",
+            base=old_base,
+            path=workspace.path,
+            head=old_head,
+        )
+        git(control, "add", "executions/T-1")
+        git(control, "commit", "-m", "retain prior execution receipt")
+        git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "push", "origin", "HEAD:main")
+    devlegate = Devlegate(config)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head=old_head
+    )
+    if remote:
+        devlegate._save_state("agent_pending", execution_remote_head=old_head)
+    devlegate._save_state(
+        "agent_pending",
+        operator_recovery={
+            "ticket_id": "T-1",
+            "execution_id": "current",
+            "observed_head": old_head,
+        },
+    )
+    return working, config, state, devlegate, manager, old_head, base
+
+
 def test_pending_workspace_plan_is_reusable_only_for_exact_binding(
     tmp_path, monkeypatch
 ):
@@ -5017,3 +5068,182 @@ def test_automatic_repair_launches_one_worker_with_same_execution_id(
     assert run_test_iteration(devlegate) in {0, 1}
     assert calls == ["current"]
     assert devlegate._state["execution_id"] == "current"
+
+
+@pytest.mark.parametrize("boundary", ["evidence", "remote", "normalization"])
+def test_operator_recovery_replays_each_durable_prefix(
+    tmp_path, monkeypatch, boundary
+):
+    (
+        working,
+        config,
+        state,
+        devlegate,
+        manager,
+        old_head,
+        base,
+    ) = _operator_recovery_fixture(tmp_path, monkeypatch, remote=boundary == "remote")
+    real_git = runtime._git
+    crashed = False
+
+    def crash_after_effect(repo, *args, **kwargs):
+        nonlocal crashed
+        result = real_git(repo, *args, **kwargs)
+        if not crashed and (
+            (boundary == "evidence" and args[:2] == (
+                "update-ref",
+                "refs/devlegate/recovery/operator/T-1/current",
+            ))
+            or (
+                boundary == "remote"
+                and any(
+                    str(argument).startswith("--force-with-lease") for argument in args
+                )
+            )
+        ):
+            crashed = True
+            raise RuntimeError("simulated recovery crash")
+        return result
+
+    monkeypatch.setattr(runtime, "_git", crash_after_effect)
+    if boundary == "remote":
+        original_remote = devlegate._execution_remote_head
+        remote_observations = 0
+
+        def crash_after_remote_reconciliation(branch):
+            nonlocal remote_observations
+            value = original_remote(branch)
+            remote_observations += 1
+            if remote_observations == 2:
+                raise RuntimeError("simulated recovery crash")
+            return value
+
+        monkeypatch.setattr(
+            devlegate, "_execution_remote_head", crash_after_remote_reconciliation
+        )
+    if boundary == "normalization":
+        original_save = devlegate._save_state
+
+        def crash_after_normalization(phase, **kwargs):
+            result = original_save(phase, **kwargs)
+            if kwargs.get("clear_pre_worker_generation"):
+                raise RuntimeError("simulated recovery crash")
+            return result
+
+        monkeypatch.setattr(devlegate, "_save_state", crash_after_normalization)
+
+    with pytest.raises(RuntimeError, match="simulated recovery crash"):
+        devlegate.run_iteration()
+    assert crashed or boundary in {"remote", "normalization"}
+
+    restarted = Devlegate(config)
+    assert restarted._state["execution_id"] == "current"
+    monkeypatch.setattr(runtime, "_git", real_git)
+    if boundary != "normalization":
+        run_test_iteration(restarted)
+
+    assert git(working, "rev-parse", manager.branch).stdout.strip() == base
+    assert (
+        git(
+            working,
+            "rev-parse",
+            "refs/devlegate/recovery/operator/T-1/current",
+        ).stdout.strip()
+        == old_head
+    )
+    assert restarted._state["execution_id"] == "current"
+    assert "operator_recovery" not in restarted._state
+    assert (
+        restarted._inspect_bound_execution_workspace(restarted._state).classification
+        == "REUSABLE"
+    )
+
+
+def test_operator_recovery_rejects_remote_drift_after_observation(
+    tmp_path, monkeypatch
+):
+    (
+        working,
+        _config,
+        _state,
+        devlegate,
+        manager,
+        old_head,
+        base,
+    ) = _operator_recovery_fixture(tmp_path, monkeypatch, remote=True)
+    drift_path = tmp_path / "drift-worktree"
+    git(working, "worktree", "add", "--detach", drift_path, base)
+    git(drift_path, "config", "user.email", "test@example.com")
+    git(drift_path, "config", "user.name", "Test User")
+    (drift_path / "drift.txt").write_text("drift\n")
+    git(drift_path, "add", "drift.txt")
+    git(drift_path, "commit", "-m", "unexpected remote generation")
+    drift_head = git(drift_path, "rev-parse", "HEAD").stdout.strip()
+    git(working, "worktree", "remove", "--force", drift_path)
+    observed = 0
+    real_observe = devlegate._execution_remote_head
+
+    def drift_after_observe(branch):
+        nonlocal observed
+        value = real_observe(branch)
+        observed += 1
+        if observed == 2:
+            git(
+                working,
+                "push",
+                "--force",
+                "origin",
+                f"{drift_head}:refs/heads/{branch}",
+            )
+        return value
+
+    monkeypatch.setattr(devlegate, "_execution_remote_head", drift_after_observe)
+    with pytest.raises(DevlegateError, match="changed before recovery CAS"):
+        devlegate.run_iteration()
+
+    remote = git(
+        working, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+    ).stdout.split()[0]
+    assert remote == drift_head
+    assert (
+        git(
+            working,
+            "rev-parse",
+            "refs/devlegate/recovery/operator/T-1/current",
+        ).stdout.strip()
+        == old_head
+    )
+    assert devlegate._state["execution_id"] == "current"
+    assert devlegate._state["execution_base_head"] == base
+
+
+def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    observed = workspace.head
+
+    with LiveService(working, config) as service:
+        service.wait_ready()
+        time.sleep(1.2)
+        assert service.process is not None and service.process.poll() is None
+        status = service.cli("status", "--json")
+        assert status.returncode in {0, 1}
+        status_payload = json.loads(status.stdout)
+        assert status_payload["execution"]["phase"] == "agent_pending"
+        assert status_payload["service"]["state"] == "running"
+        assert "recovery-required" in status.stdout or "unsafe" in status.stdout
+        recovered = service.cli(
+            "recover", "T-1", "current", "--observed-head", observed
+        )
+        assert recovered.returncode == 0, recovered.stderr
+        assert "recovery accepted: T-1" in recovered.stdout
