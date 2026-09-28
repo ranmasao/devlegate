@@ -415,7 +415,7 @@ def test_start_systemd_reprovisions_persisted_legacy_name(tmp_path, monkeypatch)
     calls: list[tuple[str, str | None]] = []
 
     class FakeSupervisor:
-        def install(self, _locator, _env_file, *, name=None):
+        def install(self, _locator, _env_file, *, name=None, allow_legacy=False):
             calls.append(("install", name))
             return tmp_path / "units" / (name or "unexpected.service")
 
@@ -433,7 +433,7 @@ class RecordingSupervisor:
     def __init__(self, calls: list[tuple[str, str | None]]) -> None:
         self._calls = calls
 
-    def inspect(self, _locator, *, name=None):
+    def inspect(self, _locator, *, name=None, **_kwargs):
         self._calls.append(("inspect", name))
         return True
 
@@ -526,7 +526,7 @@ def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
     )
 
     class FailingSupervisor:
-        def inspect(self, _locator, *, name=None):
+        def inspect(self, _locator, *, name=None, **_kwargs):
             return True
 
         def status(self, _locator, *, name=None):

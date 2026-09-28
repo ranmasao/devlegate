@@ -82,6 +82,7 @@ from devlegate.service_diagnostics import read as read_service_failure
 from devlegate.systemd_supervisor import (
     SystemdSupervisor,
     SystemdSupervisorError,
+    UnitClassification,
     managed_unit_paths,
     notify_ready,
     unit_name,
@@ -658,7 +659,7 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | Non
             finder = getattr(supervisor, "managed_unit_for", None)
             if finder is None:
                 name = unit_name(locator)
-                if not supervisor.inspect(locator):
+                if not supervisor.inspect(locator, allow_legacy=authority is not None):
                     return None
                 if not supervisor.status(locator):
                     return None
@@ -667,7 +668,9 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | Non
             name = existing.name if existing is not None else None
         if (
             name is None
-            or not supervisor.inspect(locator, name=name)
+            or not supervisor.inspect(
+                locator, name=name, allow_legacy=authority is not None
+            )
             or not supervisor.status(locator, name=name)
         ):
             return None
@@ -715,6 +718,7 @@ def _systemd_authority_established(
                 target.locator,
                 env_file=target.env_file,
                 name=authority["unit_name"],
+                allow_legacy=True,
             ):
                 return store, True
         except SystemdSupervisorError as error:
@@ -743,6 +747,7 @@ def _systemd_authority_established(
                     target.locator,
                     env_file=target.env_file,
                     name=preferred.name,
+                    allow_legacy=False,
                 )
             except SystemdSupervisorError as error:
                 raise DevlegateError(str(error)) from error
@@ -750,7 +755,10 @@ def _systemd_authority_established(
     if existing is not None:
         try:
             current.inspect(
-                target.locator, env_file=target.env_file, name=existing.name
+                target.locator,
+                env_file=target.env_file,
+                name=existing.name,
+                allow_legacy=False,
             )
         except SystemdSupervisorError as error:
             raise DevlegateError(str(error)) from error
@@ -1444,6 +1452,8 @@ def _start_background(
 
 def _start_systemd(target: ProjectTarget) -> int:
     supervisor = SystemdSupervisor()
+    unit_path_value: Path | None = None
+    needs_restart = False
     try:
         current_installation = _host_installation(required=False)
         if (
@@ -1456,31 +1466,67 @@ def _start_systemd(target: ProjectTarget) -> int:
             )
         store = _supervision_store(target)
         authority = store.supervision_authority()
+        if authority is not None:
+            expected_authority = {
+                "authority": "systemd",
+                "state_key": target.locator.state_key,
+                "env_file": str(target.env_file.resolve()),
+                "repository": str(target.repo.resolve()),
+            }
+            if any(
+                authority.get(key) != value
+                for key, value in expected_authority.items()
+            ):
+                raise DevlegateError(
+                    "persisted systemd authority does not match the selected project"
+                )
         unit = (
             authority["unit_name"]
             if authority is not None and authority.get("authority") == "systemd"
             else None
         )
-        path = supervisor.install(target.locator, target.env_file, name=unit)
-        supervisor.start(target.locator, name=path.name)
+        if unit is not None:
+            classifier = getattr(supervisor, "classify", None)
+            if classifier is not None:
+                needs_restart = (
+                    classifier(
+                        target.locator,
+                        env_file=target.env_file,
+                        name=unit,
+                    )
+                    is UnitClassification.RECONCILABLE
+                )
+        unit_path_value = supervisor.install(
+            target.locator,
+            target.env_file,
+            name=unit,
+            allow_legacy=authority is not None,
+        )
+        if needs_restart:
+            supervisor.restart(target.locator, name=unit_path_value.name)
+        else:
+            supervisor.start(target.locator, name=unit_path_value.name)
         store.establish_systemd_authority(
-            unit_name=path.name,
+            unit_name=unit_path_value.name,
             state_key=target.locator.state_key,
             env_file=target.env_file.resolve(),
             repository=target.repo.resolve(),
         )
         if current_installation is None:
-            path = installation_path()
-            with installation_lock(exclusive=True, path=path):
+            installation_record_path = installation_path()
+            with installation_lock(exclusive=True, path=installation_record_path):
                 if _host_installation_locked(required=False) is None:
-                    write_installation(path, HostInstallation("systemd"))
+                    write_installation(
+                        installation_record_path, HostInstallation("systemd")
+                    )
     except RuntimeStoreError as error:
         raise DevlegateError(str(error)) from error
     except HostInstallationError as error:
         raise DevlegateError(str(error)) from error
     except SystemdSupervisorError as error:
         raise DevlegateError(str(error)) from error
-    print(f"service started; systemd unit: {path}")
+    assert unit_path_value is not None
+    print(f"service started; systemd unit: {unit_path_value}")
     return 0
 
 

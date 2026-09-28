@@ -210,6 +210,7 @@ class SystemdSupervisor:
         env_file: Path,
         *,
         name: str | None = None,
+        allow_legacy: bool = False,
     ) -> Path:
         if name is None:
             existing = self.managed_unit_for(locator)
@@ -223,7 +224,11 @@ class SystemdSupervisor:
         classification = UnitClassification.RECONCILABLE
         if path.exists():
             classification = self.classify(
-                locator, env_file=env_file, name=path.name, desired=desired
+                locator,
+                env_file=env_file,
+                name=path.name,
+                desired=desired,
+                allow_legacy=allow_legacy,
             )
             if classification is UnitClassification.AMBIGUOUS_FOREIGN:
                 raise SystemdSupervisorError(
@@ -262,12 +267,18 @@ class SystemdSupervisor:
         *,
         env_file: Path | None = None,
         name: str | None = None,
+        allow_legacy: bool = False,
     ) -> bool:
         """Verify and report the exact managed unit registration."""
         path = unit_path(locator, self.unit_directory, name=name)
         if not path.exists():
             return False
-        classification = self.classify(locator, env_file=env_file, name=name)
+        classification = self.classify(
+            locator,
+            env_file=env_file,
+            name=name,
+            allow_legacy=allow_legacy,
+        )
         if classification is UnitClassification.AMBIGUOUS_FOREIGN:
             raise SystemdSupervisorError(
                 f"refusing to operate on unmanaged or unexpected identity {path}"
@@ -281,6 +292,7 @@ class SystemdSupervisor:
         env_file: Path | None = None,
         name: str | None = None,
         desired: str | None = None,
+        allow_legacy: bool = False,
     ) -> UnitClassification:
         """Classify ownership separately from the current deployment render."""
         path = unit_path(locator, self.unit_directory, name=name)
@@ -306,6 +318,8 @@ class SystemdSupervisor:
                 (line[len(prefix) :] for line in lines if line.startswith(prefix)),
                 None,
             )
+            if actual is None and not allow_legacy:
+                return UnitClassification.AMBIGUOUS_FOREIGN
             if actual is not None and actual != expected:
                 return UnitClassification.AMBIGUOUS_FOREIGN
         if env_file is None:
@@ -323,10 +337,16 @@ class SystemdSupervisor:
         *,
         env_file: Path | None = None,
         name: str | None = None,
+        allow_legacy: bool = False,
     ) -> Path:
         path = unit_path(locator, self.unit_directory, name=name)
         if path.exists():
-            self.inspect(locator, env_file=env_file, name=path.name)
+            self.inspect(
+                locator,
+                env_file=env_file,
+                name=path.name,
+                allow_legacy=allow_legacy,
+            )
         self.probe_user_manager()
         if path.exists():
             self._run("stop", path.name, allow_failure=True)

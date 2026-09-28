@@ -201,7 +201,11 @@ def test_systemd_default_start_never_uses_internal_background(monkeypatch, tmp_p
     monkeypatch.setattr(cli, "SystemdSupervisor", FakeSupervisor)
     monkeypatch.setattr(cli, "_project_target", lambda **_: target)
     monkeypatch.setattr(cli, "_healthy_service", lambda _env: None)
-    monkeypatch.setattr(cli, "_host_installation", lambda: HostInstallation("systemd"))
+    monkeypatch.setattr(
+        cli,
+        "_host_installation",
+        lambda *, required=True: HostInstallation("systemd"),
+    )
     monkeypatch.setattr(
         cli,
         "_start_background",

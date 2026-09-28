@@ -115,7 +115,8 @@ def test_owned_stale_launcher_is_reconciled_in_place(tmp_path: Path) -> None:
     directory = tmp_path / "units"
     old = LaunchCommand.current_python(Path("/opt/devlegate/a/python"))
     new = LaunchCommand.executable(Path("/opt/devlegate/b/devlegate"))
-    runner = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, "", "")
     supervisor = SystemdSupervisor(
         unit_directory=directory, runner=runner, launcher=old
     )
@@ -174,9 +175,98 @@ def test_foreign_unit_is_ambiguous_and_untouched(tmp_path: Path) -> None:
         supervisor.classify(item, env_file=tmp_path / "project.env")
         is UnitClassification.AMBIGUOUS_FOREIGN
     )
-    with pytest.raises(SystemdSupervisorError, match="unmanaged"):
+    with pytest.raises(SystemdSupervisorError, match="unexpected identity"):
         supervisor.install(item, tmp_path / "project.env", name=path.name)
     assert path.read_text().startswith("# Managed by someone else")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("state_key", "b" * 64),
+        ("repository", "/other/repository"),
+        ("env_file", "/other/project.env"),
+    ],
+)
+def test_binding_mismatch_is_ambiguous_and_untouched(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    path = directory / unit_name(item)
+    directory.mkdir()
+    lines = render_unit(item, tmp_path / "project.env").splitlines()
+    prefix = f"# {field}="
+    index = next(
+        index for index, line in enumerate(lines) if line.startswith(prefix)
+    )
+    lines[index] = (
+        prefix + value
+    )
+    original = "\n".join(lines) + "\n"
+    path.write_text(original)
+    supervisor = SystemdSupervisor(unit_directory=directory)
+
+    assert (
+        supervisor.classify(item, env_file=tmp_path / "project.env")
+        is UnitClassification.AMBIGUOUS_FOREIGN
+    )
+    with pytest.raises(SystemdSupervisorError, match="unexpected identity"):
+        supervisor.install(item, tmp_path / "project.env", name=path.name)
+    assert path.read_text() == original
+
+
+def test_legacy_owned_unit_without_binding_comments_requires_authority(
+    tmp_path: Path,
+) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    path = directory / unit_name(item)
+    directory.mkdir()
+    path.write_text(f"{MANAGED_MARKER}\n# state_key={item.state_key}\n")
+    supervisor = SystemdSupervisor(
+        unit_directory=directory,
+        runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    assert (
+        supervisor.classify(item, env_file=tmp_path / "project.env")
+        is UnitClassification.AMBIGUOUS_FOREIGN
+    )
+    assert (
+        supervisor.classify(
+            item,
+            env_file=tmp_path / "project.env",
+            allow_legacy=True,
+        )
+        is UnitClassification.RECONCILABLE
+    )
+
+
+def test_failed_daemon_reload_leaves_retryable_desired_unit(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+    attempts = 0
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal attempts
+        if command[-1] == "daemon-reload":
+            attempts += 1
+            if attempts == 1:
+                return subprocess.CompletedProcess(command, 1, "", "reload failed")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    supervisor = SystemdSupervisor(unit_directory=directory, runner=runner)
+    with pytest.raises(SystemdSupervisorError, match="reload failed"):
+        supervisor.install(item, tmp_path / "project.env")
+    path = directory / unit_name(item)
+    assert path.is_file()
+
+    supervisor.install(item, tmp_path / "project.env")
+    assert (
+        supervisor.classify(item, env_file=tmp_path / "project.env")
+        is UnitClassification.CURRENT
+    )
 
 
 def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> None:
@@ -225,8 +315,9 @@ def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> Non
     ]
 
     content_a_before = path_a.read_text()
-    supervisor.install(project_a, tmp_path / "a-updated.env")
-    assert path_a.read_text() != content_a_before
+    with pytest.raises(SystemdSupervisorError, match="unexpected identity"):
+        supervisor.install(project_a, tmp_path / "a-updated.env")
+    assert path_a.read_text() == content_a_before
     assert path_b.read_text() == content_b_before
 
     supervisor.remove(project_a)
@@ -272,9 +363,10 @@ def test_same_state_managed_candidate_is_reused(tmp_path: Path) -> None:
         runner=lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
     )
     first = supervisor.install(item, tmp_path / "first.env")
-    second = supervisor.install(item, tmp_path / "second.env")
+    with pytest.raises(SystemdSupervisorError, match="unexpected identity"):
+        supervisor.install(item, tmp_path / "second.env")
 
-    assert second == first
+    assert first.read_text() == render_unit(item, tmp_path / "first.env")
 
 
 def test_unmanaged_compact_collision_is_not_overwritten(tmp_path: Path) -> None:
@@ -376,7 +468,12 @@ def test_systemctl_failure_is_not_silenced_on_remove(tmp_path: Path) -> None:
     item = locator(tmp_path)
     path = tmp_path / "units" / unit_name(item)
     path.parent.mkdir()
-    path.write_text(f"{MANAGED_MARKER}\n# state_key={item.state_key}\n")
+    path.write_text(
+        f"{MANAGED_MARKER}\n"
+        f"# state_key={item.state_key}\n"
+        f"# repository={item.repo.resolve()}\n"
+        f"# env_file={(tmp_path / 'project.env').resolve()}\n"
+    )
     calls: list[list[str]] = []
 
     def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
