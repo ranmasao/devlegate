@@ -1,0 +1,1 @@
+Focused changed-suite validation passes, including 429 tests across control-plane, CLI, and IPC coverage. The remaining repository tests pass except three environment-dependent tests requiring the absent local .venv and coverage package; Ruff for src/tests and diff checks pass.

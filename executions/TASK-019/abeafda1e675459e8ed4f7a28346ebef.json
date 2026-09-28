@@ -1,0 +1,28 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "completed",
+  "control_head": "3cbd194f32ea30ea265e5b2541f85840e929379d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "abeafda1e675459e8ed4f7a28346ebef",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-019/abeafda1e675459e8ed4f7a28346ebef.md",
+  "report_sha256": "245887db5d2f58fd0773e81b9b4a173cb78cb0a8ce2396408a2a77c1801bec39",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused changed-suite validation passes, including 429 tests across control-plane, CLI, and IPC coverage. The remaining repository tests pass except three environment-dependent tests requiring the absent local .venv and coverage package; Ruff for src/tests and diff checks pass.",
+    "summary": "Added recovery regressions covering branch/worktree drift fail-closed behavior, automatic repair with exactly one same-generation worker launch, CLI/IPC identity forwarding, and wrong registered-worktree classification. Existing recovery mechanisms were preserved."
+  },
+  "workspace_head": "48bb9fc03ed64d6c92cfe5036c4539ca32a3c84a"
+}
