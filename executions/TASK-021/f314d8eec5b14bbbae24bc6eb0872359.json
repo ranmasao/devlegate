@@ -1,0 +1,28 @@
+{
+  "code_base_head": "7efdae418222e873d383509a358bfa6923d69e27",
+  "conclusion": "completed",
+  "control_head": "2160f8d835bbf29d1f7766c074bdbc6b41cbbf22",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-021",
+  "execution_id": "f314d8eec5b14bbbae24bc6eb0872359",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-021",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-021/f314d8eec5b14bbbae24bc6eb0872359.md",
+  "report_sha256": "259f6e215fd8a2811a5b865548703208d9d78502f3ddcfff595785bb97d33899",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-021",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Changed tests/test_launcher.py, tests/test_systemd_supervisor.py, and tests/test_host_installation.py. Focused tests and Ruff checks for changed files pass. The full suite could not complete in this environment because it exceeds the execution window; its first deterministic failure was the existing missing `coverage` dependency in tests/test_coverage.py.",
+    "summary": "Updated systemd-related test doubles for the current host-installation and supervisor contracts. Added regression coverage for bidirectional lifecycle reconciliation on one authoritative unit, safe host-installation adoption and conflict handling, and recovery after a post-rewrite start failure."
+  },
+  "workspace_head": "7883c27078d75d95d78156b7eb14ee820f11c779"
+}
