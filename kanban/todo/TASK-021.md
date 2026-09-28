@@ -239,3 +239,101 @@ Use distinct variables and keep the reported unit identity truthful.
 
 No version-specific migration logic is needed. Keep the current desired-state model
 and finish the missing proof surface around it.
+
+
+## Review continuation after execution ab20c00c0abe4cf09cce7ef86dc3a327
+
+Checkpoint `6edb49e2eeaffe24d8e419185dcbae8005b0a184` is materially
+improved and the desired-state/classification design should be preserved.
+
+Confirmed progress:
+
+- repository/env/state-key mismatches are now explicitly AMBIGUOUS_FOREIGN and
+  remain untouched;
+- legacy units without repository/env binding comments are no longer silently
+  trusted: they require an explicit durable-authority path via `allow_legacy`;
+- persisted systemd authority is validated against ticket/project state before
+  mutation;
+- stale owned deployment representation causes restart rather than blind start;
+- failed daemon-reload leaves the desired unit on disk and a subsequent install can
+  converge;
+- the unit-path reporting clobber is fixed.
+
+The task is still not ready for acceptance for the following narrow reasons.
+
+### 1. Exact-head CI is still red
+
+Authoritative CI completed with:
+
+```text
+2 failed, 999 passed, 1 skipped
+```
+
+One failure is deterministic and directly caused by the new API surface:
+
+```text
+tests/test_launcher.py::
+test_unmanaged_systemd_unit_is_normal_cli_error_for_stop_and_restart
+
+UnmanagedSupervisor.inspect() got an unexpected keyword argument 'allow_legacy'
+```
+
+Update that test double (or the compatibility seam if there is a better supported
+one) so the maintained suite matches the new supervisor contract.
+
+The other failure is the already-known intermittent
+`test_real_service_drop_retire_old_lineage_and_runs_fresh[T-2]` Git commit race.
+Do not change TASK-021 code for it unless it reproduces deterministically. After the
+deterministic failure is fixed, rerun exact-head CI; if the drop test fails again,
+investigate it as a real suite reliability defect instead of assuming flakiness.
+
+### 2. Add an explicit lifecycle proof for representation reconciliation
+
+The current A -> B -> A tests still prove only `install()`, rendered content, and
+`daemon-reload` counts. TASK-021 requires the reconciled unit to be operated through
+the service lifecycle.
+
+Add a focused test through the supported CLI/supervisor path that proves, for the
+same authoritative unit name:
+
+- launcher A unit exists and is owned;
+- launcher B classifies it RECONCILABLE, rewrites it, then uses restart/start as
+  appropriate and reaches the readiness seam;
+- B -> A repeats through the same mechanism;
+- an already CURRENT representation is idempotent and does not unnecessarily
+  rewrite/restart.
+
+This may use a deterministic fake systemctl/readiness seam; it need not require a
+real host systemd manager.
+
+### 3. Add explicit host-installation adoption/conflict regressions
+
+The production code now contains the desired behavior, but the maintained tests do
+not directly prove it.
+
+Add focused coverage that:
+
+- with missing host-installation metadata **and** an existing exact persisted
+  systemd authority for the selected repository/env/state/unit, successful
+  systemd start writes `HostInstallation("systemd")` only after start succeeds;
+- if start/restart fails, the host-installation record is not created;
+- an existing non-systemd host-installation record rejects the systemd path without
+  unit rewrite;
+- the final success message continues to report the canonical systemd unit path,
+  not the installation-record path.
+
+### 4. Strengthen the post-rewrite/start-failure recovery proof
+
+The new daemon-reload retry test is useful, but the ticket specifically calls out a
+failure after representation rewrite and before successful service start.
+
+Add a CLI/supervisor-level regression where:
+
+1. a stale owned unit is rewritten to the current desired representation;
+2. restart/start fails before readiness;
+3. the unit and durable authority remain inspectable and unambiguously owned;
+4. the next invocation sees CURRENT/owned representation and successfully converges
+   without manual file deletion or authority reset.
+
+Do not add migration tables or weaken ownership checks. The remaining work is proof
+and compatibility cleanup around the current implementation, not a redesign.
