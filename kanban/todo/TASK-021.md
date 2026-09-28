@@ -141,3 +141,101 @@ Only RECONCILABLE state may be automatically rewritten.
 - Repeated reconciliation when already current is a no-op.
 - Failure between unit rewrite and start leaves a recoverable, inspectable state and
   a subsequent invocation converges without manual cleanup.
+
+
+## Review continuation after execution 5296ef5c7c594e3da0f11c38295f173a
+
+The implementation has the right architectural direction and should be continued,
+not redesigned.
+
+Retain:
+
+- explicit CURRENT / RECONCILABLE / AMBIGUOUS_FOREIGN classification;
+- separation of stable ownership identity from mutable deployment representation;
+- bidirectional desired-render reconciliation rather than version migration tables;
+- repository/env binding metadata in newly rendered managed units;
+- atomic unit rewrite plus daemon-reload;
+- missing host-installation adoption only after a successful systemd start.
+
+However checkpoint `51b7bb03818f6766849fc0b68eabf8e37eed668d` is not yet
+acceptable.
+
+### 1. Exact-head CI is red
+
+The full suite completed with:
+
+```text
+5 failed, 991 passed, 1 skipped
+```
+
+The failures are:
+
+- `test_foreign_unit_is_ambiguous_and_untouched`: only the expected error-text
+  assertion is stale (`unmanaged` versus `unexpected identity`);
+- `test_two_project_units_and_operations_are_independent` and
+  `test_same_state_managed_candidate_is_reused`: old tests still assume that an
+  already managed unit may silently change its env-file binding. Under TASK-021,
+  env/repository binding is ownership identity, so do not weaken the classifier to
+  satisfy these old expectations. Update the tests to distinguish legitimate stale
+  deployment representation from ownership-binding changes and prove the latter
+  fail closed;
+- `test_systemd_default_start_never_uses_internal_background`: update the test
+  double for the new `_host_installation(required=False)` call;
+- `test_real_service_foreign_local_control_descendant_stays_blocked`: investigate
+  and preserve its existing workflow invariant. Do not dismiss it until a rerun
+  proves it nondeterministic or the deterministic cause is fixed.
+
+Rerun the exact-head full suite and Ruff after these corrections.
+
+### 2. Exercise reconciliation through start/readiness, not only unit rewrite
+
+The new A -> B -> A regressions currently call `install()` and count
+`daemon-reload`, but TASK-021 requires convergence through the service lifecycle.
+
+Add focused proof that an owned unit rendered with launcher A is reconciled by B,
+then started/restarted and reaches readiness using the same authoritative unit name;
+repeat B -> A through the same mechanism. Reuse existing lifecycle seams rather than
+inventing a second service model.
+
+### 3. Complete the ownership fail-closed matrix
+
+Add explicit TASK-021-level regressions for:
+
+- wrong state key;
+- wrong repository binding;
+- wrong env-file binding;
+- conflicting persisted systemd supervision authority.
+
+Each must classify as AMBIGUOUS_FOREIGN (or equivalent), remain untouched, and never
+be rewritten merely because the unit name/managed marker looks familiar.
+
+Legacy units that predate the new repository/env comments may still be adopted only
+when the surrounding durable authority is sufficient to prove the binding; do not
+make absence of the new comments equivalent to arbitrary ownership.
+
+### 4. Prove host-record adoption and recovery cases
+
+The new missing-host-installation behavior in `_start_systemd()` has no dedicated
+regression. Add proof that:
+
+- an existing provably owned systemd authority plus a missing host-installation
+  record is safely adopted after successful start;
+- an existing conflicting non-systemd host policy is rejected without rewriting the
+  unit;
+- persisted authority plus a missing canonical unit recreates the same authoritative
+  unit with the current desired representation;
+- failure after unit rewrite/daemon-reload but before successful start leaves a
+  recoverable state and a subsequent invocation converges without manual cleanup.
+
+Where practical, assert that workflow/runtime/control state is not rewritten as a
+side effect of host representation refresh.
+
+### 5. Fix the reporting-path variable clobber
+
+In `_start_systemd()`, `path` first holds the systemd unit path, but when the host
+installation record is missing it is reassigned to `installation_path()`. The
+final message therefore reports the installation-record path as the systemd unit.
+Use distinct variables and keep the reported unit identity truthful.
+
+No version-specific migration logic is needed. Keep the current desired-state model
+and finish the missing proof surface around it.
