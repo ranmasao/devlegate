@@ -1,0 +1,28 @@
+{
+  "code_base_head": "063ef24bf126ec297a32b577b646f6238273ac0b",
+  "conclusion": "completed",
+  "control_head": "1224d85f974d420bd6c79f4e414895e3f9afd4eb",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-031",
+  "execution_id": "45dfb5e86de343be9372951070b8aa71",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-031",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-031/45dfb5e86de343be9372951070b8aa71.md",
+  "report_sha256": "805f91a59c6133790a1b847e0348e393a91b543ac4263c18c5069401b94252e1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-031",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused control-plane and output tests pass, Ruff passes via python -m ruff, and git diff checks are clean. Full validation is environment-limited because coverage is not installed and the complete suite exceeded the execution window.",
+    "summary": "Explicit pre-worker recovery now persists the actual reconciled remote branch head, preserving a truthful current-generation predecessor for normal checkpoint publication. Added an end-to-end stale-generation regression covering evidence preservation, stale metadata normalization, same-execution worker admission, and successful remote publication."
+  },
+  "workspace_head": "36ca734dda3e8e4e44aae42c8e41c17fb5ec698a"
+}
