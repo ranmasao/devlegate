@@ -1,0 +1,28 @@
+{
+  "code_base_head": "063ef24bf126ec297a32b577b646f6238273ac0b",
+  "conclusion": "completed",
+  "control_head": "30633fed8b774a50ee3bfdf66f08597c7e5d7b29",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-031",
+  "execution_id": "d637a2372e59496c8f620bd2b026bb80",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-031",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-031/d637a2372e59496c8f620bd2b026bb80.md",
+  "report_sha256": "73fbdc1db7199284c7db361574defe47a5b59b8202cef01b7bfb81b471c2eba3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-031",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Created the repository-local development environment and completed the canonical validation successfully: ./dev test-parallel, ./dev coverage -n 4 --dist=worksteal, and ./dev lint. No source or test files were modified.",
+    "summary": "The TASK-031 recovery hardening checkpoint is complete, preserving reachable operator recovery, replay-safe generation normalization, truthful remote lineage, and coherent status/plan semantics."
+  },
+  "workspace_head": "ea76996e296233b241dcfb98dafd0b78de1ab4d1"
+}
