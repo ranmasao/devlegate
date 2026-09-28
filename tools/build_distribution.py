@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import shutil
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
 from pathlib import Path
+from typing import TextIO
 
 from devlegate.cli_common import ConciseArgumentParser
 
@@ -61,6 +63,26 @@ class DistributionError(RuntimeError):
     """The selected distribution graph cannot be completed safely."""
 
 
+class EvidenceLog:
+    """Durable run-level evidence, including output hidden by the TTY UI."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.file = path.open("w", encoding="utf-8")
+
+    def write(self, text: str) -> None:
+        self.file.write(text)
+        if text and not text.endswith("\n"):
+            self.file.write("\n")
+        self.file.flush()
+
+    def close(self) -> None:
+        self.file.close()
+
+
+_ACTIVE_EVIDENCE: EvidenceLog | None = None
+
+
 @dataclass(frozen=True)
 class Source:
     repo: Path
@@ -93,13 +115,54 @@ class ProgressEvent:
 
 
 class ProgressReporter:
-    """Render one deterministic progress stream for the complete build plan."""
+    """Render semantic progress as a TTY bar or a stable line stream."""
 
-    def __init__(self, steps: tuple[SemanticStep, ...]) -> None:
+    def __init__(
+        self, steps: tuple[SemanticStep, ...], output: TextIO | None = None
+    ) -> None:
         self.steps = steps
+        self.output = output or sys.stdout
+        self.interactive = bool(getattr(self.output, "isatty", lambda: False)())
         self.completed = 0
         self.skipped: list[SemanticStep] = []
         self._started: SemanticStep | None = None
+        self.failed: SemanticStep | None = None
+        self._last_render = ""
+
+    def _width(self) -> int:
+        try:
+            return max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+        except OSError:
+            return 80
+
+    def _render(self, step: SemanticStep, status: str = "") -> None:
+        total = len(self.steps)
+        width = self._width()
+        bar_width = max(10, min(20, width // 4))
+        filled = bar_width * self.completed // total if total else bar_width
+        bar = "#" * filled + "." * (bar_width - filled)
+        prefix = f"[{bar}] {self.completed}/{total}  "
+        label = f"{step.target}: {step.name}"
+        if status:
+            label = f"{label} ({status})"
+        available = max(0, width - len(prefix))
+        line = prefix + label[:available]
+        self.output.write("\r" + line.ljust(width))
+        self.output.flush()
+        self._last_render = line
+
+    def finish(self, success: bool) -> None:
+        if not self.interactive:
+            return
+        width = self._width()
+        self.output.write("\r" + (" " * width) + "\r")
+        if success and self.steps:
+            self._render(self.steps[-1])
+        self.output.write("\n")
+        self.output.flush()
+
+    def _line(self, text: str) -> None:
+        print(text, file=self.output)
 
     def emit(self, event: ProgressEvent) -> None:
         matches = [step for step in self.steps if step.identity == event.step.identity]
@@ -115,9 +178,13 @@ class ProgressReporter:
                     f"progress step is out of order: {event.step.name}"
                 )
             self._started = step
-            print(
-                f"[{self.completed}/{len(self.steps)}] START {step.target}: {step.name}"
-            )
+            if self.interactive:
+                self._render(step)
+            else:
+                self._line(
+                    f"[{self.completed}/{len(self.steps)}] START "
+                    f"{step.target}: {step.name}"
+                )
         elif event.action in {"complete", "skip"}:
             if event.action == "complete" and self._started != step:
                 raise DistributionError(f"progress step was not started: {step.name}")
@@ -129,18 +196,26 @@ class ProgressReporter:
             status = "SKIP" if event.action == "skip" else "DONE"
             if event.action == "skip":
                 self.skipped.append(step)
-            print(
-                f"[{self.completed}/{len(self.steps)}] {status} "
-                f"{step.target}: {step.name}"
-            )
+            if self.interactive:
+                self._render(step, status.lower())
+            else:
+                self._line(
+                    f"[{self.completed}/{len(self.steps)}] {status} "
+                    f"{step.target}: {step.name}"
+                )
             self._started = None
         elif event.action == "fail":
             if self._started != step:
                 raise DistributionError(f"progress step was not started: {step.name}")
-            print(
-                f"[{self.completed}/{len(self.steps)}] FAILED "
-                f"{step.target}: {step.name}"
-            )
+            self.failed = step
+            if self.interactive:
+                self.output.write("\r" + (" " * self._width()) + "\r")
+                self.output.flush()
+            else:
+                self._line(
+                    f"[{self.completed}/{len(self.steps)}] FAILED "
+                    f"{step.target}: {step.name}"
+                )
         else:
             raise DistributionError(f"unknown progress event: {event.action}")
 
@@ -215,6 +290,10 @@ def run(command: list[str], *, cwd: Path | None = None) -> str:
     result = subprocess.run(
         command, cwd=cwd, text=True, capture_output=True, check=False
     )
+    if _ACTIVE_EVIDENCE is not None:
+        _ACTIVE_EVIDENCE.write(
+            f"$ {' '.join(command)}\n{result.stdout}{result.stderr}"
+        )
     if result.returncode:
         detail = (
             "\n".join(
@@ -1133,12 +1212,27 @@ def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
 
 def package(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
-    source = source_identity(repo, str(Path(args.python)))
-    require_tools(("git",))
-    if args.target in {"standalone", "deb", "all"}:
-        require_tools(("file",))
-    if args.target in {"deb", "all"}:
-        require_tools(("dpkg-deb",))
+    output_path = output_directory(repo, args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    evidence = EvidenceLog(output_path / f"devlegate-{args.target}-build.log")
+    global _ACTIVE_EVIDENCE
+    previous_evidence = _ACTIVE_EVIDENCE
+    _ACTIVE_EVIDENCE = evidence
+    try:
+        source = source_identity(repo, str(Path(args.python)))
+        require_tools(("git",))
+        if args.target in {"standalone", "deb", "all"}:
+            require_tools(("file",))
+        if args.target in {"deb", "all"}:
+            require_tools(("dpkg-deb",))
+    except Exception as error:
+        evidence.write(f"FAILED before semantic plan: {error}")
+        evidence.close()
+        _ACTIVE_EVIDENCE = previous_evidence
+        if getattr(sys.stdout, "isatty", lambda: False)():
+            print(f"build failed at packaging", file=sys.stdout)
+            print(f"details: {evidence.path}", file=sys.stdout)
+        raise
     selected = expand_targets(args.target)
     order = dependency_order(selected)
     frozen = freeze_plan(component_tree(selected))
@@ -1146,49 +1240,68 @@ def package(args: argparse.Namespace) -> int:
         SemanticStep(leaf_id.split("/", 1)[0], step.name, leaf_id)
         for leaf_id, step in frozen
     )
-    reporter = ProgressReporter(plan_steps)
+    reporter = ProgressReporter(plan_steps, sys.stdout)
     workspace_path = Path(tempfile.mkdtemp(prefix="devlegate-distribution-"))
-    print(f"Source: {source.commit}")
-    print(f"Version: {source.version}")
+    evidence.write(f"Source: {source.commit}\nVersion: {source.version}")
     values: dict[str, object] = {}
     try:
         direct_targets = set(selected)
-        for node in order:
-            _component_for_target(
-                node,
-                source,
-                workspace_path,
-                values,
-                include_proof=node in direct_targets or "all" in direct_targets,
-            ).run(
-                lambda event, node=node: reporter.emit(
-                    ProgressEvent(
-                        event.action,
-                        SemanticStep(
-                            node,
-                            event.step.name,
-                            f"{node}/{event.leaf_id or event.step.identity}",
-                        ),
+        output_capture = contextlib.redirect_stdout(evidence.file)
+        error_capture = contextlib.redirect_stderr(evidence.file)
+        with (
+            output_capture if reporter.interactive else contextlib.nullcontext(),
+            error_capture if reporter.interactive else contextlib.nullcontext(),
+        ):
+            for node in order:
+                _component_for_target(
+                    node,
+                    source,
+                    workspace_path,
+                    values,
+                    include_proof=node in direct_targets or "all" in direct_targets,
+                ).run(
+                    lambda event, node=node: reporter.emit(
+                        ProgressEvent(
+                            event.action,
+                            SemanticStep(
+                                node,
+                                event.step.name,
+                                f"{node}/{event.leaf_id or event.step.identity}",
+                            ),
+                        )
                     )
                 )
-            )
         final_files = publish(
             selected_final_files(args.target, values),
-            output_directory(repo, args.output_dir),
+            output_path,
         )
-        print("\nDevlegate distributions ready")
+        evidence.write("Artifacts:")
         for path in final_files:
-            print(f"{path}: {path.stat().st_size} bytes {digest(path)}")
-        print(
-            f"Progress complete: {reporter.completed}/"
-            f"{len(reporter.steps)} semantic steps"
-        )
+            evidence.write(f"{path}: {path.stat().st_size} bytes {digest(path)}")
+        reporter.finish(True)
+        if reporter.interactive:
+            for path in final_files:
+                print(f"package ready: {path}", file=reporter.output)
+            print(f"details: {evidence.path}", file=reporter.output)
         return 0
+    except Exception:
+        failed = reporter.failed
+        stage = f"{failed.target}: {failed.name}" if failed else "packaging"
+        evidence.write(f"FAILED at {stage}")
+        reporter.finish(False)
+        if reporter.interactive:
+            print(f"build failed at {stage}", file=reporter.output)
+            print(f"details: {evidence.path}", file=reporter.output)
+        raise
     finally:
         if args.keep_work:
-            print(f"Temporary workspace kept: {workspace_path}")
+            evidence.write(f"Temporary workspace kept: {workspace_path}")
+            if not reporter.interactive:
+                print(f"Temporary workspace kept: {workspace_path}")
         else:
             shutil.rmtree(workspace_path, ignore_errors=True)
+        evidence.close()
+        _ACTIVE_EVIDENCE = previous_evidence
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1280,7 +1393,8 @@ def main() -> int:
         subprocess.SubprocessError,
         tarfile.TarError,
     ) as error:
-        print(f"dev: package: {error}", file=sys.stderr)
+        if not getattr(sys.stdout, "isatty", lambda: False)():
+            print(f"dev: package: {error}", file=sys.stderr)
         return 1
 
 

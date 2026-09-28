@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import importlib.util
+import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -68,6 +70,46 @@ def test_progress_reports_named_completion_skip_and_failure(capsys):
         "standalone",
         "deb",
     )
+
+
+class TTYBuffer(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def test_tty_progress_rewrites_and_finishes_at_exact_total(monkeypatch):
+    first = GRAPH.SemanticStep("demo", "first")
+    second = GRAPH.SemanticStep("demo", "second")
+    output = TTYBuffer()
+    monkeypatch.setattr(
+        GRAPH.shutil,
+        "get_terminal_size",
+        lambda **_kwargs: os.terminal_size((40, 24)),
+    )
+    reporter = GRAPH.ProgressReporter((first, second), output)
+    reporter.emit(GRAPH.ProgressEvent("start", first))
+    reporter.emit(GRAPH.ProgressEvent("complete", first))
+    reporter.emit(GRAPH.ProgressEvent("skip", second))
+    reporter.finish(True)
+    rendered = output.getvalue()
+    assert rendered.count("\n") == 1
+    assert "1/2" in rendered
+    assert "[#####.....] 1/2" in rendered
+    assert "[##########] 2/2" in rendered
+    assert reporter.completed == 2
+
+
+def test_tty_failure_clears_line_without_counting_failed_step():
+    step = GRAPH.SemanticStep("demo", "failure")
+    output = TTYBuffer()
+    reporter = GRAPH.ProgressReporter((step,), output)
+    reporter.emit(GRAPH.ProgressEvent("start", step))
+    reporter.emit(GRAPH.ProgressEvent("fail", step))
+    reporter.finish(False)
+    assert reporter.completed == 0
+    assert reporter.failed == step
+    assert output.getvalue().endswith("\n")
+    assert "0/1" not in output.getvalue().splitlines()[-1]
 
 
 def test_component_tree_freezes_nested_ids_and_rejects_future_failure():
