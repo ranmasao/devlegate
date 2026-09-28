@@ -1232,13 +1232,21 @@ class ServiceEngine:
             raise DevlegateError(
                 f"recovered execution workspace is not reusable: {final.reason}"
             )
+        current_remote_head = self._execution_remote_head(branch)
+        if current_remote_head not in {None, str(base_head)}:
+            raise DevlegateError(
+                "execution remote branch changed during explicit recovery"
+            )
         # A pre-worker generation owns no lifecycle stage or worker start head.
         # Explicit recovery starts a new coherent pending generation while
         # retaining the exact execution identity and binding.
         self._save_state(
             "agent_pending",
             clear_pre_worker_generation=True,
-            execution_remote_head=None,
+            # The leased reconciliation above deliberately leaves a current
+            # generation predecessor at base_head.  Preserve that exact
+            # observed value so normal checkpoint publication can lease from it.
+            execution_remote_head=current_remote_head,
             worker_identity=None,
         )
 

@@ -4655,6 +4655,81 @@ def test_operator_recovery_requires_exact_observed_head_and_preserves_identity(
     )
 
 
+def test_operator_recovery_keeps_current_remote_predecessor_for_publication(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    git(workspace.path, "push", "origin", f"{old_head}:refs/heads/{workspace.branch}")
+
+    control = next((state / "worktrees").glob("*/control"))
+    _write_prior_execution_receipt(
+        control,
+        execution_id="old-generation",
+        base=old_base,
+        path=workspace.path,
+        head=old_head,
+    )
+    git(control, "add", "executions/T-1")
+    git(control, "commit", "-m", "retain prior execution receipt")
+    git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "push", "origin", "HEAD:main")
+
+    devlegate = Devlegate(config)
+    _persist_pending_execution(
+        devlegate, state, workspace, new_base, "current", start_head=old_head
+    )
+    devlegate._save_state("agent_pending", execution_remote_head=old_head)
+    assert devlegate.plan_view().action == "blocked"
+
+    devlegate._recover_unsafe_bound_execution_workspace("T-1", "current", old_head)
+
+    assert devlegate._state["execution_id"] == "current"
+    assert devlegate._state["execution_remote_head"] == new_base
+    assert "execution_stage" not in devlegate._state
+    assert "execution_start_head" not in devlegate._state
+    assert devlegate.plan_view().action == "run-worker"
+
+    worker_ids = []
+
+    def worker(recovered_workspace, _prompt, **_kwargs):
+        worker_ids.append(devlegate._state["execution_id"])
+        (recovered_workspace.path / "new.txt").write_text("worker\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    monkeypatch.setattr(
+        devlegate,
+        "_sync_control",
+        lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
+    )
+
+    assert run_test_iteration(devlegate) == 0
+    assert worker_ids == ["current"]
+    execution_remote = git(
+        working, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+    ).stdout.split()[0]
+    assert execution_remote == git(manager.path, "rev-parse", "HEAD").stdout.strip()
+
+
 @pytest.mark.parametrize(
     ("ticket_id", "execution_id", "observed_head", "expected_error"),
     [
