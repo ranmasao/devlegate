@@ -112,6 +112,24 @@ def test_tty_failure_clears_line_without_counting_failed_step():
     assert "0/1" not in output.getvalue().splitlines()[-1]
 
 
+def test_tty_progress_fits_a_narrow_terminal(monkeypatch):
+    step = GRAPH.SemanticStep("demo", "an operation with a long label")
+    output = TTYBuffer()
+    monkeypatch.setattr(
+        GRAPH.shutil,
+        "get_terminal_size",
+        lambda **_kwargs: os.terminal_size((8, 24)),
+    )
+    reporter = GRAPH.ProgressReporter((step,), output)
+    reporter.emit(GRAPH.ProgressEvent("start", step))
+    reporter.emit(GRAPH.ProgressEvent("complete", step))
+    reporter.finish(True)
+    rendered = output.getvalue()
+    assert "0/1" in rendered
+    assert "1/1" in rendered
+    assert all(len(part) <= 8 for part in rendered.split("\r") if part)
+
+
 def test_component_tree_freezes_nested_ids_and_rejects_future_failure():
     first = GRAPH.ComponentStep("same label", key="first")
     second = GRAPH.ComponentStep("same label", key="second")

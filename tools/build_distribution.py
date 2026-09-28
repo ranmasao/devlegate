@@ -80,6 +80,23 @@ class EvidenceLog:
         self.file.close()
 
 
+class EvidenceTee:
+    """Write diagnostics to the durable report and, when appropriate, stdout."""
+
+    def __init__(self, evidence: TextIO, visible: TextIO) -> None:
+        self.evidence = evidence
+        self.visible = visible
+
+    def write(self, text: str) -> int:
+        self.evidence.write(text)
+        self.visible.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.evidence.flush()
+        self.visible.flush()
+
+
 _ACTIVE_EVIDENCE: EvidenceLog | None = None
 
 
@@ -131,17 +148,23 @@ class ProgressReporter:
 
     def _width(self) -> int:
         try:
-            return max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+            return max(1, shutil.get_terminal_size(fallback=(80, 24)).columns)
         except OSError:
             return 80
 
     def _render(self, step: SemanticStep, status: str = "") -> None:
         total = len(self.steps)
         width = self._width()
-        bar_width = max(10, min(20, width // 4))
+        counter = f"{self.completed}/{total}"
+        fixed_width = len(counter) + 4
+        if width >= 20:
+            bar_width = max(10, min(20, width // 4))
+        else:
+            bar_width = max(1, min(20, width - fixed_width))
         filled = bar_width * self.completed // total if total else bar_width
         bar = "#" * filled + "." * (bar_width - filled)
-        prefix = f"[{bar}] {self.completed}/{total}  "
+        prefix = f"[{bar}] {counter}"
+        prefix += " " * min(2, max(0, width - len(prefix)))
         label = f"{step.target}: {step.name}"
         if status:
             label = f"{label} ({status})"
@@ -1210,6 +1233,21 @@ def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
     return files
 
 
+def retain_stage_reports(
+    target: str, values: dict[str, object], output_path: Path, evidence: EvidenceLog
+) -> None:
+    """Copy reports out of the temporary workspace before it is removed."""
+    if target not in {"standalone", "deb", "all"}:
+        return
+    standalone = values.get("standalone")
+    if not isinstance(standalone, dict) or "report" not in standalone:
+        return
+    report = standalone["report"].path
+    retained = output_path / f"devlegate-{target}-standalone-build.json"
+    shutil.copy2(report, retained)
+    evidence.write(f"Standalone build report: {retained}")
+
+
 def package(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     output_path = output_directory(repo, args.output_dir)
@@ -1246,11 +1284,21 @@ def package(args: argparse.Namespace) -> int:
     values: dict[str, object] = {}
     try:
         direct_targets = set(selected)
-        output_capture = contextlib.redirect_stdout(evidence.file)
-        error_capture = contextlib.redirect_stderr(evidence.file)
+        output_stream: TextIO = (
+            evidence.file
+            if reporter.interactive
+            else EvidenceTee(evidence.file, reporter.output)
+        )
+        error_stream: TextIO = (
+            evidence.file
+            if reporter.interactive
+            else EvidenceTee(evidence.file, sys.stderr)
+        )
+        output_capture = contextlib.redirect_stdout(output_stream)
+        error_capture = contextlib.redirect_stderr(error_stream)
         with (
-            output_capture if reporter.interactive else contextlib.nullcontext(),
-            error_capture if reporter.interactive else contextlib.nullcontext(),
+            output_capture,
+            error_capture,
         ):
             for node in order:
                 _component_for_target(
@@ -1275,6 +1323,7 @@ def package(args: argparse.Namespace) -> int:
             selected_final_files(args.target, values),
             output_path,
         )
+        retain_stage_reports(args.target, values, output_path, evidence)
         evidence.write("Artifacts:")
         for path in final_files:
             evidence.write(f"{path}: {path.stat().st_size} bytes {digest(path)}")
@@ -1283,11 +1332,18 @@ def package(args: argparse.Namespace) -> int:
             for path in final_files:
                 print(f"package ready: {path}", file=reporter.output)
             print(f"details: {evidence.path}", file=reporter.output)
+        else:
+            for path in final_files:
+                print(
+                    f"package ready: {path} ({path.stat().st_size} bytes, "
+                    f"sha256 {digest(path)})",
+                    file=reporter.output,
+                )
         return 0
-    except Exception:
+    except Exception as error:
         failed = reporter.failed
         stage = f"{failed.target}: {failed.name}" if failed else "packaging"
-        evidence.write(f"FAILED at {stage}")
+        evidence.write(f"FAILED at {stage}: {type(error).__name__}: {error}")
         reporter.finish(False)
         if reporter.interactive:
             print(f"build failed at {stage}", file=reporter.output)
@@ -1387,12 +1443,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         return package(args)
-    except (
-        DistributionError,
-        OSError,
-        subprocess.SubprocessError,
-        tarfile.TarError,
-    ) as error:
+    except Exception as error:
         if not getattr(sys.stdout, "isatty", lambda: False)():
             print(f"dev: package: {error}", file=sys.stderr)
         return 1
