@@ -556,3 +556,98 @@ Still add the explicit required proofs that are not covered by this checkpoint:
 Do not redesign the successful remote-predecessor fix or the normal publication
 path. The remaining work is to make the explicit recovery effect transactional/
 replay-safe and prove the required operator-facing paths.
+
+
+## Review continuation after execution 10a75b35bdac40c89c7921da21ff3ab4
+
+Checkpoint `2684ef3b132af0228ec1306a331144b163a1f7cb` closes the
+previous replay-dead-end and appears semantically correct, but TASK-031 is still
+missing required maintained proof.
+
+Confirmed:
+
+- explicit recovery now persists the exact authorized operator-recovery identity;
+- replay recognizes an already-completed durable prefix without weakening the
+  original observed-head authorization;
+- already-reconciled remote and already-moved local conventional refs are not
+  destructively repeated;
+- a crash after local reconstruction can restart, preserve the same execution ID,
+  finish normalization, clear the recovery intent, and return to a bound
+  `run-worker` plan;
+- the prior current-generation remote predecessor fix remains intact;
+- exact-head CI is green: `1023 passed, 1 skipped`, Ruff clean.
+
+No new recovery-model redesign is requested.
+
+The remaining blocker is the explicit regression contract in TASK-031.
+
+### 1. Cover all durable recovery prefixes, not only local reconstruction
+
+The ticket requires deterministic crash/restart coverage after:
+
+- old-generation evidence preservation;
+- remote conventional-branch reconciliation;
+- local branch CAS/reconstruction;
+- persisted-state normalization.
+
+This checkpoint adds only the local-reconstruction case.
+
+Add fault-injection tests for the remaining boundaries and prove on restart that the
+same authorized recovery either completes the exact remaining suffix or is already
+coherently complete. In every case assert:
+
+- the original operator evidence remains immutable and attributable;
+- old-generation evidence is not lost or rebound;
+- remote/local ref mutations are not repeated destructively;
+- the execution ID is unchanged;
+- no second execution generation is created;
+- no manual runtime-store edit is required.
+
+A parameterized recovery-prefix test is appropriate if it makes the invariant
+clearer.
+
+### 2. Add the required real-service blocked recovery regression
+
+Construct an UNSAFE bound `agent_pending` execution and start the real persistent
+service.
+
+Prove end to end that:
+
+- the service remains alive in blocked/recovery-required state beyond the former
+  startup admission window;
+- no worker is launched before operator authorization;
+- status remains reachable;
+- the public CLI/IPC `recover <ticket> <execution> --observed-head <sha>` command is
+  accepted after that delay;
+- the admitted recovery continues through the normal owner path.
+
+This is the user-visible failure mode that motivated TASK-031 and must not remain
+covered only by internal method tests.
+
+### 3. Add the required remote-drift lease regression
+
+Inject a change to the conventional remote execution branch after the recovery path
+observes its old-generation head but before the leased reconciliation mutation.
+
+Prove:
+
+- the exact lease/CAS rejects the recovery mutation;
+- the unexpected remote material is untouched;
+- old-generation evidence already preserved remains valid;
+- the current execution does not record the drifted remote as its predecessor;
+- a later operator retry still requires a fresh, exact observation rather than
+  silently accepting the drift.
+
+### 4. Keep explicit status/plan agreement coverage
+
+Ensure maintained tests directly prove both sides of the TASK-031 projection
+invariant:
+
+- REUSABLE bound `agent_pending` + `plan.action=run-worker` is not rendered as
+  `recovery-required`;
+- UNSAFE bound `agent_pending` remains `recovery-required`.
+
+Existing projection tests may be extended/reused if they already exercise the exact
+runtime semantics; do not add redundant presentation-only tests merely for count.
+
+After adding these proofs, rerun the exact-head full suite, coverage, and Ruff.
