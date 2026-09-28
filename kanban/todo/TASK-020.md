@@ -104,3 +104,52 @@ not fail when it resolves to the bundled Python instead of the outer artifact.
 - WorkerSupervisor sanitation prevents inherited `PEX`, `SCIE`,
   `SCIE_ARGV0`, and related packaging metadata from selecting a parent
   standalone executable.
+
+
+## Review continuation after execution 0427f7cd6c264097b0899efca9d5d83e
+
+Checkpoint `03058e7f5927cc144d6a1744cee5c5c317e3abd5` is semantically
+promising and should be continued without redesign.
+
+Confirmed:
+
+- launcher selection no longer depends on `sys.argv[0]` when validated
+  `PEX == SCIE` metadata identifies an executable ELF outer artifact;
+- source/development fallback remains `<python> -P -m devlegate`;
+- WorkerSupervisor now strips the broader inherited PEX/SCIE metadata families;
+- the standalone proof now fails unless rendered systemd `ExecStart` starts with
+  the exact outer artifact path;
+- exact-head CI ran the full test suite successfully: `993 passed, 1 skipped`.
+
+Two completion gates remain.
+
+### 1. Fix the exact-head Ruff failure
+
+CI failed only at lint:
+
+```text
+E501 Line too long (89 > 88)
+tests/test_launcher.py:41:89
+```
+
+Wrap/rename that test declaration without changing its semantics and rerun exact-head
+CI.
+
+### 2. Execute the authentic standalone proof/distribution validation
+
+TASK-020 explicitly requires the standalone proof, not only unit-level launcher and
+systemd tests. The normal CI workflow does not run
+`tools/build_standalone.py build/prove`, and the execution report mentions focused
+launcher/worker/systemd tests only.
+
+Build the current standalone artifact and run the existing standalone proof against
+it, including the strengthened exact-outer-`ExecStart` assertion. Run the relevant
+standalone package/distribution validation required by the ticket. Record the exact
+result in the worker report.
+
+Do not change the launcher design merely to address these review comments. If the
+authentic standalone proof exposes a real defect, fix that defect narrowly; otherwise
+retain the current implementation.
+
+Once Ruff is green, exact-head CI is green, and the authentic standalone
+proof/distribution validation succeeds, TASK-020 should be ready for acceptance.
