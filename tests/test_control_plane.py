@@ -4730,6 +4730,54 @@ def test_operator_recovery_keeps_current_remote_predecessor_for_publication(
     assert execution_remote == git(manager.path, "rev-parse", "HEAD").stdout.strip()
 
 
+def test_operator_recovery_replays_after_local_reconstruction_boundary(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    observed = workspace.head
+    devlegate._save_state(
+        "agent_pending",
+        operator_recovery={
+            "ticket_id": "T-1",
+            "execution_id": "current",
+            "observed_head": observed,
+        },
+    )
+    original_prepare = ExecutionWorkspaceManager.prepare
+
+    def crash_after_reconstruction(self, planned_base):
+        original_prepare(self, planned_base)
+        raise RuntimeError("simulated recovery crash")
+
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager, "prepare", crash_after_reconstruction
+    )
+    with pytest.raises(RuntimeError, match="simulated recovery crash"):
+        devlegate.run_iteration()
+
+    assert git(working, "rev-parse", workspace.branch).stdout.strip() == base
+    assert devlegate._state["operator_recovery"]["observed_head"] == observed
+
+    restarted = Devlegate(config)
+    assert restarted._state["execution_id"] == "current"
+    monkeypatch.setattr(ExecutionWorkspaceManager, "prepare", original_prepare)
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["phase"] == "agent_pending"
+    assert "operator_recovery" not in restarted._state
+    assert restarted.plan_view().action == "run-worker"
+
+
 @pytest.mark.parametrize(
     ("ticket_id", "execution_id", "observed_head", "expected_error"),
     [

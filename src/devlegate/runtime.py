@@ -1074,7 +1074,17 @@ class ServiceEngine:
         current = _git(
             self.repo, "rev-parse", "--verify", f"refs/heads/{branch}", check=False
         )
-        if current.returncode or current.stdout.strip() != observed_head:
+        evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
+        evidence = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        replay = (
+            evidence.returncode == 0
+            and evidence.stdout.strip() == observed_head
+            and current.returncode == 0
+            and current.stdout.strip() == state.get("execution_base_head")
+        )
+        if current.returncode or (
+            current.stdout.strip() != observed_head and not replay
+        ):
             raise DevlegateError("execution branch does not match the authorized HEAD")
 
     def _recover_unsafe_bound_execution_workspace(
@@ -1094,11 +1104,19 @@ class ServiceEngine:
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("persisted execution workspace binding is invalid")
         branch_ref = f"refs/heads/{branch}"
-        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if current.returncode or current.stdout.strip() != observed_head:
-            raise DevlegateError("execution branch changed before explicit recovery")
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
+        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
+        current_head = current.stdout.strip() if current.returncode == 0 else None
         existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        authorized_replay = (
+            existing.returncode == 0
+            and existing.stdout.strip() == observed_head
+            and current_head == str(base_head)
+        )
+        if current.returncode or (
+            current_head != observed_head and not authorized_replay
+        ):
+            raise DevlegateError("execution branch changed before explicit recovery")
         if existing.returncode == 0 and existing.stdout.strip() != observed_head:
             raise DevlegateError("operator recovery evidence has conflicting identity")
         if existing.returncode:
@@ -1198,8 +1216,13 @@ class ServiceEngine:
         if registration is not None:
             # Validate the authorized conflicting checkout by its observed old
             # generation; the new admitted base is intentionally unrelated.
-            workspace = manager._validate_existing(registration, observed_head)
-            if workspace.head != observed_head or workspace.dirty:
+            expected_worktree_head = (
+                str(base_head) if authorized_replay else observed_head
+            )
+            workspace = manager._validate_existing(
+                registration, expected_worktree_head
+            )
+            if workspace.head != expected_worktree_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
             removed = _git(
                 self.repo,
@@ -1212,20 +1235,25 @@ class ServiceEngine:
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
         current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if current.returncode or current.stdout.strip() != observed_head:
+        current_head = current.stdout.strip() if current.returncode == 0 else None
+        if current.returncode or (
+            current_head != observed_head
+            and not (authorized_replay and current_head == str(base_head))
+        ):
             raise DevlegateError("execution branch changed during explicit recovery")
-        moved = _git(
-            self.repo,
-            "update-ref",
-            branch_ref,
-            str(base_head),
-            observed_head,
-            check=False,
-        )
-        if moved.returncode:
-            raise DevlegateError(
-                "execution branch changed before explicit recovery CAS"
+        if current_head == observed_head:
+            moved = _git(
+                self.repo,
+                "update-ref",
+                branch_ref,
+                str(base_head),
+                observed_head,
+                check=False,
             )
+            if moved.returncode:
+                raise DevlegateError(
+                    "execution branch changed before explicit recovery CAS"
+                )
         repaired = manager.prepare(str(base_head))
         final = manager.inspect(str(base_head), repaired.head)
         if final.classification != "REUSABLE":
@@ -1243,6 +1271,7 @@ class ServiceEngine:
         self._save_state(
             "agent_pending",
             clear_pre_worker_generation=True,
+            clear_operator_recovery=True,
             # The leased reconciliation above deliberately leaves a current
             # generation predecessor at base_head.  Preserve that exact
             # observed value so normal checkpoint publication can lease from it.
@@ -1625,6 +1654,17 @@ class ServiceEngine:
             self._save_state(
                 str(self._state["phase"]),
                 mutable_receipts=updated,
+                **(
+                    {
+                        "operator_recovery": {
+                            "ticket_id": command.ticket_id,
+                            "execution_id": command.execution_id,
+                            "observed_head": command.onto,
+                        }
+                    }
+                    if command.method == "recover"
+                    else {}
+                ),
                 **({"reconciliation": reconciliation} if reconciliation else {}),
             )
 
@@ -2741,6 +2781,7 @@ class ServiceEngine:
         *,
         clear_execution: bool = False,
         clear_pre_worker_generation: bool = False,
+        clear_operator_recovery: bool = False,
         **fields: object,
     ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -2773,6 +2814,8 @@ class ServiceEngine:
                 "resume_required",
             ):
                 state.pop(field, None)
+        if clear_operator_recovery:
+            state.pop("operator_recovery", None)
         self._validate_state_invariant(state)
         try:
             self._runtime_store.replace(state)
@@ -2938,6 +2981,22 @@ class ServiceEngine:
         if self._stop_requested() and self._state.get("phase") != "merge_pending":
             return 0
         self._workflow_validation_succeeded = False
+        recovery = self._state.get("operator_recovery")
+        if self._state.get("phase") == "agent_pending" and isinstance(recovery, dict):
+            ticket_id = recovery.get("ticket_id")
+            execution_id = recovery.get("execution_id")
+            observed_head = recovery.get("observed_head")
+            if not all(
+                isinstance(value, str) and value
+                for value in (ticket_id, execution_id, observed_head)
+            ):
+                raise DevlegateError(
+                    "persisted operator recovery identity is incomplete"
+                )
+            self._recover_unsafe_bound_execution_workspace(
+                ticket_id, execution_id, observed_head
+            )
+            return 0
         branch = self._git_runtime(
             self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
