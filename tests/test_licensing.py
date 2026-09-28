@@ -254,14 +254,8 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
 
 
 def _distribution_source() -> DISTRIBUTION.Source:
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    return DISTRIBUTION.Source(ROOT, commit, __version__, sys.executable)
+    # These boundary tests validate archive contents, not repository history.
+    return DISTRIBUTION.Source(ROOT, "0" * 40, __version__, sys.executable)
 
 
 def test_wheel_validator_rejects_injected_repository_integration(tmp_path) -> None:

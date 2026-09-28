@@ -166,6 +166,14 @@ jobs:
           if [[ -x "$extracted/dev" && -f "$extracted/pyproject.toml" ]] \
             && grep -q '^  setup)' "$extracted/dev" \
             && grep -q '^  check)' "$extracted/dev"; then
+            # The archive is intentionally Git-free. Add repository context only
+            # after archive validation, for developer checks that still need HEAD.
+            git -C "$extracted" init --quiet
+            git -C "$extracted" add --all
+            git -C "$extracted" -c user.name=release-check \
+              -c user.email=release-check@localhost commit --quiet \
+              -m extracted-source-check
+            test -z "$(git -C "$extracted" status --porcelain)"
             (cd "$extracted" && ./dev setup && ./dev check)
           else
             printf 'Skipping modern Devlegate checks for this historical source tree\n'
