@@ -536,3 +536,39 @@ the authoritative exact-head GitHub run above supersedes it.
 
 Once these focused regressions are present and the new exact-head CI remains green,
 TASK-019 should be ready for review -> accepted.
+
+
+## Review continuation after execution abeafda1e675459e8ed4f7a28346ebef
+
+Checkpoint `48bb9fc03ed64d6c92cfe5036c4539ca32a3c84a` is otherwise ready:
+
+- exact-head CI is green: `988 passed, 1 skipped`;
+- coverage completed at 79%;
+- Ruff completed with `All checks passed!`;
+- the final execution changes tests only and leaves the recovery implementation
+  unchanged;
+- automatic stale-generation repair is now exercised through the normal runtime path
+  and proves one worker launch under the same execution ID;
+- inspection-to-mutation branch drift is injected deterministically and automatic
+  repair fails closed without overwriting the drifted ref;
+- a wrong registered worktree is classified UNSAFE and the plan is non-runnable;
+- CLI and IPC tests now prove exact ticket/execution/observed-head forwarding for the
+  supported `recover` command.
+
+One explicitly requested public-boundary proof remains. The new CLI/IPC tests stop at
+forwarding into `submit_recover`; they do not exercise real owner-side admission
+with bad identities. Existing engine coverage checks stale observed HEAD only through
+the private `_validate_recover_admission` seam and does not cover wrong ticket or
+wrong execution ID through the public submission/owner path.
+
+Add a narrow owner/IPC regression (parameterized is fine) that submits `recover`
+through the supported mutation path and proves, before any recovery effect:
+
+- wrong ticket ID is rejected;
+- wrong execution ID is rejected;
+- stale/wrong observed HEAD is rejected;
+- the exact matching identity is admitted to the owner-side recovery operation.
+
+Do not change the recovery implementation unless this test exposes a real defect.
+After this boundary proof and another green exact-head CI run, no other TASK-019
+review blocker is known.
