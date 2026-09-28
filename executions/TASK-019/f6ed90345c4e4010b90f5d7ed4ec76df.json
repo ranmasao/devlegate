@@ -1,0 +1,28 @@
+{
+  "code_base_head": "68cf5526618913d52bf542e84ddd3936e7ea8faa",
+  "conclusion": "completed",
+  "control_head": "8d20e24b90727a2eec01fe06fcba528e3a98a970",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-019",
+  "execution_id": "f6ed90345c4e4010b90f5d7ed4ec76df",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-019",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-019/f6ed90345c4e4010b90f5d7ed4ec76df.md",
+  "report_sha256": "effc7b1cb69ee49625dbc9ff5df9c19f255ba16d71497dd43772376976534d7f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-019",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused recovery/workspace tests, the IPC server suite, compileall, and diff checks pass. The full pytest run exceeded the available command timeout, and Ruff is not installed in the environment.",
+    "summary": "Added public owner-admission regressions for pre-worker recovery covering wrong ticket, wrong execution, stale observed HEAD rejection, and exact identity admission through submit_recover into the owner-side recovery operation. The tests verify invalid requests do not reach the recovery effect and valid requests preserve the exact recovery identity."
+  },
+  "workspace_head": "28070e7951756da867640027f6142edfea3efb02"
+}
