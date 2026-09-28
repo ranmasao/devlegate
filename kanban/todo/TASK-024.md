@@ -435,3 +435,44 @@ coverage, and Ruff remain required after the missing regressions are added.
 No new semantic redesign is requested. The evidence tee, exception retention,
 durable report copy, non-TTY artifact summary, and narrow renderer should all be
 retained.
+
+
+## Review continuation after execution 4b57105e2bf44e54a661b658d13ce141
+
+Checkpoint `05b196bc02b82daf6836baa13a963bfb8e37e47e` closes the
+remaining TASK-024 end-to-end proof gaps.
+
+Confirmed:
+
+- package-level TTY success is covered through `GRAPH.package(args)`, including
+  transient progress, concise `package ready` / `details` output, published
+  artifact survival, durable details log, and normal temporary-workspace cleanup;
+- package-level TTY failure is covered through an in-process semantic failure,
+  including concise terminal output, diagnostic retention in the details log,
+  unchanged failed-leaf completion accounting, and workspace cleanup;
+- durable standalone structured evidence is covered end to end: the original report
+  starts inside the temporary workspace, the retained report survives cleanup in the
+  output directory, and the details log references the durable path;
+- the narrow-terminal regression now measures visible terminal width while excluding
+  the required terminating newline rather than weakening the renderer.
+
+Exact-head pytest/coverage is fully green:
+
+```text
+1021 passed, 1 skipped
+```
+
+The only remaining blockers are four Ruff findings, all mechanical and localized:
+
+1. `tests/test_distribution_graph.py`: remove the unused local `values = {}` in
+   `test_package_tty_success_keeps_progress_transient_and_log_durable`.
+2. `tests/test_distribution_graph.py`: wrap the 90-character failure-log assertion
+   so it satisfies E501 without weakening the assertion.
+3. `tests/test_distribution_graph.py`: remove the unused local `values = {}` in
+   `test_standalone_package_retains_structured_report_and_evidence_path`.
+4. `tools/build_distribution.py`: remove the unnecessary `f` prefix from
+   `print(f"build failed at packaging", file=sys.stdout)`.
+
+Do not change TASK-024 behavior or tests beyond these lint corrections. After those
+four edits, rerun the exact-head full suite, coverage, and Ruff. No additional
+semantic blocker is known at this checkpoint.
