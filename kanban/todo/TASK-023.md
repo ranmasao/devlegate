@@ -181,3 +181,102 @@ packages.
 - Rebuild the same full-source candidate twice and preserve byte equality.
 - Preserve exact recursive submodule identities after applying the curated source
   boundary.
+
+
+## Review continuation after execution 26f6bc0d604f4a25b47cd0e3338dd488
+
+Checkpoint `c3bbfc97821a3482fdbedc700972642077d9a70c` is structurally
+sound and should be continued rather than redesigned.
+
+Confirmed good work:
+
+- the curated full-source builder now removes repository integration before archive
+  assembly;
+- wheel/sdist/standalone/Debian validation all have a shared negative-boundary hook;
+- the explicit fixed prohibited paths (`.env`, `.devlegate/**`,
+  `skills/architect/SKILL.md`, `skills/reviewer/SKILL.md`) are protected;
+- `src/devlegate/default_templates/**` remains outside the exclusion boundary;
+- the GitHub automatic source-snapshot exception is documented clearly;
+- existing full-source reproducibility/submodule/SOURCE-MANIFEST behavior remains
+  covered;
+- exact-head CI is fully green: `1009 passed, 1 skipped`, coverage completed, and
+  Ruff reports `All checks passed!`.
+
+The task is not ready for acceptance for three narrow reasons.
+
+### 1. Manifest-derived exclusion currently trusts arbitrary project targets too much
+
+`distribution_boundary.generated_targets()` accepts any target whose string starts
+with `skills/`. The manifest `source` is parsed but not used to prove that the
+target is actually Devlegate-generated repository integration.
+
+As written, a tracked project manifest could declare an unrelated product file such
+as:
+
+```toml
+[[artifact]]
+source = "something.tmpl"
+target = "skills/product-data/README.md"
+```
+
+and the curated full-source builder would silently remove that tracked file. This
+violates TASK-023's explicit requirement that a stronger manifest-derived mechanism
+must remain fail closed and must not let arbitrary project configuration silently
+exclude unrelated product source.
+
+Keep the manifest-derived mechanism, but require positive ownership proof before a
+declared target becomes excludable. Reuse or mirror the project renderer's ownership
+semantics where practical: validate the complete manifest entry, constrain the
+template source to the project template boundary, and/or prove the existing target
+is Devlegate-generated (for example through the generated marker). The exact design
+is flexible, but a manifest declaration alone must not authorize source removal.
+
+Add a regression in which a manifest points at an unrelated tracked `skills/**`
+file and prove the distribution boundary refuses to delete/omit it.
+
+### 2. Full-source validation does not enforce the same dynamic boundary as the builder
+
+`build_full_source.remove_integration()` derives additional generated targets from
+the selected source manifest. But `validate_full_source.validate_archive()` checks
+archive members using:
+
+```python
+is_prohibited(name)
+```
+
+without the selected source/boundary root. Therefore that direct negative check sees
+only the fixed default targets plus `.env/.devlegate`, not non-default generated
+targets declared by the selected source manifest.
+
+`verify_tree_content(..., boundary_root=selected_source)` skips expected dynamic
+targets while comparing source content, but it does not reject an *extra/injected*
+dynamic target in the archive. Thus builder and validator can disagree about the
+curated boundary.
+
+Make the validator enforce the exact same resolved prohibited-member set as the
+builder, using the selected source tree/validated manifest ownership proof. Add a
+focused regression with a non-default, positively proven generated target and show:
+
+- the builder excludes it;
+- the validator rejects an archive in which that target is injected back;
+- an unrelated manifest-declared target without ownership proof fails closed rather
+  than being silently excluded.
+
+### 3. Required wheel/sdist boundary regressions are missing
+
+TASK-023 explicitly requires wheel/sdist member-list coverage. The checkpoint wires
+`validate_members()` into `validate_wheel()` and `validate_sdist()`, but the
+maintained tests added in this execution cover only:
+
+- full-source builder exclusion;
+- standalone validator rejection;
+- Debian validator rejection.
+
+Add focused wheel and sdist tests that construct/inject repository-integration
+members and prove the supported validators reject them. At minimum exercise one
+fixed prohibited root integration path; where practical also exercise the
+manifest-derived target boundary.
+
+Do not broaden this into packaging redesign. The current shared-boundary structure
+is appropriate; finish its ownership proof and validation/regression symmetry, then
+rerun the exact-head full suite and Ruff.
