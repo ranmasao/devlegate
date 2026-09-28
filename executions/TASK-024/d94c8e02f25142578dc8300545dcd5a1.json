@@ -1,0 +1,28 @@
+{
+  "code_base_head": "73831989ce2e962f3a64d8fce689260438028f73",
+  "conclusion": "completed",
+  "control_head": "861a3d80ab699c60d7149e5026aaeaff28dea08e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-024",
+  "execution_id": "d94c8e02f25142578dc8300545dcd5a1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-024",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-024/d94c8e02f25142578dc8300545dcd5a1.md",
+  "report_sha256": "fde6a56670892406ffdd20a5db0ab3509173b4add3e26782505a8bdffb88b109",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-024",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused syntax compilation and diff checks passed. The repository environment does not provide pytest or ruff executables, so those suites could not be run.",
+    "summary": "Completed TASK-024 packaging evidence and presentation continuation. Non-TTY diagnostics are retained via tee capture, failures record exception details, standalone reports are copied to durable output paths before workspace cleanup, non-TTY runs retain artifact summaries, and narrow TTY rendering remains bounded while preserving counters. Added a narrow-terminal regression without changing semantic planning or event validation."
+  },
+  "workspace_head": "98f0bac08ee59f773f51974acd6e60e6b76b8226"
+}
