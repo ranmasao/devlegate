@@ -336,3 +336,128 @@ Then prove end to end:
   `recovery-required`.
 - Once the same execution is claimed by the service, normal preparing/starting/
   running projection is preserved.
+
+
+## Review continuation after execution 828f0f5b3b4e429e9794bb930703903f
+
+Checkpoint `59e3d223e7210ac6f1418db4ea4b3d13b6b7b0e5` moves the
+implementation in the intended direction, but TASK-031 is not ready for acceptance.
+
+Confirmed good work:
+
+- a persistent UNSAFE `agent_pending` state can now keep the service in a blocked
+  owner loop rather than forcing the IPC recovery route to depend on startup timing;
+- explicit pre-worker recovery clears stale `execution_stage`,
+  `execution_start_head`, interruption, and resume metadata without changing the
+  current ticket/execution binding;
+- status projection no longer reports a reusable bound pending execution as
+  `recovery-required` merely because the restarted process has not yet claimed it;
+- remote conventional-branch reconciliation now freshly observes the remote,
+  preserves prior evidence, and uses `--force-with-lease` rather than an
+  unconditional mutation;
+- exact-head CI is green: `1021 passed, 1 skipped`, Ruff clean.
+
+Two blocking issues remain.
+
+### 1. Remote reconciliation records the wrong current-generation predecessor
+
+The new explicit-recovery path moves the conventional remote branch to the current
+admitted base:
+
+```python
+git push   --force-with-lease=refs/heads/<branch>:<old-remote-head>   <remote>   <base_head>:refs/heads/<branch>
+```
+
+but after doing that it persists:
+
+```python
+execution_remote_head=None
+```
+
+Those two facts are inconsistent.
+
+Normal checkpoint publication later calls:
+
+```python
+_publish_execution_branch(
+    workspace,
+    checkpoint.after_head,
+    self._state.get("execution_remote_head"),
+)
+```
+
+and that function first requires:
+
+```python
+observed_remote_head == expected_remote_head
+```
+
+After this recovery, however:
+
+```text
+observed remote conventional branch = base_head
+expected execution_remote_head      = None
+```
+
+so the recovered execution will fail at checkpoint publication with:
+
+```text
+execution branch remote changed during worker execution
+```
+
+before it can complete the very continuation TASK-031 exists to guarantee.
+
+Choose one coherent current-generation model and test it end to end:
+
+- either preserve old evidence, lease-move the conventional remote branch to the
+  current `base_head`, and persist `execution_remote_head=base_head`; then normal
+  publication uses that exact current-generation predecessor;
+- or preserve old evidence and lease-delete/retire the conventional remote branch,
+  keeping `execution_remote_head=None`; then the first current-generation checkpoint
+  creates the branch from no predecessor.
+
+Do not leave a real remote predecessor at `base_head` while persisting `None`.
+
+Add a regression that performs explicit recovery, launches the same execution ID,
+creates a worker checkpoint, and successfully publishes it through the normal
+`_publish_execution_branch()` path.
+
+### 2. The TASK-031 required regressions were not added
+
+This execution changes only:
+
+- `src/devlegate/runtime.py`
+- `src/devlegate/cli.py`
+
+No maintained tests were added or modified.
+
+The existing TASK-019-era tests cover local workspace classification/repair and
+identity-bound recover admission, but they do not prove the new TASK-031 continuation
+contract. In particular they do not cover the remote-predecessor bug above.
+
+Add focused regressions for the explicit requirements in this ticket, at minimum:
+
+- **reachable blocked-service recovery:** real service remains alive beyond the
+  startup admission window, no worker launches, public CLI/IPC recover is still
+  accepted;
+- **LAB-153 stale-generation continuation:** prior receipt/checkpoint plus stale local
+  and remote conventional refs, stale pending lifecycle/start-head metadata, exact
+  recovery, normalized state, REUSABLE plan, same execution ID, exactly one worker,
+  successful checkpoint publication;
+- **remote drift:** mutate the conventional remote after observation and prove the
+  lease/CAS fails without touching unexpected material while preserved evidence
+  remains valid;
+- **replay/crash boundaries:** recovery repeated after evidence preservation, local
+  reconstruction, remote reconciliation, and persisted-state normalization is
+  idempotent/fail-closed rather than duplicating destructive effects;
+- **status/plan agreement:** REUSABLE bound pending + `run-worker` is not
+  `recovery-required`; UNSAFE remains `recovery-required`; claimed execution
+  keeps normal preparing/running projection.
+
+The full LAB-153-shaped test must pass through the normal worker/checkpoint/publication
+path, not stop after `manager.inspect(...)=REUSABLE`.
+
+Do not redesign the recovery model. Keep the service-liveness, targeted
+pre-worker-state normalization, lease/CAS, evidence preservation, and status changes.
+Fix the current-generation remote predecessor invariant, add the missing end-to-end
+regressions, and rerun exact-head tests, coverage, and Ruff.
