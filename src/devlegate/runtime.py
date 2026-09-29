@@ -7826,6 +7826,21 @@ class ServiceEngine:
                         raise DevlegateError(
                             "interrupted execution rewrite evidence is invalid"
                         )
+                    rewritten_ref = reconciliation.get("rewritten_evidence_ref")
+                    rewritten = _git(
+                        self.repo,
+                        "rev-parse",
+                        "--verify",
+                        str(rewritten_ref),
+                        check=False,
+                    )
+                    if (
+                        rewritten.returncode
+                        or rewritten.stdout.strip() != rewrite_checkpoint
+                    ):
+                        raise DevlegateError(
+                            "interrupted execution rewritten evidence is invalid"
+                        )
                     rewritten = _git(
                         workspace.path,
                         "rev-list",

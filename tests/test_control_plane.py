@@ -3018,6 +3018,82 @@ def test_update_base_transplants_multiple_unpublished_checkpoints(
     assert git(execution, "rev-parse", f"{rewritten[0]}^").stdout.strip() == target
 
 
+@pytest.mark.parametrize("published_checkpoint", ["first", "second"])
+def test_update_base_rewrites_exact_published_lineage_only_with_authorization(
+    tmp_path, monkeypatch, published_checkpoint
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "first.txt").write_text("first\n")
+        (working / "dirty-product.txt").write_text("product\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 1
+    reconciliation = dict(devlegate._state["reconciliation"])
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "second.txt").write_text("second\n")
+    git(execution, "add", "second.txt")
+    git(execution, "commit", "-m", "second checkpoint")
+    second = git(execution, "rev-parse", "HEAD").stdout.strip()
+    first = git(execution, "rev-parse", "HEAD^").stdout.strip()
+    published = first if published_checkpoint == "first" else second
+    git(
+        execution,
+        "push",
+        "origin",
+        f"{published}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    git(working, "add", "dirty-product.txt")
+    git(working, "commit", "-m", "advance product")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(execution, "update-ref", reconciliation["evidence_ref"], second)
+    operation = {
+        **reconciliation,
+        "worker_checkpoint": second,
+        "execution_remote_head": published,
+        "execution_report": {
+            **reconciliation["execution_report"],
+            "workspace_head": second,
+        },
+    }
+    devlegate._save_state("idle", reconciliation=operation)
+
+    with pytest.raises(DevlegateError, match="--rewrite-published"):
+        devlegate.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+
+    assert devlegate.reconcile_update_base("T-1", target, rewrite_published=True) == 0
+    resolved = devlegate._state["reconciliation"]
+    assert resolved["status"] == "resolved"
+    assert resolved["effective_base"] == target
+    assert resolved["worker_checkpoint"] != second
+    assert (
+        git(
+            execution,
+            "ls-remote",
+            "origin",
+            f"refs/heads/{reconciliation['execution_branch']}",
+        ).stdout.split()[0]
+        == resolved["worker_checkpoint"]
+    )
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == second
+    )
+    assert (
+        git(execution, "rev-parse", resolved["evidence_ref"]).stdout.strip()
+        == resolved["worker_checkpoint"]
+    )
+
+
 def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     tmp_path, monkeypatch
 ):
