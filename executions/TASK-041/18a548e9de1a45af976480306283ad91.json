@@ -1,0 +1,28 @@
+{
+  "code_base_head": "53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb",
+  "conclusion": "completed",
+  "control_head": "6270201190b15c65a88c699ddc9cd2845a2d3a86",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-041",
+  "execution_id": "18a548e9de1a45af976480306283ad91",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-041",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-041/18a548e9de1a45af976480306283ad91.md",
+  "report_sha256": "dc24e3477599c7db86b717219ca306b53707c126673885d4e98775511823d8e9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-041",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused reconciliation and process-boundary tests pass, Ruff and diff checks pass. The full 1044-test run exceeded the available timeout during the existing control-plane suite; an isolated flaky CLI test passed on rerun.",
+    "summary": "Added real-Git TASK-041 regressions for out-of-lineage publication, merge/nonlinear history, multi-commit conflict restoration, dropped-commit rejection, lease drift, and process restart after successful remote rewrite. Added post-transform abort persistence so invalid rebases restore the original checkpoint and durable base generation."
+  },
+  "workspace_head": "92f5a2593d46a2bf009cc083b2a4904ddfcf7070"
+}
