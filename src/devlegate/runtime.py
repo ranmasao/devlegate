@@ -438,6 +438,13 @@ def _reconcile_resume_request_fingerprint(ticket_id: str) -> str:
     return _mutation_fingerprint("reconcile-resume", {"ticket_id": ticket_id})
 
 
+def _reconcile_auto_request_fingerprint(ticket_id: str, onto: str | None) -> str:
+    return _mutation_fingerprint(
+        "reconcile-auto",
+        {"ticket_id": ticket_id, "onto": onto if onto is not None else "<auto>"},
+    )
+
+
 def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
     return _mutation_fingerprint(
         "reconcile-control", {"from": from_head, "to": to_head}
@@ -943,6 +950,18 @@ class ServiceEngine:
             fingerprint=_reconcile_resume_request_fingerprint(ticket_id),
         )
 
+    def submit_reconcile_auto(
+        self, ticket_id: str, onto: str | None, *, request_id: str
+    ) -> dict[str, object]:
+        """Submit the intent-driven reconciliation operation."""
+        return self._submit_operator_command(
+            method="reconcile-auto",
+            ticket_id=ticket_id,
+            onto=onto,
+            request_id=request_id,
+            fingerprint=_reconcile_auto_request_fingerprint(ticket_id, onto),
+        )
+
     def submit_reconcile_control(
         self, from_head: str, to_head: str, *, request_id: str
     ) -> dict[str, object]:
@@ -1401,6 +1420,37 @@ class ServiceEngine:
         elif not command.onto:
             raise DevlegateError("requested reconciliation target is empty")
 
+    def _validate_reconcile_auto_admission(self, command: OperatorCommand) -> None:
+        reconciliation = self._state.get("reconciliation")
+        if (
+            not isinstance(reconciliation, dict)
+            or reconciliation.get("status") != "pending"
+        ):
+            raise DevlegateError(
+                f"ticket {command.ticket_id} has no pending reconciliation"
+            )
+        if reconciliation.get("ticket_id") != command.ticket_id:
+            raise DevlegateError(
+                "requested ticket does not match pending reconciliation"
+            )
+        if command.onto is not None:
+            self._validate_reconcile_admission(command)
+            return
+        product = self._observe_product_generation(
+            str(reconciliation["original_base"])
+        )
+        if product["stable"]:
+            return
+        if not product["target_eligible"]:
+            raise DevlegateError(
+                "current product generation is not eligible for reconciliation"
+            )
+        local_head = str(product["local_head"])
+        remote_head = str(product["remote_head"])
+        if not local_head or local_head != remote_head:
+            raise DevlegateError("current product local and remote HEADs do not agree")
+        command.onto = local_head
+
     def _automatic_zero_delta_authorization(
         self,
         ticket_store: TicketStore,
@@ -1594,6 +1644,9 @@ class ServiceEngine:
         if command.method == "reconcile-update-base":
             self._validate_reconcile_admission(command)
             return
+        if command.method == "reconcile-auto":
+            self._validate_reconcile_auto_admission(command)
+            return
         if command.method == "reconcile-resume":
             self._validate_reconcile_resume_admission(command.ticket_id)
             return
@@ -1646,6 +1699,12 @@ class ServiceEngine:
             if onto is None:
                 raise DevlegateError("reconciliation target was not resolved")
             return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
+        if method == "reconcile-auto":
+            return {
+                "accepted": True,
+                "ticket_id": ticket_id,
+                **({"onto": onto} if onto is not None else {}),
+            }
         raise DevlegateError(f"unsupported operator command: {method}")
 
     @staticmethod
@@ -1724,7 +1783,9 @@ class ServiceEngine:
             execution_id = getattr(command, "execution_id", None)
             if execution_id is not None:
                 receipt["execution_id"] = execution_id
-            if command.method == "reconcile-update-base":
+            if command.method == "reconcile-update-base" or (
+                command.method == "reconcile-auto" and command.onto is not None
+            ):
                 if command.onto is None:
                     raise DevlegateError("reconciliation target was not resolved")
                 receipt["onto"] = command.onto
@@ -1738,6 +1799,14 @@ class ServiceEngine:
                     **current,
                     "status": "resolving",
                     "resolution": "resume",
+                }
+            elif command.method == "reconcile-auto":
+                current = self._state.get("reconciliation")
+                if not isinstance(current, dict):
+                    raise DevlegateError("invalid reconciliation state")
+                reconciliation = {
+                    **current,
+                    "resolution": "resume" if command.onto is None else "update-base",
                 }
             self._save_state(
                 str(self._state["phase"]),
@@ -6345,6 +6414,12 @@ class ServiceEngine:
             return 0
         if command.method == "reconcile-resume":
             return self._reconcile_resume_owned(command.ticket_id)
+        if command.method == "reconcile-auto":
+            if command.onto is None:
+                return self._reconcile_resume_owned(command.ticket_id)
+            return self._reconcile_update_base_owned(
+                command.ticket_id, command.onto, rewrite_published=True
+            )
         if command.method == "reconcile-update-base":
             if command.onto is None:
                 raise DevlegateError(
@@ -7906,6 +7981,7 @@ class ServiceEngine:
                         **reconciliation,
                         "status": "resolved",
                         "resolution": "update-base",
+                        "resolution_class": "update-base with published-lineage rewrite",
                         "effective_base": target,
                         "worker_checkpoint": rewrite_checkpoint,
                         "execution_remote_head": rewrite_checkpoint,
@@ -8177,6 +8253,11 @@ class ServiceEngine:
                 **reconciliation,
                 "status": "resolved",
                 "resolution": "update-base",
+                "resolution_class": (
+                    "update-base with published-lineage rewrite"
+                    if execution_remote is not None
+                    else "update-base"
+                ),
                 "effective_base": target,
                 "worker_checkpoint": updated.head,
                 "execution_remote_head": (

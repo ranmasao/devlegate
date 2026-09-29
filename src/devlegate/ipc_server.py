@@ -181,6 +181,25 @@ def dispatch_mutation(
                 "invalid_request", "reconciliation ticket_id must be non-empty text"
             )
         return engine.submit_reconcile_resume(ticket_id, request_id=request.request_id)
+    if request.method == "reconcile-auto":
+        if set(request.payload) not in ({"ticket_id"}, {"ticket_id", "onto"}):
+            raise IPCProtocolError(
+                "invalid_request",
+                "automatic reconciliation payload fields are invalid",
+            )
+        ticket_id = request.payload["ticket_id"]
+        onto = request.payload.get("onto")
+        if not isinstance(ticket_id, str) or not ticket_id:
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation ticket_id must be non-empty text"
+            )
+        if onto is not None and (not isinstance(onto, str) or not onto):
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation onto must be non-empty text"
+            )
+        return engine.submit_reconcile_auto(
+            ticket_id, onto, request_id=request.request_id
+        )
     if request.method == "reconcile-control":
         if set(request.payload) != {"from", "to"}:
             raise IPCProtocolError(

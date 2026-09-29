@@ -478,6 +478,48 @@ def _reconcile_resume_daemon(
     return 0
 
 
+def _reconcile_auto_daemon(
+    env_file: Path, ticket_id: str, onto: str | None, output_format: str
+) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError(
+                "service is not running for this checkout; start `devlegate`"
+            )
+        payload = {"ticket_id": ticket_id}
+        if onto is not None:
+            payload["onto"] = onto
+        result = request(
+            locator.socket_path, "reconcile-auto", payload, mutable=True
+        )
+        if result.get("accepted") is not True or result.get("ticket_id") != ticket_id:
+            raise DevlegateError(
+                "service returned an invalid reconciliation acknowledgement"
+            )
+        effective_onto = result.get("onto")
+        if effective_onto is not None and (
+            not isinstance(effective_onto, str)
+            or not effective_onto
+            or (onto is not None and effective_onto != onto)
+        ):
+            raise DevlegateError("service returned an invalid reconciliation target")
+    except RuntimeLocatorError as error:
+        raise DevlegateError(str(error)) from error
+    except IPCClientError as error:
+        raise DevlegateError(str(error)) from error
+    emit(
+        {
+            "result": "accepted",
+            "ticket_id": ticket_id,
+            **({"onto": effective_onto} if effective_onto is not None else {}),
+        },
+        output_format,
+        f"reconciliation request accepted: {ticket_id}; see service log for result",
+    )
+    return 0
+
+
 def _reconcile_control(
     env_file: Path, from_head: str, to_head: str, output_format: str
 ) -> int:
@@ -2423,12 +2465,22 @@ def build_parser() -> argparse.ArgumentParser:
     add_output_arguments(recover_parser)
     reconcile_parser = commands.add_parser(
         "reconcile",
-        help="handle pending product-base changes",
-        description="Handle a pending product-base change for an execution.",
+        help="resolve a pending reconciliation",
+        description=(
+            "Handle a pending product-base change for an execution. Resolve it "
+            "using the strongest safe service-owned operation. Normal form: "
+            "devlegate reconcile TICKET."
+        ),
     )
     reconcile_commands = reconcile_parser.add_subparsers(
         dest="reconcile_command", parser_class=DevlegateArgumentParser
     )
+    auto_parser = reconcile_commands.add_parser(
+        "auto", help=argparse.SUPPRESS, description=argparse.SUPPRESS
+    )
+    auto_parser.add_argument("ticket_id", help=argparse.SUPPRESS)
+    auto_parser.add_argument("--onto", help=argparse.SUPPRESS)
+    add_output_arguments(auto_parser)
     update_base_parser = reconcile_commands.add_parser(
         "update-base",
         help="update an execution to a new product base",
@@ -2585,6 +2637,12 @@ def _run_attached_command(
 def main() -> int:
     parser = build_parser()
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
+    if "reconcile" in argv:
+        index = argv.index("reconcile")
+        if index + 1 < len(argv) and argv[index + 1] not in {
+            "auto", "resume", "update-base", "control"
+        } and not argv[index + 1].startswith("-"):
+            argv[index + 1:index + 1] = ["auto"]
     args = parser.parse_args(argv)
     args.project_alias = project_alias
     startup_fd = _startup_fd()
@@ -2800,6 +2858,10 @@ def main() -> int:
                 args.output_format,
             )
         if args.command == "reconcile":
+            if args.reconcile_command == "auto":
+                return _reconcile_auto_daemon(
+                    env_file, args.ticket_id, args.onto, args.output_format
+                )
             if args.reconcile_command == "control":
                 return _reconcile_control(
                     env_file, args.from_head, args.to_head, args.output_format
