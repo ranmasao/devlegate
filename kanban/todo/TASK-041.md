@@ -583,3 +583,79 @@ in-process state.
 
 GitHub CI run 36570082140 was still running at review time. Full CI, coverage, and
 Ruff must be green after the remaining regression matrix is added.
+
+
+## Fourth review findings
+
+Review of execution `08a30941f2de4721bf7e8f815b827d36` / checkpoint
+`caa6b517ae40bc880c5deb5779d183c791c9505e` still requires rework.
+
+The published-path implementation and its first positive regression are materially
+improved:
+
+- the restart-finalization path now requires the durable rewritten-evidence ref to
+  resolve to the exact observed rewritten checkpoint;
+- a real-Git parameterized regression covers both a published prefix
+  (`remote=W1`, preserved `W2`) and a published current checkpoint
+  (`remote=W2`);
+- the same test proves blocking without `--rewrite-published`, successful
+  lease-guarded publication with authorization, the displaced old evidence pin, and
+  the rewritten evidence pin.
+
+GitHub CI run 36572855680 is green:
+
+```text
+1037 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+The ticket must nevertheless remain open because several regressions explicitly
+required by TASK-041 are still absent from the candidate.
+
+### Remaining required negative/recovery proofs
+
+Add real-Git regressions for the remaining acceptance cases already specified by
+this ticket:
+
+- external remote movement after the expected published SHA has been established,
+  causing the exact force-with-lease/CAS publication to fail; prove no weaker retry
+  or unconditional force occurs and reconciliation remains recoverable;
+- an execution remote ref that is not a checkpoint inside the proven
+  `original_base..worker_checkpoint` lineage -> rejected before rewrite;
+- a merge/nonlinear execution lineage -> rejected;
+- conflict while rebasing a multi-commit execution lineage -> exact original
+  checkpoint restored, workspace clean, remote unchanged;
+- a transform that would drop/squash one of the execution commits -> rejected by the
+  one-for-one rewritten-lineage proof;
+- restart after remote lease publication succeeded but before resolved state was
+  durably committed -> exact rewritten remote + displaced evidence + rewritten
+  evidence are re-observed and the operation finalizes idempotently.
+
+### Preserve the requested process-boundary recovery proof
+
+The previous review finding also requires process-lifetime evidence for the crash
+contract. The current candidate still adds only engine-level
+`Devlegate(config)` recovery tests.
+
+Add a `LiveService`/equivalent production-process regression for the externally
+observable staged rewrite recovery. At minimum, cover the strongest irreversible
+window:
+
+```text
+remote lease update succeeded
+process dies before resolved-state commit
+restart
+-> exact already-published rewrite is recognized and finalized once
+```
+
+A process-level local-pending case is also desirable if the existing harness can
+inject the crash point cleanly, but do not broaden the implementation merely to
+satisfy the harness. The post-publication crash case is mandatory because it proves
+recovery across the non-fast-forward remote side effect introduced by this ticket.
+
+No additional architecture change is requested in this review. Complete the
+remaining regression matrix against the existing implementation, fixing production
+code only where those proofs expose a real defect.
+
+Return to review with full CI, coverage, and Ruff green.
