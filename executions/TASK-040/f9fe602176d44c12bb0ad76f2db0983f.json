@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6c80e9784ca39208c6a5769b0d263540d6b885f9",
+  "conclusion": "completed",
+  "control_head": "1b36f22721b2538adf0454fe538a095727fcbf74",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-040",
+  "execution_id": "f9fe602176d44c12bb0ad76f2db0983f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-040",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-040/f9fe602176d44c12bb0ad76f2db0983f.md",
+  "report_sha256": "437efe600f4c0790a0605dc33232664955dc26ca13258149501f8fe3ac3968d0",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-040",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented in src/devlegate/runtime.py and tests/test_control_plane.py. Focused reconciliation tests, the full control-plane suite, Ruff, compile validation, and diff checks completed successfully.",
+    "summary": "Added the missing engine-level same-parent replacement success regression, covering resolved update-base provenance, exact target parent, and preserved checkpoint evidence. Updated the shared reconciliation path to validate the rebased execution branch against the new transient target base while restoring the original base on aborted rebase failures."
+  },
+  "workspace_head": "53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb"
+}
