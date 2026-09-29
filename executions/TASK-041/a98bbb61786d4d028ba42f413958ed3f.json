@@ -1,0 +1,34 @@
+{
+  "code_base_head": "53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb",
+  "conclusion": "incomplete",
+  "control_head": "1da3a45fa6c7defea2aacfd41576f96fbff17247",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-041",
+  "execution_id": "a98bbb61786d4d028ba42f413958ed3f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-041",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add and run the required integration regressions covering multi-checkpoint transplant, published prefixes, lease failure, merge/nonlinear rejection, conflicts, and crash recovery.",
+    "Run the focused pytest suite when the test dependency is available."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-041",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add and run the required integration regressions covering multi-checkpoint transplant, published prefixes, lease failure, merge/nonlinear rejection, conflicts, and crash recovery.",
+      "Run the focused pytest suite when the test dependency is available."
+    ],
+    "report": null,
+    "summary": "Extended update-base reconciliation with explicit published-lineage rewrite authorization, bounded linear execution-chain proof, durable displaced and rewritten evidence refs, lease-guarded remote publication, and restart handling for interrupted rewrites. Added CLI and IPC plumbing for --rewrite-published while preserving the default unpublished path."
+  },
+  "workspace_head": "097f5740a5900b2dd005ba40d55b333a00640661"
+}
