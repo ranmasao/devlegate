@@ -1,0 +1,32 @@
+{
+  "code_base_head": "6c80e9784ca39208c6a5769b0d263540d6b885f9",
+  "conclusion": "incomplete",
+  "control_head": "ec9a8df540dd6e29737f491fdce8bf22115e02b4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-040",
+  "execution_id": "b1bb576427fb44888b0198a75225e2b9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-040",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the repository-wide pytest, coverage, and Ruff validation in an environment with enough runtime and Ruff installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-040",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the repository-wide pytest, coverage, and Ruff validation in an environment with enough runtime and Ruff installed."
+    ],
+    "report": null,
+    "summary": "Corrected the same-parent topology regression to reject only genuinely different-parent divergence, and strengthened engine regressions for sibling-target conflict recovery and resolved effective-base provenance. The existing shared reconciliation implementation remains unchanged and is covered by these tests."
+  },
+  "workspace_head": "431574436193d5b0f765f9d06ba020ae7f0d0c70"
+}
