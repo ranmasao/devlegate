@@ -2873,6 +2873,53 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     assert devlegate._state["reconciliation"]["status"] == "pending"
 
 
+def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    (working / "product-seed.txt").write_text("seed\n")
+    git(working, "add", "product-seed.txt")
+    git(working, "commit", "-m", "seed product base")
+    git(working, "push", "origin", "HEAD:main")
+    publisher = tmp_path / "publisher"
+    git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "worker.txt").write_text("worker\n")
+        parent = git(working, "rev-parse", "HEAD^").stdout.strip()
+        git(publisher, "reset", "--hard", parent)
+        (publisher / "product.txt").write_text("replacement\n")
+        git(publisher, "add", "product.txt")
+        git(publisher, "commit", "-m", "replace product tip")
+        git(publisher, "push", "--force", "origin", "HEAD:main")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 1
+    reconciliation = devlegate._state["reconciliation"]
+    evidence = reconciliation["evidence_ref"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    original_checkpoint = reconciliation["worker_checkpoint"]
+    target = reconciliation["observed_product"]
+    assert git(
+        execution, "rev-parse", f"{reconciliation['original_base']}^"
+    ).stdout.strip() == git(working, "rev-parse", f"{target}^").stdout.strip()
+    git(working, "reset", "--hard", target)
+
+    assert devlegate.reconcile_update_base("T-1", target) == 0
+    resolved = devlegate._state["reconciliation"]
+    assert resolved["status"] == "resolved"
+    assert resolved["resolution"] == "update-base"
+    assert resolved["effective_base"] == target
+    assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
+    assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
+
+
 def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     tmp_path, monkeypatch
 ):

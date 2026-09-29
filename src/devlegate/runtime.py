@@ -7675,6 +7675,8 @@ class ServiceEngine:
                 raise DevlegateError(
                     "reconciliation requires a worker checkpoint commit"
                 )
+            previous_execution_base = self._state["execution_base_head"]
+            self._state["execution_base_head"] = target
             try:
                 rebased = _git(
                     workspace.path,
@@ -7686,6 +7688,7 @@ class ServiceEngine:
                 )
                 if rebased.returncode:
                     _git(workspace.path, "rebase", "--abort", check=False)
+                    self._state["execution_base_head"] = previous_execution_base
                     restored = _git(
                         workspace.path, "rev-parse", "HEAD", check=False
                     ).stdout.strip()
@@ -7701,6 +7704,7 @@ class ServiceEngine:
                         "is required"
                     )
             except OSError as error:
+                self._state["execution_base_head"] = previous_execution_base
                 raise DevlegateError(f"reconciliation failed: {error}") from error
             updated = self._execution_workspace_for_recovery()
             if updated.dirty or updated.head == target:
