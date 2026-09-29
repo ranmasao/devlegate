@@ -210,3 +210,32 @@ Review of execution `de9d92d2c4fd491482f336e07cb2e13e` / product candidate
   workspace, publication, checkpoint-shape, rebase, abort, and result-proof
   path should remain shared rather than forked.
 - Re-run full tests, coverage, and Ruff; CI must be green before review.
+
+
+## Second review finding
+
+Execution `b1bb576427fb44888b0198a75225e2b9` / checkpoint
+`431574436193d5b0f765f9d06ba020ae7f0d0c70` fixes the invalid
+different-parent topology assertion and converts the conflict regression to a real
+same-parent rewritten-tip case. GitHub CI run 36533288886 is fully green,
+including tests with coverage and Ruff, so the worker's remaining local-validation
+item is externally satisfied.
+
+One required semantic regression is still missing:
+
+- Add a successful engine-level same-parent update-base case with exact topology
+  `B -> O`, `B -> T`, preserved worker checkpoint `O -> W`, then call
+  `reconcile_update_base(..., T)` and prove:
+  - the operation succeeds;
+  - reconciliation becomes `resolved`;
+  - `resolution == "update-base"`;
+  - `effective_base == T`;
+  - the rewritten worker checkpoint parent is exactly `T`;
+  - the preserved evidence ref still names the original worker checkpoint.
+
+The newly added `effective_base` assertions are currently on the pre-existing
+descendant/forward update-base test, so they do not exercise the new
+same-parent eligibility branch.
+
+Do not otherwise restructure the shared reconciliation implementation; current
+production-code shape and the new same-parent conflict regression are satisfactory.
