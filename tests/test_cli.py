@@ -1669,6 +1669,77 @@ def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
     assert "reconciliation request accepted: T-1" in capsys.readouterr().out
 
 
+def test_canonical_reconcile_uses_automatic_ipc_operation(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    accepted = []
+
+    def submit(ticket_id, onto, *, request_id):
+        accepted.append((ticket_id, onto, request_id))
+        return {
+            "accepted": True,
+            "ticket_id": ticket_id,
+            "resolution_class": "resume",
+        }
+
+    monkeypatch.setattr(cli_daemon, "submit_reconcile_auto", submit)
+    monkeypatch.setattr(
+        "devlegate.cli._service_engine",
+        lambda *_args, **_kwargs: pytest.fail("CLI constructed mutable engine"),
+    )
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "--env",
+            str(config),
+            "reconcile",
+            "T-1",
+        ],
+    )
+
+    assert main() == 0
+    assert accepted and accepted[0][0] == "T-1"
+    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
+
+
+def test_canonical_reconcile_onto_is_forwarded_as_assertion(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    accepted = []
+
+    def submit(ticket_id, onto, *, request_id):
+        accepted.append((ticket_id, onto, request_id))
+        return {
+            "accepted": True,
+            "ticket_id": ticket_id,
+            "onto": onto,
+            "resolution_class": "resume",
+        }
+
+    monkeypatch.setattr(cli_daemon, "submit_reconcile_auto", submit)
+    config = _short_runtime_config(git_fixture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "--env",
+            str(config),
+            "reconcile",
+            "T-1",
+            "--onto",
+            "current-head",
+        ],
+    )
+
+    assert main() == 0
+    assert accepted and accepted[0][1] == "current-head"
+    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
+
+
 def test_reconcile_refuses_without_daemon_without_constructing_engine(
     git_fixture, monkeypatch, capsys
 ):

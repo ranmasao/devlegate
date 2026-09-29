@@ -382,6 +382,7 @@ class OperatorCommand:
     onto: str | None = None
     execution_id: str | None = None
     rewrite_published: bool = False
+    resolution_class: str | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -1008,7 +1009,11 @@ class ServiceEngine:
                         f"request id collision: {method} request semantics differ"
                     )
                 return self._operator_ack(
-                    method, ticket_id, receipt.get("onto", onto), execution_id
+                    method,
+                    ticket_id,
+                    receipt.get("onto", onto),
+                    execution_id,
+                    receipt.get("resolution_class"),
                 )
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
@@ -1028,13 +1033,13 @@ class ServiceEngine:
                         "service busy; mutable request was not admitted"
                     )
                 command = OperatorCommand(
-                    request_id,
-                    method,
-                    fingerprint,
-                    ticket_id,
-                    onto,
-                    execution_id,
-                    rewrite_published,
+                    request_id=request_id,
+                    method=method,
+                    fingerprint=fingerprint,
+                    ticket_id=ticket_id,
+                    onto=onto,
+                    execution_id=execution_id,
+                    rewrite_published=rewrite_published,
                 )
                 self._operator_command = command
                 new_command = True
@@ -1433,14 +1438,9 @@ class ServiceEngine:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
-        if command.onto is not None:
-            self._validate_reconcile_admission(command)
-            return
         product = self._observe_product_generation(
             str(reconciliation["original_base"])
         )
-        if product["stable"]:
-            return
         if not product["target_eligible"]:
             raise DevlegateError(
                 "current product generation is not eligible for reconciliation"
@@ -1449,7 +1449,26 @@ class ServiceEngine:
         remote_head = str(product["remote_head"])
         if not local_head or local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
-        command.onto = local_head
+        if command.onto is not None:
+            asserted = _git(
+                self.repo,
+                "rev-parse",
+                "--verify",
+                f"{command.onto}^{{commit}}",
+                check=False,
+            )
+            if asserted.returncode or asserted.stdout.strip() != local_head:
+                raise DevlegateError(
+                    "requested reconciliation target is not the current product HEAD"
+                )
+        else:
+            command.onto = None if product["stable"] else local_head
+        if product["stable"]:
+            command.resolution_class = "resume"
+        elif reconciliation.get("execution_remote_head") is not None:
+            command.resolution_class = "update-base with published-lineage rewrite"
+        else:
+            command.resolution_class = "update-base"
 
     def _automatic_zero_delta_authorization(
         self,
@@ -1665,6 +1684,7 @@ class ServiceEngine:
         ticket_id: str,
         onto: str | None,
         execution_id: str | None = None,
+        resolution_class: str | None = None,
     ) -> dict[str, object]:
         if method == "retry":
             return {"accepted": True, "ticket_id": ticket_id}
@@ -1704,6 +1724,11 @@ class ServiceEngine:
                 "accepted": True,
                 "ticket_id": ticket_id,
                 **({"onto": onto} if onto is not None else {}),
+                **(
+                    {"resolution_class": resolution_class}
+                    if resolution_class is not None
+                    else {}
+                ),
             }
         raise DevlegateError(f"unsupported operator command: {method}")
 
@@ -1733,6 +1758,7 @@ class ServiceEngine:
                         "accepted",
                         "execution_id",
                         "onto",
+                        "resolution_class",
                     }
                 )
                 or set(receipt)
@@ -1745,8 +1771,24 @@ class ServiceEngine:
                         "fingerprint",
                         "ticket_id",
                         "accepted",
+                        "resolution_class",
+                    },
+                    {
+                        "method",
+                        "fingerprint",
+                        "ticket_id",
+                        "accepted",
+                        "onto",
+                        "resolution_class",
+                    },
+                    {
+                        "method",
+                        "fingerprint",
+                        "ticket_id",
+                        "accepted",
                         "execution_id",
                         "onto",
+                        "resolution_class",
                     },
                 )
             ):
@@ -1764,6 +1806,11 @@ class ServiceEngine:
             onto = receipt.get("onto")
             if onto is not None and (not isinstance(onto, str) or not onto):
                 raise DevlegateError("invalid mutable request receipt target")
+            resolution_class = receipt.get("resolution_class")
+            if resolution_class is not None and (
+                not isinstance(resolution_class, str) or not resolution_class
+            ):
+                raise DevlegateError("invalid mutable request receipt resolution")
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
@@ -1789,6 +1836,10 @@ class ServiceEngine:
                 if command.onto is None:
                     raise DevlegateError("reconciliation target was not resolved")
                 receipt["onto"] = command.onto
+            if command.method == "reconcile-auto":
+                if command.resolution_class is None:
+                    raise DevlegateError("automatic reconciliation was not classified")
+                receipt["resolution_class"] = command.resolution_class
             updated[command.request_id] = receipt
             reconciliation = None
             if command.method == "reconcile-resume":
@@ -1806,7 +1857,12 @@ class ServiceEngine:
                     raise DevlegateError("invalid reconciliation state")
                 reconciliation = {
                     **current,
-                    "resolution": "resume" if command.onto is None else "update-base",
+                    "resolution": (
+                        "resume"
+                        if command.resolution_class == "resume"
+                        else "update-base"
+                    ),
+                    "resolution_class": command.resolution_class,
                 }
             self._save_state(
                 str(self._state["phase"]),
@@ -1847,6 +1903,7 @@ class ServiceEngine:
                     command.ticket_id,
                     command.onto,
                     getattr(command, "execution_id", None),
+                    command.resolution_class,
                 )
         except DevlegateError as error:
             command.admission_error = error
@@ -2667,6 +2724,14 @@ class ServiceEngine:
                 "update-base",
             }:
                 raise DevlegateError("invalid reconciliation resolution")
+            if "resolution_class" in reconciliation and reconciliation[
+                "resolution_class"
+            ] not in {
+                "resume",
+                "update-base",
+                "update-base with published-lineage rewrite",
+            }:
+                raise DevlegateError("invalid reconciliation resolution class")
             if "reason" in reconciliation and not isinstance(
                 reconciliation["reason"], str
             ):
@@ -6415,8 +6480,21 @@ class ServiceEngine:
         if command.method == "reconcile-resume":
             return self._reconcile_resume_owned(command.ticket_id)
         if command.method == "reconcile-auto":
-            if command.onto is None:
+            reconciliation = self._state.get("reconciliation")
+            resolution_class = (
+                reconciliation.get("resolution_class")
+                if isinstance(reconciliation, dict)
+                else None
+            )
+            if resolution_class == "resume":
                 return self._reconcile_resume_owned(command.ticket_id)
+            if resolution_class not in {
+                "update-base",
+                "update-base with published-lineage rewrite",
+            } or command.onto is None:
+                raise DevlegateError(
+                    "automatic reconciliation classification is invalid"
+                )
             return self._reconcile_update_base_owned(
                 command.ticket_id, command.onto, rewrite_published=True
             )
@@ -7981,7 +8059,9 @@ class ServiceEngine:
                         **reconciliation,
                         "status": "resolved",
                         "resolution": "update-base",
-                        "resolution_class": "update-base with published-lineage rewrite",
+                        "resolution_class": (
+                            "update-base with published-lineage rewrite"
+                        ),
                         "effective_base": target,
                         "worker_checkpoint": rewrite_checkpoint,
                         "execution_remote_head": rewrite_checkpoint,
