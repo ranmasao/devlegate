@@ -2924,6 +2924,100 @@ def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
     ).stdout.strip()
 
 
+def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "worker.txt").write_text("worker\n")
+        (working / "operator.txt").write_text("operator\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "done", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 1
+    reconciliation = dict(devlegate._state["reconciliation"])
+    original_base = reconciliation["original_base"]
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+
+    (working / "target.txt").write_text("target\n")
+    git(working, "add", "target.txt", "operator.txt")
+    git(working, "commit", "-m", "advance product")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(execution, "rebase", "--onto", target, original_base)
+    operation = {
+        **reconciliation,
+        "rewrite_authorized": True,
+        "rewrite_target": target,
+        "rewrite_count": 1,
+        "rewrite_stage": "local-pending",
+    }
+    devlegate._save_state(
+        "idle",
+        execution_base_head=original_base,
+        execution_start_head=original_base,
+        reconciliation=operation,
+    )
+
+    restarted = Devlegate(config)
+    assert restarted.reconcile_update_base("T-1", target) == 0
+    assert restarted._state["reconciliation"]["status"] == "resolved"
+    assert restarted._state["reconciliation"]["effective_base"] == target
+    assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
+
+
+def test_update_base_transplants_multiple_unpublished_checkpoints(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "first.txt").write_text("first\n")
+        (working / "dirty-product.txt").write_text("product\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 1
+    reconciliation = dict(devlegate._state["reconciliation"])
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "second.txt").write_text("second\n")
+    git(execution, "add", "second.txt")
+    git(execution, "commit", "-m", "second checkpoint")
+    second = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(working, "add", "dirty-product.txt")
+    git(working, "commit", "-m", "advance product")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "update-ref", reconciliation["evidence_ref"], second)
+    operation = {
+        **reconciliation,
+        "worker_checkpoint": second,
+        "execution_report": {
+            **reconciliation["execution_report"],
+            "workspace_head": second,
+        },
+    }
+    devlegate._save_state("idle", reconciliation=operation)
+
+    assert devlegate.reconcile_update_base("T-1", target) == 0
+    rewritten = git(
+        execution, "rev-list", "--reverse", f"{target}..HEAD"
+    ).stdout.splitlines()
+    assert len(rewritten) == 2
+    assert git(execution, "rev-parse", f"{rewritten[0]}^").stdout.strip() == target
+
+
 def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
     tmp_path, monkeypatch
 ):

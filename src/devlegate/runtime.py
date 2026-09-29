@@ -611,6 +611,20 @@ def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
     )
 
 
+def _is_linear_chain(repo: Path, root: str, commits: list[str]) -> bool:
+    """Prove that commits are an ordered single-parent chain from root."""
+    previous = root
+    for commit in commits:
+        parents = _git(
+            repo, "rev-list", "--parents", "-n", "1", commit, check=False
+        )
+        fields = parents.stdout.split()
+        if parents.returncode or len(fields) != 2 or fields[1] != previous:
+            return False
+        previous = commit
+    return bool(commits)
+
+
 class ServiceEngine:
     """Own persistent workflow orchestration and mutable runtime operations."""
 
@@ -5550,6 +5564,55 @@ class ServiceEngine:
             ) from error
         return workspace
 
+    def _execution_workspace_for_rewrite_recovery(
+        self, manager: ExecutionWorkspaceManager
+    ) -> ExecutionWorkspace:
+        """Observe a staged rewrite without validating its persisted base yet."""
+        expected_path = manager.path.resolve()
+        registrations = manager._registrations()
+        registration = registrations.get(expected_path)
+        if registration is None or registration.get("branch") != manager.branch:
+            raise WorkflowBlockedError(
+                "cannot validate staged execution rewrite worktree binding"
+            )
+        common = _git(manager.path, "rev-parse", "--git-common-dir", check=False)
+        root = _git(manager.path, "rev-parse", "--show-toplevel", check=False)
+        expected_common = _git(
+            self.repo, "rev-parse", "--git-common-dir", check=False
+        )
+        branch_name = _git(
+            manager.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
+        if (
+            common.returncode
+            or root.returncode
+            or expected_common.returncode
+            or Path(root.stdout.strip()).resolve() != manager.path.resolve()
+            or branch_name.returncode
+            or branch_name.stdout.strip() != manager.branch
+        ):
+            raise WorkflowBlockedError(
+                "staged execution rewrite worktree binding is invalid"
+            )
+        head = _git(manager.path, "rev-parse", "HEAD", check=False)
+        status = _git(manager.path, "status", "--porcelain", check=False)
+        if (
+            head.returncode
+            or status.returncode
+            or registration.get("head") != head.stdout.strip()
+        ):
+            raise WorkflowBlockedError(
+                "cannot observe staged execution rewrite worktree"
+            )
+        return ExecutionWorkspace(
+            ticket_id=manager.ticket_id,
+            branch=manager.branch,
+            path=manager.path,
+            head=head.stdout.strip(),
+            base_head=str(self._state.get("execution_base_head", "")),
+            dirty=bool(status.stdout),
+        )
+
     def _checkpoint_commit_is_exact(
         self, workspace: ExecutionWorkspace, commit: str, start_head: str
     ) -> bool:
@@ -7693,10 +7756,14 @@ class ServiceEngine:
             ):
                 raise DevlegateError("reconciliation workspace binding is invalid")
             checkpoint = str(reconciliation["worker_checkpoint"])
-            workspace = self._execution_workspace_for_recovery()
             rewrite_stage = reconciliation.get("rewrite_stage")
             rewrite_checkpoint = reconciliation.get("rewrite_checkpoint")
             persisted_target = reconciliation.get("rewrite_target")
+            workspace = (
+                self._execution_workspace_for_rewrite_recovery(manager)
+                if rewrite_stage in {"local-pending", "remote-pending"}
+                else self._execution_workspace_for_recovery()
+            )
             if rewrite_stage in {"local-pending", "remote-pending"}:
                 if persisted_target != target:
                     raise DevlegateError(
@@ -7826,10 +7893,29 @@ class ServiceEngine:
                 # Safely abort the local effect and require an explicit retry. The
                 # persisted base is still the old generation at this stage.
                 if workspace.dirty:
-                    raise DevlegateError(
-                        "interrupted execution rewrite workspace is dirty"
-                    )
+                    aborted = _git(workspace.path, "rebase", "--abort", check=False)
+                    if aborted.returncode:
+                        raise DevlegateError(
+                            "interrupted execution rewrite workspace is dirty"
+                        )
+                    workspace = self._execution_workspace_for_rewrite_recovery(manager)
                 if workspace.head != checkpoint:
+                    rewritten_result = _git(
+                        workspace.path,
+                        "rev-list",
+                        "--reverse",
+                        f"{target}..{workspace.head}",
+                        check=False,
+                    )
+                    rewritten = rewritten_result.stdout.splitlines()
+                    if (
+                        rewritten_result.returncode
+                        or len(rewritten) != reconciliation.get("rewrite_count")
+                        or not _is_linear_chain(workspace.path, target, rewritten)
+                    ):
+                        raise DevlegateError(
+                            "interrupted execution rewrite cannot be safely aborted"
+                        )
                     restored = _git(
                         workspace.path, "reset", "--hard", checkpoint, check=False
                     )
@@ -7842,7 +7928,12 @@ class ServiceEngine:
                     for key, value in reconciliation.items()
                     if key not in {"rewrite_stage", "rewrite_target", "rewrite_count"}
                 }
-                self._save_state("idle", reconciliation=reconciliation)
+                self._save_state(
+                    "idle",
+                    execution_base_head=original_base,
+                    execution_start_head=original_base,
+                    reconciliation=reconciliation,
+                )
                 workspace = self._execution_workspace_for_recovery()
             if workspace.head != reconciliation["worker_checkpoint"] or workspace.dirty:
                 raise DevlegateError(
