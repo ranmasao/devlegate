@@ -1,0 +1,28 @@
+{
+  "code_base_head": "c594d577cbce558ae348d29b3f6c98844fe88b6c",
+  "conclusion": "completed",
+  "control_head": "7eb6b760a4064e24c9159dc02d7369fc40516f0d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-042",
+  "execution_id": "636a1992b3644198b1842c424aa1cd4b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-042",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-042/636a1992b3644198b1842c424aa1cd4b.md",
+  "report_sha256": "0d7e756bea57be63e99124f1cb5574a64062d0e7aec06321117242b3a846b0a5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-042",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented CLI, IPC, and runtime support for automatic reconciliation. Focused CLI, IPC, and reconciliation control-plane tests passed; compile and diff checks passed. Ruff was not installed in the workspace.",
+    "summary": "Added the canonical `devlegate reconcile <ticket-id>` intent path with service-owned classification, durable request admission, automatic target binding, and dispatch to resume or update-base. Proven published execution lineages now automatically use the existing lease-guarded rewrite path, while legacy explicit forms remain available and status records the selected resolution class."
+  },
+  "workspace_head": "424b40987b381bbed157d96a2f11e74c2b3efb9b"
+}
