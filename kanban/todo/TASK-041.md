@@ -526,3 +526,60 @@ blocking findings.
 
 Return only after the stage-ordering bug is fixed and the required regression matrix
 is implemented and green under full CI/Ruff/coverage.
+
+
+## Third review findings
+
+Review of execution `d4a3ef097d48452388bd5f44ccdf7add` / checkpoint
+`6fa2d9a9778f2ff326bcc750d99d40ef9d280b80` remains incomplete.
+
+The previously identified local-pending ordering bug is now corrected. Staged rewrite
+recovery observes the execution worktree without first assuming the durable old/new
+base generation, normalizes the stage, rebinds durable base state, and only then
+returns to ordinary workspace validation.
+
+The new real-Git tests also establish two useful pieces of the contract:
+
+- local-pending recovery after a completed local rebase; and
+- a two-checkpoint unpublished lineage transplanted as two rewritten commits.
+
+No new implementation blocker was identified in those changes.
+
+### Complete the published-rewrite regression matrix
+
+The worker correctly reports the remaining work. Before acceptance, add and run the
+ticket's remaining proofs for:
+
+- published prefix rewrite (`remote=W1`, preserved checkpoint `W2`);
+- published current-checkpoint rewrite (`remote=Wn`);
+- both cases blocked without explicit `--rewrite-published`;
+- exact lease failure after external remote movement, with no weaker retry;
+- remote execution ref outside the proven lineage;
+- merge/nonlinear execution lineage rejection;
+- conflict on a multi-commit lineage with exact old-checkpoint/workspace restoration
+  and unchanged remote;
+- detection/rejection of a transform that drops or squashes execution commits;
+- crash/restart after successful remote publication but before resolved-state commit;
+- displaced old evidence and rewritten evidence remaining exact after successful
+  published rewrite.
+
+### Crash/lifetime claims need process-boundary proof
+
+The new `local-pending` test uses real Git and reconstructs `Devlegate(config)`,
+which is a useful engine-level recovery test. It does not exercise an actual service
+process lifetime boundary.
+
+For the crash/restart guarantees in this ticket, retain the engine-level tests but
+add process-level `LiveService` (or the repository's equivalent strongest-boundary
+harness) coverage for the externally meaningful crash windows, especially:
+
+- process death after local rewrite before publication; and
+- process death after successful remote lease publication before final durable
+  resolution.
+
+The restart must prove that the owner process can classify and recover/finalize the
+staged operation from durable state and Git/remote observations, not from surviving
+in-process state.
+
+GitHub CI run 36570082140 was still running at review time. Full CI, coverage, and
+Ruff must be green after the remaining regression matrix is added.
