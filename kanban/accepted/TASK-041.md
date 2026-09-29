@@ -659,3 +659,34 @@ remaining regression matrix against the existing implementation, fixing producti
 code only where those proofs expose a real defect.
 
 Return to review with full CI, coverage, and Ruff green.
+
+
+## Accepted
+
+Execution `18a548e9de1a45af976480306283ad91` / product checkpoint
+`92f5a2593d46a2bf009cc083b2a4904ddfcf7070` satisfies TASK-041.
+
+The cumulative implementation now proves and covers:
+
+- linear multi-checkpoint execution transplantation;
+- published-prefix and published-current-checkpoint rewrites;
+- explicit `--rewrite-published` authorization;
+- exact force-with-lease publication with fail-closed lease drift;
+- rejection of remote checkpoints outside the proven lineage;
+- rejection of merge/nonlinear execution history;
+- clean restoration after multi-commit rebase conflict;
+- rejection and restoration when rebase would drop an execution commit;
+- durable displaced and rewritten evidence identities;
+- staged local-rewrite recovery before generation-sensitive validation;
+- process-level restart after successful remote rewrite but before resolved-state
+  commit, with idempotent exact-evidence finalization.
+
+GitHub CI run `36577209948` is green:
+
+```text
+1043 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
