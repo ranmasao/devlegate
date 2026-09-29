@@ -2918,6 +2918,10 @@ def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
     assert resolved["effective_base"] == target
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
     assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
+    assert resolved["evidence_ref"] != evidence
+    assert git(execution, "rev-parse", resolved["evidence_ref"]).stdout.strip() == git(
+        execution, "rev-parse", "HEAD"
+    ).stdout.strip()
 
 
 def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(

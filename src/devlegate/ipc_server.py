@@ -164,12 +164,10 @@ def dispatch_mutation(
             raise IPCProtocolError(
                 "invalid_request", "reconciliation rewrite_published must be boolean"
             )
-        return engine.submit_reconcile_update_base(
-            ticket_id,
-            onto,
-            rewrite_published=rewrite_published,
-            request_id=request.request_id,
-        )
+        kwargs = {"request_id": request.request_id}
+        if rewrite_published:
+            kwargs["rewrite_published"] = True
+        return engine.submit_reconcile_update_base(ticket_id, onto, **kwargs)
     if request.method == "reconcile-resume":
         if set(request.payload) != {"ticket_id"}:
             raise IPCProtocolError(

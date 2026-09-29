@@ -7696,6 +7696,19 @@ class ServiceEngine:
             workspace = self._execution_workspace_for_recovery()
             rewrite_stage = reconciliation.get("rewrite_stage")
             rewrite_checkpoint = reconciliation.get("rewrite_checkpoint")
+            persisted_target = reconciliation.get("rewrite_target")
+            if rewrite_stage in {"local-pending", "remote-pending"}:
+                if persisted_target != target:
+                    raise DevlegateError(
+                        "interrupted execution rewrite target does not match "
+                        "the requested target"
+                    )
+                # Recovery of an already-authorized operation must not require
+                # the operator to repeat the side-effect authorization, but a
+                # fresh operation never inherits it.
+                rewrite_published = rewrite_published or (
+                    reconciliation.get("rewrite_authorized") is True
+                )
             if rewrite_stage == "remote-pending" and isinstance(
                 rewrite_checkpoint, str
             ):
@@ -7723,7 +7736,12 @@ class ServiceEngine:
                             "rewrite_target",
                         }
                     }
-                    self._save_state("idle", reconciliation=reconciliation)
+                    self._save_state(
+                        "idle",
+                        execution_base_head=original_base,
+                        execution_start_head=original_base,
+                        reconciliation=reconciliation,
+                    )
                     workspace = self._execution_workspace_for_recovery()
                 elif (
                     observed_remote == rewrite_checkpoint
@@ -7783,6 +7801,7 @@ class ServiceEngine:
                             "rewritten_evidence_ref", reconciliation["evidence_ref"]
                         ),
                     }
+                    resolved.pop("execution_report", None)
                     todo_fingerprint, _count = _todo_fingerprint(
                         self.control_worktree, self.todo_path
                     )
@@ -7802,6 +7821,29 @@ class ServiceEngine:
                     raise DevlegateError(
                         "execution branch remote changed during interrupted rewrite"
                     )
+            if rewrite_stage == "local-pending":
+                # A crash can occur after rebase and before the next WAL stage.
+                # Safely abort the local effect and require an explicit retry. The
+                # persisted base is still the old generation at this stage.
+                if workspace.dirty:
+                    raise DevlegateError(
+                        "interrupted execution rewrite workspace is dirty"
+                    )
+                if workspace.head != checkpoint:
+                    restored = _git(
+                        workspace.path, "reset", "--hard", checkpoint, check=False
+                    )
+                    if restored.returncode:
+                        raise DevlegateError(
+                            "interrupted execution rewrite could not be safely aborted"
+                        )
+                reconciliation = {
+                    key: value
+                    for key, value in reconciliation.items()
+                    if key not in {"rewrite_stage", "rewrite_target", "rewrite_count"}
+                }
+                self._save_state("idle", reconciliation=reconciliation)
+                workspace = self._execution_workspace_for_recovery()
             if workspace.head != reconciliation["worker_checkpoint"] or workspace.dirty:
                 raise DevlegateError(
                     "execution workspace changed before reconciliation"
@@ -7857,33 +7899,21 @@ class ServiceEngine:
                         "lineage"
                     )
             previous_execution_base = self._state["execution_base_head"]
-            displaced_evidence = (
-                f"refs/devlegate/reconciliation/{ticket_id}/"
-                f"{reconciliation['execution_id']}/displaced"
-            )
-            displaced = _git(
-                self.repo,
-                "update-ref",
-                displaced_evidence,
-                checkpoint,
-                "0" * 40,
-                check=False,
-            )
-            if displaced.returncode:
-                existing = _git(
-                    self.repo, "rev-parse", "--verify", displaced_evidence, check=False
-                )
-                if existing.returncode or existing.stdout.strip() != checkpoint:
-                    raise DevlegateError(
-                        "displaced execution evidence could not be durably pinned"
-                    )
+            # The original reconciliation evidence ref is already an immutable
+            # pin for the displaced checkpoint. Do not create descendants below
+            # it: Git forbids a ref and a ref namespace beneath the same path.
+            displaced_evidence = evidence
             operation = {
                 **reconciliation,
                 "rewrite_authorized": bool(rewrite_published),
                 "rewrite_expected_remote": execution_remote,
                 "displaced_evidence_ref": displaced_evidence,
-                "rewritten_evidence_ref": f"{evidence}/rewritten",
+                "rewritten_evidence_ref": (
+                    f"refs/devlegate/reconciliation/{ticket_id}/"
+                    f"{reconciliation['execution_id']}-rewritten"
+                ),
                 "rewrite_target": target,
+                "rewrite_count": len(lineage),
                 "rewrite_stage": "local-pending",
             }
             self._save_state("idle", reconciliation=operation)
@@ -7974,7 +8004,7 @@ class ServiceEngine:
                     raise DevlegateError(
                         "execution branch remote changed during publication"
                     )
-            rewritten_evidence = f"{evidence}/rewritten"
+            rewritten_evidence = str(operation["rewritten_evidence_ref"])
             pinned_rewritten = _git(
                 self.repo,
                 "update-ref",
@@ -8007,6 +8037,7 @@ class ServiceEngine:
                 "displaced_evidence_ref": displaced_evidence,
                 "evidence_ref": rewritten_evidence,
             }
+            resolved.pop("execution_report", None)
             todo_fingerprint, _count = _todo_fingerprint(
                 self.control_worktree, self.todo_path
             )
