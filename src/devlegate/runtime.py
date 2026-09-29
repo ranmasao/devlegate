@@ -8064,6 +8064,18 @@ class ServiceEngine:
                 or len(rewritten_lineage) != len(lineage)
                 or updated.head == target
             ):
+                restored = _git(
+                    workspace.path, "reset", "--hard", checkpoint, check=False
+                )
+                self._state["execution_base_head"] = previous_execution_base
+                if restored.returncode:
+                    raise DevlegateError("reconciled execution lineage is invalid")
+                self._save_state(
+                    "idle",
+                    execution_base_head=original_base,
+                    execution_start_head=original_base,
+                    reconciliation=reconciliation,
+                )
                 raise DevlegateError("reconciled execution lineage is invalid")
             previous = target
             for commit in rewritten_lineage:

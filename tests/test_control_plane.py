@@ -3018,6 +3018,190 @@ def test_update_base_transplants_multiple_unpublished_checkpoints(
     assert git(execution, "rev-parse", f"{rewritten[0]}^").stdout.strip() == target
 
 
+def _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "first.txt").write_text("first\n")
+        (working / "dirty-product.txt").write_text("product\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 1
+    reconciliation = dict(devlegate._state["reconciliation"])
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "second.txt").write_text("second\n")
+    git(execution, "add", "second.txt")
+    git(execution, "commit", "-m", "second checkpoint")
+    second = git(execution, "rev-parse", "HEAD").stdout.strip()
+    first = git(execution, "rev-parse", "HEAD^").stdout.strip()
+    git(working, "add", "dirty-product.txt")
+    git(working, "commit", "-m", "advance product")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(execution, "update-ref", reconciliation["evidence_ref"], second)
+    operation = {
+        **reconciliation,
+        "worker_checkpoint": second,
+        "execution_report": {
+            **reconciliation["execution_report"],
+            "workspace_head": second,
+        },
+    }
+    devlegate._save_state("idle", reconciliation=operation)
+    return devlegate, working, state, execution, operation, first, second, target
+
+
+def test_update_base_rejects_published_execution_outside_lineage(
+    tmp_path, monkeypatch
+):
+    devlegate, working, _state, execution, reconciliation, _first, second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    tree = git(execution, "rev-parse", f"{second}^{{tree}}").stdout.strip()
+    outside = subprocess.run(
+        ["git", "commit-tree", tree, "-p", second],
+        cwd=execution,
+        input="outside execution\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    git(
+        execution,
+        "push",
+        "origin",
+        f"{outside}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    operation = {**reconciliation, "execution_remote_head": outside}
+    devlegate._save_state("idle", reconciliation=operation)
+    with pytest.raises(DevlegateError, match="outside the proven execution lineage"):
+        devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == target
+    assert second != outside
+
+
+def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
+    devlegate, _working, _state, execution, reconciliation, first, _second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    (execution / "side.txt").write_text("side\n")
+    git(execution, "add", "side.txt")
+    git(execution, "commit", "-m", "side checkpoint")
+    side = git(execution, "rev-parse", "HEAD").stdout.strip()
+    tree = git(execution, "rev-parse", f"{side}^{{tree}}").stdout.strip()
+    merge = subprocess.run(
+        ["git", "commit-tree", tree, "-p", first, "-p", side],
+        cwd=execution,
+        input="merge checkpoint\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    git(execution, "reset", "--hard", merge)
+    git(execution, "update-ref", reconciliation["evidence_ref"], merge)
+    operation = {
+        **reconciliation,
+        "worker_checkpoint": merge,
+        "execution_report": {
+            **reconciliation["execution_report"],
+            "workspace_head": merge,
+        },
+    }
+    devlegate._save_state("idle", reconciliation=operation)
+    with pytest.raises(DevlegateError, match="merge, side branch, or unrelated"):
+        devlegate.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == merge
+
+
+def test_update_base_conflict_restores_multi_checkpoint_workspace(
+    tmp_path, monkeypatch
+):
+    devlegate, working, _state, execution, reconciliation, _first, second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    (working / "first.txt").write_text("target\n")
+    git(working, "add", "first.txt")
+    git(working, "commit", "-m", "conflicting product target")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
+        devlegate.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+    assert not git(execution, "status", "--porcelain").stdout
+    assert (
+        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+        == second
+    )
+
+
+def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
+    devlegate, working, _state, execution, reconciliation, first, second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    (working / "first.txt").write_text("first\n")
+    git(working, "add", "first.txt")
+    git(working, "commit", "-m", "product contains first checkpoint")
+    git(working, "push", "origin", "HEAD:main")
+    target = git(working, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="reconciled execution lineage is invalid"):
+        devlegate.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+    assert git(execution, "rev-parse", "HEAD^").stdout.strip() == first
+
+
+def test_update_base_published_rewrite_fails_closed_on_lease_drift(
+    tmp_path, monkeypatch
+):
+    devlegate, working, _state, execution, reconciliation, _first, second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    git(
+        execution,
+        "push",
+        "origin",
+        f"{second}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    operation = {**reconciliation, "execution_remote_head": second}
+    devlegate._save_state("idle", reconciliation=operation)
+    drift = git(execution, "rev-parse", "HEAD^").stdout.strip()
+    original_git = runtime._git
+    moved = False
+
+    def drift_before_lease(repo, *args, **kwargs):
+        nonlocal moved
+        if not moved and args[:1] == ("push",) and any(
+            str(argument).startswith("--force-with-lease=") for argument in args
+        ):
+            git(
+                execution,
+                "push",
+                "--force",
+                "origin",
+                f"{drift}:refs/heads/{reconciliation['execution_branch']}",
+            )
+            moved = True
+        return original_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_git", drift_before_lease)
+    with pytest.raises(
+        DevlegateError, match="stale info|remote changed during publication"
+    ):
+        devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
+    remote = git(
+        execution,
+        "ls-remote",
+        "origin",
+        f"refs/heads/{reconciliation['execution_branch']}",
+    ).stdout.split()[0]
+    assert remote == drift
+    assert devlegate._state["reconciliation"].get("rewrite_stage") == "remote-pending"
 @pytest.mark.parametrize("published_checkpoint", ["first", "second"])
 def test_update_base_rewrites_exact_published_lineage_only_with_authorization(
     tmp_path, monkeypatch, published_checkpoint

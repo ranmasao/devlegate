@@ -91,6 +91,25 @@ def main() -> int:
             return result
 
         engine._publish_execution_branch = publish
+    elif point == "reconcile_publication_after_effect":
+        from devlegate import runtime
+
+        original_git = runtime._git
+
+        def git(repo, *git_args, **git_kwargs):
+            result = original_git(repo, *git_args, **git_kwargs)
+            if (
+                git_args[:1] == ("push",)
+                and any(
+                    str(argument).startswith("--force-with-lease=")
+                    for argument in git_args
+                )
+                and result.returncode == 0
+            ):
+                crash()
+            return result
+
+        runtime._git = git
     elif point == "lifecycle_after_effect":
         original_lifecycle = engine._apply_execution_lifecycle
 

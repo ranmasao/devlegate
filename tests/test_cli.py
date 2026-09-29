@@ -4066,6 +4066,103 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     assert persisted["resume_required"]["status"] == "required"
 
 
+def test_real_service_reconcile_published_rewrite_restart_after_remote_effect(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _recovery_config(git_fixture)
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "first.txt").write_text("first\n")
+        (git_fixture["working"] / "product-change.txt").write_text("product\n")
+        git(git_fixture["working"], "add", "product-change.txt")
+        git(git_fixture["working"], "commit", "-m", "advance product")
+        git(git_fixture["working"], "push", "origin", "HEAD:main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    reconciliation = dict(engine._state["reconciliation"])
+    execution = next((engine.state_dir / "worktrees").glob("*/work/T-1"))
+    git(execution, "config", "user.email", "test@example.com")
+    git(execution, "config", "user.name", "Test User")
+    (execution / "second.txt").write_text("second\n")
+    git(execution, "add", "second.txt")
+    git(execution, "commit", "-m", "second checkpoint")
+    second = git(execution, "rev-parse", "HEAD").stdout.strip()
+    first = git(execution, "rev-parse", "HEAD^").stdout.strip()
+    git(
+        execution,
+        "push",
+        "origin",
+        f"{first}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
+    target = git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip()
+    git(execution, "update-ref", reconciliation["evidence_ref"], second)
+    engine._save_state(
+        "idle",
+        reconciliation={
+            **reconciliation,
+            "worker_checkpoint": second,
+            "execution_remote_head": first,
+            "execution_report": {
+                **reconciliation["execution_report"],
+                "workspace_head": second,
+            },
+        },
+    )
+
+    monkeypatch.setenv(
+        "DEVLEGATE_TEST_CRASH_POINT", "reconcile_publication_after_effect"
+    )
+    service = LiveService(
+        git_fixture["working"], config, command=_recovery_driver(config)
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        service.cli(
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            target,
+            "--rewrite-published",
+        )
+        _wait_process_death(service)
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        finalized = service.cli(
+            "reconcile",
+            "update-base",
+            "T-1",
+            "--onto",
+            target,
+            "--rewrite-published",
+        )
+        assert finalized.returncode == 0, finalized.stderr
+        service.wait_for(
+            lambda: _disk_state(config)["reconciliation"]["status"] == "resolved"
+        )
+        resolved = _disk_state(config)["reconciliation"]
+        assert resolved["effective_base"] == target
+        assert (
+            git(execution, "rev-parse", resolved["evidence_ref"]).stdout.strip()
+            == resolved["worker_checkpoint"]
+        )
+        assert (
+            git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+            == second
+        )
+    finally:
+        service.stop()
+
+
 def test_cli_status_and_plan_render_fake_engine_without_runtime(
     git_fixture, monkeypatch, capsys
 ):
