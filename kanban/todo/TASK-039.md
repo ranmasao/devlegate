@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
-"title": "Default reconcile update-base to the current product HEAD"
-"depends_on": ["TASK-036"]
+"title": "Make reconciliation intent-driven and automatically select the safe resolution"
+"depends_on": ["TASK-036", "TASK-041"]
 ---
 
 ## Milestone
@@ -10,123 +10,283 @@ Devlegate 0.5.6 reconciliation operator UX.
 
 ## Goal
 
-Make the common reconciliation command concise:
+Make reconciliation an intent-driven operation with one normal operator command:
 
 ```text
-devlegate reconcile update-base <ticket-id>
+devlegate reconcile <ticket-id>
 ```
 
-by defaulting the reconciliation target to the current canonical product HEAD,
-while retaining `--onto` as an optional exact operator assertion.
+The operator should not normally have to decide whether the retained execution needs
+`resume`, `update-base`, a same-parent replacement transplant, or a
+lease-guarded rewrite of an already published Devlegate execution branch.
+
+The running service must classify the exact reconciliation state deterministically,
+choose the strongest safe supported resolution, bind its identities durably, and
+either execute it or fail closed.
+
+Additional parameters are assertions/debugging controls, not normal inputs required
+to choose the algorithm.
 
 ## Context
 
-The current command requires:
+The current reconciliation surface exposes implementation choices to the operator:
 
 ```text
+devlegate reconcile resume <ticket-id>
 devlegate reconcile update-base <ticket-id> --onto <target>
+devlegate reconcile update-base <ticket-id> --onto <target> --rewrite-published
 ```
 
-but the runtime does not actually allow an arbitrary target. It already requires the
-resolved target to equal both:
+Recent live recovery of LAB-158 demonstrated that the service already possesses the
+facts needed to choose among these paths:
 
-- the current local product HEAD; and
-- the freshly observed product remote HEAD.
+- exact pending ticket/execution/reconciliation identity;
+- original product base;
+- preserved worker checkpoint;
+- fresh canonical product local/remote HEAD;
+- execution workspace/branch binding;
+- exact published execution remote identity;
+- linear checkpoint lineage and reconciliation evidence refs;
+- target eligibility rules from TASK-040;
+- lease-guarded published-lineage rewrite and crash recovery from TASK-041.
 
-Therefore `--onto` currently acts primarily as a manually supplied compare-and-set
-assertion for a value Devlegate already has to observe itself.
+Requiring the operator to restate those facts or select the Git mechanism does not
+add authority. It creates opportunities to choose the wrong subcommand or copy the
+wrong SHA.
 
-The normal operator intent is simply:
+Reconciliation remains an explicit operator intent in this ticket. Detecting product
+drift does not by itself authorize Devlegate to mutate history without a reconcile
+request. A future project policy may choose a more automatic trigger, but that is
+outside this task.
+
+## Canonical CLI
+
+Add the common form:
 
 ```text
-reconcile this retained execution onto the product generation that is current now
+devlegate reconcile <ticket-id>
 ```
 
-Requiring the operator to copy the same HEAD manually adds friction without adding
-authority.
+This is the primary documented/operator path.
 
-## Required behavior
+Given a pending reconciliation, the service must freshly observe the relevant state
+and classify it without LLM judgment or heuristic similarity.
 
-- Make `--onto` optional for `reconcile update-base`.
-- With no `--onto`, resolve the target from a fresh canonical product-generation
-  observation owned by the running service.
-- Do not resolve the default target from stale CLI-side state or from an
-  unauthenticated caller checkout.
-- The implicit target must still satisfy every existing update-base safety
-  invariant, including clean checkout, expected product branch, local/remote
-  agreement, execution/checkpoint binding, and any ancestry restrictions that
-  remain part of update-base semantics.
-- Bind the exact resolved target commit to the admitted mutable operation before
-  reconciliation effects are applied.
-- Durable mutable-request/receipt semantics must preserve that resolved identity:
-  replaying the same admitted request ID must refer to the same effective target,
-  not silently re-resolve a newer HEAD.
-- If the product generation changes before the operation's final safety
-  re-observation, fail closed rather than silently transplanting onto a different
-  commit.
+### Same-base recovery
 
-### Explicit `--onto`
+If the retained execution is still based on the exact current canonical product
+generation and the existing resume invariants hold, automatically perform the
+existing safe resume resolution.
 
-- Preserve `--onto <target>` as an optional operator safety assertion.
-- When supplied, the target must continue to resolve to the exact current canonical
-  product HEAD accepted by update-base.
-- An explicit target mismatch remains an error.
-- `--onto` does not become permission to transplant onto an arbitrary historical
-  or unrelated commit.
+Conceptually:
 
-## CLI and documentation
+```text
+pending reconciliation
+product == original/effective base
+exact workspace/checkpoint binding
+-> resume
+```
 
-- Help should describe the default clearly, e.g. that omitted `--onto` means the
-  current product HEAD.
-- Existing explicit-`--onto` scripts remain compatible.
-- Update operations documentation/examples to show the common short form first and
-  the explicit assertion form separately.
-- Correct the mutable-request acknowledgement wording. The CLI currently prints
-  `reconciliation accepted: <ticket>` once the request/receipt has been admitted,
-  even though the service may still reject the reconciliation during execution.
-  Use wording that distinguishes request admission from operation success, e.g.
-  `reconciliation request accepted: <ticket>; see service log for result`, or an
-  equivalent concise message consistent with the existing mutable-request model.
-- Do not report a reconciliation as resolved/successful from the client merely
-  because the request was durably admitted. Final success remains service-owned and
-  observable through status/log/state.
+### Product advancement / eligible replacement
+
+If the current product generation differs from the retained execution base, resolve
+the current canonical product HEAD inside the service and apply the existing
+update-base eligibility rules.
+
+This includes the already-supported cases:
+
+- ordinary descendant advancement;
+- exact same-parent rewritten product tip from TASK-040.
+
+Do not broaden target topology in this ticket.
+
+When eligible, automatically transplant the proven execution lineage onto the exact
+fresh current product generation.
+
+### Published execution lineage
+
+If update-base requires moving an already published Devlegate-owned execution ref,
+do not require a normal operator to add `--rewrite-published`.
+
+TASK-041 already requires all of the actual safety authority:
+
+- exact Devlegate-owned execution ref;
+- exact published SHA bound in durable state;
+- remote SHA is a proven checkpoint/prefix of the retained linear execution lineage;
+- displaced lineage is durably pinned as provenance evidence;
+- rewritten lineage is proved one-for-one;
+- remote mutation uses exact lease/CAS, never unconditional force;
+- remote is freshly re-observed after publication;
+- crash recovery is write-ahead and idempotent.
+
+If those proofs hold, the service may perform the lease-guarded rewrite as part of
+the ordinary reconciliation request.
+
+If any proof does not hold, fail closed. Do not ask the operator to bypass the proof
+with a stronger-looking force flag.
+
+## Deterministic classification
+
+The service owns classification. At minimum distinguish:
+
+```text
+same exact product generation
+    -> resume
+
+eligible current product generation
+    + unpublished execution lineage
+    -> update-base/transplant
+
+eligible current product generation
+    + exact proven published Devlegate execution prefix
+    -> update-base + lease-guarded publication rewrite
+
+unsupported/divergent/ambiguous topology
+    -> remain blocked with exact diagnostic
+```
+
+Classification must use exact Git/state/provenance predicates only.
+
+Do not infer equivalence from:
+
+- commit message;
+- tree similarity;
+- patch-id;
+- timestamp/author;
+- reflog;
+- LLM judgment;
+- semantic guesses about the changes.
+
+## Target selection
+
+For automatic update-base:
+
+- resolve the target from a fresh canonical product-generation observation owned by
+  the running service;
+- require the expected product branch and clean local/remote agreement;
+- bind the exact resolved target to the admitted mutable request before effects;
+- same request-ID replay must keep the same bound target/result and must not silently
+  re-resolve a newer product HEAD;
+- movement after admission/before effect fails closed.
+
+The operator must not need to copy a SHA in the normal path.
+
+## Advanced/compatibility assertions
+
+Preserve the existing explicit reconciliation forms where practical for scripts and
+diagnosis:
+
+```text
+devlegate reconcile resume <ticket-id>
+devlegate reconcile update-base <ticket-id> [--onto <target>]
+```
+
+Their safety semantics remain exact.
+
+`--onto <target>`, when supplied, is an assertion that the operator expects this
+exact current canonical product generation. It is not permission to reconcile onto
+an arbitrary historical target.
+
+The existing `--rewrite-published` option may remain temporarily accepted for CLI
+compatibility, but it must no longer be required for a proven Devlegate-owned
+published-lineage rewrite and must not weaken or change the proof set. Document it as
+unnecessary/deprecated if retained.
+
+Do not introduce a replacement force/yes/confirm flag for the same proven case.
+
+## Request acknowledgement
+
+Correct the mutable-request acknowledgement wording.
+
+The client currently can print wording such as:
+
+```text
+reconciliation accepted: LAB-158
+```
+
+after request admission even though the service may subsequently reject the
+operation.
+
+Client acknowledgement must distinguish request admission from operation success,
+for example:
+
+```text
+reconciliation request accepted: LAB-158; see service log/status for result
+```
+
+or an equivalent concise wording consistent with the mutable-request/receipt model.
+
+Do not claim `resolved` or successful reconciliation merely because the request
+was admitted. Final result remains service-owned and observable through status/state
+and operational logs.
+
+## Status and diagnostics
+
+Expose enough human-readable state to explain the automatic choice/result, including
+the effective resolution class when known, for example:
+
+- resume;
+- update-base;
+- update-base with published-lineage rewrite;
+- blocked unsupported topology.
+
+Do not require the operator to reconstruct why a command selected a path from raw
+Git SHAs alone.
+
+Structured state/evidence should retain the exact target, old/new checkpoint,
+publication identity, and resolution already required by the underlying operations.
 
 ## Scope boundaries
 
-- Do not broaden which product histories are eligible for update-base in this
-  ticket.
-- In particular, do not solve rewritten/amended original-base reconciliation here.
-- Do not weaken current fail-closed ancestry, checkpoint, workspace, publication, or
-  fresh-remote checks.
-- Do not change same-base `reconcile resume` semantics.
-- Do not make reconciliation automatic merely because the target can now default.
+- Do not automatically reconcile merely because drift was detected; one explicit
+  reconcile intent remains required.
+- Do not broaden target eligibility beyond the rules already implemented by
+  TASK-040/TASK-041.
+- Do not add generic force push.
+- Do not add arbitrary rebase/merge reconciliation.
+- Do not weaken clean-workspace, product local/remote agreement, checkpoint,
+  workspace, provenance, publication, lease, or crash-recovery proofs.
+- Do not use an LLM to choose the reconciliation path.
+- Do not create a generic workflow-policy language in this ticket.
 
 ## Acceptance criteria
 
-- `devlegate reconcile update-base T-1` reconciles against the freshly observed
-  current canonical product HEAD when the existing update-base invariants permit it.
-- The effective target commit is exact, durable, and observable in reconciliation
-  state/evidence.
-- Same-request replay cannot silently switch to a newer product HEAD.
-- A product move between admission and effect fails closed.
-- `--onto` remains available as an exact current-HEAD assertion.
-- An explicit stale or mismatched `--onto` remains rejected.
-- Existing safety semantics for unsupported divergent/rewritten histories are
-  unchanged.
-- CLI acknowledgement text clearly distinguishes admitted request from resolved
-  reconciliation and does not claim success before the service completes it.
+- `devlegate reconcile T-1` is sufficient for every currently supported safe
+  reconciliation class.
+- Same-base pending state automatically selects resume.
+- Eligible current product advancement automatically selects update-base.
+- Eligible same-parent product replacement automatically selects the TASK-040
+  transplant path.
+- A proven published Devlegate execution prefix automatically selects the TASK-041
+  lease-guarded rewrite without requiring `--rewrite-published`.
+- Unsupported or ambiguous topology remains blocked and receives no weaker fallback.
+- The automatic target is freshly service-resolved, exact, durable, and replay-safe.
+- Explicit `--onto` remains a current-HEAD assertion rather than target authority.
+- Existing explicit subcommands remain compatible unless a deliberate parser
+  deprecation is documented and tested.
+- Client acknowledgement distinguishes admitted request from completed resolution.
 - Tests, Ruff, and coverage remain green.
 
 ## Required regressions
 
-- Omitted `--onto` + stable eligible current product HEAD -> update-base succeeds.
-- Omitted `--onto` + product moves before effect -> no transplant to the new
-  unbound HEAD.
-- Same admitted request ID replay after product movement -> original resolved target
-  remains authoritative or the operation reports its existing durable result.
-- Explicit matching `--onto` -> existing behavior succeeds.
+- Pending same-base execution + `reconcile T-1` -> resume selected and resolved.
+- Descendant current product + `reconcile T-1` -> update-base selected against the
+  exact fresh product HEAD.
+- Same-parent rewritten current product + unpublished lineage -> automatic
+  TASK-040 transplant.
+- Same-parent/eligible target + proven published execution prefix -> automatic
+  TASK-041 lease-guarded rewrite with no `--rewrite-published` flag.
+- Published execution remote moves before lease -> automatic path fails closed; no
+  unconditional/weak force retry.
+- Unsupported divergent product topology -> remains blocked; no guessed strategy.
+- Omitted explicit target + product moves between admission and effect -> no
+  transplant to an unbound newer HEAD.
+- Same admitted request ID replay after product movement -> original bound target or
+  durable completed result remains authoritative.
+- Explicit matching `--onto` -> succeeds through the same service-owned
+  classification/proof path.
 - Explicit stale/mismatched `--onto` -> fails closed.
-- Rewritten/divergent original base remains subject to the existing update-base
-  restriction and is not implicitly accepted by this UX change.
+- Legacy explicit `update-base --rewrite-published`, if retained, proves no broader
+  authority than the automatic path.
 - Admitted request later rejected by the service -> client acknowledgement says
   request accepted/admitted, not reconciliation succeeded/resolved.
