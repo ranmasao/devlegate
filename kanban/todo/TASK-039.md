@@ -81,6 +81,15 @@ authority.
 - Existing explicit-`--onto` scripts remain compatible.
 - Update operations documentation/examples to show the common short form first and
   the explicit assertion form separately.
+- Correct the mutable-request acknowledgement wording. The CLI currently prints
+  `reconciliation accepted: <ticket>` once the request/receipt has been admitted,
+  even though the service may still reject the reconciliation during execution.
+  Use wording that distinguishes request admission from operation success, e.g.
+  `reconciliation request accepted: <ticket>; see service log for result`, or an
+  equivalent concise message consistent with the existing mutable-request model.
+- Do not report a reconciliation as resolved/successful from the client merely
+  because the request was durably admitted. Final success remains service-owned and
+  observable through status/log/state.
 
 ## Scope boundaries
 
@@ -104,6 +113,8 @@ authority.
 - An explicit stale or mismatched `--onto` remains rejected.
 - Existing safety semantics for unsupported divergent/rewritten histories are
   unchanged.
+- CLI acknowledgement text clearly distinguishes admitted request from resolved
+  reconciliation and does not claim success before the service completes it.
 - Tests, Ruff, and coverage remain green.
 
 ## Required regressions
@@ -117,3 +128,5 @@ authority.
 - Explicit stale/mismatched `--onto` -> fails closed.
 - Rewritten/divergent original base remains subject to the existing update-base
   restriction and is not implicitly accepted by this UX change.
+- Admitted request later rejected by the service -> client acknowledgement says
+  request accepted/admitted, not reconciliation succeeded/resolved.
