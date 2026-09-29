@@ -179,3 +179,34 @@ asserted explicitly with `--onto`.
 - Unrelated divergence with a common older merge-base -> rejected.
 - Local/remote target disagreement -> rejected before transplant.
 - Published execution history -> existing rewrite prohibition remains enforced.
+
+
+## Review findings
+
+Review of execution `de9d92d2c4fd491482f336e07cb2e13e` / product candidate
+`f1a3b92f671ef305c060b05b106ac50f31aa5804` requires rework.
+
+- GitHub CI run 36503271728 failed with one test failure:
+  `test_same_parent_replacement_requires_exact_single_parent_git_topology`.
+  The test creates an "unrelated" commit from the exact same parent as
+  `original` and then expects the same-parent predicate to reject it. That
+  contradicts this ticket's deliberately topology-only proof: any distinct
+  single-parent sibling with the same exact parent satisfies the permitted
+  replacement topology. Do not add content/message/patch heuristics merely to
+  make this assertion pass; correct the regression to test an actually
+  unsupported topology (for example a different parent / older common merge
+  base).
+- Add an engine-level semantic regression that exercises the new branch through
+  the complete operation: pending reconciliation with `B -> O`, `B -> T`,
+  preserved worker checkpoint `O -> W`, then
+  `reconcile_update_base(..., T)` succeeds, records resolved/effective base,
+  and proves the rewritten worker checkpoint parent is exactly `T`.
+- Add the corresponding same-parent conflict regression: the rewritten target
+  and worker delta conflict, rebase aborts, reconciliation remains unresolved,
+  and the execution workspace is restored cleanly to the exact preserved worker
+  checkpoint.
+- Preserve the implementation shape in which same-parent replacement only
+  extends the existing target-eligibility predicate. The existing evidence,
+  workspace, publication, checkpoint-shape, rebase, abort, and result-proof
+  path should remain shared rather than forked.
+- Re-run full tests, coverage, and Ruff; CI must be green before review.
