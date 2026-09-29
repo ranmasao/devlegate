@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6c80e9784ca39208c6a5769b0d263540d6b885f9",
+  "conclusion": "completed",
+  "control_head": "91ef879b81148a57e040733cdd15df868e2a4153",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-040",
+  "execution_id": "de9d92d2c4fd491482f336e07cb2e13e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-040",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-040/de9d92d2c4fd491482f336e07cb2e13e.md",
+  "report_sha256": "03021fdaabe5d77e01b41435405929cc56000c675715f3eb600a1d40594f4fed",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-040",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The source and tests compile cleanly and git diff checks pass. The environment does not provide pytest or ruff executables, so those commands could not be run here.",
+    "summary": "Added a narrow same-parent rewritten-tip proof to update-base reconciliation, requiring distinct single-parent commits with the exact same parent before allowing the existing rebase transplant. Added topology regressions for valid replacements, differing-parent divergence, and merge commits; existing checkpoint, publication, and conflict-abort safeguards remain unchanged."
+  },
+  "workspace_head": "f1a3b92f671ef305c060b05b106ac50f31aa5804"
+}
