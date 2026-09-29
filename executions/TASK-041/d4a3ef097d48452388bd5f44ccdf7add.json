@@ -1,0 +1,32 @@
+{
+  "code_base_head": "53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb",
+  "conclusion": "incomplete",
+  "control_head": "3a19855ba5b34ff187efe0fc13f001ee0f1bd01e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-041",
+  "execution_id": "d4a3ef097d48452388bd5f44ccdf7add",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-041",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the remaining TASK-041 real-Git regression matrix for published-prefix/current rewrites, authorization blocking, lease movement failure, invalid lineage, merge/nonlinear history, conflict restoration, dropped commits, and post-publication crash recovery."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-041",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the remaining TASK-041 real-Git regression matrix for published-prefix/current rewrites, authorization blocking, lease movement failure, invalid lineage, merge/nonlinear history, conflict restoration, dropped commits, and post-publication crash recovery."
+    ],
+    "report": null,
+    "summary": "Fixed staged rewrite recovery ordering by observing the execution worktree without assuming the persisted base generation, safely aborting or restoring local-pending rewrites, and rebinding durable execution base state before normal validation. Added real Git regressions for local-pending restart recovery and unpublished multi-checkpoint transplantation."
+  },
+  "workspace_head": "6fa2d9a9778f2ff326bcc750d99d40ef9d280b80"
+}
