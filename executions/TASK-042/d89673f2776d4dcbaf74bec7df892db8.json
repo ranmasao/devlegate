@@ -1,0 +1,28 @@
+{
+  "code_base_head": "c594d577cbce558ae348d29b3f6c98844fe88b6c",
+  "conclusion": "completed",
+  "control_head": "28e4ac87b3020cbcc69e810e4e5a84ca5154ecf8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-042",
+  "execution_id": "d89673f2776d4dcbaf74bec7df892db8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-042",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-042/d89673f2776d4dcbaf74bec7df892db8.md",
+  "report_sha256": "279cd355db52a0af3f36d10543f77944b0cedcc652c6f9f451a02e4ac19a29f3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-042",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused CLI, IPC, control-plane, compile, diff-check, and Ruff validation passed. The full suite reached 1043 passing tests; three unrelated environment-dependent tests failed because the workspace lacks coverage and .venv artifacts.",
+    "summary": "Automatic reconciliation now classifies resume versus update-base independently of --onto, persists the selected class and exact target for replay, and dispatches from durable classification. Added canonical CLI/IPC regressions, updated operator documentation, and fixed Ruff formatting."
+  },
+  "workspace_head": "c42783762b70668fb3c29b709898852774bfa59c"
+}
