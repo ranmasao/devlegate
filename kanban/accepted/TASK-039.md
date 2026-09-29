@@ -213,3 +213,33 @@ The existing TASK-040/TASK-041 topology and rewrite tests do not need to be
 duplicated here.
 
 Return to review with full CI, coverage, and Ruff green.
+
+
+## Accepted
+
+Execution `811310115fdb4146b7f4edd44e836b2c` / product checkpoint
+`c594d577cbce558ae348d29b3f6c98844fe88b6c` satisfies TASK-039.
+
+The final candidate proves the service-owned omitted-target contract at the
+IPC/owner boundary:
+
+- an omitted `--onto` request is admitted and resolved to the exact current
+  canonical product HEAD;
+- the resolved SHA is persisted in the mutable receipt before reconciliation effects;
+- owner-side execution consumes the bound target rather than re-resolving a newer
+  product generation;
+- product movement after admission fails closed and leaves the reconciliation
+  pending instead of silently retargeting;
+- replay of the same request ID returns the original persisted target;
+- explicit target behavior remains compatible;
+- public help and request-acknowledgement wording match the new contract.
+
+GitHub CI run `36610943905` is green:
+
+```text
+1043 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
