@@ -582,6 +582,27 @@ def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
 
 
+def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
+    """Prove that two distinct commits are single-parent replacements."""
+    if original == target:
+        return False
+    original_parents = _git(
+        repo, "rev-list", "--parents", "-n", "1", original, check=False
+    )
+    target_parents = _git(
+        repo, "rev-list", "--parents", "-n", "1", target, check=False
+    )
+    original_fields = original_parents.stdout.split()
+    target_fields = target_parents.stdout.split()
+    return (
+        original_parents.returncode == 0
+        and target_parents.returncode == 0
+        and len(original_fields) == 2
+        and len(target_fields) == 2
+        and original_fields[1] == target_fields[1]
+    )
+
+
 class ServiceEngine:
     """Own persistent workflow orchestration and mutable runtime operations."""
 
@@ -7608,10 +7629,14 @@ class ServiceEngine:
                 target,
                 check=False,
             )
-            if ancestor.returncode:
+            same_parent_replacement = (
+                ancestor.returncode != 0
+                and _is_same_parent_replacement(self.repo, original_base, target)
+            )
+            if ancestor.returncode and not same_parent_replacement:
                 raise DevlegateError(
                     "requested reconciliation target is not a descendant of "
-                    "the original base"
+                    "the original base or a proven same-parent replacement"
                 )
             evidence = str(reconciliation["evidence_ref"])
             preserved = _git(self.repo, "rev-parse", "--verify", evidence, check=False)

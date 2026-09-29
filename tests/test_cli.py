@@ -46,6 +46,7 @@ from devlegate.runtime import (
     ExecutionPlan,
     GitObservation,
     StatusSnapshot,
+    _is_same_parent_replacement,
     _todo_fingerprint,
 )
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
@@ -337,6 +338,47 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
+
+
+def test_same_parent_replacement_requires_exact_single_parent_git_topology(
+    git_fixture,
+):
+    repo = git_fixture["working"]
+    (repo / "replacement.txt").write_text("original\n")
+    git(repo, "add", "replacement.txt")
+    git(repo, "commit", "-m", "original product tip")
+    original = git(repo, "rev-parse", "HEAD").stdout.strip()
+    parent = git(repo, "rev-parse", "HEAD^").stdout.strip()
+
+    git(repo, "reset", "--hard", parent)
+    (repo / "replacement.txt").write_text("replacement\n")
+    git(repo, "add", "replacement.txt")
+    git(repo, "commit", "-m", "rewritten product tip")
+    target = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert _is_same_parent_replacement(repo, original, target)
+
+    git(repo, "reset", "--hard", parent)
+    (repo / "divergent.txt").write_text("divergent\n")
+    git(repo, "add", "divergent.txt")
+    git(repo, "commit", "-m", "unrelated product tip")
+    unrelated = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert not _is_same_parent_replacement(repo, original, unrelated)
+
+
+def test_same_parent_replacement_rejects_merge_commit(git_fixture):
+    repo = git_fixture["working"]
+    original = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "switch", "-c", "replacement-side")
+    (repo / "side.txt").write_text("side\n")
+    git(repo, "add", "side.txt")
+    git(repo, "commit", "-m", "replacement side")
+    git(repo, "switch", "main")
+    (repo / "main.txt").write_text("main\n")
+    git(repo, "add", "main.txt")
+    git(repo, "commit", "-m", "main side")
+    git(repo, "merge", "--no-ff", "replacement-side", "-m", "merge replacement")
+    target = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert not _is_same_parent_replacement(repo, original, target)
 
 
 @pytest.mark.parametrize("command", ["run", "daemon"])
