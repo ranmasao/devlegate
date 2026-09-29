@@ -436,3 +436,93 @@ In addition to the ref-layout failures, existing IPC/CLI tests use test doubles 
 
 Fix existing regressions, add the new required coverage, and rerun full tests,
 coverage, and Ruff before returning to review.
+
+
+## Second review findings
+
+Review of execution `e1b1debc712a4b398d85f6543ca8d612` / checkpoint
+`1e310a39f4f140acaee8ba4ebb630a601db48ce9` still requires rework.
+
+The ref-namespace conflict is corrected: the original reconciliation evidence ref is
+reused as displaced evidence, and rewritten evidence now uses a non-conflicting
+sibling ref. IPC compatibility and remote-pending old-base restoration are also
+improved.
+
+Two blockers remain.
+
+### Local-pending crash recovery still runs too late
+
+The method still calls:
+
+```python
+workspace = self._execution_workspace_for_recovery()
+```
+
+before inspecting and recovering `rewrite_stage == "local-pending"`.
+
+That shared validator uses durable `execution_base_head`.
+
+For the required crash window:
+
+```text
+durable state:
+  rewrite_stage = local-pending
+  execution_base_head = O
+
+workspace after successful local rebase:
+  T -> W1' -> ... -> Wn'
+```
+
+`O` is not an ancestor of the rewritten execution branch in the same-parent
+replacement case. Therefore normal workspace recovery fails before the newly added
+`local-pending` recovery block can run.
+
+Stage-aware recovery must occur before any validator that assumes either the old or
+new generation exclusively. Use exact worktree/branch/HEAD observations sufficient
+to classify the persisted rewrite stage, then either:
+
+- prove and restore the old checkpoint/base generation; or
+- prove the exact rewritten generation and advance the durable stage safely.
+
+Only after the generation is normalized should the ordinary shared workspace
+validator run.
+
+Add a real regression that crashes after local rebase has completed but before
+`remote-pending` is durably saved, restarts the service, and proves safe recovery.
+
+### Required TASK-041 regressions are still absent
+
+The cumulative product diff from TASK-040 integration
+`53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb` through this checkpoint changes only
+four test lines, all extending the existing one-commit same-parent test with evidence
+assertions. No new TASK-041 topology/publication/crash tests were added.
+
+The ticket explicitly requires semantic/integration proof for:
+
+- unpublished multi-checkpoint transplant;
+- published prefix rewrite;
+- published current-checkpoint rewrite;
+- missing `--rewrite-published` authorization;
+- lease failure after external remote movement;
+- remote checkpoint outside the proven lineage;
+- merge/nonlinear rejection;
+- conflict restoration across a multi-commit lineage;
+- detection of dropped/squashed commits;
+- crash before local effect;
+- crash after local rewrite / before remote publication;
+- crash after remote publication / before resolved-state commit;
+- displaced and rewritten evidence durability.
+
+These are not optional coverage polish: they are the proof of the new remote
+non-fast-forward mutation and recovery contract.
+
+Use real Git refs/worktrees/remotes for the topology, lease, and crash-recovery
+claims. Existing unit/helper tests may supplement but must not replace the
+strongest-boundary proofs.
+
+GitHub CI run 36566024722 was still running at review time; regardless of its final
+result, the missing acceptance regressions and unreachable local-pending recovery are
+blocking findings.
+
+Return only after the stage-ordering bug is fixed and the required regression matrix
+is implemented and green under full CI/Ruff/coverage.
