@@ -130,3 +130,86 @@ authority.
   restriction and is not implicitly accepted by this UX change.
 - Admitted request later rejected by the service -> client acknowledgement says
   request accepted/admitted, not reconciliation succeeded/resolved.
+
+
+## Review findings
+
+Execution `6179c326db3e4bb3a9ab40b2f5a609e7` / checkpoint
+`c4a9159a59211e5b34e3ccbc37c01936ee9f59da` requires a focused
+hardening pass.
+
+The implementation direction is appropriate:
+
+- `--onto` is optional at the CLI/IPC boundary;
+- omitted target resolution is service-owned;
+- admission resolves an exact local/remote-agreed product HEAD;
+- the resolved target is persisted in the mutable receipt;
+- replay acknowledgement can return the persisted target;
+- client wording now distinguishes request admission from completed reconciliation.
+
+No architectural rewrite is requested.
+
+### CI is currently red
+
+GitHub CI run `36584143453` reports:
+
+```text
+1 failed, 1041 passed, 1 skipped
+```
+
+The failure is the public-help contract:
+
+```text
+tests/test_cli.py::test_public_help_surfaces_are_successful_and_useful
+```
+
+The test still expects the old phrase:
+
+```text
+product branch to use as the new base
+```
+
+while the command now documents an exact current product HEAD/default-current-HEAD
+assertion. Update the help regression to the intended new contract and rerun full CI
+and Ruff.
+
+### Required omitted-target proofs are missing
+
+The candidate changes only existing CLI wording/payload expectations and does not add
+the semantic regressions required by TASK-039 for the new service-owned target
+selection.
+
+Add strongest-practical-boundary tests for:
+
+1. **Omitted `--onto`, stable eligible product.**
+   A real pending reconciliation is submitted without an `onto` field.
+   The service resolves the exact current canonical product HEAD, returns/persists
+   that SHA in the admission receipt, executes update-base, and records the same SHA
+   as `effective_base`.
+
+2. **Target identity is frozen at admission.**
+   Admit an omitted-target request and prove the durable receipt contains the exact
+   resolved SHA before reconciliation effects. The owner-side operation must consume
+   that bound SHA rather than re-resolving "whatever is current" later.
+
+3. **Product moves after admission / before effect.**
+   After the omitted-target request is admitted and its target is bound, move the
+   canonical product HEAD. The reconciliation must fail closed; it must not silently
+   transplant onto the newer HEAD.
+
+4. **Same request-ID replay is target-stable.**
+   After an omitted-target request has been admitted, move the product and replay the
+   exact same request ID. The replay must return/use the original persisted target
+   (or the already durable completed result), not resolve the newer product HEAD.
+
+5. **Explicit target remains an assertion.**
+   Preserve/prove the existing matching-`--onto` success and stale/mismatched
+   `--onto` failure against the same service-owned current-product rules.
+
+Use the real IPC/owner boundary for admission/receipt/replay semantics where that is
+the externally meaningful contract. Engine-level tests may supplement it.
+
+The existing TASK-040/TASK-041 topology and rewrite tests do not need to be
+duplicated here.
+
+Return to review with full CI, coverage, and Ruff green.
