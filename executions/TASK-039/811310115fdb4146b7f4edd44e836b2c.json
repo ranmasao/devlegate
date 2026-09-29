@@ -1,0 +1,28 @@
+{
+  "code_base_head": "92f5a2593d46a2bf009cc083b2a4904ddfcf7070",
+  "conclusion": "completed",
+  "control_head": "ba71b2211fa319c2aae522b74228be8623dc093c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-039",
+  "execution_id": "811310115fdb4146b7f4edd44e836b2c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-039",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-039/811310115fdb4146b7f4edd44e836b2c.md",
+  "report_sha256": "090b46d7a1e224fdcb6bb1846e2fd67c58240b8f9179dea778ebd44593efdf42",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-039",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused reconciliation and CLI tests pass, and Ruff passes for src and tests. The full pytest suite was started twice but exceeded the available command timeout; no failure was observed before timeout.",
+    "summary": "Enabled omitted --onto admission by allowing the service-owned validator to resolve and bind the current canonical product HEAD, while retaining the resolved-target acknowledgement invariant. Updated the public-help regression and strengthened live IPC coverage for durable target binding, post-admission product movement, fail-closed behavior, and replay target stability."
+  },
+  "workspace_head": "c594d577cbce558ae348d29b3f6c98844fe88b6c"
+}
