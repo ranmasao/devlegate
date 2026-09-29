@@ -1592,10 +1592,6 @@ class ServiceEngine:
             )
             return
         if command.method == "reconcile-update-base":
-            if command.onto is None:
-                raise DevlegateError(
-                    "reconcile-update-base requires a product base target"
-                )
             self._validate_reconcile_admission(command)
             return
         if command.method == "reconcile-resume":
@@ -1648,9 +1644,7 @@ class ServiceEngine:
             return {"accepted": True, "ticket_id": ticket_id}
         if method == "reconcile-update-base":
             if onto is None:
-                raise DevlegateError(
-                    "reconcile-update-base requires a product base target"
-                )
+                raise DevlegateError("reconciliation target was not resolved")
             return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
         raise DevlegateError(f"unsupported operator command: {method}")
 

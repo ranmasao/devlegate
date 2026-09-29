@@ -1450,8 +1450,9 @@ def test_retry_request_receipt_coalesces_duplicates_and_survives_restart(
     assert not restarted._operator_command_pending()
 
 
-def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
-    tmp_path, monkeypatch, short_state_dir
+@pytest.mark.parametrize("move_after_admission", [False, True])
+def test_reconcile_update_base_binds_omitted_target_before_effect(
+    tmp_path, monkeypatch, short_state_dir, move_after_admission
 ):
     working, config, state = control_fixture(tmp_path)
     config.write_text(config.read_text().replace(str(state), str(short_state_dir)))
@@ -1473,6 +1474,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
     assert run_test_iteration(engine) == 1
     reconciliation = engine._state["reconciliation"]
     target = reconciliation["observed_product"]
+    original_base = reconciliation["original_base"]
     execution = next((short_state_dir / "worktrees").glob("*/work/T-1"))
     git(working, "pull", "--ff-only", "origin", "main")
 
@@ -1487,9 +1489,10 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
         executed_thread.append(threading.get_ident())
         reconciliation_started.set()
         assert reconciliation_release.wait(3)
-        result = original_owned(ticket_id, onto, **kwargs)
-        executed.set()
-        return result
+        try:
+            return original_owned(ticket_id, onto, **kwargs)
+        finally:
+            executed.set()
 
     monkeypatch.setattr(engine, "_reconcile_update_base_owned", owned)
     original_submit = engine.submit_reconcile_update_base
@@ -1514,7 +1517,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
             engine.ipc_socket_path,
             "reconcile-request",
             "reconcile-update-base",
-            {"ticket_id": "T-1", "onto": target},
+            {"ticket_id": "T-1"},
         )
         assert response.ok
         assert response.result == {
@@ -1522,6 +1525,7 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
             "ticket_id": "T-1",
             "onto": target,
         }
+        assert engine._state["mutable_receipts"]["reconcile-request"]["onto"] == target
         assert reconciliation_started.wait(2)
         busy = request(
             engine.ipc_socket_path,
@@ -1531,6 +1535,12 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
         )
         assert not busy.ok
         assert "service busy" in busy.error["message"]
+        if move_after_admission:
+            (working / "product-after-admission.txt").write_text("product C\n")
+            git(working, "add", "product-after-admission.txt")
+            git(working, "commit", "-m", "advance product after admission")
+            git(working, "push", "origin", "HEAD:main")
+            git(working, "pull", "--ff-only", "origin", "main")
         reconciliation_release.set()
         assert executed.wait(3)
         assert submitted_thread[0] != executed_thread[0]
@@ -1539,9 +1549,14 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
             engine.ipc_socket_path,
             "reconcile-request",
             "reconcile-update-base",
-            {"ticket_id": "T-1", "onto": target},
+            {"ticket_id": "T-1"},
         )
         assert duplicate.ok
+        assert duplicate.result == {
+            "accepted": True,
+            "ticket_id": "T-1",
+            "onto": target,
+        }
         collision = request(
             engine.ipc_socket_path,
             "reconcile-request",
@@ -1566,12 +1581,17 @@ def test_reconcile_update_base_runs_on_owner_thread_and_resolves_pending_state(
         server.stop()
         authority.close()
 
-    assert engine._state["reconciliation"]["status"] == "resolved"
-    assert engine._state["resume_required"]["status"] == "required"
-    assert (execution / "implementation.txt").read_text() == "worker work\n"
+    assert engine._state["reconciliation"]["status"] == (
+        "pending" if move_after_admission else "resolved"
+    )
+    if not move_after_admission:
+        assert engine._state["resume_required"]["status"] == "required"
+        assert (execution / "implementation.txt").read_text() == "worker work\n"
+    else:
+        assert git(execution, "rev-parse", "HEAD^").stdout.strip() == original_base
     restarted = ServiceEngine(config)
     assert restarted.submit_reconcile_update_base(
-        "T-1", target, request_id="reconcile-request"
+        "T-1", None, request_id="reconcile-request"
     ) == {"accepted": True, "ticket_id": "T-1", "onto": target}
 
 

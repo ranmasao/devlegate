@@ -573,7 +573,7 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
             [
                 "Update a ticket execution after the product base changes.",
                 "ticket execution to update",
-                "product branch to use as the new base",
+                "exact current product HEAD",
             ],
         ),
         (
