@@ -317,3 +317,122 @@ The implementation must work with both:
 - Crash/restart after exact remote rewrite but before resolved-state commit -> exact
   published result recognized and finalized idempotently.
 - Displaced old checkpoint remains reachable through durable evidence after success.
+
+
+## Review findings
+
+Review of execution `a98bbb61786d4d028ba42f413958ed3f` / checkpoint
+`097f5740a5900b2dd005ba40d55b333a00640661` requires rework.
+
+The implementation direction is appropriate (explicit
+`--rewrite-published`, linear-lineage proof, exact lease publication, and
+write-ahead stages), but the current checkpoint is not safe or runnable yet.
+
+### Git ref namespace conflict
+
+The existing reconciliation evidence ref already occupies:
+
+```text
+refs/devlegate/reconciliation/<ticket>/<execution>
+```
+
+The implementation then attempts to create child refs:
+
+```text
+refs/devlegate/reconciliation/<ticket>/<execution>/displaced
+refs/devlegate/reconciliation/<ticket>/<execution>/rewritten
+```
+
+Git refs cannot have both a ref and descendants beneath that same path. The old
+evidence ref therefore conflicts with both new names.
+
+GitHub CI run 36559669526 demonstrates the failure directly: multiple existing
+update-base tests fail with:
+
+```text
+displaced execution evidence could not be durably pinned
+```
+
+Use a non-conflicting immutable ref layout. Preserve compatibility with the
+already-existing reconciliation evidence identity. The existing old evidence ref
+already pins the displaced checkpoint and may be reused as that proof if the state
+model can do so cleanly; otherwise use a separate sibling namespace, not a child of
+an existing ref.
+
+### Crash recovery is incomplete
+
+The ticket requires recovery across every persisted rewrite stage. The current
+implementation handles only one `remote-pending` shape and leaves important crash
+windows unsafe.
+
+1. `local-pending` is persisted before the rebase, but there is no restart
+   recovery for it. A crash after the local rebase succeeds but before
+   `remote-pending` is saved leaves the workspace rooted at the new target while
+   durable `execution_base_head` is still the old base. Normal workspace recovery
+   then cannot validate either generation.
+
+2. In the `remote-pending` / remote-still-old branch, recovery resets the
+   workspace back to the old checkpoint, but the persisted
+   `execution_base_head` has already become the new target. The subsequent shared
+   workspace validation therefore checks the restored old lineage against the new
+   target and cannot prove it in the same-parent replacement case.
+
+3. Recovery must bind to the exact write-ahead target and rewritten checkpoint.
+   When resuming a staged rewrite, prove the supplied/resolved target equals the
+   persisted `rewrite_target`; do not let a later request silently substitute a
+   different target.
+
+4. When recovering the case where the remote already equals the rewritten
+   checkpoint, prove the durable rewritten-evidence identity also names that exact
+   checkpoint before finalizing. Do not rely only on workspace/remote coincidence.
+
+Model the operation as an explicit recoverable stage machine. Recovery must cover at
+least:
+
+- intent saved, no local rewrite performed;
+- local rewrite in progress / interrupted;
+- local rewrite completed but remote unchanged;
+- remote lease update completed but resolved state not yet committed;
+- remote changed to any unexpected value -> fail closed.
+
+A safe abort path must restore both the Git workspace and the durable execution-base
+binding to the old generation before invoking normal old-lineage validation.
+
+### Required regressions are still missing
+
+The worker explicitly reported these as remaining work, and this checkpoint adds no
+test files for TASK-041 behavior.
+
+Add the ticket's required semantic/integration regressions, including:
+
+- multi-checkpoint unpublished descendant and same-parent successful transplants;
+- published prefix and published-current-checkpoint success with explicit
+  authorization;
+- the same published cases blocked without authorization;
+- exact lease failure after external remote movement;
+- remote checkpoint outside the proven lineage;
+- merge/nonlinear lineage rejection;
+- conflict on any commit with exact clean restoration;
+- no silent dropped/squashed commit;
+- crash/restart before local effect, after local rewrite before remote publication,
+  and after remote publication before final state commit;
+- durable displaced and rewritten evidence proofs after success.
+
+Use real Git topology for the execution-lineage and publication claims. Preserve the
+existing strongest-boundary testing conventions rather than proving remote rewrite
+semantics only through mocks.
+
+### Existing regression suite must remain green
+
+GitHub CI run 36559669526 currently reports:
+
+```text
+9 failed, 1024 passed, 1 skipped
+```
+
+In addition to the ref-layout failures, existing IPC/CLI tests use test doubles whose
+`submit_reconcile_update_base` signatures were not updated for
+`rewrite_published`, causing unexpected-keyword failures/warnings.
+
+Fix existing regressions, add the new required coverage, and rerun full tests,
+coverage, and Ruff before returning to review.
