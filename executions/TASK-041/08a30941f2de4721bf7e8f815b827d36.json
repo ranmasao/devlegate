@@ -1,0 +1,28 @@
+{
+  "code_base_head": "53b14baa6e2f9cbc41e390ce3e8166e23b8f84bb",
+  "conclusion": "completed",
+  "control_head": "41c0aed5730bd5fa00ce6d4a8e27392b62991b7a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-041",
+  "execution_id": "08a30941f2de4721bf7e8f815b827d36",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-041",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-041",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened staged published-lineage recovery to require the durable rewritten-evidence ref to point exactly at the observed rewritten checkpoint before finalizing. Added real-Git regression coverage for published-prefix and published-current rewrites, explicit authorization gating, lease publication, displaced evidence, and rewritten evidence."
+  },
+  "workspace_head": "caa6b517ae40bc880c5deb5779d183c791c9505e"
+}
