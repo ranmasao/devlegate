@@ -141,13 +141,17 @@ def dispatch_mutation(
             ticket_id, execution_id, observed_head, request_id=request.request_id
         )
     if request.method == "reconcile-update-base":
-        if set(request.payload) != {"ticket_id", "onto"}:
+        if set(request.payload) not in (
+            {"ticket_id", "onto"},
+            {"ticket_id", "onto", "rewrite_published"},
+        ):
             raise IPCProtocolError(
                 "invalid_request",
                 "reconciliation payload fields are invalid",
             )
         ticket_id = request.payload["ticket_id"]
         onto = request.payload["onto"]
+        rewrite_published = request.payload.get("rewrite_published", False)
         if not isinstance(ticket_id, str) or not ticket_id:
             raise IPCProtocolError(
                 "invalid_request", "reconciliation ticket_id must be non-empty text"
@@ -156,8 +160,15 @@ def dispatch_mutation(
             raise IPCProtocolError(
                 "invalid_request", "reconciliation onto must be non-empty text"
             )
+        if not isinstance(rewrite_published, bool):
+            raise IPCProtocolError(
+                "invalid_request", "reconciliation rewrite_published must be boolean"
+            )
         return engine.submit_reconcile_update_base(
-            ticket_id, onto, request_id=request.request_id
+            ticket_id,
+            onto,
+            rewrite_published=rewrite_published,
+            request_id=request.request_id,
         )
     if request.method == "reconcile-resume":
         if set(request.payload) != {"ticket_id"}:

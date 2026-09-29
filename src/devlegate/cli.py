@@ -409,7 +409,11 @@ def _recover_daemon(
 
 
 def _reconcile_daemon(
-    env_file: Path, ticket_id: str, onto: str, output_format: str
+    env_file: Path,
+    ticket_id: str,
+    onto: str,
+    output_format: str,
+    rewrite_published: bool = False,
 ) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -420,7 +424,15 @@ def _reconcile_daemon(
         result = request(
             locator.socket_path,
             "reconcile-update-base",
-            {"ticket_id": ticket_id, "onto": onto},
+            {
+                "ticket_id": ticket_id,
+                "onto": onto,
+                **(
+                    {"rewrite_published": True}
+                    if rewrite_published
+                    else {}
+                ),
+            },
             mutable=True,
         )
         decode_reconcile_ack(result, ticket_id, onto)
@@ -2426,6 +2438,11 @@ def build_parser() -> argparse.ArgumentParser:
     update_base_parser.add_argument(
         "--onto", required=True, help="product branch to use as the new base"
     )
+    update_base_parser.add_argument(
+        "--rewrite-published",
+        action="store_true",
+        help="authorize rewriting the published Devlegate execution ref",
+    )
     resume_parser = reconcile_commands.add_parser(
         "resume",
         help="resume retained execution progress on the same product base",
@@ -2793,7 +2810,11 @@ def main() -> int:
                     env_file, args.ticket_id, args.output_format
                 )
             return _reconcile_daemon(
-                env_file, args.ticket_id, args.onto, args.output_format
+                env_file,
+                args.ticket_id,
+                args.onto,
+                args.output_format,
+                args.rewrite_published,
             )
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())

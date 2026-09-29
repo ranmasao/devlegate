@@ -381,6 +381,7 @@ class OperatorCommand:
     ticket_id: str
     onto: str | None = None
     execution_id: str | None = None
+    rewrite_published: bool = False
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -420,9 +421,16 @@ def _recover_request_fingerprint(
     )
 
 
-def _reconcile_request_fingerprint(ticket_id: str, onto: str) -> str:
+def _reconcile_request_fingerprint(
+    ticket_id: str, onto: str, rewrite_published: bool = False
+) -> str:
     return _mutation_fingerprint(
-        "reconcile-update-base", {"ticket_id": ticket_id, "onto": onto}
+        "reconcile-update-base",
+        {
+            "ticket_id": ticket_id,
+            "onto": onto,
+            "rewrite_published": "1" if rewrite_published else "0",
+        },
     )
 
 
@@ -891,15 +899,23 @@ class ServiceEngine:
         )
 
     def submit_reconcile_update_base(
-        self, ticket_id: str, onto: str, *, request_id: str
+        self,
+        ticket_id: str,
+        onto: str,
+        *,
+        rewrite_published: bool = False,
+        request_id: str,
     ) -> dict[str, object]:
         """Submit one reconciliation intent for owner-side admission."""
         return self._submit_operator_command(
             method="reconcile-update-base",
             ticket_id=ticket_id,
             onto=onto,
+            rewrite_published=rewrite_published,
             request_id=request_id,
-            fingerprint=_reconcile_request_fingerprint(ticket_id, onto),
+            fingerprint=_reconcile_request_fingerprint(
+                ticket_id, onto, rewrite_published
+            ),
         )
 
     def submit_reconcile_resume(
@@ -934,6 +950,7 @@ class ServiceEngine:
         fingerprint: str,
         onto: str | None = None,
         execution_id: str | None = None,
+        rewrite_published: bool = False,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
@@ -976,7 +993,13 @@ class ServiceEngine:
                         "service busy; mutable request was not admitted"
                     )
                 command = OperatorCommand(
-                    request_id, method, fingerprint, ticket_id, onto, execution_id
+                    request_id,
+                    method,
+                    fingerprint,
+                    ticket_id,
+                    onto,
+                    execution_id,
+                    rewrite_published,
                 )
                 self._operator_command = command
                 new_command = True
@@ -6234,7 +6257,11 @@ class ServiceEngine:
                 raise DevlegateError(
                     "reconcile-update-base requires a product base target"
                 )
-            return self._reconcile_update_base_owned(command.ticket_id, command.onto)
+            return self._reconcile_update_base_owned(
+                command.ticket_id,
+                command.onto,
+                rewrite_published=command.rewrite_published,
+            )
         if command.method == "reconcile-control":
             if command.onto is None:
                 raise DevlegateError(
@@ -7527,9 +7554,16 @@ class ServiceEngine:
         with self._stop_context(stop_event):
             return self.run_iteration(intent)
 
-    def reconcile_update_base(self, ticket_id: str, onto: str) -> int:
-        """Transplant one preserved worker checkpoint onto an explicit base."""
-        return self._reconcile_update_base_owned(ticket_id, onto, _take_lock=True)
+    def reconcile_update_base(
+        self, ticket_id: str, onto: str, *, rewrite_published: bool = False
+    ) -> int:
+        """Transplant the preserved linear worker lineage onto an explicit base."""
+        return self._reconcile_update_base_owned(
+            ticket_id,
+            onto,
+            rewrite_published=rewrite_published,
+            _take_lock=True,
+        )
 
     def reconcile_resume(self, ticket_id: str) -> int:
         """Recover retained execution progress without changing its product base."""
@@ -7581,7 +7615,12 @@ class ServiceEngine:
             return 0
 
     def _reconcile_update_base_owned(
-        self, ticket_id: str, onto: str, *, _take_lock: bool = False
+        self,
+        ticket_id: str,
+        onto: str,
+        *,
+        rewrite_published: bool = False,
+        _take_lock: bool = False,
     ) -> int:
         """Run reconciliation with authority held by the service owner."""
         authority = self._lock() if _take_lock else nullcontext()
@@ -7653,29 +7692,201 @@ class ServiceEngine:
                 or Path(str(reconciliation["execution_path"])) != manager.path
             ):
                 raise DevlegateError("reconciliation workspace binding is invalid")
+            checkpoint = str(reconciliation["worker_checkpoint"])
             workspace = self._execution_workspace_for_recovery()
+            rewrite_stage = reconciliation.get("rewrite_stage")
+            rewrite_checkpoint = reconciliation.get("rewrite_checkpoint")
+            if rewrite_stage == "remote-pending" and isinstance(
+                rewrite_checkpoint, str
+            ):
+                if workspace.dirty:
+                    raise DevlegateError(
+                        "interrupted execution rewrite workspace is dirty"
+                    )
+                observed_remote = self._execution_remote_head(manager.branch)
+                expected_remote = reconciliation.get("rewrite_expected_remote")
+                if observed_remote == expected_remote:
+                    restored = _git(
+                        workspace.path, "reset", "--hard", checkpoint, check=False
+                    )
+                    if restored.returncode:
+                        raise DevlegateError(
+                            "interrupted execution rewrite could not be safely aborted"
+                        )
+                    reconciliation = {
+                        key: value
+                        for key, value in reconciliation.items()
+                        if key not in {
+                            "rewrite_stage",
+                            "rewrite_checkpoint",
+                            "rewrite_expected_remote",
+                            "rewrite_target",
+                        }
+                    }
+                    self._save_state("idle", reconciliation=reconciliation)
+                    workspace = self._execution_workspace_for_recovery()
+                elif (
+                    observed_remote == rewrite_checkpoint
+                    and workspace.head == rewrite_checkpoint
+                ):
+                    displaced_ref = reconciliation.get("displaced_evidence_ref")
+                    displaced = _git(
+                        self.repo,
+                        "rev-parse",
+                        "--verify",
+                        str(displaced_ref),
+                        check=False,
+                    )
+                    if displaced.returncode or displaced.stdout.strip() != checkpoint:
+                        raise DevlegateError(
+                            "interrupted execution rewrite evidence is invalid"
+                        )
+                    rewritten = _git(
+                        workspace.path,
+                        "rev-list",
+                        "--reverse",
+                        f"{target}..{rewrite_checkpoint}",
+                        check=False,
+                    )
+                    if rewritten.returncode or not rewritten.stdout.splitlines():
+                        raise DevlegateError(
+                            "interrupted execution rewrite result is invalid"
+                        )
+                    previous = target
+                    for commit in rewritten.stdout.splitlines():
+                        parents = _git(
+                            workspace.path,
+                            "rev-list",
+                            "--parents",
+                            "-n",
+                            "1",
+                            commit,
+                        )
+                        fields = parents.stdout.split()
+                        if len(fields) != 2 or fields[1] != previous:
+                            raise DevlegateError(
+                                "interrupted execution rewrite is not linear"
+                            )
+                        previous = commit
+                    if previous != rewrite_checkpoint:
+                        raise DevlegateError(
+                            "interrupted execution rewrite does not reach HEAD"
+                        )
+                    resolved = {
+                        **reconciliation,
+                        "status": "resolved",
+                        "resolution": "update-base",
+                        "effective_base": target,
+                        "worker_checkpoint": rewrite_checkpoint,
+                        "execution_remote_head": rewrite_checkpoint,
+                        "evidence_ref": reconciliation.get(
+                            "rewritten_evidence_ref", reconciliation["evidence_ref"]
+                        ),
+                    }
+                    todo_fingerprint, _count = _todo_fingerprint(
+                        self.control_worktree, self.todo_path
+                    )
+                    self._save_state(
+                        "idle",
+                        execution_base_head=target,
+                        execution_start_head=target,
+                        execution_remote_head=rewrite_checkpoint,
+                        handled_remote_head=target,
+                        handled_control_head=str(reconciliation["control_head"]),
+                        handled_todo_fingerprint=todo_fingerprint,
+                        reconciliation=resolved,
+                        resume_required={"ticket_id": ticket_id, "status": "required"},
+                    )
+                    return 0
+                else:
+                    raise DevlegateError(
+                        "execution branch remote changed during interrupted rewrite"
+                    )
             if workspace.head != reconciliation["worker_checkpoint"] or workspace.dirty:
                 raise DevlegateError(
                     "execution workspace changed before reconciliation"
                 )
+            lineage_result = _git(
+                workspace.path,
+                "rev-list",
+                "--reverse",
+                f"{original_base}..{checkpoint}",
+                check=False,
+            )
+            lineage = (
+                lineage_result.stdout.splitlines()
+                if not lineage_result.returncode
+                else []
+            )
+            if lineage_result.returncode or not lineage:
+                raise DevlegateError(
+                    "execution lineage is not a non-empty linear checkpoint chain"
+                )
+            previous = original_base
+            for commit in lineage:
+                parents = _git(
+                    workspace.path, "rev-list", "--parents", "-n", "1", commit,
+                    check=False,
+                )
+                fields = parents.stdout.split()
+                if parents.returncode or len(fields) != 2 or fields[1] != previous:
+                    raise DevlegateError(
+                        "execution lineage contains a merge, side branch, or "
+                        "unrelated commit"
+                    )
+                previous = commit
+            if previous != checkpoint:
+                raise DevlegateError(
+                    "execution lineage does not reach the preserved checkpoint"
+                )
             execution_remote = self._execution_remote_head(manager.branch)
+            expected_remote = reconciliation.get("execution_remote_head")
+            if execution_remote != expected_remote:
+                raise DevlegateError(
+                    "execution branch remote changed since reconciliation observation"
+                )
             if execution_remote is not None:
-                raise DevlegateError(
-                    "published execution history cannot be rewritten without force push"
-                )
-            if not self._checkpoint_commit_is_exact(
-                workspace,
-                str(reconciliation["worker_checkpoint"]),
-                original_base,
-            ):
-                raise DevlegateError(
-                    "execution lineage is not the supported one-commit shape"
-                )
-            if str(reconciliation["worker_checkpoint"]) == original_base:
-                raise DevlegateError(
-                    "reconciliation requires a worker checkpoint commit"
-                )
+                if not rewrite_published:
+                    raise DevlegateError(
+                        f"published execution ref refs/heads/{manager.branch} requires "
+                        "--rewrite-published authorization"
+                    )
+                if execution_remote not in lineage:
+                    raise DevlegateError(
+                        "published execution ref is outside the proven execution "
+                        "lineage"
+                    )
             previous_execution_base = self._state["execution_base_head"]
+            displaced_evidence = (
+                f"refs/devlegate/reconciliation/{ticket_id}/"
+                f"{reconciliation['execution_id']}/displaced"
+            )
+            displaced = _git(
+                self.repo,
+                "update-ref",
+                displaced_evidence,
+                checkpoint,
+                "0" * 40,
+                check=False,
+            )
+            if displaced.returncode:
+                existing = _git(
+                    self.repo, "rev-parse", "--verify", displaced_evidence, check=False
+                )
+                if existing.returncode or existing.stdout.strip() != checkpoint:
+                    raise DevlegateError(
+                        "displaced execution evidence could not be durably pinned"
+                    )
+            operation = {
+                **reconciliation,
+                "rewrite_authorized": bool(rewrite_published),
+                "rewrite_expected_remote": execution_remote,
+                "displaced_evidence_ref": displaced_evidence,
+                "rewritten_evidence_ref": f"{evidence}/rewritten",
+                "rewrite_target": target,
+                "rewrite_stage": "local-pending",
+            }
+            self._save_state("idle", reconciliation=operation)
             self._state["execution_base_head"] = target
             try:
                 rebased = _git(
@@ -7707,16 +7918,94 @@ class ServiceEngine:
                 self._state["execution_base_head"] = previous_execution_base
                 raise DevlegateError(f"reconciliation failed: {error}") from error
             updated = self._execution_workspace_for_recovery()
-            if updated.dirty or updated.head == target:
+            rewritten_lineage_result = _git(
+                updated.path, "rev-list", "--reverse", f"{target}..HEAD", check=False
+            )
+            rewritten_lineage = rewritten_lineage_result.stdout.splitlines()
+            if (
+                updated.dirty
+                or rewritten_lineage_result.returncode
+                or len(rewritten_lineage) != len(lineage)
+                or updated.head == target
+            ):
                 raise DevlegateError("reconciled execution lineage is invalid")
-            parent = _git(updated.path, "rev-parse", "--verify", "HEAD^", check=False)
-            if parent.returncode or parent.stdout.strip() != target:
-                raise DevlegateError("reconciled execution base proof failed")
+            previous = target
+            for commit in rewritten_lineage:
+                parents = _git(updated.path, "rev-list", "--parents", "-n", "1", commit)
+                fields = parents.stdout.split()
+                if len(fields) != 2 or fields[1] != previous:
+                    raise DevlegateError(
+                        "reconciled execution lineage is not ordered and linear"
+                    )
+                previous = commit
+            if previous != updated.head:
+                raise DevlegateError("reconciled execution lineage does not reach HEAD")
+            if execution_remote is not None:
+                operation = {**operation, "rewrite_stage": "remote-pending"}
+                operation["rewrite_checkpoint"] = updated.head
+                pinned_rewritten = _git(
+                    self.repo,
+                    "update-ref",
+                    operation["rewritten_evidence_ref"],
+                    updated.head,
+                    "0" * 40,
+                    check=False,
+                )
+                if pinned_rewritten.returncode:
+                    raise DevlegateError(
+                        "rewritten execution evidence could not be pinned"
+                    )
+                self._save_state("idle", reconciliation=operation)
+                lease = f"refs/heads/{manager.branch}:{execution_remote}"
+                pushed = _git(
+                    updated.path,
+                    "push",
+                    f"--force-with-lease={lease}",
+                    self.remote_name,
+                    f"{updated.head}:refs/heads/{manager.branch}",
+                    check=False,
+                )
+                observed = self._execution_remote_head(manager.branch)
+                if pushed.returncode and observed != updated.head:
+                    raise DevlegateError(
+                        pushed.stderr.strip() or "published execution rewrite failed"
+                    )
+                if observed != updated.head:
+                    raise DevlegateError(
+                        "execution branch remote changed during publication"
+                    )
+            rewritten_evidence = f"{evidence}/rewritten"
+            pinned_rewritten = _git(
+                self.repo,
+                "update-ref",
+                rewritten_evidence,
+                updated.head,
+                "0" * 40,
+                check=False,
+            )
+            if pinned_rewritten.returncode:
+                existing = _git(
+                    self.repo,
+                    "rev-parse",
+                    "--verify",
+                    rewritten_evidence,
+                    check=False,
+                )
+                if existing.returncode or existing.stdout.strip() != updated.head:
+                    raise DevlegateError(
+                        "rewritten execution evidence could not be pinned"
+                    )
             resolved = {
                 **reconciliation,
                 "status": "resolved",
                 "resolution": "update-base",
                 "effective_base": target,
+                "worker_checkpoint": updated.head,
+                "execution_remote_head": (
+                    updated.head if execution_remote is not None else None
+                ),
+                "displaced_evidence_ref": displaced_evidence,
+                "evidence_ref": rewritten_evidence,
             }
             todo_fingerprint, _count = _todo_fingerprint(
                 self.control_worktree, self.todo_path
@@ -7725,7 +8014,7 @@ class ServiceEngine:
                 "idle",
                 execution_base_head=target,
                 execution_start_head=target,
-                execution_remote_head=None,
+                execution_remote_head=resolved["execution_remote_head"],
                 handled_remote_head=target,
                 handled_control_head=str(reconciliation["control_head"]),
                 handled_todo_fingerprint=todo_fingerprint,
