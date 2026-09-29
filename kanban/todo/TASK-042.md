@@ -217,3 +217,136 @@ Keep the underlying exact target/checkpoint/publication evidence observable.
 - Explicit matching `--onto` -> same service-owned proof path.
 - Explicit stale/mismatched `--onto` -> fail closed.
 - Legacy `--rewrite-published`, if retained, grants no broader authority.
+
+
+## Review findings
+
+Execution `636a1992b3644198b1842c424aa1cd4b` / checkpoint
+`424b40987b381bbed157d96a2f11e74c2b3efb9b` requires a focused
+hardening pass.
+
+The implementation direction is correct:
+
+- the canonical CLI form `devlegate reconcile <ticket-id>` is introduced;
+- the request is service-owned through a dedicated mutable IPC operation;
+- same-base state is intended to dispatch to resume;
+- moved eligible product state is intended to dispatch to update-base;
+- automatic update-base reuses TASK-041's proven lease-guarded published rewrite;
+- legacy explicit reconciliation forms remain available.
+
+Do not redesign TASK-040/TASK-041 or add broader Git heuristics.
+
+### Semantic blocker: `--onto` currently selects the algorithm
+
+In `_validate_reconcile_auto_admission()`, any non-null `command.onto`
+immediately delegates to `_validate_reconcile_admission()`, and
+`_dispatch_operator_command()` selects resume versus update-base solely from
+whether `command.onto is None`.
+
+That overloads one field with two different meanings:
+
+1. operator assertion: "I expect the canonical current product HEAD to be H";
+2. service classification: "this reconciliation requires update-base".
+
+Those meanings must remain independent.
+
+The TASK-042 contract requires `--onto` to be an assertion only. For example:
+
+```text
+pending reconciliation
+current product == original base == H
+devlegate reconcile T-1 --onto H
+```
+
+must validate the assertion and still classify as **resume**. Supplying an exact
+assertion must not force update-base.
+
+Likewise, for a moved eligible product, an explicit matching `--onto H` should
+validate H and then select update-base because the observed topology requires it,
+not because the option was present.
+
+Persist the selected reconciliation class independently from the optional assertion
+/ resolved target identity, and dispatch from that durable classification. Reuse
+the existing reconciliation state if practical; do not add a generic policy layer.
+
+### Required TASK-042 regressions are missing
+
+The checkpoint changes only production files. The full suite still collects the
+same 1043 tests as before; no TASK-042-specific test coverage was added.
+
+Add regressions at the strongest practical boundary for the public automatic path:
+
+1. **Canonical same-base -> resume**
+   `devlegate reconcile T-1` on a same-base pending reconciliation selects and
+   completes resume.
+
+2. **Explicit matching assertion does not select update-base**
+   Same-base + `devlegate reconcile T-1 --onto <exact-current-H>` still selects
+   resume.
+
+3. **Descendant current product -> update-base**
+   Canonical reconcile selects update-base against the exact service-observed HEAD.
+
+4. **Same-parent replacement -> TASK-040 path**
+   Canonical reconcile succeeds through the already-proven same-parent eligibility
+   without the operator selecting update-base.
+
+5. **Proven published prefix -> TASK-041 rewrite automatically**
+   Canonical reconcile performs the exact lease-guarded rewrite without requiring
+   `--rewrite-published`.
+
+6. **Lease drift / remote movement**
+   Automatic published rewrite fails closed under exact lease mismatch and never
+   retries with weaker/unconditional force.
+
+7. **Unsupported divergent topology**
+   Canonical reconcile remains blocked and does not guess another strategy.
+
+8. **Admission/effect product movement**
+   The automatically bound target remains exact; later product movement causes
+   fail-closed behavior rather than retargeting.
+
+9. **Same request-ID replay**
+   Replay preserves the originally classified/bound operation identity and target
+   rather than reclassifying against a newer product generation.
+
+10. **Explicit stale/mismatched `--onto`**
+    Fails as an assertion while leaving the service-owned classifier semantics
+    unchanged.
+
+Include at least one CLI/IPC-level proof that the user-facing
+`devlegate reconcile T-1` form reaches the automatic service path, rather than
+testing only internal engine methods.
+
+### Public documentation is missing
+
+TASK-042 says the canonical form is the primary documented operator path, but this
+checkpoint changes no README/operations documentation.
+
+Update the relevant operator documentation so the normal form is:
+
+```text
+devlegate reconcile <ticket-id>
+```
+
+and describe `resume`, `update-base`, `--onto`, and
+`--rewrite-published` as compatibility/diagnostic details rather than required
+normal decision inputs.
+
+### CI
+
+GitHub CI run `36619542377` has:
+
+```text
+1043 passed, 1 skipped
+coverage: 79%
+Ruff: failed
+```
+
+Ruff failure:
+
+```text
+src/devlegate/runtime.py:7984:89 E501 Line too long
+```
+
+Fix the lint error and return with full CI, coverage, and Ruff green.
