@@ -411,7 +411,7 @@ def _recover_daemon(
 def _reconcile_daemon(
     env_file: Path,
     ticket_id: str,
-    onto: str,
+    onto: str | None,
     output_format: str,
     rewrite_published: bool = False,
 ) -> int:
@@ -421,30 +421,30 @@ def _reconcile_daemon(
             raise DevlegateError(
                 "service is not running for this checkout; start `devlegate`"
             )
+        payload = {
+            "ticket_id": ticket_id,
+            **({"onto": onto} if onto is not None else {}),
+            **({"rewrite_published": True} if rewrite_published else {}),
+        }
         result = request(
             locator.socket_path,
             "reconcile-update-base",
-            {
-                "ticket_id": ticket_id,
-                "onto": onto,
-                **(
-                    {"rewrite_published": True}
-                    if rewrite_published
-                    else {}
-                ),
-            },
+            payload,
             mutable=True,
         )
-        decode_reconcile_ack(result, ticket_id, onto)
+        effective_onto = result.get("onto")
+        if not isinstance(effective_onto, str) or not effective_onto:
+            raise DevlegateError("service returned an invalid reconciliation target")
+        decode_reconcile_ack(result, ticket_id, effective_onto)
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    result = {"result": "accepted", "ticket_id": ticket_id, "onto": onto}
+    result = {"result": "accepted", "ticket_id": ticket_id, "onto": effective_onto}
     emit(
         result,
         output_format,
-        f"reconciliation accepted: {ticket_id}",
+        f"reconciliation request accepted: {ticket_id}; see service log for result",
     )
     return 0
 
@@ -2436,7 +2436,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     update_base_parser.add_argument("ticket_id", help="ticket execution to update")
     update_base_parser.add_argument(
-        "--onto", required=True, help="product branch to use as the new base"
+        "--onto",
+        help="exact current product HEAD; defaults to the current product HEAD",
     )
     update_base_parser.add_argument(
         "--rewrite-published",

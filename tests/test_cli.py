@@ -1666,7 +1666,7 @@ def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
 
     assert main() == 0
     assert accepted and accepted[0][:2] == ("T-1", "abc123")
-    assert "reconciliation accepted: T-1" in capsys.readouterr().out
+    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
 
 
 def test_reconcile_refuses_without_daemon_without_constructing_engine(
@@ -4033,7 +4033,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         assert _disk_state(config)["reconciliation"] == pending_before
         result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
         assert result.returncode == 0, result.stderr
-        assert "reconciliation accepted: T-1" in result.stdout
+        assert "reconciliation request accepted: T-1" in result.stdout
 
         def resolved():
             status = service.cli("status", "--json")

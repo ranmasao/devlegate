@@ -144,7 +144,8 @@ Use explicit commands when an operation needs operator intent:
 devlegate retry <ticket-id>
 devlegate drop <ticket-id>
 devlegate reconcile resume <ticket-id>
-devlegate reconcile update-base <ticket-id> --onto <product-branch>
+devlegate reconcile update-base <ticket-id>
+devlegate reconcile update-base <ticket-id> --onto <current-product-head>
 ```
 
 `retry` requests a new attempt after a failed execution. `drop` retires a
@@ -152,7 +153,9 @@ blocked execution only when its exact execution record, checkpoint, report, and
 absent worker ownership are proven; it preserves the record and does not rewrite the
 ticket. `reconcile resume` continues retained progress when the admitted product
 base is unchanged. `update-base` is a separate, explicit product-base
-transplant operation. Unknown or ambiguous state is not automatically recovered.
+transplant operation. Omitting `--onto` uses the current canonical product HEAD;
+the explicit form asserts the exact current HEAD and is not a historical-target
+override. Unknown or ambiguous state is not automatically recovered.
 
 Tickets normally move through:
 

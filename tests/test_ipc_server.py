@@ -1816,7 +1816,6 @@ def test_worker_launch_stage_is_rejected_before_durable_ack(
 @pytest.mark.parametrize(
     "payload",
     [
-        {"ticket_id": "T-1"},
         {"onto": "B"},
         {"ticket_id": "T-1", "onto": "B", "extra": "nope"},
         {"ticket_id": "", "onto": "B"},

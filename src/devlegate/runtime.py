@@ -422,13 +422,13 @@ def _recover_request_fingerprint(
 
 
 def _reconcile_request_fingerprint(
-    ticket_id: str, onto: str, rewrite_published: bool = False
+    ticket_id: str, onto: str | None, rewrite_published: bool = False
 ) -> str:
     return _mutation_fingerprint(
         "reconcile-update-base",
         {
             "ticket_id": ticket_id,
-            "onto": onto,
+            "onto": onto if onto is not None else "<current-product-head>",
             "rewrite_published": "1" if rewrite_published else "0",
         },
     )
@@ -915,7 +915,7 @@ class ServiceEngine:
     def submit_reconcile_update_base(
         self,
         ticket_id: str,
-        onto: str,
+        onto: str | None,
         *,
         rewrite_published: bool = False,
         request_id: str,
@@ -988,7 +988,9 @@ class ServiceEngine:
                     raise DevlegateError(
                         f"request id collision: {method} request semantics differ"
                     )
-                return self._operator_ack(method, ticket_id, onto, execution_id)
+                return self._operator_ack(
+                    method, ticket_id, receipt.get("onto", onto), execution_id
+                )
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
                 if existing.request_id == request_id:
@@ -1369,18 +1371,35 @@ class ServiceEngine:
             },
         )
 
-    def _validate_reconcile_admission(self, ticket_id: str, onto: str) -> None:
-        if not onto:
-            raise DevlegateError("requested reconciliation target is empty")
+    def _validate_reconcile_admission(self, command: OperatorCommand) -> None:
         reconciliation = self._state.get("reconciliation")
         if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
             "pending"
         ):
-            raise DevlegateError(f"ticket {ticket_id} has no pending reconciliation")
-        if reconciliation.get("ticket_id") != ticket_id:
+            raise DevlegateError(
+                f"ticket {command.ticket_id} has no pending reconciliation"
+            )
+        if reconciliation.get("ticket_id") != command.ticket_id:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
+        if command.onto is None:
+            product = self._observe_product_generation(
+                str(reconciliation["original_base"])
+            )
+            if not product["target_eligible"]:
+                raise DevlegateError(
+                    "current product generation is not eligible for reconciliation"
+                )
+            local_head = str(product["local_head"])
+            remote_head = str(product["remote_head"])
+            if not local_head or local_head != remote_head:
+                raise DevlegateError(
+                    "current product local and remote HEADs do not agree"
+                )
+            command.onto = local_head
+        elif not command.onto:
+            raise DevlegateError("requested reconciliation target is empty")
 
     def _automatic_zero_delta_authorization(
         self,
@@ -1577,7 +1596,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "reconcile-update-base requires a product base target"
                 )
-            self._validate_reconcile_admission(command.ticket_id, command.onto)
+            self._validate_reconcile_admission(command)
             return
         if command.method == "reconcile-resume":
             self._validate_reconcile_resume_admission(command.ticket_id)
@@ -1660,12 +1679,22 @@ class ServiceEngine:
                         "ticket_id",
                         "accepted",
                         "execution_id",
+                        "onto",
                     }
                 )
                 or set(receipt)
                 not in (
                     {"method", "fingerprint", "ticket_id", "accepted"},
                     {"method", "fingerprint", "ticket_id", "accepted", "execution_id"},
+                    {"method", "fingerprint", "ticket_id", "accepted", "onto"},
+                    {
+                        "method",
+                        "fingerprint",
+                        "ticket_id",
+                        "accepted",
+                        "execution_id",
+                        "onto",
+                    },
                 )
             ):
                 raise DevlegateError("invalid mutable request receipt")
@@ -1679,6 +1708,9 @@ class ServiceEngine:
                 not isinstance(execution_id, str) or not execution_id
             ):
                 raise DevlegateError("invalid mutable request receipt execution")
+            onto = receipt.get("onto")
+            if onto is not None and (not isinstance(onto, str) or not onto):
+                raise DevlegateError("invalid mutable request receipt target")
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
@@ -1698,6 +1730,10 @@ class ServiceEngine:
             execution_id = getattr(command, "execution_id", None)
             if execution_id is not None:
                 receipt["execution_id"] = execution_id
+            if command.method == "reconcile-update-base":
+                if command.onto is None:
+                    raise DevlegateError("reconciliation target was not resolved")
+                receipt["onto"] = command.onto
             updated[command.request_id] = receipt
             reconciliation = None
             if command.method == "reconcile-resume":
