@@ -2828,6 +2828,10 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
+    (working / "product-seed.txt").write_text("seed\n")
+    git(working, "add", "product-seed.txt")
+    git(working, "commit", "-m", "seed product base")
+    git(working, "push", "origin", "HEAD:main")
     publisher = tmp_path / "publisher"
     git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
     git(publisher, "config", "user.email", "test@example.com")
@@ -2836,10 +2840,12 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
 
     def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "shared.txt").write_text("worker\n")
+        parent = git(working, "rev-parse", "HEAD^").stdout.strip()
+        git(publisher, "reset", "--hard", parent)
         (publisher / "shared.txt").write_text("product\n")
         git(publisher, "add", "shared.txt")
         git(publisher, "commit", "-m", "advance product")
-        git(publisher, "push", "origin", "HEAD:main")
+        git(publisher, "push", "--force", "origin", "HEAD:main")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
@@ -2847,17 +2853,24 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     reconciliation = devlegate._state["reconciliation"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
     original_head = git(execution, "rev-parse", "HEAD").stdout.strip()
-    git(working, "pull", "--ff-only", "origin", "main")
+    original_parent = git(
+        execution, "rev-parse", f"{reconciliation['original_base']}^"
+    ).stdout.strip()
+    target_parent = git(
+        working, "rev-parse", f"{reconciliation['observed_product']}^"
+    ).stdout.strip()
+    assert target_parent == original_parent
+    git(working, "reset", "--hard", reconciliation["observed_product"])
 
     with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
         devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
-    assert devlegate._state["reconciliation"]["status"] == "pending"
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
     assert not git(execution, "status", "--porcelain").stdout
     assert (
         git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
         == original_head
     )
+    assert devlegate._state["reconciliation"]["status"] == "pending"
 
 
 def test_dirty_product_after_worker_is_reconciliation_pending_without_mutation(
@@ -2915,6 +2928,8 @@ def test_engine_dirty_product_can_become_valid_update_base_target(
     assert devlegate.reconcile_update_base("T-1", target) == 0
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["resume_required"]["status"] == "required"
+    assert devlegate._state["reconciliation"]["resolution"] == "update-base"
+    assert devlegate._state["reconciliation"]["effective_base"] == target
     assert (
         git(working, "rev-parse", evidence).stdout.strip()
         == reconciliation["worker_checkpoint"]

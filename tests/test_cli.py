@@ -358,7 +358,10 @@ def test_same_parent_replacement_requires_exact_single_parent_git_topology(
     assert _is_same_parent_replacement(repo, original, target)
 
     git(repo, "reset", "--hard", parent)
-    (repo / "divergent.txt").write_text("divergent\n")
+    (repo / "divergent.txt").write_text("divergent parent\n")
+    git(repo, "add", "divergent.txt")
+    git(repo, "commit", "-m", "unrelated product parent")
+    (repo / "divergent.txt").write_text("divergent target\n")
     git(repo, "add", "divergent.txt")
     git(repo, "commit", "-m", "unrelated product tip")
     unrelated = git(repo, "rev-parse", "HEAD").stdout.strip()
