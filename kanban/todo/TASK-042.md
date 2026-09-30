@@ -429,3 +429,49 @@ prove the **new selector and durable binding**, not to re-prove every internal G
 rewrite invariant.
 
 Return to review with full CI, coverage, and Ruff green.
+
+
+## Third review: final proof gaps only
+
+Execution `9c3fea0e8eec42d89eaff62fe5e56841` / checkpoint
+`c6908be306857d701a6ff8e730287d16205be9af` correctly implements the
+requested production behavior:
+
+- `--onto` accepts a full SHA or unique hexadecimal prefix of at least 4
+  characters;
+- 1-3 character hexadecimal prefixes are rejected explicitly;
+- accepted assertions are normalized to the full commit ID;
+- classifier selection remains independent from assertion presence;
+- help and operator documentation describe the prefix contract;
+- focused classifier tests cover resume, update-base, and published-lineage rewrite
+  dispatch;
+- GitHub CI run `36676203701` is green:
+  `1049 passed, 1 skipped`, coverage 79%, Ruff green.
+
+No further production-code redesign is requested.
+
+Two regressions explicitly required by the previous review are still absent and are
+the only remaining blockers:
+
+1. **Ambiguous 4+ hexadecimal prefix fails closed.**
+   Construct two reachable Git objects/commits sharing a sufficiently short
+   4+ prefix, or deterministically discover an ambiguous prefix in the fixture,
+   then prove the reconciliation assertion is rejected. Do not mock away Git's
+   ambiguity result.
+
+2. **Canonical auto receipt survives restart/replay without reclassification.**
+   Admit a real `reconcile-auto` request using a short unique prefix, and prove
+   before effect that the durable mutable receipt contains:
+   - the full 40-character resolved `onto`;
+   - the selected `resolution_class`.
+
+   Reconstruct `ServiceEngine` from disk and replay the same request ID with the
+   same original request semantics. The acknowledgement must return the same full
+   SHA and class, no new operator command may be queued, and the service must not
+   re-observe/reclassify against a changed product generation.
+
+The existing TASK-039 tests already cover generic update-base target freezing and
+post-admission product movement; do not duplicate those. This pass should be tests
+only unless they expose a defect.
+
+Return to review with full CI and Ruff green.
