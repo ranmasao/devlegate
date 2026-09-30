@@ -473,3 +473,75 @@ CLI -> IPC -> lifecycle escalation -> worker interruption -> durable recovery
 This should be a tests-only pass unless it uncovers a real wiring defect.
 
 Return to review with full CI and Ruff green.
+
+
+## Fourth review: live proof exposed one final host-exit defect
+
+Execution `091b3527bdac4b7590c00fef0d442106` / checkpoint
+`4693849b8bdb385e38cb2fa3b1de0f0f94154652` adds the requested
+live-service integration coverage. The tests correctly exercise:
+
+- the real public `devlegate stop --force` CLI path;
+- an active owned worker with durable worker identity;
+- interruption and authority release;
+- retained execution/workspace/branch identity;
+- recoverable `post-checkpoint` restart state;
+- graceful stop followed by force escalation using the original lifecycle request
+  identity and completed receipt.
+
+The tests expose one final production semantic defect rather than a test-fixture
+problem.
+
+### Explicit force stop makes the service process exit 130
+
+Both new live tests reach a clean forced shutdown and the service logs:
+
+```text
+orderly shutdown complete (force)
+```
+
+but `ServiceHost._serve_engine()` currently returns 130 whenever:
+
+```python
+stop_intent.kind == "operator_abort"
+```
+
+without distinguishing the source of that abort.
+
+That conflates two different cases:
+
+1. foreground/operator SIGINT — interrupt-style process termination, where exit 130
+   remains appropriate;
+2. an explicitly accepted `devlegate stop --force` lifecycle command — successful
+   bounded service shutdown, where the service process must exit successfully.
+
+The force path already records `source="force"`; use that provenance. Preserve the
+existing 130 behavior for a real operator SIGINT / `source="operator_abort"`, but
+return the normal successful service result for `source="force"`.
+
+Do not weaken `LiveService.wait_exited()` to accept 130 for force. The integration
+test is correctly detecting that a successful lifecycle command should not make the
+managed service appear to have failed.
+
+Add or adjust a focused host-level regression proving:
+
+```text
+kind=operator_abort, source=operator_abort -> 130
+kind=operator_abort, source=force          -> 0
+```
+
+Then retain the two new live tests unchanged in substance.
+
+### Current CI
+
+GitHub CI run `36702095206` reports:
+
+```text
+2 failed, 1060 passed, 1 skipped
+```
+
+Both failures are the new live force tests and both fail solely because the service
+process exits 130 after otherwise orderly forced shutdown.
+
+Return to review with those live tests passing, the full suite green, coverage
+reported, and Ruff green. No further scope expansion is requested.
