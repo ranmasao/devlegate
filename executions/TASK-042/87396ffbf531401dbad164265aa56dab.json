@@ -1,0 +1,28 @@
+{
+  "code_base_head": "c594d577cbce558ae348d29b3f6c98844fe88b6c",
+  "conclusion": "completed",
+  "control_head": "9d34111430d9eeb9533b7eb7b32c638826955893",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-042",
+  "execution_id": "87396ffbf531401dbad164265aa56dab",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-042",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-042/87396ffbf531401dbad164265aa56dab.md",
+  "report_sha256": "7c37cc0db6f55ed90c60648c18341873c4bcba28a4c49966f46648b061daf98f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-042",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Changed tests/test_control_plane.py only. Maintained src/tests Ruff passes; focused control-plane suite passes. Full suite reached 1049 passed with three pre-existing environment setup failures involving missing coverage and missing .venv executables.",
+    "summary": "Added TASK-042 regression coverage for real ambiguous hexadecimal commit-prefix rejection and restart-safe reconcile-auto receipt replay. The replay proof verifies full-SHA target and resolution class durability, product movement immunity, and no reclassification or duplicate command queueing."
+  },
+  "workspace_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5"
+}
