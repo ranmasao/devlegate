@@ -1,0 +1,28 @@
+{
+  "code_base_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5",
+  "conclusion": "completed",
+  "control_head": "7337bcd8be3ac35689f4e536c8ab54e72ea8e4fa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-037",
+  "execution_id": "dc1e4bc377fc485291c24059b9e8570e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-037",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-037/dc1e4bc377fc485291c24059b9e8570e.md",
+  "report_sha256": "a8970cafc887624ac0f76b86a86dab684a7c929ea5ef231af203e17e816dcdb6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-037",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the final force-shutdown host exit semantic fix in src/devlegate/daemon.py and added the focused regression in tests/test_daemon.py. The daemon test module and Ruff checks pass.",
+    "summary": "Updated ServiceHost shutdown result handling so explicitly forced operator-abort shutdowns return the normal successful service result, while signal/operator-abort shutdowns retain exit status 130. Added a host-level regression covering both provenance cases."
+  },
+  "workspace_head": "9101fca118f604e70c11a33f193bdb68709b5e01"
+}
