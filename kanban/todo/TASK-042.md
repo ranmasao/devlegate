@@ -350,3 +350,82 @@ src/devlegate/runtime.py:7984:89 E501 Line too long
 ```
 
 Fix the lint error and return with full CI, coverage, and Ruff green.
+
+
+## Second review hardening
+
+Execution `d89673f2776d4dcbaf74bec7df892db8` / checkpoint
+`c42783762b70668fb3c29b709898852774bfa59c` resolves the previous
+algorithm-selection defect:
+
+- `resolution_class` is now distinct from the optional `--onto` assertion;
+- same-base state can remain `resume` even when an assertion is supplied;
+- dispatch uses the durable selected class rather than presence/absence of
+  `command.onto`;
+- operator documentation now presents `devlegate reconcile <ticket-id>` as the
+  canonical form;
+- GitHub CI run `36627606981` is green:
+  `1045 passed, 1 skipped`, coverage 79%, Ruff green.
+
+Two focused items remain before acceptance.
+
+### Normalize accepted commit prefixes to full Git identities
+
+The user-facing `--onto` assertion is resolved with:
+
+```text
+git rev-parse --verify <value>^{commit}
+```
+
+so a unique hexadecimal commit prefix is valid Git input. Git requires at least
+four hexadecimal characters for an abbreviated object name.
+
+Make that contract explicit and keep durable provenance canonical:
+
+- document in the relevant CLI help that a commit may be supplied as a full SHA or
+  a unique hexadecimal prefix of **at least 4 characters**;
+- reject shorter hash-like prefixes with a clear operator-facing error rather than
+  relying on an opaque downstream Git failure;
+- once a prefix is accepted, normalize it immediately to the resolved full
+  40-character commit ID;
+- persist/acknowledge/use the full resolved commit ID in mutable receipt and
+  reconciliation state, not the raw user prefix;
+- a replay must therefore return the same canonical full commit identity;
+- ambiguous/nonexistent prefixes still fail closed.
+
+This applies to the public reconciliation assertion surface that actually accepts
+abbreviated Git commit identities. Do not broaden other commands that currently
+require exact 40-character identities merely for consistency.
+
+Add focused regressions for:
+
+- 4+ character unique prefix -> accepted and normalized to full SHA;
+- 1-3 character hash-like prefix -> explicit rejection;
+- ambiguous 4+ prefix -> rejection;
+- replay after prefix admission -> full original SHA remains authoritative.
+
+### Prove the automatic classifier itself
+
+The new checkpoint adds two CLI routing tests, but no test currently exercises the
+new service-side automatic classifier/dispatch semantics directly. The existing
+TASK-040/TASK-041 tests prove the underlying update-base/rewrite mechanisms; they do
+not prove that `reconcile-auto` selects those mechanisms correctly.
+
+Do not duplicate the entire old topology matrix. Add a compact focused set around
+the new classifier/dispatch boundary proving at least:
+
+- same-base -> durable `resolution_class=resume` -> resume dispatch;
+- same-base + matching `--onto` assertion -> still resume;
+- moved eligible product -> durable `resolution_class=update-base` and exact full
+  target -> update-base dispatch;
+- moved product + proven published execution predecessor -> selected published-lineage
+  rewrite class and TASK-041 path is invoked without operator rewrite authorization;
+- unsupported/divergent product -> admission fails closed before a weaker dispatch;
+- same request-ID replay returns the previously persisted class/target without
+  reclassification.
+
+The tests may reuse existing TASK-040/TASK-041 fixtures/helpers. The purpose is to
+prove the **new selector and durable binding**, not to re-prove every internal Git
+rewrite invariant.
+
+Return to review with full CI, coverage, and Ruff green.
