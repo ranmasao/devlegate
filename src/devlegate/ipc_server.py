@@ -75,11 +75,12 @@ def dispatch_mutation(
     engine: object,
     request: IPCRequest,
     *,
-    lifecycle: Callable[[str, str], dict[str, object]] | None = None,
+    lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
     if request.method in {"stop", "restart"}:
-        if request.payload:
+        allowed = {"force"} if request.method == "stop" else set()
+        if set(request.payload) - allowed:
             raise IPCProtocolError(
                 "invalid_request", f"{request.method} payload fields are invalid"
             )
@@ -87,10 +88,25 @@ def dispatch_mutation(
             raise IPCProtocolError(
                 "unknown_method", f"unsupported method: {request.method}"
             )
+        force = request.payload.get("force", False)
+        if not isinstance(force, bool):
+            raise IPCProtocolError("invalid_request", "stop force must be boolean")
+        try:
+            lifecycle_result = lifecycle(request.method, request.request_id, force)
+        except TypeError as error:
+            # Keep embedders using the pre-force callback shape working.
+            if force:
+                raise
+            try:
+                lifecycle_result = lifecycle(  # type: ignore[call-arg]
+                    request.method, request.request_id
+                )
+            except TypeError:
+                raise error
         return {
             "accepted": True,
             "instance_id": _INSTANCE_ID,
-            **lifecycle(request.method, request.request_id),
+            **lifecycle_result,
         }
     if request.method == "retry":
         if set(request.payload) != {"ticket_id"}:
@@ -228,7 +244,7 @@ def dispatch_request(
     engine: object,
     request: IPCRequest,
     *,
-    lifecycle: Callable[[str, str], dict[str, object]] | None = None,
+    lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Dispatch a request without duplicating method ownership knowledge."""
     try:
@@ -247,7 +263,7 @@ class UnixIPCServer:
         engine: object,
         socket_path: Path,
         *,
-        lifecycle: Callable[[str, str], dict[str, object]] | None = None,
+        lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
     ) -> None:
         self.engine = engine
         self.path = socket_path

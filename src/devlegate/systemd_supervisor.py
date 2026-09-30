@@ -172,7 +172,11 @@ class SystemdSupervisor:
         command = ["systemctl", "--user", *arguments]
         try:
             result = self._runner(
-                command, text=True, capture_output=True, check=False, timeout=5
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=None if "stop" in arguments else 5,
             )
         except OSError as error:
             raise SystemdSupervisorError(
@@ -192,6 +196,7 @@ class SystemdSupervisor:
                     "not found",
                     "does not exist",
                     "inactive",
+                    "deactivating",
                 )
             ):
                 raise SystemdSupervisorError(
@@ -375,7 +380,7 @@ class SystemdSupervisor:
     def stop(self, locator: RuntimeLocator, *, name: str | None = None) -> None:
         self.probe_user_manager()
         selected = unit_name(locator) if name is None else _validate_unit_name(name)
-        self._run("stop", selected)
+        self._run("--no-block", "stop", selected)
 
     def restart(
         self,
@@ -393,7 +398,7 @@ class SystemdSupervisor:
         self.probe_user_manager()
         selected = unit_name(locator) if name is None else _validate_unit_name(name)
         result = self._run("is-active", selected, allow_failure=True)
-        return result.returncode == 0
+        return result.returncode == 0 or result.stdout.strip() == "deactivating"
 
     def allocate_unit_name(self, locator: RuntimeLocator) -> str:
         prefix_lengths = (8, 16, *range(20, 65, 4))

@@ -705,6 +705,7 @@ class ServiceEngine:
         self._lifecycle_intent: str | None = None
         self._lifecycle_phase = "running"
         self._lifecycle_request_id: str | None = None
+        self._lifecycle_force = False
         self._service_ready = False
         self._workers = WorkerSupervisor(
             self.opencode_bin,
@@ -763,7 +764,9 @@ class ServiceEngine:
         """Wake the owner loop for an internal command or shutdown request."""
         self._service_wake.set()
 
-    def request_lifecycle(self, intent: str, request_id: str) -> dict[str, object]:
+    def request_lifecycle(
+        self, intent: str, request_id: str, *, force: bool = False
+    ) -> dict[str, object]:
         """Accept one process-local lifecycle intent and close worker admission."""
         if intent not in {"stop", "restart"}:
             raise DevlegateError(f"unsupported lifecycle intent: {intent}")
@@ -774,11 +777,14 @@ class ServiceEngine:
                         raise DevlegateError(
                             f"service {self._lifecycle_intent} is already accepted"
                         )
+                    if force:
+                        self._lifecycle_force = True
                     return self.lifecycle_status_payload()
                 self._workers.begin_drain()
                 self._lifecycle_intent = intent
                 self._lifecycle_phase = "draining"
                 self._lifecycle_request_id = request_id
+                self._lifecycle_force = force
         self.wake()
         return self.lifecycle_status_payload()
 
@@ -792,6 +798,7 @@ class ServiceEngine:
             "ready": self._service_ready,
             "request_id": self._lifecycle_request_id,
             "workers": {"active": self._workers.active_count},
+            "force": self._lifecycle_force,
         }
 
     def mark_service_ready(self) -> None:

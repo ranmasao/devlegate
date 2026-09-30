@@ -138,13 +138,18 @@ class ServiceHost:
                     f"service failure diagnostic write failed: {diagnostic_error}"
                 )
 
-        def request_lifecycle(intent: str, request_id: str) -> dict[str, object]:
+        def request_lifecycle(
+            intent: str, request_id: str, force: bool = False
+        ) -> dict[str, object]:
             if intent == "restart" and self.host_mode is not HostingMode.INTERNAL:
                 raise DevlegateError(
                     "restart is available only for internally hosted services"
                 )
             service_log(f"lifecycle {intent} accepted through devlegate {intent}")
-            result = self.engine.request_lifecycle(intent, request_id)
+            result = self.engine.request_lifecycle(intent, request_id, force=force)
+            if force and intent == "stop":
+                stop_intent.request("operator_abort", source="force")
+                self.engine.wake()
             write_lifecycle_receipt(
                 self.engine._locator,
                 {

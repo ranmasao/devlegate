@@ -835,7 +835,9 @@ def _known_systemd_name(
     return existing.name if existing is not None else None
 
 
-def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
+def _lifecycle_service(
+    env_file: Path, output_format: str, intent: str, *, force: bool = False
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -843,13 +845,39 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     owner = _managed_systemd_owner(locator)
     if owner is not None:
         if intent == "stop":
+            payload = {"force": True} if force else None
+            try:
+                response = request(
+                    locator.socket_path,
+                    "stop",
+                    payload=payload,
+                    mutable=True,
+                    request_id=uuid.uuid4().hex,
+                )
+            except IPCClientError as error:
+                raise DevlegateError(str(error)) from error
+            if response is not None and response.get("accepted") is not True:
+                raise DevlegateError(
+                    "service IPC returned invalid stop acknowledgement"
+                )
             try:
                 owner.supervisor.stop(locator, name=owner.unit)
             except SystemdSupervisorError as error:
                 raise DevlegateError(str(error)) from error
+            active = (
+                response.get("workers", {}).get("active", 0)
+                if isinstance(response, dict)
+                and isinstance(response.get("workers"), dict)
+                else 0
+            )
+            if active and not force:
+                print(
+                    f"stop requested; will stop at checkpoint "
+                    f"({active} worker active)"
+                )
+                return 0
             _wait_for_runtime_stop(locator)
-            result = {"result": "stopped", "service": "devlegate", "action": intent}
-            emit(result, output_format, "service stopped")
+            print("service stopped")
             return 0
         try:
             owner.supervisor.restart(locator, name=owner.unit)
@@ -861,9 +889,16 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     if not locator.daemon_authority_present():
         raise DevlegateError("service is not running")
     if intent == "stop":
-        _stop_runtime(locator)
-        result = {"result": "stopped", "service": "devlegate", "action": intent}
-        emit(result, output_format, "service stopped")
+        response = _stop_runtime(locator, force=force)
+        workers = response.get("workers") if isinstance(response, dict) else None
+        active = workers.get("active", 0) if isinstance(workers, dict) else 0
+        if active and not force:
+            print(
+                f"stop requested; will stop at checkpoint "
+                f"({active} worker active)"
+            )
+        else:
+            print("service stopped")
     else:
         if not locator.daemon_authority_present():
             raise DevlegateError("service is not running")
@@ -887,13 +922,17 @@ def _lifecycle_service(env_file: Path, output_format: str, intent: str) -> int:
     return 0
 
 
-def _stop_runtime(locator: RuntimeLocator) -> None:
+def _stop_runtime(locator: RuntimeLocator, *, force: bool = False) -> dict[str, object]:
     if not locator.daemon_authority_present():
-        return
+        return {}
     request_id = uuid.uuid4().hex
     try:
         response = request(
-            locator.socket_path, "stop", mutable=True, request_id=request_id
+            locator.socket_path,
+            "stop",
+            payload={"force": True} if force else None,
+            mutable=True,
+            request_id=request_id,
         )
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
@@ -902,15 +941,19 @@ def _stop_runtime(locator: RuntimeLocator) -> None:
     instance_id = response.get("instance_id")
     if not isinstance(instance_id, str) or not instance_id:
         raise DevlegateError("service IPC returned no service instance identity")
-    _wait_for_service_stop(locator, request_id, instance_id)
+    workers = response.get("workers")
+    active = workers.get("active", 0) if isinstance(workers, dict) else 0
+    if not active or force:
+        _wait_for_service_stop(locator, request_id, instance_id)
+    return response
 
 
-def _stop_service(env_file: Path, output_format: str) -> int:
-    return _lifecycle_service(env_file, output_format, "stop")
+def _stop_service(env_file: Path, force: bool | str = False) -> int:
+    return _lifecycle_service(env_file, "table", "stop", force=force is True)
 
 
-def _restart_service(env_file: Path, output_format: str) -> int:
-    return _lifecycle_service(env_file, output_format, "restart")
+def _restart_service(env_file: Path, _output_format: str | None = None) -> int:
+    return _lifecycle_service(env_file, "table", "restart")
 
 
 def _healthy_service(env_file: Path) -> dict[str, object] | None:
@@ -2325,13 +2368,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="orderly stop the persistent workflow service",
         description="Request an orderly shutdown of the persistent service.",
     )
-    add_output_arguments(stop_parser)
+    stop_parser.add_argument(
+        "--force", action="store_true", help="interrupt the active worker immediately"
+    )
     restart_parser = commands.add_parser(
         "restart",
         help="restart the persistent workflow service at a checkpoint",
         description="Restart the self-managed service after a graceful checkpoint.",
     )
-    add_output_arguments(restart_parser)
     check_parser = commands.add_parser(
         "check",
         help="validate setup readiness",
@@ -2845,9 +2889,9 @@ def main() -> int:
             )
             return result
         if args.command == "stop":
-            return _stop_service(env_file, args.output_format)
+            return _stop_service(env_file, args.force)
         if args.command == "restart":
-            return _restart_service(env_file, args.output_format)
+            return _restart_service(env_file)
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "drop":

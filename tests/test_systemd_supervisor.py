@@ -356,11 +356,11 @@ def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> Non
     ]
     assert lifecycle == [
         ["systemctl", "--user", "start", path_a.name],
-        ["systemctl", "--user", "stop", path_a.name],
+        ["systemctl", "--user", "--no-block", "stop", path_a.name],
         ["systemctl", "--user", "restart", path_a.name],
         ["systemctl", "--user", "is-active", path_a.name],
         ["systemctl", "--user", "start", path_b.name],
-        ["systemctl", "--user", "stop", path_b.name],
+        ["systemctl", "--user", "--no-block", "stop", path_b.name],
         ["systemctl", "--user", "restart", path_b.name],
         ["systemctl", "--user", "is-active", path_b.name],
     ]
@@ -490,7 +490,7 @@ def test_start_stop_restart_never_use_ipc_lifecycle_requests(tmp_path: Path) -> 
 
     assert [call for call in calls if call[2] != "show-environment"] == [
         ["systemctl", "--user", "start", unit_name(item)],
-        ["systemctl", "--user", "stop", unit_name(item)],
+        ["systemctl", "--user", "--no-block", "stop", unit_name(item)],
         ["systemctl", "--user", "restart", unit_name(item)],
     ]
 
