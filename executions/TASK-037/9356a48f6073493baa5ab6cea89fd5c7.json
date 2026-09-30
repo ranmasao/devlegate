@@ -1,0 +1,28 @@
+{
+  "code_base_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5",
+  "conclusion": "completed",
+  "control_head": "56ba941395347990fa11c1a77b14c99195110d39",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-037",
+  "execution_id": "9356a48f6073493baa5ab6cea89fd5c7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-037",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-037/9356a48f6073493baa5ab6cea89fd5c7.md",
+  "report_sha256": "25fd452a81ccd86f69a80b606bdba416629b8024fe567ccce17e1b6755506cfe",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-037",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Lifecycle-focused tests, Ruff, and diff validation pass. The repository-wide pytest run exceeded the available execution window before completion.",
+    "summary": "Connected forced lifecycle escalation to the existing operator-abort shutdown intent so active owned workers use the established bounded interruption path while preserving the authoritative lifecycle identity. Updated stale strict-callback and managed-systemd test doubles, and added regressions for forced intent promotion, deactivating status, and nonblocking systemd stop submission."
+  },
+  "workspace_head": "7daa906da0260dd8b1dc5275a0b53efc31471618"
+}
