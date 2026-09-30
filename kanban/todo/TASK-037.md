@@ -398,3 +398,78 @@ If there is not already an explicit regression for systemd `is-active` returning
 `deactivating`, add one small supervisor-level test as required by the ticket.
 
 Return to review with full CI, coverage, and Ruff green.
+
+
+## Third review: final integration proof only
+
+Execution `9356a48f6073493baa5ab6cea89fd5c7` / checkpoint
+`7daa906da0260dd8b1dc5275a0b53efc31471618` resolves the remaining
+CI adaptation problems and the production wiring is now coherent.
+
+Confirmed:
+
+- force promotion reaches the same process-local shutdown intent used by the running
+  engine;
+- that intent is the exact object passed to WorkerSupervisor as `stop_request`;
+- the existing WorkerSupervisor operator-abort path provides exact process-group
+  interruption and bounded escalation;
+- the interrupted worker path persists interruption state before later execution
+  processing;
+- lifecycle drain causes the interrupted execution to stop at a recoverable
+  post-checkpoint stage rather than being silently discarded;
+- systemd `deactivating` is accepted;
+- systemd stop is explicitly `--no-block` with no subprocess timeout;
+- the stale strict-callback and managed-systemd test doubles are corrected.
+
+GitHub CI run `36692757266` is green:
+
+```text
+1060 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No additional production-code change is requested unless the integration test below
+exposes a defect.
+
+### Missing acceptance proof: public `stop --force` with a real active worker
+
+The previous review explicitly required an end-to-end/live-service proof of the
+public force path. The new tests still stop at
+`engine.request_lifecycle(..., force=True)`; they do not invoke the real CLI/IPC
+surface against an active worker.
+
+Add a focused live-service regression using the existing service/worker harness:
+
+1. start the real hosted service with a deliberately long-running active worker;
+2. wait until exact worker identity/ownership is durably visible;
+3. invoke the real CLI:
+   `devlegate --env <...> stop --force`;
+4. prove the command succeeds and service authority disappears;
+5. prove the owned worker process group is retired (including children if the
+   harness exposes them);
+6. prove durable execution state records `operator_abort` and preserves the same
+   ticket/execution/workspace/branch binding;
+7. construct/restart `ServiceEngine` from the same state and prove that execution
+   is recognized through the existing interrupted/recoverable path rather than as a
+   clean new execution or a dropped execution.
+
+Also exercise the real escalation boundary in the same or a second live test:
+
+```text
+graceful stop request A -> accepted/draining
+stop --force request B -> acknowledgement still binds lifecycle A
+                       -> force=true
+                       -> completion succeeds through A
+```
+
+The lower-level SIGINT/SIGKILL mechanics are already tested and do not need to be
+duplicated. The missing evidence is the composition:
+
+```text
+CLI -> IPC -> lifecycle escalation -> worker interruption -> durable recovery
+```
+
+This should be a tests-only pass unless it uncovers a real wiring defect.
+
+Return to review with full CI and Ruff green.
