@@ -378,6 +378,41 @@ def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> Non
     assert path_b.read_text() == content_b_before
 
 
+def test_deactivating_is_a_valid_stopping_status(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    directory = tmp_path / "units"
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command[2] == "show-environment":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 3, "deactivating", "")
+
+    supervisor = SystemdSupervisor(unit_directory=directory, runner=runner)
+    assert supervisor.status(item) is True
+
+
+def test_stop_is_nonblocking_and_has_no_subprocess_timeout(tmp_path: Path) -> None:
+    item = locator(tmp_path)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def runner(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    SystemdSupervisor(unit_directory=tmp_path / "units", runner=runner).stop(item)
+    assert calls[0][0] == ["systemctl", "--user", "show-environment"]
+    assert calls[1][0] == [
+        "systemctl",
+        "--user",
+        "--no-block",
+        "stop",
+        unit_name(item),
+    ]
+    assert calls[1][1]["timeout"] is None
+
+
 def test_remove_cannot_cross_project_provenance(tmp_path: Path) -> None:
     project_a, project_b = locator_pair(tmp_path)
     unit_directory = tmp_path / "units"

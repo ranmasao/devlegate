@@ -779,12 +779,30 @@ class ServiceEngine:
                         )
                     if force:
                         self._lifecycle_force = True
+                        stop_event = self._stop_event
+                        if stop_event is not None:
+                            request_abort = getattr(stop_event, "request", None)
+                            if callable(request_abort):
+                                request_abort("operator_abort", source="operator_abort")
+                            else:
+                                stop_event.kind = "operator_abort"
+                                stop_event.source = "operator_abort"
+                                stop_event.set()
                     return self.lifecycle_status_payload()
                 self._workers.begin_drain()
                 self._lifecycle_intent = intent
                 self._lifecycle_phase = "draining"
                 self._lifecycle_request_id = request_id
                 self._lifecycle_force = force
+                stop_event = self._stop_event
+                if force and stop_event is not None:
+                    request_abort = getattr(stop_event, "request", None)
+                    if callable(request_abort):
+                        request_abort("operator_abort", source="operator_abort")
+                    else:
+                        stop_event.kind = "operator_abort"
+                        stop_event.source = "operator_abort"
+                        stop_event.set()
         self.wake()
         return self.lifecycle_status_payload()
 

@@ -461,6 +461,16 @@ def lifecycle_over_persisted_unit(
     )
     calls: list[tuple[str, str | None]] = []
     monkeypatch.setattr(cli, "SystemdSupervisor", lambda: RecordingSupervisor(calls))
+    monkeypatch.setattr(
+        cli,
+        "request",
+        lambda *_args, **_kwargs: {
+            "accepted": True,
+            "request_id": "lifecycle-request",
+            "instance_id": "service-instance",
+            "workers": {"active": 0},
+        },
+    )
 
     assert cli._stop_service(env, "table") == 0
     assert cli._restart_service(env, "table") == 0
@@ -539,6 +549,17 @@ def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
             raise cli.SystemdSupervisorError("systemctl restart failed")
 
     monkeypatch.setattr(cli, "SystemdSupervisor", FailingSupervisor)
+    if action == "stop":
+        monkeypatch.setattr(
+            cli,
+            "request",
+            lambda *_args, **_kwargs: {
+                "accepted": True,
+                "request_id": "lifecycle-request",
+                "instance_id": "service-instance",
+                "workers": {"active": 0},
+            },
+        )
     monkeypatch.setattr(
         sys, "argv", ["devlegate", "--env", str(env), action]
     )

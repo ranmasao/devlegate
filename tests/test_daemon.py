@@ -108,6 +108,20 @@ def test_drop_rejects_lifecycle_drain_before_owner_admission(tmp_path, monkeypat
         engine.submit_drop("T-1", "execution-1", request_id="drop-request")
 
 
+def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    intent = daemon.ShutdownIntent()
+
+    with engine._stop_context(intent):
+        accepted = engine.request_lifecycle("stop", "force-request", force=True)
+
+    assert accepted["request_id"] == "force-request"
+    assert accepted["force"] is True
+    assert intent.kind == "operator_abort"
+    assert intent.source == "operator_abort"
+    assert intent.is_set()
+
+
 def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     engine._state.update(
@@ -684,7 +698,8 @@ def test_daemon_host_signal_handler_splits_abort_from_graceful_lifecycle(
     intent = daemon.ShutdownIntent()
     host = daemon.ServiceHost(FakeServiceEngine())
     with host._signal_ownership(
-        intent, lambda lifecycle, _request_id: lifecycle_calls.append(lifecycle) or {}
+        intent,
+        lambda lifecycle, _request_id, _force: lifecycle_calls.append(lifecycle) or {},
     ):
         result = host._serve_engine(intent)
     assert result == expected_status
@@ -1003,7 +1018,9 @@ def test_daemon_host_operator_abort_precedes_graceful_lifecycle(monkeypatch, sig
 
     intent = daemon.ShutdownIntent()
     host = daemon.ServiceHost(FakeServiceEngine())
-    with host._signal_ownership(intent, lambda _intent, _request_id: {}):
+    with host._signal_ownership(
+        intent, lambda _intent, _request_id, _force: {}
+    ):
         result = host._serve_engine(intent)
     assert result == 130
 
