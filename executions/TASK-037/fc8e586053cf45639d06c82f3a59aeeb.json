@@ -1,0 +1,28 @@
+{
+  "code_base_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5",
+  "conclusion": "completed",
+  "control_head": "3f40ee227f1cb74a55acf0d767467d49a235d435",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-037",
+  "execution_id": "fc8e586053cf45639d06c82f3a59aeeb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-037",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-037",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Lifecycle stop completion now waits on the authoritative accepted request ID, so repeated stops and graceful-to-force escalation cannot wait for a phantom request. IPC lifecycle callbacks use one explicit three-argument contract without TypeError retries, and signal handling follows that contract. Added regressions for callback invocation safety, lifecycle request convergence, parser rejection of redundant output flags, accepted graceful draining, and non-blocking systemd stop expectations."
+  },
+  "workspace_head": "c3b4a9070b57869aea30b1602a0ec5000dce0bce"
+}
