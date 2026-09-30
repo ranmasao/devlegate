@@ -158,3 +158,157 @@ with explicit immediate-shutdown semantics.
 - `stop --json` and `stop --yaml` -> parser failure with no stop request sent.
 - `restart --json` and `restart --yaml` -> parser failure with no restart
   request sent.
+
+
+## Review findings
+
+Execution `3ce09e1dbbf04cc2bdaa1e1f9a8bc5f6` / checkpoint
+`3e482048cd26cfbdd28f1e384a9d4218cc59d4b8` requires a focused
+lifecycle hardening pass.
+
+The implementation direction is appropriate:
+
+- top-level `stop` / `restart` no longer expose redundant structured-output
+  options;
+- `stop --force` is present and propagates force intent through IPC;
+- force reuses the existing owned worker-group interruption path, including bounded
+  escalation;
+- systemd stop is submitted with `--no-block`;
+- `deactivating` is treated as a valid systemd transitional state;
+- graceful stop with an active worker can return an accepted/draining message
+  instead of waiting for checkpoint completion.
+
+Do not redesign WorkerSupervisor termination or invent a second kill mechanism.
+
+### Production blocker: repeated/escalated stop waits on the wrong request ID
+
+`ServiceEngine.request_lifecycle()` intentionally keeps the identity of the first
+accepted lifecycle request when a same-intent stop is repeated or escalated:
+
+```text
+graceful request A accepted
+stop --force request B arrives
+-> lifecycle remains the same stop, request_id == A
+```
+
+That is the correct one-lifecycle model.
+
+However, `_stop_runtime()` currently generates request B locally and later calls:
+
+```text
+_wait_for_service_stop(locator, B, instance_id)
+```
+
+even when the service acknowledgement reports the already-authoritative request A.
+The completed lifecycle receipt is written for A, so direct/internal repeated stop
+or graceful -> force escalation can shut down successfully and then fail waiting
+for a receipt that can never match B.
+
+Use the **acknowledged authoritative lifecycle request ID** for completion proof.
+Validate its type/identity appropriately; do not silently invent a second lifecycle.
+A repeated same-intent stop and a force escalation must converge on the first
+accepted lifecycle identity.
+
+Add regressions for at least:
+
+- repeated graceful stop while draining -> same lifecycle ID, no failure;
+- graceful stop A followed by `stop --force` request B -> force escalation succeeds,
+  completion is proved through lifecycle A, no phantom receipt B is required;
+- initial force stop still binds/waits on its own admitted lifecycle identity.
+
+### Mutable IPC callback must not retry on TypeError
+
+`dispatch_mutation()` currently catches `TypeError` from:
+
+```python
+lifecycle(method, request_id, force)
+```
+
+and, for non-force requests, invokes the callback again with the old two-argument
+shape.
+
+A `TypeError` may originate **inside** a valid three-argument callback after it has
+already performed a side effect. Retrying the mutable callback can therefore
+duplicate lifecycle effects.
+
+Remove this runtime TypeError-based compatibility retry. Keep one explicit callback
+contract and update internal tests/doubles to that signature. Programming errors
+must propagate; they are not evidence of an old callback shape.
+
+Add a regression proving an internal callback `TypeError` causes exactly one
+callback invocation.
+
+### Required lifecycle proofs are largely missing
+
+The checkpoint changes five production modules but only adjusts six lines in
+`tests/test_systemd_supervisor.py`. No new force-path, CLI-surface, IPC-force, or
+recovery regressions were added.
+
+Add/adjust focused tests to cover the ticket contract without duplicating existing
+WorkerSupervisor primitives:
+
+1. **Active worker + graceful stop**
+   CLI returns success with accepted/draining text while the worker continues to its
+   safe checkpoint; the service itself remains alive until that boundary.
+
+2. **Systemd non-blocking stop**
+   Prove the exact managed unit is submitted with
+   `systemctl --user --no-block stop ...` and no five-second synchronous-stop
+   timeout governs lifecycle success.
+
+3. **Systemd `deactivating`**
+   `is-active` returning `deactivating` is accepted as stopping state.
+
+4. **Repeated graceful stop**
+   Idempotent, same lifecycle intent/identity, no duplicate conflicting request.
+
+5. **Force with active worker**
+   Through the real host/engine boundary, force produces
+   `operator_abort`, persists interruption state, retires the owned group, releases
+   service authority, and leaves workspace/ticket/execution lineage recoverable.
+
+6. **Force escalation**
+   Graceful drain followed by force is one coherent lifecycle and exercises the
+   authoritative-request-ID rule above.
+
+7. **Uncooperative worker**
+   Reuse the existing worker-process test harness to prove the force path reaches the
+   bounded SIGKILL escalation and exact group retirement proof.
+
+8. **Restart after forced stop**
+   The retained execution is seen through existing interrupted-execution recovery;
+   it is not silently treated as a clean/new execution and is not dropped.
+
+9. **Foreign/unproven systemd authority**
+   `stop --force` cannot become a kill-by-name fallback.
+
+10. **CLI parser boundary**
+    `stop --json`, `stop --yaml`, `restart --json`, and
+    `restart --yaml` fail in argument parsing before any lifecycle request;
+    `stop --force` appears in help.
+
+Existing lower-level tests for SIGINT/SIGKILL and interruption metadata may be reused
+where they already prove the primitive, but at least one end-to-end/live-service
+test must prove that `stop --force` actually reaches that primitive and preserves
+recovery state.
+
+### Current CI is red
+
+GitHub CI run `36683890730` reports:
+
+```text
+5 failed, 1046 passed, 1 skipped
+```
+
+Failures include stale/incorrect lifecycle expectations in:
+
+- `tests/test_project_registry.py`;
+- `tests/test_cli.py::test_real_service_graceful_lifecycle_waits_for_active_worker[stop]`;
+- `tests/test_systemd_supervisor.py::test_two_project_units_and_operations_are_independent`.
+
+Some failures are expected test-contract updates (for example the CLI should now
+return after accepted draining); others expose incomplete test adaptation around the
+new requirement that a managed stop first obtains durable service IPC acceptance.
+
+Fix the regressions deliberately rather than weakening the new lifecycle contract.
+Return to review with the full suite, coverage, and Ruff green.
