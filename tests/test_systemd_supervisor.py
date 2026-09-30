@@ -352,7 +352,8 @@ def test_two_project_units_and_operations_are_independent(tmp_path: Path) -> Non
     lifecycle = [
         call
         for call in calls
-        if call[2] in {"start", "stop", "restart", "is-active"}
+        if call[2] in {"start", "restart", "is-active"}
+        or call[2:4] == ["--no-block", "stop"]
     ]
     assert lifecycle == [
         ["systemctl", "--user", "start", path_a.name],

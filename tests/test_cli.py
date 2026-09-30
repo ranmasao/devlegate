@@ -729,6 +729,45 @@ def test_stop_wait_accepts_receipt_published_after_authority_release(monkeypatch
     cli._wait_for_service_stop(locator, "request", "instance")
 
 
+def test_stop_waits_for_authoritative_repeated_lifecycle_request(monkeypatch):
+    class Locator:
+        socket_path = Path("/tmp/devlegate-test-stop.sock")
+
+        def daemon_authority_present(self):
+            return True
+
+    waited = []
+    monkeypatch.setattr(
+        cli,
+        "request",
+        lambda *_args, **_kwargs: {
+            "accepted": True,
+            "request_id": "original-request",
+            "instance_id": "instance",
+            "workers": {"active": 0},
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_service_stop",
+        lambda _locator, request_id, instance_id: waited.append(
+            (request_id, instance_id)
+        ),
+    )
+
+    cli._stop_runtime(Locator(), force=True)
+
+    assert waited == [("original-request", "instance")]
+
+
+@pytest.mark.parametrize("command", ["stop", "restart"])
+@pytest.mark.parametrize("output", ["--json", "--yaml"])
+def test_lifecycle_commands_reject_structured_output(command, output):
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args([command, output])
+    assert error.value.code == 2
+
+
 def test_restart_wait_requires_ready_replacement(monkeypatch):
     class Locator:
         socket_path = Path("/tmp/devlegate-test-restart.sock")
@@ -835,7 +874,10 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
             service.wait_for(lifecycle_status_visible, timeout=10)
             assert "a worker is active" in status_text
         if client is not None:
-            assert client.poll() is None
+            if command == "stop":
+                assert client.wait(timeout=10) == 0
+            else:
+                assert client.poll() is None
             if command in {"stop", "restart"}:
                 os.kill(worker_pid, 0)
         if command == "restart":
@@ -875,29 +917,29 @@ def test_real_service_graceful_lifecycle_waits_for_active_worker(
             if command == "signal":
                 assert service.process is not None
                 service.process.wait(timeout=30)
+            elif command == "stop":
+                service.wait_exited(timeout=30)
             assert not service.locator.daemon_authority_present()
-            if command == "stop":
-                receipt_path = service.locator.state_dir / "lifecycle" / (
-                    f"{service.locator.state_key}.json"
-                )
-                receipt = json.loads(receipt_path.read_text())
-                assert receipt["action"] == "stop"
-                assert receipt["state"] == "completed"
-                service.wait_exited()
-                execution_path = (
-                    service.locator.execution_log_dir / f"{execution_id}.log"
-                )
-                service._collect_output()
-                service_log_text = service.stdout
-                assert (
-                    f"execution starting: ticket=T-1 execution={execution_id} "
-                    f"log={execution_path}"
-                ) in service_log_text
-                assert (
-                    f"execution finished: ticket=T-1 execution={execution_id} "
-                    f"log={execution_path}"
-                ) in service_log_text
-                natural_exit_completed = True
+        if command == "stop":
+            receipt_path = service.locator.state_dir / "lifecycle" / (
+                f"{service.locator.state_key}.json"
+            )
+            receipt = json.loads(receipt_path.read_text())
+            assert receipt["action"] == "stop"
+            assert receipt["state"] == "completed"
+            service.wait_exited()
+            execution_path = service.locator.execution_log_dir / f"{execution_id}.log"
+            service._collect_output()
+            service_log_text = service.stdout
+            assert (
+                f"execution starting: ticket=T-1 execution={execution_id} "
+                f"log={execution_path}"
+            ) in service_log_text
+            assert (
+                f"execution finished: ticket=T-1 execution={execution_id} "
+                f"log={execution_path}"
+            ) in service_log_text
+            natural_exit_completed = True
     finally:
         if client is not None and client.poll() is None:
             client.kill()

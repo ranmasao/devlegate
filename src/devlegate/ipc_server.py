@@ -91,18 +91,7 @@ def dispatch_mutation(
         force = request.payload.get("force", False)
         if not isinstance(force, bool):
             raise IPCProtocolError("invalid_request", "stop force must be boolean")
-        try:
-            lifecycle_result = lifecycle(request.method, request.request_id, force)
-        except TypeError as error:
-            # Keep embedders using the pre-force callback shape working.
-            if force:
-                raise
-            try:
-                lifecycle_result = lifecycle(  # type: ignore[call-arg]
-                    request.method, request.request_id
-                )
-            except TypeError:
-                raise error
+        lifecycle_result = lifecycle(request.method, request.request_id, force)
         return {
             "accepted": True,
             "instance_id": _INSTANCE_ID,

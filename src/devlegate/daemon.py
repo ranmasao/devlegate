@@ -351,7 +351,7 @@ class ServiceHost:
     def _signal_ownership(
         self,
         stop_intent: ShutdownIntent,
-        request_lifecycle: Callable[[str, str], dict[str, object]],
+        request_lifecycle: Callable[[str, str, bool], dict[str, object]],
     ) -> Iterator[None]:
         wake = getattr(self.engine, "wake", None)
 
@@ -360,7 +360,7 @@ class ServiceHost:
                 stop_intent.request("operator_abort", source="operator_abort")
             else:
                 try:
-                    request_lifecycle("stop", f"signal-{uuid.uuid4().hex}")
+                    request_lifecycle("stop", f"signal-{uuid.uuid4().hex}", False)
                 except DevlegateError as error:
                     service_log(f"graceful SIGTERM request failed: {error}")
             if wake is not None:

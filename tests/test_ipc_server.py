@@ -425,13 +425,28 @@ def test_stop_dispatch_requests_service_lifecycle(running_server):
     response = dispatch_mutation(
         engine,
         _request("stop"),
-        lifecycle=lambda intent, request_id: called.append((intent, request_id))
+        lifecycle=lambda intent, request_id, force: called.append(
+            (intent, request_id, force)
+        )
         or {"phase": "draining", "request_id": request_id},
     )
     assert response["accepted"] is True
     assert response["phase"] == "draining"
     assert isinstance(response["instance_id"], str)
-    assert called == [("stop", "id")]
+    assert called == [("stop", "id", False)]
+
+
+def test_lifecycle_callback_type_error_is_not_retried(running_server):
+    engine, _state, _server = running_server
+    calls = []
+
+    def lifecycle(_intent, _request_id, _force):
+        calls.append(True)
+        raise TypeError("callback failure")
+
+    with pytest.raises(TypeError, match="callback failure"):
+        dispatch_mutation(engine, _request("stop"), lifecycle=lifecycle)
+    assert calls == [True]
 
 
 def test_control_reconciliation_dispatch_preserves_both_identities(running_server):

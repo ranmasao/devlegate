@@ -941,10 +941,15 @@ def _stop_runtime(locator: RuntimeLocator, *, force: bool = False) -> dict[str, 
     instance_id = response.get("instance_id")
     if not isinstance(instance_id, str) or not instance_id:
         raise DevlegateError("service IPC returned no service instance identity")
+    authoritative_request_id = response.get("request_id")
+    if not isinstance(authoritative_request_id, str) or not authoritative_request_id:
+        raise DevlegateError(
+            "service IPC returned no authoritative lifecycle request identity"
+        )
     workers = response.get("workers")
     active = workers.get("active", 0) if isinstance(workers, dict) else 0
     if not active or force:
-        _wait_for_service_stop(locator, request_id, instance_id)
+        _wait_for_service_stop(locator, authoritative_request_id, instance_id)
     return response
 
 
@@ -2371,7 +2376,7 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument(
         "--force", action="store_true", help="interrupt the active worker immediately"
     )
-    restart_parser = commands.add_parser(
+    commands.add_parser(
         "restart",
         help="restart the persistent workflow service at a checkpoint",
         description="Restart the self-managed service after a graceful checkpoint.",
