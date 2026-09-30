@@ -475,3 +475,38 @@ post-admission product movement; do not duplicate those. This pass should be tes
 only unless they expose a defect.
 
 Return to review with full CI and Ruff green.
+
+
+## Accepted
+
+Execution `87396ffbf531401dbad164265aa56dab` / checkpoint
+`0c4ca8e0deadca459fb204a273eae8ed9995aed5` completes the final
+TASK-042 proof gaps.
+
+The accepted implementation now proves:
+
+- canonical `devlegate reconcile <ticket-id>` service-owned classification;
+- assertion presence does not choose the reconciliation algorithm;
+- resume, update-base, and published-lineage rewrite are distinct durable
+  resolution classes;
+- `--onto` accepts a full SHA or unique hexadecimal prefix of at least 4
+  characters and normalizes accepted input to the full 40-character commit ID;
+- ambiguous commit prefixes fail closed through real Git resolution;
+- the full canonical target and `resolution_class` are persisted in the mutable
+  receipt;
+- restart/replay of the same request ID returns the original target/class without
+  product re-observation, reclassification, or duplicate command admission;
+- operator documentation and CLI help expose the intended canonical interface.
+
+The final hardening pass is tests-only relative to the prior implementation
+checkpoint.
+
+GitHub CI run `36679325462` is green:
+
+```text
+1051 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
