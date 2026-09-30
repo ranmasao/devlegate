@@ -312,3 +312,89 @@ new requirement that a managed stop first obtains durable service IPC acceptance
 
 Fix the regressions deliberately rather than weakening the new lifecycle contract.
 Return to review with the full suite, coverage, and Ruff green.
+
+
+## Second review: remaining proof and CI gaps
+
+Execution `fc8e586053cf45639d06c82f3a59aeeb` / checkpoint
+`c3b4a9070b57869aea30b1602a0ec5000dce0bce` fixes both production
+blockers from the previous review:
+
+- stop completion now waits on the authoritative lifecycle request ID returned by
+  the service, so repeated stop / graceful-to-force escalation does not wait for a
+  phantom second receipt;
+- lifecycle IPC callbacks now have one strict three-argument contract and are never
+  retried after an internal `TypeError`.
+
+The managed-systemd completion ordering is also acceptable: the service writes the
+completed stop receipt before releasing runtime authority, so waiting for exact
+authority release does not report completion ahead of the durable service-side
+lifecycle completion.
+
+No further lifecycle architecture change is requested unless the tests below expose
+a defect.
+
+### CI is still red
+
+GitHub CI run `36687843304` reports:
+
+```text
+6 failed, 1051 passed, 1 skipped
+```
+
+The remaining failures are test adaptation gaps:
+
+- two project-registry managed-systemd lifecycle tests now need a valid mocked IPC
+  acceptance before the supervisor stop assertion;
+- the concise systemd-stop failure test must likewise reach the supervisor after a
+  mocked valid service acknowledgement;
+- daemon signal-handler test doubles still use the obsolete two-argument lifecycle
+  callback shape and must be updated to the strict three-argument contract.
+
+Update those tests to the new contract. Do not reintroduce runtime compatibility
+fallbacks merely to keep old test doubles working.
+
+### The public force path still needs end-to-end proof
+
+The rework adds request-ID, parser, callback, and graceful-drain regressions, but it
+still does not prove that the actual public:
+
+```text
+devlegate stop --force
+```
+
+path reaches the existing worker interruption machinery and leaves a recoverable
+execution.
+
+Add focused live-service regressions covering:
+
+1. Start a service with an active worker whose process/group identity is owned and
+   durably recorded.
+2. Invoke the real CLI `stop --force` surface.
+3. Prove the active worker is interrupted through the existing
+   `operator_abort` path, the exact owned process group is retired, the service
+   authority is released, and the command exits successfully.
+4. Prove durable state records the interruption and preserves the execution
+   workspace/ticket/branch lineage.
+5. Reconstruct/restart the service and prove the retained execution is exposed
+   through the existing interrupted-execution recovery model rather than treated as
+   clean, dropped, or re-created from scratch.
+
+Also add the explicit escalation case through the real service boundary:
+
+```text
+graceful stop A -> draining
+stop --force B -> same lifecycle identity A, force=true
+```
+
+The force command must complete using A's receipt/authority proof.
+
+The existing WorkerSupervisor tests already prove the lower-level bounded
+SIGINT/SIGKILL mechanics. Reuse them; do not duplicate process-supervision internals.
+What is missing is proof that the **public lifecycle force path is wired to those
+mechanics and preserves recovery state**.
+
+If there is not already an explicit regression for systemd `is-active` returning
+`deactivating`, add one small supervisor-level test as required by the ticket.
+
+Return to review with full CI, coverage, and Ruff green.
