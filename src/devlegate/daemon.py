@@ -403,4 +403,9 @@ class ServiceHost:
         result = self.engine.serve(
             stop_intent, lock_handle=lock_handle, once=self.once
         )
-        return 130 if stop_intent.kind == "operator_abort" else result
+        return (
+            130
+            if stop_intent.kind == "operator_abort"
+            and stop_intent.source != "force"
+            else result
+        )

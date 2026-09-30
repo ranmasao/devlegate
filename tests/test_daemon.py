@@ -706,6 +706,24 @@ def test_daemon_host_signal_handler_splits_abort_from_graceful_lifecycle(
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_status"),
+    [("operator_abort", 130), ("force", 0)],
+)
+def test_forced_operator_abort_is_successful_service_shutdown(
+    source, expected_status
+):
+    class FakeServiceEngine:
+        def serve(self, _stop_intent, *, lock_handle=None, once=False):
+            return 0
+
+    intent = daemon.ShutdownIntent()
+    intent.request("operator_abort", source=source)
+    host = daemon.ServiceHost(FakeServiceEngine())
+
+    assert host._serve_engine(intent) == expected_status
+
+
 def test_foreground_failure_reports_worker_diagnostic(tmp_path, monkeypatch, capsys):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     monkeypatch.setattr(
