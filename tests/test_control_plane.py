@@ -243,6 +243,104 @@ def test_reconcile_assertion_rejects_short_hex_prefix(tmp_path, monkeypatch):
         engine._canonical_reconcile_assertion("abc", "a" * 40)
 
 
+def test_reconcile_assertion_rejects_ambiguous_commit_prefix(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    tree = git(working, "rev-parse", "HEAD^{tree}").stdout.strip()
+    parent = base
+    for index in range(2048):
+        message = f"ambiguous prefix {index}\n"
+        commit = subprocess.run(
+            ["git", "commit-tree", tree, "-p", parent, "-m", message.rstrip()],
+            cwd=working,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        parent = commit.stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/heads/ambiguous-prefixes", parent],
+        cwd=working,
+        check=True,
+    )
+
+    reachable = git(working, "rev-list", "--all").stdout.splitlines()
+    prefixes = {}
+    for commit in reachable:
+        prefix = commit[:4]
+        prefixes.setdefault(prefix, []).append(commit)
+    ambiguous = next(
+        prefix for prefix, matches in prefixes.items() if len(matches) > 1
+    )
+
+    engine = runtime.ServiceEngine(config)
+    with pytest.raises(DevlegateError, match="not a valid commit"):
+        engine._canonical_reconcile_assertion(ambiguous, base)
+
+
+def test_reconcile_auto_receipt_replays_canonical_prefix_after_restart(
+    tmp_path, monkeypatch
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = runtime.ServiceEngine(config)
+    original_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    prefix = original_base[:7]
+    engine._save_state(
+        "idle",
+        reconciliation={
+            "status": "pending",
+            "ticket_id": "T-1",
+            "execution_id": "execution-1",
+            "original_base": original_base,
+            "observed_product": original_base,
+            "worker_checkpoint": original_base,
+            "product_remote_head": original_base,
+            "control_head": original_base,
+            "execution_branch": "devlegate/execution/T-1",
+            "execution_path": str(working),
+            "evidence_ref": "evidence-1",
+        },
+    )
+    command = runtime.OperatorCommand(
+        "reconcile-replay",
+        "reconcile-auto",
+        runtime._reconcile_auto_request_fingerprint("T-1", prefix),
+        "T-1",
+        onto=prefix,
+    )
+    engine._admit_operator_command(command)
+    receipt = engine._state["mutable_receipts"]["reconcile-replay"]
+    assert receipt["onto"] == original_base
+    assert len(receipt["onto"]) == 40
+    assert receipt["resolution_class"] == "resume"
+
+    (working / "product-moved.txt").write_text("product moved\n")
+    git(working, "add", "product-moved.txt")
+    git(working, "commit", "-m", "move product after admission")
+    git(working, "push", "origin", "HEAD:main")
+
+    restarted = runtime.ServiceEngine(config)
+    monkeypatch.setattr(
+        restarted,
+        "_observe_product_generation",
+        lambda _original: pytest.fail("replayed receipt was reclassified"),
+    )
+    assert restarted.submit_reconcile_auto(
+        "T-1", prefix, request_id="reconcile-replay"
+    ) == {
+        "accepted": True,
+        "ticket_id": "T-1",
+        "onto": original_base,
+        "resolution_class": "resume",
+    }
+    assert restarted._operator_command is None
+
+
 def divergent_control_heads(working, config, tmp_path):
     assert invoke(working, "control", "init", config=config).returncode == 0
     state = Path(
