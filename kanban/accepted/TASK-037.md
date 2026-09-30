@@ -545,3 +545,43 @@ process exits 130 after otherwise orderly forced shutdown.
 
 Return to review with those live tests passing, the full suite green, coverage
 reported, and Ruff green. No further scope expansion is requested.
+
+
+## Accepted
+
+Execution `dc1e4bc377fc485291c24059b9e8570e` / checkpoint
+`9101fca118f604e70c11a33f193bdb68709b5e01` closes the final
+force-stop host-exit defect.
+
+The accepted implementation now proves:
+
+- graceful stop is checkpoint-aware and can return after durable draining admission;
+- systemd stop is non-blocking and `deactivating` is a valid stopping state;
+- repeated stop and graceful-to-force escalation preserve one authoritative lifecycle
+  request identity;
+- `stop --force` reaches the real owned-worker interruption path, retires the worker
+  process group, releases service authority, and preserves execution/workspace/branch
+  provenance;
+- the resulting interrupted execution remains recoverable after service restart;
+- mutable lifecycle callbacks have one strict three-argument contract and are not
+  retried after internal `TypeError`;
+- `stop --json/--yaml` and `restart --json/--yaml` are rejected at parsing;
+- explicit force shutdown is a successful lifecycle operation and exits the service
+  normally, while a genuine operator SIGINT retains exit status 130.
+
+The final fix distinguishes abort provenance:
+
+```text
+kind=operator_abort, source=operator_abort -> 130
+kind=operator_abort, source=force          -> normal service result
+```
+
+GitHub CI run `36704107294` is green:
+
+```text
+1064 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
