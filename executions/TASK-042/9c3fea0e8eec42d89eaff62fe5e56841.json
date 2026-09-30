@@ -1,0 +1,28 @@
+{
+  "code_base_head": "c594d577cbce558ae348d29b3f6c98844fe88b6c",
+  "conclusion": "completed",
+  "control_head": "b1ba7eb63943c7b4e336d3d63fc05eceda9cbf9e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-042",
+  "execution_id": "9c3fea0e8eec42d89eaff62fe5e56841",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-042",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-042/9c3fea0e8eec42d89eaff62fe5e56841.md",
+  "report_sha256": "9e9592ab2277a7aaa2858d03ffddfb77dd57cde51ffdae6410bbad092d9a4495",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-042",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the TASK-042 hardening changes in runtime, CLI, tests, and operator documentation. Python compilation and diff checks pass; pytest/Ruff could not run because this workspace has no installed pytest/Ruff and .venv is missing.",
+    "summary": "Canonical reconciliation assertions now resolve unique hexadecimal commit prefixes to full Git identities, reject short prefixes, and persist/acknowledge canonical targets without changing classifier selection. Added focused automatic classification/dispatch and short-prefix regressions, plus CLI and operations documentation for the assertion contract."
+  },
+  "workspace_head": "c6908be306857d701a6ff8e730287d16205be9af"
+}
