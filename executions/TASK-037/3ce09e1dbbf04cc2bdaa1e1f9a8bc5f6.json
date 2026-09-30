@@ -1,0 +1,28 @@
+{
+  "code_base_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5",
+  "conclusion": "completed",
+  "control_head": "34f11d55115cfcae8bc8bdbcacf8afc80a54a9d3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-037",
+  "execution_id": "3ce09e1dbbf04cc2bdaa1e1f9a8bc5f6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-037",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-037/3ce09e1dbbf04cc2bdaa1e1f9a8bc5f6.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-037",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Implemented checkpoint-aware lifecycle stop handling with concise accepted-draining output, explicit force propagation through IPC and daemon shutdown signaling, and preservation of existing worker interruption/provenance behavior. Removed structured-output options from top-level stop/restart, added stop --force, and made systemd stop submission non-blocking while accepting deactivating as valid transitional state."
+  },
+  "workspace_head": "3e482048cd26cfbdd28f1e384a9d4218cc59d4b8"
+}
