@@ -167,6 +167,82 @@ def control_fixture(tmp_path):
     return world["working"], config, state
 
 
+@pytest.mark.parametrize(
+    ("stable", "execution_remote_head", "expected_class"),
+    [
+        (True, None, "resume"),
+        (False, None, "update-base"),
+        (
+            False,
+            "published-checkpoint",
+            "update-base with published-lineage rewrite",
+        ),
+    ],
+)
+def test_reconcile_auto_classifies_and_dispatches_from_durable_class(
+    tmp_path, monkeypatch, stable, execution_remote_head, expected_class
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = runtime.ServiceEngine(config)
+    current_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    engine._state["reconciliation"] = {
+        "status": "pending",
+        "ticket_id": "T-1",
+        "original_base": current_head,
+        "execution_remote_head": execution_remote_head,
+    }
+    monkeypatch.setattr(
+        engine,
+        "_observe_product_generation",
+        lambda _original_base: {
+            "target_eligible": True,
+            "local_head": current_head,
+            "remote_head": current_head,
+            "stable": stable,
+        },
+    )
+    command = runtime.OperatorCommand(
+        "request-1", "reconcile-auto", "fingerprint", "T-1", onto=current_head[:7]
+    )
+    engine._validate_reconcile_auto_admission(command)
+    assert command.resolution_class == expected_class
+    assert command.onto == current_head
+
+    engine._state["reconciliation"]["resolution_class"] = command.resolution_class
+    dispatched = []
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_resume_owned",
+        lambda ticket_id: dispatched.append((ticket_id, "resume")) or 0,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_update_base_owned",
+        lambda ticket_id, target, **kwargs: dispatched.append(
+            (ticket_id, target, kwargs["rewrite_published"])
+        )
+        or 0,
+    )
+    engine._dispatch_operator_command(command, None)
+    expected = ("T-1", "resume") if expected_class == "resume" else (
+        "T-1",
+        current_head,
+        True,
+    )
+    assert dispatched == [expected]
+
+
+def test_reconcile_assertion_rejects_short_hex_prefix(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = runtime.ServiceEngine(config)
+    with pytest.raises(DevlegateError, match="at least 4 characters"):
+        engine._canonical_reconcile_assertion("abc", "a" * 40)
+
+
 def divergent_control_heads(working, config, tmp_path):
     assert invoke(working, "control", "init", config=config).returncode == 0
     state = Path(

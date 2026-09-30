@@ -501,7 +501,6 @@ def _reconcile_auto_daemon(
         if effective_onto is not None and (
             not isinstance(effective_onto, str)
             or not effective_onto
-            or (onto is not None and effective_onto != onto)
         ):
             raise DevlegateError("service returned an invalid reconciliation target")
     except RuntimeLocatorError as error:
@@ -2469,7 +2468,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Handle a pending product-base change for an execution. Resolve it "
             "using the strongest safe service-owned operation. Normal form: "
-            "devlegate reconcile TICKET."
+            "devlegate reconcile TICKET. The optional --onto assertion accepts a "
+            "full SHA or a unique hexadecimal prefix of at least 4 characters."
         ),
     )
     reconcile_commands = reconcile_parser.add_subparsers(
@@ -2489,7 +2489,10 @@ def build_parser() -> argparse.ArgumentParser:
     update_base_parser.add_argument("ticket_id", help="ticket execution to update")
     update_base_parser.add_argument(
         "--onto",
-        help="exact current product HEAD; defaults to the current product HEAD",
+        help=(
+            "exact current product HEAD, as a full SHA or unique hexadecimal "
+            "prefix of at least 4 characters; defaults to service observation"
+        ),
     )
     update_base_parser.add_argument(
         "--rewrite-published",

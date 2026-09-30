@@ -154,8 +154,10 @@ eligible update-base transplant, or the proven lease-guarded published-lineage
 rewrite. Unknown or ambiguous state is not automatically recovered. The legacy
 `reconcile resume` and `reconcile update-base` forms remain available for explicit
 diagnostics and compatibility. `--onto` asserts the exact current product HEAD;
-it does not select the algorithm. `--rewrite-published` is a compatibility option,
-not required for the canonical service-proven published-lineage path.
+it does not select the algorithm. Supply it as a full SHA or a unique hexadecimal
+commit prefix of at least 4 characters; Devlegate records the resolved full ID.
+`--rewrite-published` is a compatibility option, not required for the canonical
+service-proven published-lineage path.
 
 Tickets normally move through:
 

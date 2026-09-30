@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1407,23 +1408,50 @@ class ServiceEngine:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
-        if command.onto is None:
-            product = self._observe_product_generation(
-                str(reconciliation["original_base"])
+        product = self._observe_product_generation(
+            str(reconciliation["original_base"])
+        )
+        local_head = str(product["local_head"])
+        remote_head = str(product["remote_head"])
+        if not local_head or local_head != remote_head:
+            raise DevlegateError("current product local and remote HEADs do not agree")
+        if not product["target_eligible"]:
+            raise DevlegateError(
+                "current product generation is not eligible for reconciliation"
             )
-            if not product["target_eligible"]:
-                raise DevlegateError(
-                    "current product generation is not eligible for reconciliation"
-                )
-            local_head = str(product["local_head"])
-            remote_head = str(product["remote_head"])
-            if not local_head or local_head != remote_head:
-                raise DevlegateError(
-                    "current product local and remote HEADs do not agree"
-                )
+        if command.onto is None:
             command.onto = local_head
-        elif not command.onto:
+        else:
+            command.onto = self._canonical_reconcile_assertion(
+                command.onto, local_head
+            )
+
+    def _canonical_reconcile_assertion(self, value: str, current_head: str) -> str:
+        if not value:
             raise DevlegateError("requested reconciliation target is empty")
+        if re.fullmatch(r"[0-9a-fA-F]+", value) and len(value) < 4:
+            raise DevlegateError(
+                "requested reconciliation target is a hexadecimal commit prefix; "
+                "use at least 4 characters"
+            )
+        resolved = _git(
+            self.repo,
+            "rev-parse",
+            "--verify",
+            f"{value}^{{commit}}",
+            check=False,
+        )
+        if resolved.returncode:
+            raise DevlegateError(
+                "requested reconciliation target is not a valid commit; "
+                "use a full SHA or a unique hexadecimal prefix of at least 4 characters"
+            )
+        canonical = resolved.stdout.strip()
+        if canonical != current_head:
+            raise DevlegateError(
+                "requested reconciliation target is not the current product HEAD"
+            )
+        return canonical
 
     def _validate_reconcile_auto_admission(self, command: OperatorCommand) -> None:
         reconciliation = self._state.get("reconciliation")
@@ -1450,17 +1478,9 @@ class ServiceEngine:
         if not local_head or local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
         if command.onto is not None:
-            asserted = _git(
-                self.repo,
-                "rev-parse",
-                "--verify",
-                f"{command.onto}^{{commit}}",
-                check=False,
+            command.onto = self._canonical_reconcile_assertion(
+                command.onto, local_head
             )
-            if asserted.returncode or asserted.stdout.strip() != local_head:
-                raise DevlegateError(
-                    "requested reconciliation target is not the current product HEAD"
-                )
         else:
             command.onto = None if product["stable"] else local_head
         if product["stable"]:
