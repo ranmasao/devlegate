@@ -1,0 +1,28 @@
+{
+  "code_base_head": "0c4ca8e0deadca459fb204a273eae8ed9995aed5",
+  "conclusion": "completed",
+  "control_head": "d195e28967a4934f3eeb81d0aaf06227b353d43d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-037",
+  "execution_id": "091b3527bdac4b7590c00fef0d442106",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-037",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-037/091b3527bdac4b7590c00fef0d442106.md",
+  "report_sha256": "20152064957453323ff6b9e1f5e42f9db360fddc44ef13f8a6928c1b23c3cfc7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-037",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The focused test file compiles and `git diff --check` passes. Runtime pytest/Ruff execution was unavailable because this workspace environment does not provide pytest, uv, or ruff.",
+    "summary": "Added live-service regressions for the public `stop --force` CLI path, verifying owned worker interruption, authority release, durable execution lineage, retained workspace, and recoverable restart state. Added a real graceful-to-force escalation regression proving one lifecycle request identity and completed receipt are used."
+  },
+  "workspace_head": "4693849b8bdb385e38cb2fa3b1de0f0f94154652"
+}
