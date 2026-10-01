@@ -499,3 +499,41 @@ owned file entry.
 
 This should be a very small production fix plus focused regression. No further
 provenance redesign is requested.
+
+
+## Accepted
+
+Execution `9de0e7a2af6147a68208f80ca098b128` / checkpoint
+`2162d43a94d1c333071ce784308603d8a950e23f` completes the runtime
+identity and installation-provenance contract.
+
+Accepted behavior includes:
+
+- root `devlegate --version` remains a concise one-line project-independent probe;
+- `devlegate version` reports only runtime/distribution, installation, Python,
+  and OS identity;
+- standalone identity is proven through matching PEX/SCIE executable evidence;
+- Debian installation identity is external to the standalone payload and is bound
+  to the exact packaged executable by SHA-256;
+- portable standalone and Debian payload may remain byte-identical;
+- Python installer/direct-url provenance is used only when metadata is bound to the
+  currently imported Devlegate package;
+- ordinary installed-distribution binding now requires the exact owned
+  `devlegate/__init__.py` entry from `distribution.files`, preventing stale
+  same-root metadata from binding through `locate_file()` alone;
+- editable PEP 610 source binding and unknown fallbacks are covered;
+- OS-release fallback is deterministic and stdlib-only;
+- no runtime pip, dpkg, Git, systemd, project, or daemon dependency was introduced.
+
+The final rework is narrowly scoped to the exact file-ownership binding plus its
+regression.
+
+GitHub CI run `36906521856` is green:
+
+```text
+1081 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
