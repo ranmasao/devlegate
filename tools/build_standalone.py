@@ -292,6 +292,35 @@ def download_url_to(path: Path, url: str) -> None:
         shutil.copyfileobj(response, destination)
 
 
+def materialize_standalone_assets(directory: Path) -> str:
+    pbs = cached_input(
+        PBS_ARCHIVE,
+        PBS_SHA256,
+        directory / PBS_ARCHIVE,
+        lambda path: download_url_to(
+            path,
+            "https://github.com/astral-sh/python-build-standalone/releases/"
+            f"download/{PBS_RELEASE}/{PBS_ARCHIVE}",
+        ),
+    )
+    scie_jump = cached_input(
+        SCIE_JUMP_ASSET,
+        SCIE_JUMP_SHA256,
+        directory / SCIE_JUMP_ASSET,
+        lambda path: download_url_to(
+            path,
+            "https://github.com/a-scie/jump/releases/"
+            f"download/v{SCIE_JUMP_VERSION}/{SCIE_JUMP_ASSET}",
+        ),
+    )
+    assets = directory / "science-assets"
+    (assets / "jump").mkdir(parents=True, exist_ok=True)
+    (assets / "providers" / PBS_PROVIDER).mkdir(parents=True, exist_ok=True)
+    shutil.copy2(scie_jump, assets / "jump" / SCIE_JUMP_ASSET)
+    shutil.copy2(pbs, assets / "providers" / PBS_PROVIDER / PBS_ARCHIVE)
+    return assets.as_uri()
+
+
 def build_wheel(repo: Path, output: Path, python: str, epoch: str) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     environment = {**os.environ, "SOURCE_DATE_EPOCH": epoch}
@@ -355,7 +384,7 @@ def create_wheel_build_environment(
 
 def download_packaging_tools(
     python: str, directory: Path
-) -> tuple[Path, Path, list[Path]]:
+) -> tuple[Path, Path, list[Path], str]:
     directory.mkdir(parents=True, exist_ok=True)
 
     def download(filename: str, expected_hash: str, requirement: str) -> Path:
@@ -430,7 +459,7 @@ def download_packaging_tools(
             "Science version mismatch: expected "
             f"{SCIENCE_VERSION}, found {observed_science_version}"
         )
-    return pex_wheel, runtime, tool_wheels
+    return pex_wheel, runtime, tool_wheels, materialize_standalone_assets(directory)
 
 
 def build_environment(build_root: Path, epoch: str) -> dict[str, str]:
@@ -450,6 +479,7 @@ def build_scie(
     python: str,
     artifact: Path,
     science: Path,
+    assets_base_url: str,
     build_root: Path,
     epoch: str,
 ) -> Path:
@@ -466,6 +496,7 @@ def build_scie(
             tools_dir,
             artifact,
             science,
+            assets_base_url,
         ),
         env=environment,
     )
@@ -481,8 +512,9 @@ def scie_command(
     tools_dir: Path,
     artifact: Path,
     science: Path,
+    assets_base_url: str | None = None,
 ) -> list[str]:
-    return [
+    command = [
         python,
         "-m",
         "pex",
@@ -512,6 +544,10 @@ def scie_command(
         "--output-file",
         str(artifact),
     ]
+    if assets_base_url is not None:
+        insertion = command.index("--output-file")
+        command[insertion:insertion] = ["--scie-assets-base-url", assets_base_url]
+    return command
 
 
 def project_version_from_wheel(wheel: Path) -> str:
@@ -964,7 +1000,7 @@ def build(args: argparse.Namespace, emit=None) -> int:
         root = Path(temporary)
         tools = root / "tools"
         with progress_stage(emit, semantic_plan()[0]):
-            pex_wheel, pex_runtime, tool_wheels = download_packaging_tools(
+            pex_wheel, pex_runtime, tool_wheels, assets_base_url = download_packaging_tools(
                 args.python, tools
             )
         build_a_root = root / "build-a"
@@ -1028,13 +1064,13 @@ def build(args: argparse.Namespace, emit=None) -> int:
             artifact_a = build_scie(
                 wheel_a, wheel_input_a, tools, pex_runtime, args.python,
                 artifact_a_dir / f"devlegate-{version}-linux-x86_64",
-                tools / SCIENCE_ASSET, build_a_root, epoch,
+                tools / SCIENCE_ASSET, assets_base_url, build_a_root, epoch,
             )
         with progress_stage(emit, semantic_plan()[5]):
             artifact_b = build_scie(
                 wheel_b, wheel_input_b, tools, pex_runtime, args.python,
                 artifact_b_dir / f"devlegate-{version}-linux-x86_64",
-                tools / SCIENCE_ASSET, build_b_root, epoch,
+                tools / SCIENCE_ASSET, assets_base_url, build_b_root, epoch,
             )
         scie_a = inspect_scie(artifact_a, forbidden_build_root=root)
         scie_b = inspect_scie(artifact_b, forbidden_build_root=root)

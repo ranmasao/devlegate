@@ -91,6 +91,56 @@ def test_cached_input_does_not_publish_failed_download(tmp_path, monkeypatch):
     assert not destination.exists()
 
 
+def test_standalone_assets_use_cached_pbs_and_scie_jump(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+    pbs = b"pbs"
+    jump = b"jump"
+    pbs_digest = hashlib.sha256(pbs).hexdigest()
+    jump_digest = hashlib.sha256(jump).hexdigest()
+    (cache / pbs_digest).parent.mkdir(parents=True)
+    (cache / pbs_digest).write_bytes(pbs)
+    (cache / jump_digest).write_bytes(jump)
+    monkeypatch.setattr(BUILDER, "PBS_SHA256", pbs_digest)
+    monkeypatch.setattr(BUILDER, "SCIE_JUMP_SHA256", jump_digest)
+
+    def fail_download(_path, _url):
+        pytest.fail("warm standalone asset cache attempted a download")
+
+    monkeypatch.setattr(BUILDER, "download_url_to", fail_download)
+    assets_url = BUILDER.materialize_standalone_assets(tmp_path / "tools")
+    assets = Path(assets_url.removeprefix("file://"))
+    assert (assets / "jump" / BUILDER.SCIE_JUMP_ASSET).read_bytes() == jump
+    assert (
+        assets / "providers" / BUILDER.PBS_PROVIDER / BUILDER.PBS_ARCHIVE
+    ).read_bytes() == pbs
+
+
+def test_standalone_assets_reject_corrupt_cache_and_redownload(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+    pbs = b"pbs"
+    jump = b"jump"
+    pbs_digest = hashlib.sha256(pbs).hexdigest()
+    jump_digest = hashlib.sha256(jump).hexdigest()
+    cache.mkdir()
+    (cache / pbs_digest).write_bytes(b"corrupt pbs")
+    (cache / jump_digest).write_bytes(b"corrupt jump")
+    monkeypatch.setattr(BUILDER, "PBS_SHA256", pbs_digest)
+    monkeypatch.setattr(BUILDER, "SCIE_JUMP_SHA256", jump_digest)
+    downloads = []
+
+    def download(path, url):
+        downloads.append(url)
+        path.write_bytes(pbs if path.name == BUILDER.PBS_ARCHIVE else jump)
+
+    monkeypatch.setattr(BUILDER, "download_url_to", download)
+    BUILDER.materialize_standalone_assets(tmp_path / "tools")
+    assert len(downloads) == 2
+    assert (cache / pbs_digest).read_bytes() == pbs
+    assert (cache / jump_digest).read_bytes() == jump
+
+
 def test_scie_command_pins_runtime_inputs(tmp_path):
     wheel = tmp_path / "devlegate.whl"
     with ZipFile(wheel, "w") as archive:
@@ -121,6 +171,22 @@ def test_scie_command_pins_runtime_inputs(tmp_path):
     ]
 
 
+def test_scie_command_uses_local_standalone_asset_mirror(tmp_path):
+    wheel = tmp_path / "devlegate.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "devlegate-0.5.6.dev0.dist-info/METADATA", "Version: 0.5.6.dev0\n"
+        )
+    command = BUILDER.scie_command(
+        "python", wheel, tmp_path, tmp_path / "tools", tmp_path / "devlegate",
+        tmp_path / "science", "file:///standalone-assets"
+    )
+    assets_pin = command.index("--scie-assets-base-url")
+    assert command[assets_pin : assets_pin + 2] == [
+        "--scie-assets-base-url", "file:///standalone-assets"
+    ]
+
+
 def test_build_environment_uses_isolated_pex_root(tmp_path):
     first = BUILDER.build_environment(tmp_path / "build-a", "123")
     second = BUILDER.build_environment(tmp_path / "build-b", "123")
@@ -128,6 +194,44 @@ def test_build_environment_uses_isolated_pex_root(tmp_path):
     assert first["PEX_ROOT"] != second["PEX_ROOT"]
     assert first["PEX_ROOT"] == str(tmp_path / "build-a" / "PEX_ROOT")
     assert first["PYTHONHASHSEED"] == second["PYTHONHASHSEED"] == "0"
+
+
+def test_scie_builds_share_assets_but_not_pex_roots(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(BUILDER, "project_version_from_wheel", lambda _wheel: "0.5.6.dev0")
+
+    def fake_run(command, *, env=None, cwd=None):
+        calls.append((command, env))
+        artifact = Path(command[command.index("--output-file") + 1])
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"scie")
+        artifact.chmod(0o700)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(BUILDER, "run", fake_run)
+    common = (
+        tmp_path / "wheel",
+        tmp_path / "wheel-input",
+        tmp_path / "tools",
+        tmp_path / "pex-runtime",
+        "python",
+        "file:///standalone-assets",
+        "123",
+    )
+    BUILDER.build_scie(
+        common[0], common[1], common[2], common[3], common[4],
+        tmp_path / "build-a" / "scie", tmp_path / "science", common[5],
+        tmp_path / "build-a", common[6]
+    )
+    BUILDER.build_scie(
+        common[0], common[1], common[2], common[3], common[4],
+        tmp_path / "build-b" / "scie", tmp_path / "science", common[5],
+        tmp_path / "build-b", common[6]
+    )
+    assert calls[0][0][calls[0][0].index("--scie-assets-base-url") + 1] == calls[1][0][
+        calls[1][0].index("--scie-assets-base-url") + 1
+    ]
+    assert calls[0][1]["PEX_ROOT"] != calls[1][1]["PEX_ROOT"]
 
 
 def test_scie_inspection_rejects_custom_runtime_base(tmp_path):
