@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "6e858911126e1ad9eeb96669dc97a0b1cd01b645",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "ed28f8954fb14508b1de48d0586810c8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-018/ed28f8954fb14508b1de48d0586810c8.md",
+  "report_sha256": "75e8089c28742cc8d9260c05c8faa2c62fab69e24307dd4fadfe2c0bfc8dbe9c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused standalone builder tests pass. Full pytest collection ran but the suite timed out in unrelated control-plane integration tests; Ruff is unavailable in the workspace.",
+    "summary": "Extended the standalone immutable-input cache to cover the pinned PBS archive and scie-jump asset, with verified cache materialization and a disposable local Science assets mirror consumed by both A/B builds. Added regressions for warm and corrupt PBS/scie-jump entries, local mirror command wiring, and shared immutable assets with isolated PEX roots."
+  },
+  "workspace_head": "33a6e99c02268eb21928732b1379f48459c177f8"
+}
