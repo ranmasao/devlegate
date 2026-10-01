@@ -213,3 +213,48 @@ is useful. Do not duplicate the whole document.
 - No `test_real_service_*` production-topology proof is reclassified as replaceable
   by a direct engine/component test without equivalent process-boundary evidence.
 - No test is deleted or disabled merely to improve measured focused-run time.
+
+
+## Accepted
+
+Execution `9d53875c385349eeb5d736f1675ccc76` / checkpoint
+`272c592d7746d404bc35107cf45757e2c9ddf3f4` satisfies the focused-test
+audit requirements.
+
+The audit is evidence-based and remains research-only:
+
+- 1,082 collected tests are inventoried across the current 39 test modules;
+- representative timings distinguish cheap component selections from expensive
+  Git/worktree, socket, worker, lifecycle, and production-topology families;
+- the existing component -> engine semantic -> IPC/owner handoff -> production
+  topology proof hierarchy is preserved;
+- all requested operational change areas have a concrete minimum focused proof set
+  plus explicit stronger-layer companions;
+- the four largest mixed modules (`test_control_plane.py`, `test_cli.py`,
+  `test_daemon.py`, `test_ipc_server.py`) have evidence-based decomposition
+  proposals, fixture-cost analysis, and prerequisites where physical splitting
+  would otherwise be cosmetic;
+- `test_real_service_*` and other production-topology evidence are explicitly
+  protected from replacement by cheaper direct/component tests;
+- full-CI-only / normally deferred domains are identified without weakening full CI
+  authority;
+- node IDs / reviewed node groups are recommended as the current focused-selection
+  unit, with named profiles and physical splitting deferred until later measured
+  implementation work;
+- follow-up work is ordered around inventory, fixture extraction, IPC/daemon splits,
+  named profiles, and only then optional physical reorganization;
+- unresolved runtime and fixture-economics questions are recorded rather than
+  guessed.
+
+The product diff contains only `tests/FOCUSED_TEST_AUDIT.md`; no production,
+workflow, QA-state, validation-policy, or test behavior changed.
+
+GitHub CI run `36910733298` is green:
+
+```text
+1081 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further pre-QA audit changes are required.
