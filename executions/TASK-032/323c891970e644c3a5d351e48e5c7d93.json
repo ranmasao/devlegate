@@ -1,0 +1,28 @@
+{
+  "code_base_head": "9101fca118f604e70c11a33f193bdb68709b5e01",
+  "conclusion": "completed",
+  "control_head": "e087c82fa1137cae2a857e46004a015f8610536f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-032",
+  "execution_id": "323c891970e644c3a5d351e48e5c7d93",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-032",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-032/323c891970e644c3a5d351e48e5c7d93.md",
+  "report_sha256": "4bc49a20dd61403a346d13736156581460f3d89bfcda240912e6cc50b1ee3195",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-032",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Validated the CLI dispatch, selector handling, idempotent start behavior, platform boundary behavior, full parallel test suite, focused coverage, and Ruff checks.",
+    "summary": "Added explicit `devlegate start` routing through the existing authoritative startup path. Bare invocation now only renders top-level help, while selector-only invocation fails clearly without project or service resolution; help, documentation, and regressions were updated accordingly."
+  },
+  "workspace_head": "6fcc839eba3bffebc28cfa27bdd0837af7967ca2"
+}
