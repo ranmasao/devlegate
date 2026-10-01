@@ -1,0 +1,28 @@
+{
+  "code_base_head": "9101fca118f604e70c11a33f193bdb68709b5e01",
+  "conclusion": "completed",
+  "control_head": "7c79ab00cd9592d06d2f3dcf23d12bc57aee36fd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-032",
+  "execution_id": "8b3db5ad885d4b638b4993df2ff75368",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-032",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-032",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated all source CLI daemon-mutation guidance to direct operators to `devlegate start`, and updated the corresponding reconciliation and retry regression expectations."
+  },
+  "workspace_head": "48a2f7299b1bd5d86239387b7e40b55d3ff8942e"
+}
