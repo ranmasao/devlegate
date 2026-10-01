@@ -216,6 +216,15 @@ jobs:
         with:
           python-version: "3.12.14"
 
+      - name: Cache standalone immutable inputs
+        if: needs.select-release.outputs.standalone_required == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/devlegate/standalone-inputs
+          key: standalone-inputs-${{ runner.os }}-${{ hashFiles('tools/build_standalone.py') }}
+          restore-keys: |
+            standalone-inputs-${{ runner.os }}-
+
       - name: Build standalone executable
         if: needs.select-release.outputs.standalone_required == 'true'
         run: |

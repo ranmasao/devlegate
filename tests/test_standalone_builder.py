@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -38,6 +39,56 @@ def test_verified_artifact_rejects_wrong_hash(tmp_path):
 
     with pytest.raises(BUILDER.BuildError, match="sha256 mismatch"):
         BUILDER.verify_file(artifact, "0" * 64)
+
+
+def test_cached_input_uses_verified_blob_without_download(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    destination = tmp_path / "tools" / "input.bin"
+    payload = b"immutable input"
+    digest = hashlib.sha256(payload).hexdigest()
+    (cache / digest).parent.mkdir(parents=True)
+    (cache / digest).write_bytes(payload)
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+
+    def fail_download(_path):
+        pytest.fail("cache hit attempted a download")
+
+    assert BUILDER.cached_input("input.bin", digest, destination, fail_download)
+    assert destination.read_bytes() == payload
+
+
+def test_cached_input_replaces_corrupt_blob_atomically(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    destination = tmp_path / "input.bin"
+    payload = b"correct input"
+    digest = hashlib.sha256(payload).hexdigest()
+    cache.mkdir()
+    (cache / digest).write_bytes(b"corrupt")
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+
+    def download(path):
+        path.write_bytes(payload)
+
+    BUILDER.cached_input("input.bin", digest, destination, download)
+    assert destination.read_bytes() == payload
+    assert (cache / digest).read_bytes() == payload
+
+
+def test_cached_input_does_not_publish_failed_download(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    destination = tmp_path / "input.bin"
+    payload = b"partial input"
+    digest = hashlib.sha256(b"complete input").hexdigest()
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+
+    def fail_download(path):
+        path.write_bytes(payload)
+        raise OSError("interrupted")
+
+    with pytest.raises(OSError):
+        BUILDER.cached_input("input.bin", digest, destination, fail_download)
+    assert not (cache / digest).exists()
+    assert not destination.exists()
 
 
 def test_scie_command_pins_runtime_inputs(tmp_path):

@@ -229,12 +229,67 @@ def verify_file(path: Path, expected: str) -> None:
         )
 
 
+def standalone_input_cache() -> Path:
+    override = os.environ.get("DEVLEGATE_STANDALONE_INPUT_CACHE")
+    if override:
+        return Path(override)
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    if cache_home:
+        return Path(cache_home) / "devlegate" / "standalone-inputs"
+    return Path.home() / ".cache" / "devlegate" / "standalone-inputs"
+
+
+def cached_input(
+    filename: str,
+    expected: str,
+    destination: Path,
+    download,
+) -> Path:
+    """Materialize a verified immutable input, populating the digest cache."""
+    cache = standalone_input_cache()
+    cache.mkdir(parents=True, exist_ok=True)
+    entry = cache / expected
+    if entry.is_file():
+        try:
+            verify_file(entry, expected)
+        except BuildError:
+            pass
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(entry, destination)
+            return destination
+
+    with tempfile.TemporaryDirectory(prefix="input-", dir=cache) as temporary:
+        temporary_path = Path(temporary) / filename
+        download(temporary_path)
+        verify_file(temporary_path, expected)
+        # os.replace publishes a complete, verified object in one operation.
+        os.replace(temporary_path, entry)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(entry, destination)
+    return destination
+
+
 def download_verified(url: str, path: Path, expected: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb", dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as destination:
+        temporary = Path(destination.name)
+        with urllib.request.urlopen(url) as response:
+            shutil.copyfileobj(response, destination)
+    try:
+        verify_file(temporary, expected)
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def download_url_to(path: Path, url: str) -> None:
     with urllib.request.urlopen(url) as response, path.open("wb") as destination:
         shutil.copyfileobj(response, destination)
-    verify_file(path, expected)
-    return path
 
 
 def build_wheel(repo: Path, output: Path, python: str, epoch: str) -> Path:
@@ -303,39 +358,40 @@ def download_packaging_tools(
 ) -> tuple[Path, Path, list[Path]]:
     directory.mkdir(parents=True, exist_ok=True)
 
-    def download(requirements: list[str]) -> None:
-        run(
-            [
-                python,
-                "-m",
-                "pip",
-                "download",
-                "--disable-pip-version-check",
-                "--no-deps",
-                "--dest",
-                str(directory),
-                *requirements,
-            ]
+    def download(filename: str, expected_hash: str, requirement: str) -> Path:
+        def download_requirement(path: Path) -> None:
+            temporary_directory = path.parent
+            run(
+                [
+                    python,
+                    "-m",
+                    "pip",
+                    "download",
+                    "--disable-pip-version-check",
+                    "--no-deps",
+                    "--dest",
+                    str(temporary_directory),
+                    requirement,
+                ]
+            )
+            downloaded = temporary_directory / filename
+            if not downloaded.is_file():
+                raise BuildError(f"expected wheel was not downloaded: {filename}")
+            if downloaded != path:
+                os.replace(downloaded, path)
+
+        return cached_input(
+            filename, expected_hash, directory / filename, download_requirement
         )
 
-    download(
-        [
-            f"pex=={PEX_VERSION}",
-            *(
-                f"{name}=={filename.split('-')[1]}"
-                for name, (filename, _) in WHEEL_BUILD_TOOLS.items()
-            ),
-        ]
-    )
-    download(
-        [
-            f"{name}=={filename.split('-')[1]}"
-            for name, (filename, _) in PEX_BOOTSTRAP_TOOLS.items()
-        ]
-    )
+    def download_tools(tools: dict[str, tuple[str, str]]) -> None:
+        for name, (filename, expected_hash) in tools.items():
+            download(filename, expected_hash, f"{name}=={filename.split('-')[1]}")
+
+    download_tools({"pex": (PEX_WHEEL, PEX_SHA256)})
+    download_tools(WHEEL_BUILD_TOOLS)
+    download_tools(PEX_BOOTSTRAP_TOOLS)
     pex_wheel = directory / PEX_WHEEL
-    if not pex_wheel.is_file():
-        raise BuildError(f"expected PEX wheel was not downloaded: {PEX_WHEEL}")
     verify_file(pex_wheel, PEX_SHA256)
     tool_wheels = []
     for name, (filename, expected_hash) in WHEEL_BUILD_TOOLS.items():
@@ -358,10 +414,14 @@ def download_packaging_tools(
     with zipfile.ZipFile(pex_wheel) as archive:
         archive.extractall(runtime)
     science = directory / SCIENCE_ASSET
-    download_verified(
-        f"https://github.com/a-scie/lift/releases/download/v{SCIENCE_VERSION}/{SCIENCE_ASSET}",
-        science,
+    cached_input(
+        SCIENCE_ASSET,
         SCIENCE_SHA256,
+        science,
+        lambda path: download_url_to(
+            path,
+            f"https://github.com/a-scie/lift/releases/download/v{SCIENCE_VERSION}/{SCIENCE_ASSET}",
+        ),
     )
     science.chmod(science.stat().st_mode | stat.S_IXUSR)
     observed_science_version = run([str(science), "--version"]).stdout.strip()
