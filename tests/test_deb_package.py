@@ -64,6 +64,9 @@ def make_package(
         "BUILD-PROVENANCE.json",
     ):
         (doc / name).write_text(f"{name}\n", encoding="ascii")
+    (doc / "INSTALLATION-PROVENANCE.json").write_text(
+        '{"distribution":"debian","package":"devlegate"}\n', encoding="ascii"
+    )
     licenses = doc / "LICENSES"
     licenses.mkdir()
     (licenses / "standalone-compliance-manifest.json").write_text(

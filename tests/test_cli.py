@@ -657,12 +657,26 @@ def test_public_help_surfaces_are_successful_and_useful(
 
 
 def test_version_command(monkeypatch, capsys):
+    monkeypatch.chdir(Path("/tmp"))
     monkeypatch.setattr("sys.argv", ["devlegate", "version"])
 
     assert main() == 0
     output = capsys.readouterr().out
-    assert "Devlegate" in output
+    assert "Devlegate runtime" in output
     assert __version__ in output
+    assert "Distribution:" in output
+    assert "Installation:" in output
+    assert "OS:" in output
+    assert "Project:" not in output
+    assert "pid" not in output.lower()
+
+
+def test_version_does_not_contact_daemon(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "version"])
+    monkeypatch.setattr(cli, "request", pytest.fail)
+
+    assert main() == 0
+    assert "Devlegate runtime" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("flag", ["--yaml", "--json"])
@@ -672,7 +686,10 @@ def test_version_machine_formats(monkeypatch, capsys, flag):
     assert main() == 0
     output = capsys.readouterr().out
     value = nanoyaml.loads(output) if flag == "--yaml" else json.loads(output)
-    assert value == {"program": "devlegate", "version": __version__}
+    assert value["program"] == "devlegate"
+    assert value["version"] == __version__
+    assert set(value) == {"program", "version", "distribution", "python", "os"}
+    assert "pid" not in output.lower()
 
 
 def test_machine_format_flags_are_mutually_exclusive():
@@ -682,12 +699,21 @@ def test_machine_format_flags_are_mutually_exclusive():
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("old", ["--version", "--foreground", "--once"])
-def test_removed_service_and_version_flags_are_rejected(old, monkeypatch, capsys):
+@pytest.mark.parametrize("old", ["--foreground", "--once"])
+def test_removed_service_flags_are_rejected(old, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["devlegate", old])
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 2
+
+
+def test_root_version_is_one_line_and_does_not_resolve_project(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["devlegate", "--version"])
+    monkeypatch.setattr(cli, "_project_target", pytest.fail)
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 0
+    assert capsys.readouterr().out == f"devlegate {__version__}\n"
 
 
 def test_check_rejects_missing_project_context(git_fixture):

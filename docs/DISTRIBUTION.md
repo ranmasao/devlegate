@@ -103,6 +103,23 @@ attachment, while explicit host-policy commands remain available when needed.
 
 The host installation record does not identify a package manager or artifact.
 
+Runtime identity uses only evidence owned by the relevant distribution boundary:
+
+- Python package invocations read `devlegate` distribution metadata, including
+  `INSTALLER` and optional PEP 610 `direct_url.json` data. Missing metadata is
+  reported as `unknown`.
+- Standalone invocations are proven only when the PEX and SCIE environment
+  values identify the same executable ELF artifact. A standalone executable
+  reports Debian installation only when the Debian package marker at
+  `usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json` is present and exact;
+  its absence is `unknown`, not portable-path inference.
+- Debian packaging writes and validates that marker while copying the validated
+  standalone payload. The marker is not part of the standalone archive.
+
+`devlegate --version` is the concise `program version` probe. `devlegate version`
+is the project-independent diagnostic banner and its JSON/YAML forms contain the
+same runtime identity fields without project or service state.
+
 ## Relaunch Identity
 
 The centralized `product_launcher()` normally returns the current Python

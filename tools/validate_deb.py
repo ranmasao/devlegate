@@ -141,6 +141,15 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
         raise PackageError(
             f"Debian package lacks compact compliance material: {missing}"
         )
+    marker = documentation / "INSTALLATION-PROVENANCE.json"
+    try:
+        marker_value = json.loads(marker.read_text(encoding="ascii"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackageError(
+            "Debian package lacks installation provenance marker"
+        ) from error
+    if marker_value != {"distribution": "debian", "package": "devlegate"}:
+        raise PackageError("Debian installation provenance marker is invalid")
     embedded_archives = list(documentation.rglob("*.tar.gz")) + list(
         documentation.rglob("*.tar.gz.sha256")
     )

@@ -132,6 +132,10 @@ def package(
                 "BUILD-PROVENANCE.json",
             ):
                 shutil.copy2(extracted / name, documentation / name)
+            (documentation / "INSTALLATION-PROVENANCE.json").write_text(
+                '{"distribution":"debian","package":"devlegate"}\n',
+                encoding="ascii",
+            )
             shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
         with progress_stage(emit, semantic_plan()[2]):
             installed_size = installed_size_kib(package_root)

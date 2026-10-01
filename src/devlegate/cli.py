@@ -70,6 +70,8 @@ from devlegate.runtime import (
     WorkflowBlockedError,
     _git,
 )
+from devlegate.runtime_identity import banner as runtime_banner
+from devlegate.runtime_identity import identity as runtime_identity
 from devlegate.runtime_locator import (
     RuntimeAuthorityPresent,
     RuntimeLocator,
@@ -2306,6 +2308,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="explicit project configuration file",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"devlegate {__version__}",
+    )
     commands = parser.add_subparsers(
         dest="command",
         title="commands",
@@ -2722,11 +2729,11 @@ def main() -> int:
         case "version":
             if project_alias is not None or args.service_env is not None:
                 parser.error("project selectors are not valid for version")
-            value = {"program": "devlegate", "version": __version__}
+            value = runtime_identity()
             emit(
                 value,
                 args.output_format,
-                f"Devlegate {__version__}",
+                runtime_banner(value),
             )
             return 0
         case "host":
