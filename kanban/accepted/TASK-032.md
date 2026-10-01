@@ -154,3 +154,31 @@ their regression expectations as well so the old hidden-start guidance cannot re
 
 Do not change startup semantics or broaden the ticket further. Return to review with
 full CI and Ruff green.
+
+
+## Accepted
+
+Execution `8b3db5ad885d4b638b4993df2ff75368` / checkpoint
+`48a2f7299b1bd5d86239387b7e40b55d3ff8942e` completes the explicit
+startup command transition.
+
+Accepted behavior:
+
+- `devlegate start` owns the previous persistent startup path without duplicating
+  startup implementation;
+- bare `devlegate` is informational and side-effect-free;
+- selector-only invocations fail clearly and point to explicit startup;
+- alias and `--env` project selection remain exact;
+- foreground/once/stop/restart semantics are unchanged;
+- all daemon-dependent mutation guidance now points operators to
+  `devlegate start`, with regressions preventing stale hidden-start wording.
+
+GitHub CI run `36831975655` is green:
+
+```text
+1069 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
