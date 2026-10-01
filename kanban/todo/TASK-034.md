@@ -335,3 +335,93 @@ review finding above.
 This clarification is not a request to add a generic build-substitution framework.
 Prefer the smallest deterministic generated-metadata mechanism that preserves the
 validated-artifact invariants.
+
+
+## Second review: production binding is sound; focused proof is incomplete
+
+Execution `102a3d33710c4d4591621b645874265e` / checkpoint
+`b3e52898b1d5318e227f96a0248f6ede7a7d32da` closes the two production
+provenance blockers from the previous review.
+
+The implementation now correctly:
+
+- binds the Debian installation record to the exact standalone payload with
+  `payload_sha256`;
+- generates that digest from the exact executable copied into the Debian package;
+- validates the same binding in `validate_deb.py`;
+- requires the runtime digest to match before reporting Debian installation;
+- binds Python distribution metadata to the currently imported `devlegate`
+  package path before using `INSTALLER` or `direct_url.json`;
+- preserves `unknown` when provenance cannot be proven.
+
+No further production redesign is requested from these findings.
+
+### Remaining blocker: requested runtime-identity proof matrix is incomplete
+
+The newly added `tests/test_runtime_identity.py` currently contains only three
+focused tests:
+
+- exact Debian payload digest and post-install payload mismatch;
+- malformed Debian marker;
+- unrelated same-name Python distribution metadata.
+
+That is useful, but it does not satisfy the focused regression matrix explicitly
+required by the previous review and the ticket.
+
+Add focused regressions for the existing implementation, without broadening
+production behavior unless a test exposes a real defect:
+
+1. **Normal Python package binding**
+   - distribution files resolve `devlegate/__init__.py` to the currently imported
+     package;
+   - installer metadata is then accepted.
+
+2. **Optional Python metadata missing**
+   - bound distribution with no `INSTALLER` and/or no `direct_url.json`;
+   - result remains deterministic and unknown where evidence is absent.
+
+3. **Editable / PEP 610 binding**
+   - `direct_url.json` with `dir_info.editable=true` and a `file:` source root
+     containing the currently imported package is accepted;
+   - a different source root is rejected.
+
+4. **Standalone identity boundary**
+   - matching `PEX` and `SCIE` values for the same executable ELF identify
+     standalone;
+   - missing/mismatching values or a non-ELF/non-executable candidate do not.
+
+5. **Debian installation boundary**
+   - exact digest + valid marker -> Debian;
+   - no marker -> unknown;
+   - malformed marker -> unknown;
+   - stale/different digest -> unknown.
+   The existing tests cover most of this; make the no-marker case explicit.
+
+6. **OS identity fallback**
+   - when `platform.freedesktop_os_release()` raises or is unavailable, fallback
+     remains deterministic through stdlib platform identity.
+
+The existing CLI regressions already cover concise one-line `--version`,
+project-independent rich output, daemon non-contact, and JSON/YAML surface; retain
+them.
+
+### CI note
+
+The exact checkpoint has a successful full CI run `36889159576`:
+
+```text
+1074 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+A second concurrent run of the same SHA, `36889161327`, failed in the unrelated
+existing production-topology test
+`test_real_service_drop_retire_old_lineage_and_runs_fresh[T-1]` because a fixture
+`git commit` returned 128. Since the identical SHA also completed the entire suite
+successfully and this failure is unrelated to runtime identity, it is not a
+TASK-034 production blocker.
+
+Return to review with the focused identity proof matrix above and a green full CI
+run. Prefer tests-only changes unless a new focused test demonstrates an actual
+implementation defect.
