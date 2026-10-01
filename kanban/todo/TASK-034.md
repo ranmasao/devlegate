@@ -146,3 +146,103 @@ identity.
   independently validated boundary.
 - Missing OS-release data falls back deterministically.
 - JSON/YAML, if supported, does not contain project/PID/instance fields.
+
+
+## Review findings
+
+Execution `9012f936d65c4d5caf729abb4418284b` / checkpoint
+`2dcb88b6e746ba5e87e9ab2ddeb5f5299f037553` has the right overall
+shape: root `--version` is concise, rich `version` is project-independent,
+runtime identity uses stdlib/local evidence, and CI is green.
+
+GitHub CI run `36885020555` reports:
+
+```text
+1071 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+Two provenance claims are not yet proven strongly enough for the ticket contract.
+
+### Production blocker: Debian marker is not bound to the executable
+
+The package currently writes:
+
+```json
+{"distribution":"debian","package":"devlegate"}
+```
+
+and runtime classifies a standalone executable as Debian-installed whenever that
+marker exists at the expected relative filesystem location.
+
+That proves only that a Debian marker is present. It does **not** prove that the
+currently executing standalone payload is the payload installed by that package.
+
+For example, if a real package once installed the marker and
+`/usr/bin/devlegate` is later replaced manually with a portable standalone
+executable, the current implementation still reports `installer=debian`. This is
+the exact path/adjacent-state false positive the ticket requires us to avoid.
+
+Bind the Debian provenance record to the exact packaged executable. A suitable
+design is to include a cryptographic digest of the installed standalone payload
+(and version/format identity if useful) in the package-owned marker, have
+`package_deb.py` generate it from the exact payload copied into the package, have
+`validate_deb.py` verify that binding, and have runtime identity require an exact
+match before reporting Debian ownership.
+
+Use stdlib-only runtime verification. A missing, malformed, stale, or mismatching
+marker must produce `unknown`, never `debian`.
+
+Add regressions for at least:
+
+- exact Debian marker + exact executable -> Debian;
+- no marker -> unknown;
+- malformed marker -> unknown;
+- marker for a different executable / stale digest -> unknown;
+- portable standalone placed in a Debian-looking layout must not become Debian
+  merely because a marker exists nearby.
+
+### Production blocker: Python distribution metadata is not bound to this invocation
+
+`metadata.distribution("devlegate")` finds a distribution with that project name,
+but by itself does not prove that its `.dist-info` describes the Devlegate package
+whose code is currently executing.
+
+A source checkout or another import path can shadow an installed Devlegate
+distribution while `importlib.metadata` still finds the unrelated installed
+`.dist-info`. In that case the current implementation may report its
+`INSTALLER` or `direct_url.json` as installation provenance for the wrong
+invocation.
+
+Before using installer/direct-url metadata as provenance, prove that the discovered
+distribution metadata corresponds to the current Devlegate package location. Handle
+both normal installed distributions and PEP 610/editable installs according to
+evidence actually available. If that relationship cannot be proven, keep the
+installation properties `unknown`.
+
+Do not infer provenance from package name alone.
+
+Add focused regressions for:
+
+- ordinary installed-package metadata bound to the current package;
+- missing optional `INSTALLER` / `direct_url.json`;
+- editable/direct-url metadata when it really identifies the current source;
+- an unrelated same-name installed distribution while current code comes from a
+  different source tree -> provenance remains unknown.
+
+### Required runtime-identity regression coverage
+
+The new identity module currently has no dedicated focused test module. In addition
+to the two binding issues above, preserve explicit tests for:
+
+- proven standalone detection and non-standalone fallback;
+- deterministic OS-release fallback when
+  `platform.freedesktop_os_release()` is unavailable/fails;
+- rich JSON/YAML containing only project-independent runtime identity;
+- concise `--version` remaining exactly one line and side-effect-free.
+
+Do not broaden this into package-manager probing: no runtime pip, dpkg, Git,
+systemd, or network dependency.
+
+Return to review with full CI, distribution validation, coverage, and Ruff green.
