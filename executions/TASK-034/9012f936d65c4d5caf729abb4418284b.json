@@ -1,0 +1,28 @@
+{
+  "code_base_head": "9b87e0c475174de6f2725826f4b5244e3443ae86",
+  "conclusion": "completed",
+  "control_head": "cfc3537a6d5da3ca635d106ed612cbc83f318bf2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-034",
+  "execution_id": "9012f936d65c4d5caf729abb4418284b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-034",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-034/9012f936d65c4d5caf729abb4418284b.md",
+  "report_sha256": "cc82b265a6ee063540aa56189a6849d5a988caedeb9207181ac1c2796a299472",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-034",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation is complete. Stdlib compile, direct CLI probes, standalone provenance probing, and diff checks passed; pytest and Ruff were unavailable in the workspace.",
+    "summary": "Implemented a project-independent runtime identity module and wired `devlegate --version` to a concise argparse probe while expanding `devlegate version` with distribution, installation, Python, and OS identity fields. Added exact Debian installation provenance markers with package validation, focused CLI/package regressions, and distribution documentation."
+  },
+  "workspace_head": "2dcb88b6e746ba5e87e9ab2ddeb5f5299f037553"
+}
