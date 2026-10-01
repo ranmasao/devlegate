@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "59be8bd9dff100f6321ef769024125e52f55cf2c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "fa7cd60739d7402c93140830c33e2fbf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented a digest-addressed per-user cache for pinned standalone packaging wheels and the Science binary, with verification before cache use and atomic publication after downloads. Added GitHub Actions persistence for the immutable-input cache while preserving temporary A/B build roots and independent PEX_ROOT state, plus regressions for cache hits, corruption, and interrupted downloads."
+  },
+  "workspace_head": "81f80b6ed3671266b7783c5b1fa17e159bc878ab"
+}
