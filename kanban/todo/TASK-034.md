@@ -425,3 +425,77 @@ TASK-034 production blocker.
 Return to review with the focused identity proof matrix above and a green full CI
 run. Prefer tests-only changes unless a new focused test demonstrates an actual
 implementation defect.
+
+
+## Third review: one ordinary-distribution binding defect remains
+
+Execution `0cc6f6d0ddd94688b2658e37d8f2deb2` / checkpoint
+`cc98c18cece765b2fbd5d5f02190a9249ea1b00b` is tests-only and completes
+the requested focused proof matrix for:
+
+- bound normal Python metadata;
+- missing optional metadata;
+- editable PEP 610 source binding;
+- standalone PEX/SCIE ELF evidence;
+- absent/malformed/stale Debian markers;
+- OS-release fallback.
+
+GitHub CI run `36902647299` is green:
+
+```text
+1080 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+One production binding defect remains in
+`runtime_identity._metadata_matches_package()`.
+
+### Blocker: `locate_file()` is used without proving file ownership
+
+The ordinary installed-distribution branch currently does:
+
+```python
+files = distribution.files
+if files:
+    expected = distribution.locate_file(Path("devlegate") / "__init__.py")
+    if expected.resolve() == package_file:
+        return True
+```
+
+This proves only that the distribution has *some* recorded files and that its
+installation root can resolve the lexical path `devlegate/__init__.py`.
+
+It does not prove that `devlegate/__init__.py` is actually one of the files owned
+by that distribution.
+
+A stale or unrelated same-name `.dist-info` located under the same site-packages
+root can therefore satisfy this check even when its file inventory does not contain
+the currently imported Devlegate package.
+
+Bind normal metadata through the distribution's actual file inventory:
+
+- require an entry corresponding to `devlegate/__init__.py` in
+  `distribution.files`;
+- resolve that exact recorded entry with `distribution.locate_file(entry)`;
+- compare its resolved path to the currently imported `devlegate.__file__`;
+- if no exact owned file entry matches, provenance remains `unknown`.
+
+Do not accept an arbitrary lexical path merely because `locate_file()` maps it
+under the same installation root.
+
+Add a focused regression where:
+
+- current `devlegate.__file__` lives under the same site-packages root as the
+  candidate distribution;
+- `distribution.files` is non-empty but does **not** contain
+  `devlegate/__init__.py`;
+- `locate_file(Path("devlegate/__init__.py"))` would nevertheless resolve to the
+  current file;
+- binding must still be rejected.
+
+Retain the existing positive normal-package binding test, now backed by an explicit
+owned file entry.
+
+This should be a very small production fix plus focused regression. No further
+provenance redesign is requested.
