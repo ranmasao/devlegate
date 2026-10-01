@@ -1998,7 +1998,7 @@ def test_reconcile_refuses_without_daemon_without_constructing_engine(
     assert main() == 1
     stderr = capsys.readouterr().err
     assert "service is not running" in stderr
-    assert "start `devlegate`" in stderr
+    assert "run `devlegate start`" in stderr
 
 
 def test_reconcile_refuses_connectable_socket_without_authority(
@@ -2033,7 +2033,7 @@ def test_reconcile_refuses_connectable_socket_without_authority(
         assert main() == 1
         stderr = capsys.readouterr().err
         assert "service is not running" in stderr
-        assert "start `devlegate`" in stderr
+        assert "run `devlegate start`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()
@@ -2097,7 +2097,7 @@ def test_retry_refuses_connectable_socket_without_authority(
         assert main() == 1
         stderr = capsys.readouterr().err
         assert "service is not running" in stderr
-        assert "start `devlegate`" in stderr
+        assert "run `devlegate start`" in stderr
         listener.settimeout(0.2)
         with pytest.raises(socket.timeout):
             listener.accept()

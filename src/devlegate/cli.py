@@ -261,7 +261,7 @@ def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> 
     try:
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         if ticket_id is None:
             candidates = decode_retry_candidates(
@@ -319,7 +319,7 @@ def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> i
     try:
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         candidates = decode_drop_candidates(
             request(locator.socket_path, "drop-candidates")
@@ -372,7 +372,7 @@ def _recover_daemon(
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         result = request(
             locator.socket_path,
@@ -419,7 +419,7 @@ def _reconcile_daemon(
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         payload = {
             "ticket_id": ticket_id,
@@ -456,7 +456,7 @@ def _reconcile_resume_daemon(
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         result = request(
             locator.socket_path,
@@ -485,7 +485,7 @@ def _reconcile_auto_daemon(
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         payload = {"ticket_id": ticket_id}
         if onto is not None:
@@ -526,7 +526,7 @@ def _reconcile_control(
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
-                "service is not running for this checkout; start `devlegate`"
+                "service is not running for this checkout; run `devlegate start`"
             )
         result = request(
             locator.socket_path,
