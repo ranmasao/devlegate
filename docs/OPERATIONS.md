@@ -60,10 +60,10 @@ is not implemented.
 
 ## Service Hosting
 
-The bare command is the normal entry point:
+The explicit start command is the normal entry point:
 
 ```sh
-devlegate
+devlegate start
 ```
 
 It chooses systemd user supervision when the current user manager is usable and
@@ -94,7 +94,7 @@ devlegate @my-project service status --supervisor systemd
 ```
 
 The `service` command is an advanced explicit control for a systemd user unit;
-normal `devlegate` startup chooses systemd automatically when it is usable.
+normal `devlegate start` chooses systemd automatically when it is usable.
 
 ```sh
 devlegate @my-project service install --supervisor systemd

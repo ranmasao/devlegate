@@ -108,7 +108,7 @@ devlegate init my-project
 # edit the generated .env and .devlegate/project.md
 devlegate control init
 devlegate check
-devlegate
+devlegate start
 ```
 
 If the current user has access to a usable systemd user manager, Devlegate uses

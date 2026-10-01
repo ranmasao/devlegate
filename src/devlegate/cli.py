@@ -2203,6 +2203,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
             (
                 ("foreground", "run the persistent service attached to this terminal"),
                 ("once", "run one service pass, then exit"),
+                ("start", "start the persistent service"),
                 ("stop", "stop the persistent service"),
                 ("restart", "restart the persistent service"),
                 ("service", "manage an explicitly registered external service"),
@@ -2234,17 +2235,17 @@ class DevlegateArgumentParser(ConciseArgumentParser):
 
     def format_usage(self) -> str:
         if self.prog == "devlegate":
-            return "usage: devlegate [--env FILE | @ALIAS] COMMAND ...\n"
+            return "usage: devlegate [--env FILE | @ALIAS] [COMMAND ...]\n"
         return super().format_usage()
 
     def format_help(self) -> str:
         if self.prog == "devlegate":
             lines = [
-                "usage: devlegate [--env FILE | @ALIAS] COMMAND ...",
+                "usage: devlegate [--env FILE | @ALIAS] [COMMAND ...]",
                 "",
                 "Run ticket-driven coding workflows in a Git repository. With no "
-                "command,",
-                "ensure the persistent background service is running.",
+                "command, show this help.",
+                "Use `start` to run the persistent background service.",
                 "",
                 "Options:",
                 "  --env FILE       explicit project configuration file",
@@ -2295,7 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="devlegate",
         description=(
             "Run ticket-driven coding workflows in a Git repository. With no "
-            "command, ensure the persistent background service is running."
+            "command, show this help."
         ),
     )
     parser.add_argument(
@@ -2303,7 +2304,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="service_env",
         metavar="FILE",
         type=Path,
-        help="configuration file for bare background startup",
+        help="explicit project configuration file",
     )
     commands = parser.add_subparsers(
         dest="command",
@@ -2320,6 +2321,11 @@ def build_parser() -> argparse.ArgumentParser:
         "once",
         help="run one service pass attached to this terminal",
         description="Run one service pass attached to this terminal, then exit.",
+    )
+    commands.add_parser(
+        "start",
+        help="start the persistent service",
+        description="Start the persistent service using the selected project.",
     )
     version_parser = commands.add_parser(
         "version",
@@ -2700,6 +2706,14 @@ def main() -> int:
     startup_fd = _startup_fd()
     match args.command:
         case None:
+            if project_alias is not None or args.service_env is not None:
+                parser.error(
+                    "a command is required when selecting a project; "
+                    "use `start` to run the service"
+                )
+            parser.print_help()
+            return 0
+        case "start":
             return _run_default_command(
                 project_alias=project_alias,
                 service_env=args.service_env,

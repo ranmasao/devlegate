@@ -79,7 +79,7 @@ The current forms map to these policies as follows:
 
 | Form | Hosting | Attachment | Lifetime |
 | --- | --- | --- | --- |
-| bare `devlegate` | systemd when usable, direct otherwise | attached or inherited | continuous |
+| `devlegate start` | systemd when usable, direct otherwise | attached or inherited | continuous |
 | `devlegate foreground` | direct | attached | continuous |
 | `devlegate once` | direct | attached | one iteration |
 | systemd user service | external | inherited streams | continuous |
@@ -164,7 +164,7 @@ published immutable views and enqueue mutable commands. The owner thread
 validates and dispatches commands at scheduler boundaries, while duplicate
 request identities are resolved through durable receipts.
 
-Bare `devlegate` probes the current user manager and starts the exact managed
+`devlegate start` probes the current user manager and starts the exact managed
 project unit when systemd is usable; otherwise it runs direct and attached.
 `devlegate foreground` runs direct and attached, and `devlegate once` runs one
 complete scheduler iteration. All modes use the same authority and IPC

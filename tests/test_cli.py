@@ -293,6 +293,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     parser = build_parser()
     assert parser.parse_args(["once"]).command == "once"
     assert parser.parse_args(["foreground"]).command == "foreground"
+    assert parser.parse_args(["start"]).command == "start"
     assert parser.parse_args(["control", "init"]).command == "control"
     control_reconcile = parser.parse_args(
         ["reconcile", "control", "--from", "a" * 40, "--to", "b" * 40]
@@ -306,9 +307,9 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         main()
     assert error.value.code == 0
     output = capsys.readouterr().out
-    assert "usage: devlegate [--env FILE | @ALIAS] COMMAND ..." in output
+    assert "usage: devlegate [--env FILE | @ALIAS] [COMMAND ...]" in output
     assert "{init,render,retry,reconcile,check,status,plan,stop,control}" not in output
-    assert "ensure the persistent background service is running" in output
+    assert "Use `start` to run the persistent background service." in output
     assert "Service:" in output
     assert "Project:" in output
     assert "Recovery:" in output
@@ -318,6 +319,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     for command in (
         "foreground",
         "once",
+        "start",
         "stop",
         "status",
         "plan",
@@ -338,6 +340,61 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
+
+
+def test_bare_invocation_prints_help_without_starting_or_resolving(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr("sys.argv", ["devlegate"])
+    monkeypatch.setattr(cli, "_run_default_command", pytest.fail)
+    monkeypatch.setattr(cli, "_project_target", pytest.fail)
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "usage: devlegate [--env FILE | @ALIAS] [COMMAND ...]" in output
+    assert "start" in output
+
+
+@pytest.mark.parametrize(
+    "selector", [["@project"], ["--env", "/tmp/project.env"]]
+)
+def test_selector_without_command_fails_without_starting(
+    monkeypatch, capsys, selector
+):
+    monkeypatch.setattr("sys.argv", ["devlegate", *selector])
+    monkeypatch.setattr(cli, "_run_default_command", pytest.fail)
+    monkeypatch.setattr(cli, "_project_target", pytest.fail)
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 2
+    assert "a command is required when selecting a project" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "alias", "env_file"),
+    [
+        (["@project", "start"], "project", None),
+        (["--env", "/tmp/project.env", "start"], None, Path("/tmp/project.env")),
+    ],
+)
+def test_start_routes_selected_project_to_authoritative_start_path(
+    monkeypatch, argv, alias, env_file
+):
+    calls = []
+
+    def start(**kwargs):
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setattr("sys.argv", ["devlegate", *argv])
+    monkeypatch.setattr(cli, "_run_default_command", start)
+
+    assert main() == 0
+    assert calls == [
+        {"project_alias": alias, "service_env": env_file, "startup_fd": None}
+    ]
 
 
 def test_same_parent_replacement_requires_exact_single_parent_git_topology(
@@ -478,7 +535,7 @@ def test_reconcile_resume_routes_to_daemon_helper(
 def test_nested_command_help_uses_command_sections():
     parser = build_parser()
     top_level = parser.format_help()
-    assert "usage: devlegate [--env FILE | @ALIAS] COMMAND ..." in top_level
+    assert "usage: devlegate [--env FILE | @ALIAS] [COMMAND ...]" in top_level
     assert (
         "{init,render,retry,reconcile,check,status,plan,stop,control}" not in top_level
     )
@@ -1343,7 +1400,7 @@ def test_service_start_forms_are_idempotent_for_healthy_owner(
         status = service.cli("status", "--json")
         assert status.returncode == 0, status.stderr
         assert json.loads(status.stdout)["execution"]["phase"] == "idle"
-        for start_args in (("foreground",), ("once",)):
+        for start_args in (("start",), ("foreground",), ("once",)):
             repeated = service.cli(*start_args)
             assert repeated.returncode == 0, repeated.stderr
             assert repeated.stdout.strip() == "Devlegate service is already running."

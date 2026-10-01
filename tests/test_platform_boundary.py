@@ -72,7 +72,9 @@ def test_background_command_rejects_unsupported_platform_before_spawn(
 ):
     _working, config, _state = prepared_project(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(cli.sys, "argv", ["devlegate", "--env", str(config)])
+    monkeypatch.setattr(
+        cli.sys, "argv", ["devlegate", "--env", str(config), "start"]
+    )
 
     assert cli.main() == 1
     assert HOSTED_RUNTIME_ERROR in capsys.readouterr().err
