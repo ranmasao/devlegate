@@ -1,0 +1,28 @@
+{
+  "code_base_head": "48a2f7299b1bd5d86239387b7e40b55d3ff8942e",
+  "conclusion": "completed",
+  "control_head": "4c633575fbc85a4379dc1fd22b5477cc7786102b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-033",
+  "execution_id": "ce13b2508e5e4f7cbc5a15942460eff2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-033",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-033/ce13b2508e5e4f7cbc5a15942460eff2.md",
+  "report_sha256": "c24c11cbd85796c91d2b7d8b48ace4c6592374e6f32e9ce658007bf10620b54c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-033",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused output tests, CLI tests, Ruff, compileall, and diff checks pass. The full suite reached 1068 passing tests; three unrelated environment-dependent tests failed because coverage and the repository .venv executables are unavailable.",
+    "summary": "Replaced the singular human-readable Current execution block with an Active executions grid containing ticket, state, stage, execution ID, and wrapped title columns. Preserved concise diagnostics for unverified and recovery-required states and added focused renderer regressions without changing machine-readable status paths."
+  },
+  "workspace_head": "9b87e0c475174de6f2725826f4b5244e3443ae86"
+}
