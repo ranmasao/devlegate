@@ -83,6 +83,19 @@ def test_bound_python_distribution_accepts_installer(tmp_path, monkeypatch):
     assert result["direct_url"] == "unknown"
 
 
+def test_distribution_without_owned_package_file_is_not_bound(tmp_path, monkeypatch):
+    package_file = tmp_path / "site/devlegate/__init__.py"
+    package_file.parent.mkdir(parents=True)
+    package_file.write_text("", encoding="ascii")
+    monkeypatch.setattr(runtime_identity.devlegate, "__file__", str(package_file))
+    distribution = SimpleNamespace(
+        files=[Path("other/__init__.py")],
+        locate_file=lambda _path: package_file,
+        read_text=lambda _name: "pip",
+    )
+    assert not runtime_identity._metadata_matches_package(distribution)
+
+
 def test_bound_python_distribution_without_optional_metadata_is_unknown(
     tmp_path, monkeypatch
 ):

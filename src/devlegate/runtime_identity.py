@@ -67,9 +67,13 @@ def _metadata_matches_package(distribution: metadata.Distribution) -> bool:
     package_file = Path(devlegate.__file__).resolve()
     files = distribution.files
     if files:
-        expected = distribution.locate_file(Path("devlegate") / "__init__.py")
-        if expected.resolve() == package_file:
-            return True
+        package_entry = Path("devlegate") / "__init__.py"
+        for entry in files:
+            if Path(entry) == package_entry:
+                expected = distribution.locate_file(entry)
+                if expected.resolve() == package_file:
+                    return True
+                break
 
     direct_url = distribution.read_text("direct_url.json")
     if not direct_url:
