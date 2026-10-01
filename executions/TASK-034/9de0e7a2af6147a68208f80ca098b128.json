@@ -1,0 +1,28 @@
+{
+  "code_base_head": "9b87e0c475174de6f2725826f4b5244e3443ae86",
+  "conclusion": "completed",
+  "control_head": "fa1488056c0a816efd0711ac8fa281ab942d4723",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-034",
+  "execution_id": "9de0e7a2af6147a68208f80ca098b128",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-034",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-034/9de0e7a2af6147a68208f80ca098b128.md",
+  "report_sha256": "3a01117d83977fff9f4d91d02bb62a1e4391a47c2d56c6987cf09005f2c977e8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-034",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused runtime identity tests and Ruff pass. The full pytest suite was retried with a five-minute timeout and remained running without reported failures, reaching 19% before timeout.",
+    "summary": "Bound ordinary Python distribution provenance to an explicitly owned devlegate/__init__.py file entry before resolving its path. Added a regression proving same-root metadata without that owned entry cannot bind to the imported package."
+  },
+  "workspace_head": "2162d43a94d1c333071ce784308603d8a950e23f"
+}
