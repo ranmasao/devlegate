@@ -246,3 +246,92 @@ Do not broaden this into package-manager probing: no runtime pip, dpkg, Git,
 systemd, or network dependency.
 
 Return to review with full CI, distribution validation, coverage, and Ruff green.
+
+
+## Design clarification: build identity vs installation identity
+
+Keep two different kinds of provenance separate.
+
+### Artifact/build identity is intrinsic
+
+Facts that describe the artifact itself should be established by the build boundary,
+not guessed later from filesystem paths or host state.
+
+In particular, it is valid for the build to generate distribution metadata such as:
+
+```text
+runtime_form = python-package | standalone
+build_format = ...
+version = ...
+```
+
+This generated metadata is a build output. It does **not** violate source
+immutability provided the build does not modify tracked source files in the checkout.
+
+The invariant is:
+
+> Build never mutates tracked source. Distribution-specific intrinsic identity is
+> introduced only into generated build outputs.
+
+Do not implement this by editing a tracked Python source file in-place during a
+build.
+
+### Installation identity is external
+
+How an artifact was installed is a different fact:
+
+```text
+installer = pip | uv | debian | unknown
+editable = yes | no | unknown
+```
+
+That must be proven by the installation boundary.
+
+For the standalone/Debian relationship preserve the stronger existing distribution
+property:
+
+```text
+source
+  -> wheel
+  -> one validated standalone executable E
+       -> portable standalone archive contains E
+       -> Debian package contains the same exact E
+```
+
+Do **not** rebuild, rewrite, substitute, or otherwise mutate `E` into a
+Debian-specific executable merely to encode `installer=debian`.
+
+Instead:
+
+- the standalone executable carries/proves its intrinsic form as `standalone`;
+- the Debian package adds package-owned installation provenance external to the
+  executable;
+- that provenance is cryptographically bound to the exact packaged executable;
+- runtime reports `installer=debian` only when the external binding verifies.
+
+Thus a portable standalone and the Debian payload may be byte-identical while still
+producing different installation identity after installation.
+
+A suitable model is:
+
+```text
+inside executable:
+    runtime_form = standalone
+
+Debian-owned installation record:
+    installation = debian
+    package = devlegate
+    payload_sha256 = SHA256(exact installed executable)
+```
+
+The runtime may verify that record with stdlib hashing. Missing or mismatching
+installation evidence yields `unknown`.
+
+For Python-package invocation, standard distribution metadata may carry both
+artifact/package facts and installer facts, but installer/direct-url claims must
+still be bound to the currently imported Devlegate package as described in the
+review finding above.
+
+This clarification is not a request to add a generic build-substitution framework.
+Prefer the smallest deterministic generated-metadata mechanism that preserves the
+validated-artifact invariants.
