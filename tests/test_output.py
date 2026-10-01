@@ -93,7 +93,9 @@ def test_status_text_exposes_active_execution_selector():
 
     text = _render_status_text(snapshot, "running", execution)
 
-    assert "Execution: exec-1" in text
+    assert "Active executions" in text
+    assert "Execution" in text
+    assert "exec-1" in text
 
 
 def test_operator_execution_projection_requires_exact_live_evidence():
@@ -151,6 +153,23 @@ def test_old_status_payload_without_live_evidence_is_unverified():
     assert _execution_projection(decoded, None, "running")["state"] == "unverified"
 
 
+def test_unverified_execution_remains_diagnosable_in_active_grid():
+    snapshot = dataclasses.replace(
+        _execution_snapshot("agent_running", None), execution_id=None
+    )
+
+    output = _render_status_text(
+        snapshot,
+        "running",
+        _execution_projection(snapshot, None, "running"),
+    )
+
+    assert "Active executions" in output
+    assert "unverified" in output
+    assert "agent_running" in output
+    assert "Live ownership evidence is unavailable." in output
+
+
 def test_bound_title_does_not_depend_on_execution_plan():
     snapshot = dataclasses.replace(
         _execution_snapshot("agent_running", "worker-launch"),
@@ -183,7 +202,7 @@ def test_idle_snapshot_suppresses_stale_execution_identity():
     assert payload["execution"]["execution_id"] is None
 
 
-def test_current_execution_is_compact_and_wraps_long_title():
+def test_active_execution_is_compact_and_wraps_long_title():
     title = "A very long current execution title " * 8
     snapshot = dataclasses.replace(
         _execution_snapshot("agent_running", "worker-launch"),
@@ -206,10 +225,14 @@ def test_current_execution_is_compact_and_wraps_long_title():
     )
 
     lines = output.splitlines()
-    assert "Current: LAB-1  •  starting" in lines
-    assert "Current execution" not in output
+    assert "Active executions" in lines
+    assert "Current:" not in output
+    assert "LAB-1" in output
+    assert "starting" in output
+    assert "worker-launch" in output
+    assert "exec-1" in output
     assert max(map(len, lines)) <= 88
-    assert sum(line.startswith("  ") for line in lines) > 1
+    assert output.count("LAB-1") == 1
 
 
 def test_missing_title_and_recovery_coordinates_are_not_rendered_as_none():
@@ -225,7 +248,9 @@ def test_missing_title_and_recovery_coordinates_are_not_rendered_as_none():
         _execution_projection(snapshot, None, "stopped"),
     )
 
-    assert "Current: LAB-1  •  recovery-required" in output
+    assert "Active executions" in output
+    assert "recovery-required" in output
+    assert "agent_running" in output
     assert "LAB-1 · None" not in output
     assert "stage=none" not in output.lower()
     assert "execution=none" not in output.lower()
@@ -243,6 +268,7 @@ def test_workflow_is_a_compact_summary_and_empty_eligible_is_omitted():
         in output
     )
     assert "Eligible" not in output
+    assert "Active executions" not in output
 
 
 def test_non_empty_eligible_remains_visible():

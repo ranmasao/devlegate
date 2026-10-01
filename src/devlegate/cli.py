@@ -1760,6 +1760,25 @@ def _short_hash(value: str | None) -> str:
     return (value or "<unknown>")[:12]
 
 
+def _active_execution_grid(execution: dict[str, object]) -> str:
+    """Render one execution as a row that can grow to multiple rows later."""
+    ticket_id = str(execution.get("ticket_id") or "-")
+    state = str(execution.get("state") or "-")
+    stage = str(execution.get("stage") or execution.get("phase") or "-")
+    execution_id = _short_hash(execution.get("execution_id"))
+    title = str(execution.get("ticket_title") or "-")
+    title_lines = textwrap.wrap(title, width=23) or ["-"]
+    rows = [
+        (ticket_id, state, stage, execution_id, title_lines[0]),
+        *[("", "", "", "", line) for line in title_lines[1:]],
+    ]
+    return render_grid(
+        "Active executions",
+        ("Ticket", "State", "Stage", "Execution", "Title"),
+        rows,
+    )
+
+
 def _blocked_reason_text(
     reason: BlockedReason,
 ) -> str:
@@ -1844,28 +1863,9 @@ def _render_status_text(
                 ]
             )
     if execution["state"] != "idle":
-        ticket_id = execution.get("ticket_id")
-        current = (
-            f"Current: {ticket_id}  •  {execution['state']}"
-            if ticket_id
-            else f"Current: {execution['state']}"
-        )
-        lines.extend(["", current])
-        title = execution.get("ticket_title")
-        if title:
-            lines.extend(
-                textwrap.wrap(
-                    str(title),
-                    width=88,
-                    initial_indent="  ",
-                    subsequent_indent="  ",
-                )
-            )
-        execution_id = execution.get("execution_id")
-        if execution_id:
-            lines.append(f"  Execution: {str(execution_id)[:12]}")
+        lines.extend(["", _active_execution_grid(execution)])
         if execution["state"] == "unverified":
-            lines.append("  Live ownership evidence is unavailable.")
+            lines.append("Live ownership evidence is unavailable.")
         elif execution["state"] == "recovery-required":
             diagnostics = tuple(
                 f"{label}={execution[key]}"
@@ -1877,7 +1877,7 @@ def _render_status_text(
                 if execution.get(key) is not None
             )
             lines.append(
-                "  Recovery: "
+                "Recovery: "
                 + (
                     ", ".join(diagnostics)
                     if diagnostics
