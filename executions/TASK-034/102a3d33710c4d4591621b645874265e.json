@@ -1,0 +1,28 @@
+{
+  "code_base_head": "9b87e0c475174de6f2725826f4b5244e3443ae86",
+  "conclusion": "completed",
+  "control_head": "38048bb920f54cc05013337feb7c5ff3ad37a996",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-034",
+  "execution_id": "102a3d33710c4d4591621b645874265e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-034",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-034/102a3d33710c4d4591621b645874265e.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-034",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Bound Debian installation provenance to the exact standalone payload using a SHA-256 digest, with packaging and validation enforcing the binding. Bound Python installer/direct-url provenance to the imported Devlegate package location and added focused identity regressions plus distribution documentation updates."
+  },
+  "workspace_head": "b3e52898b1d5318e227f96a0248f6ede7a7d32da"
+}
