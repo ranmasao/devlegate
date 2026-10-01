@@ -113,3 +113,44 @@ operations.
 - Selector without command fails without side effects.
 - Starting an already-running service remains idempotent.
 - Existing `foreground`, `once`, `stop`, and `restart` regressions stay green.
+
+
+## Review finding: stale startup guidance
+
+Execution `323c891970e644c3a5d351e48e5c7d93` / checkpoint
+`6fcc839eba3bffebc28cfa27bdd0837af7967ca2` correctly implements the
+explicit `devlegate start` command and the commandless side-effect-free path.
+
+The production routing and tests show:
+
+- bare `devlegate` prints help without project/service resolution;
+- selector-only invocation fails before startup;
+- `devlegate start` reuses the previous authoritative startup path;
+- alias and `--env` selection remain exact;
+- existing foreground/once/platform behavior remains intact;
+- GitHub CI run `36829628324` is green:
+  `1069 passed, 1 skipped`, coverage 79%, Ruff green.
+
+One small operator-UX inconsistency remains.
+
+Several daemon-dependent mutation paths in `src/devlegate/cli.py` still emit:
+
+```text
+service is not running for this checkout; start `devlegate`
+```
+
+That advice is now incorrect because bare `devlegate` only prints help.
+
+Update every current user-facing occurrence to point to the explicit command, e.g.:
+
+```text
+service is not running for this checkout; run `devlegate start`
+```
+
+or equivalent concise wording.
+
+The affected paths include retry, drop, recover, and reconciliation commands. Update
+their regression expectations as well so the old hidden-start guidance cannot return.
+
+Do not change startup semantics or broaden the ticket further. Return to review with
+full CI and Ruff green.
