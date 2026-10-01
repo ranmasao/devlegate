@@ -102,3 +102,34 @@ A later parallel-execution task may evolve the machine schema deliberately.
 - Long ticket titles remain readable under existing renderer width rules.
 - JSON/YAML status snapshots are unchanged by the text-only presentation refactor.
 - Existing status/plan agreement tests remain green.
+
+
+## Accepted
+
+Execution `ce13b2508e5e4f7cbc5a15942460eff2` / checkpoint
+`9b87e0c475174de6f2725826f4b5244e3443ae86` satisfies the status
+presentation requirements.
+
+Accepted behavior:
+
+- the singular human-readable `Current:` block is removed;
+- a non-idle execution renders as one `Active executions` grid row with ticket,
+  state, stage/phase, shortened execution ID, and title;
+- long titles wrap within the existing output width;
+- recovery-required and unverified states remain explicitly diagnosable;
+- idle status emits no active-execution row;
+- repository/workflow/review/accepted presentation remains otherwise unchanged;
+- machine-readable JSON/YAML status schema and exit semantics are untouched.
+
+The product diff is presentation-only: `src/devlegate/cli.py` plus focused renderer
+tests.
+
+GitHub CI run `36865815544` is green:
+
+```text
+1070 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+No further review changes are required.
