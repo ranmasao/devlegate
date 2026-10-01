@@ -87,3 +87,111 @@ builder semantics or making CI correctness depend on cache availability.
   outputs.
 - Given GitHub Actions with no restored cache, then the standalone build still
   completes using the normal download path.
+
+
+## Review findings
+
+Execution `fa7cd60739d7402c93140830c33e2fbf` / checkpoint
+`81f80b6ed3671266b7783c5b1fa17e159bc878ab` implements a sound
+content-addressed cache primitive:
+
+- cache entries are addressed by the pinned SHA-256 rather than URL or filename;
+- every hit is re-verified before use;
+- downloads occur in a temporary path under the cache and are atomically published
+  with `os.replace` only after verification;
+- a corrupt entry is never trusted;
+- an interrupted download does not become a cache hit;
+- the cache is outside both A/B build roots;
+- A/B continue to use independent wheel environments and independent `PEX_ROOT`;
+- GitHub Actions persists only the dedicated standalone-input cache directory.
+
+GitHub CI run `36917301255` is green:
+
+```text
+1084 passed, 1 skipped
+coverage: 79%
+Ruff: all checks passed
+```
+
+One scope blocker remains.
+
+### Blocker: PBS and scie-jump immutable inputs are still outside the shared cache
+
+The standalone input set explicitly pins and verifies:
+
+```text
+PBS_ARCHIVE / PBS_SHA256
+SCIE_JUMP_ASSET / SCIE_JUMP_SHA256
+```
+
+Both artifacts are embedded into the eager scie and are verified again by
+`inspect_scie` / `split_scie`.
+
+The candidate cache currently covers:
+
+- the PEX wheel;
+- wheel-build tool wheels;
+- PEX bootstrap wheels;
+- the Science executable.
+
+It does not materialize the pinned PBS archive or scie-jump through
+`cached_input()`, nor otherwise provide those exact cached blobs to the scie build.
+
+Instead each `build_scie()` still invokes PEX/Science with:
+
+```text
+--scie-pbs-release <release>
+--scie-python-version <version>
+--scie-pbs-stripped
+--scie-science-binary <science>
+```
+
+while build A and build B deliberately receive different `PEX_ROOT` values.
+
+Science 0.21's documented build/download model obtains PythonBuildStandalone
+provider artifacts and scie-jump as external inputs and maintains its own download
+cache. Therefore caching only the Science executable does not establish the
+TASK-018 property that A and B may reuse the same verified immutable external blobs
+while keeping their mutable/build state independent.
+
+This is especially relevant because PBS is one of the largest standalone inputs and
+is exactly the kind of repeated pinned download this ticket is intended to avoid.
+
+### Required rework
+
+Extend the immutable-input boundary to cover the pinned PBS archive and scie-jump
+artifact as well, or prove and configure an equivalent shared immutable-only source
+that PEX/Science consumes without sharing mutable build state.
+
+Preserve these constraints:
+
+- do not share `PEX_ROOT`;
+- do not share wheel-build environments, generated wheels, scie outputs, extraction
+  directories, or other mutable intermediates;
+- do not make trust depend on Science/PEX cache metadata or filenames;
+- the Devlegate boundary must still verify the exact pinned SHA-256 before an
+  external blob is trusted as input;
+- a cold cache must retain the existing normal network build behavior;
+- a corrupt or partial cached PBS/scie-jump must be rejected exactly like the
+  already-covered inputs.
+
+If a supported Science/PEX cache mechanism is reused, constrain it so the persisted
+GitHub/local cache still contains only the intended immutable input blobs, or keep a
+Devlegate-owned content-addressed blob cache and feed the verified artifacts through
+a supported local/offline input mechanism. Do not persist the A/B PEX roots as a
+shortcut.
+
+Add regressions demonstrating that:
+
+1. a warm cache supplies the exact pinned PBS and scie-jump without a second network
+   fetch;
+2. corrupt PBS/scie-jump cache entries are rejected before use;
+3. A and B can read the same immutable cached blobs while their `PEX_ROOT`,
+   wheel-build environments, generated wheels, and scie outputs remain distinct;
+4. a cold GitHub Actions/local cache still follows the ordinary verified download
+   path.
+
+The existing cache-hit/corruption/interrupted-download tests should remain.
+
+No change is requested to the overall cache design; the remaining issue is coverage
+of the complete pinned standalone external-input boundary.
