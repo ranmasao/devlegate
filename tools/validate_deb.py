@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -148,8 +149,18 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
         raise PackageError(
             "Debian package lacks installation provenance marker"
         ) from error
-    if marker_value != {"distribution": "debian", "package": "devlegate"}:
+    if not isinstance(marker_value, dict) or (
+        marker_value.get("distribution") != "debian"
+        or marker_value.get("package") != "devlegate"
+    ):
         raise PackageError("Debian installation provenance marker is invalid")
+    payload_digest = marker_value.get("payload_sha256")
+    if not isinstance(payload_digest, str) or len(payload_digest) != 64:
+        raise PackageError("Debian installation provenance marker is invalid")
+    if any(character not in "0123456789abcdef" for character in payload_digest):
+        raise PackageError("Debian installation provenance marker is invalid")
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != payload_digest:
+        raise PackageError("Debian installation provenance does not match payload")
     embedded_archives = list(documentation.rglob("*.tar.gz")) + list(
         documentation.rglob("*.tar.gz.sha256")
     )

@@ -5,13 +5,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
 from importlib import metadata
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
+import devlegate
 from devlegate import __version__
 
 
@@ -40,13 +44,65 @@ def _debian_marker(executable: Path) -> bool:
         value = json.loads(marker.read_text(encoding="ascii"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
-    return value == {"distribution": "debian", "package": "devlegate"}
+    if not isinstance(value, dict):
+        return False
+    if value.get("distribution") != "debian" or value.get("package") != (
+        "devlegate"
+    ):
+        return False
+    digest = value.get("payload_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        return False
+    if any(character not in "0123456789abcdef" for character in digest):
+        return False
+    try:
+        observed = hashlib.sha256(executable.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return observed == digest
+
+
+def _metadata_matches_package(distribution: metadata.Distribution) -> bool:
+    """Prove that distribution metadata describes the imported package."""
+    package_file = Path(devlegate.__file__).resolve()
+    files = distribution.files
+    if files:
+        expected = distribution.locate_file(Path("devlegate") / "__init__.py")
+        if expected.resolve() == package_file:
+            return True
+
+    direct_url = distribution.read_text("direct_url.json")
+    if not direct_url:
+        return False
+    try:
+        direct = json.loads(direct_url)
+    except json.JSONDecodeError:
+        return False
+    info = direct.get("dir_info") if isinstance(direct, dict) else None
+    if not isinstance(info, dict) or info.get("editable") is not True:
+        return False
+    url = direct.get("url") if isinstance(direct, dict) else None
+    if not isinstance(url, str) or urlparse(url).scheme != "file":
+        return False
+    source_root = Path(url2pathname(unquote(urlparse(url).path))).resolve()
+    try:
+        package_file.relative_to(source_root)
+    except ValueError:
+        return False
+    return package_file.is_file()
 
 
 def _package_identity() -> dict[str, Any]:
     try:
         distribution = metadata.distribution("devlegate")
     except metadata.PackageNotFoundError:
+        return {
+            "form": "python-package",
+            "installer": "unknown",
+            "editable": "unknown",
+            "direct_url": "unknown",
+        }
+    if not _metadata_matches_package(distribution):
         return {
             "form": "python-package",
             "installer": "unknown",

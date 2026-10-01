@@ -133,7 +133,17 @@ def package(
             ):
                 shutil.copy2(extracted / name, documentation / name)
             (documentation / "INSTALLATION-PROVENANCE.json").write_text(
-                '{"distribution":"debian","package":"devlegate"}\n',
+                json.dumps(
+                    {
+                        "distribution": "debian",
+                        "package": "devlegate",
+                        "payload_sha256": hashlib.sha256(
+                            binary.read_bytes()
+                        ).hexdigest(),
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
                 encoding="ascii",
             )
             shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")

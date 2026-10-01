@@ -111,10 +111,12 @@ Runtime identity uses only evidence owned by the relevant distribution boundary:
 - Standalone invocations are proven only when the PEX and SCIE environment
   values identify the same executable ELF artifact. A standalone executable
   reports Debian installation only when the Debian package marker at
-  `usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json` is present and exact;
-  its absence is `unknown`, not portable-path inference.
-- Debian packaging writes and validates that marker while copying the validated
-  standalone payload. The marker is not part of the standalone archive.
+  `usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json` contains a SHA-256
+  digest matching that exact executable; a missing, malformed, stale, or
+  mismatching marker is `unknown`, not portable-path inference.
+- Debian packaging writes and validates that payload-bound marker while copying
+  the validated standalone payload. The marker is not part of the standalone
+  archive.
 
 `devlegate --version` is the concise `program version` probe. `devlegate version`
 is the project-independent diagnostic banner and its JSON/YAML forms contain the

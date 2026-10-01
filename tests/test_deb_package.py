@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -65,7 +66,15 @@ def make_package(
     ):
         (doc / name).write_text(f"{name}\n", encoding="ascii")
     (doc / "INSTALLATION-PROVENANCE.json").write_text(
-        '{"distribution":"debian","package":"devlegate"}\n', encoding="ascii"
+        json.dumps(
+            {
+                "distribution": "debian",
+                "package": "devlegate",
+                "payload_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            }
+        )
+        + "\n",
+        encoding="ascii",
     )
     licenses = doc / "LICENSES"
     licenses.mkdir()
