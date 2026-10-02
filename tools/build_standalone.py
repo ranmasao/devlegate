@@ -1043,9 +1043,12 @@ def build(args: argparse.Namespace, emit=None) -> int:
         root = Path(temporary)
         tools = root / "tools"
         with progress_stage(emit, semantic_plan()[0]):
-            pex_wheel, pex_runtime, tool_wheels, assets_base_url = download_packaging_tools(
-                args.python, tools
-            )
+            (
+                pex_wheel,
+                pex_runtime,
+                tool_wheels,
+                assets_base_url,
+            ) = download_packaging_tools(args.python, tools)
         build_a_root = root / "build-a"
         build_b_root = root / "build-b"
         if supplied_wheel is None:

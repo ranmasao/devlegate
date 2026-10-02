@@ -5,8 +5,11 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -209,6 +212,93 @@ def test_standalone_assets_match_science_download_mirror_layout(tmp_path, monkey
     assert metadata["assets"][0]["target_triple"] == BUILDER.PBS_TARGET_TRIPLE
 
 
+def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
+    cache_name = os.environ.get("DEVLEGATE_STANDALONE_INTEGRATION_CACHE")
+    if not cache_name:
+        pytest.skip(
+            "set DEVLEGATE_STANDALONE_INTEGRATION_CACHE for toolchain integration"
+        )
+    cache = Path(cache_name)
+    expected_digests = [
+        BUILDER.PEX_SHA256,
+        BUILDER.SCIENCE_SHA256,
+        BUILDER.PBS_SHA256,
+        BUILDER.SCIE_JUMP_SHA256,
+        *(digest for _, digest in BUILDER.WHEEL_BUILD_TOOLS.values()),
+        *(digest for _, digest in BUILDER.PEX_BOOTSTRAP_TOOLS.values()),
+    ]
+    if any(not (cache / digest).is_file() for digest in expected_digests):
+        pytest.skip("the pinned standalone integration cache is not warm")
+    for digest in expected_digests:
+        try:
+            BUILDER.verify_file(cache / digest, digest)
+        except BUILDER.BuildError:
+            pytest.skip("the pinned standalone integration cache is not warm")
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+
+    requests = []
+
+    class UpstreamDenied(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_error(503, "upstream access is forbidden in this test")
+
+        def log_message(self, _format, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamDenied)
+    server_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        for variable in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+            monkeypatch.setenv(variable, server_url)
+        monkeypatch.setenv("NO_PROXY", "")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        tools = tmp_path / "tools"
+        _pex_wheel, pex_runtime, _tool_wheels, assets_url = (
+            BUILDER.download_packaging_tools(sys.executable, tools)
+        )
+        assets = Path(assets_url.removeprefix("file://"))
+        metadata = next(assets.glob("providers/*/download/*/distributions-*.json"))
+        provider_metadata = json.loads(metadata.read_text())
+        provider_metadata["base_url"] = server_url
+        metadata.write_text(json.dumps(provider_metadata, indent=2) + "\n")
+
+        wheel = tmp_path / "devlegate-0.5.6.dev0-py3-none-any.whl"
+        with ZipFile(wheel, "w") as archive:
+            archive.writestr("devlegate/__init__.py", "")
+            archive.writestr(
+                "devlegate/cli.py", "def main():\n    return 0\n"
+            )
+            archive.writestr(
+                "devlegate-0.5.6.dev0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: devlegate\nVersion: 0.5.6.dev0\n",
+            )
+            archive.writestr(
+                "devlegate-0.5.6.dev0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nGenerator: test\n"
+                "Root-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+
+        artifact = tmp_path / "devlegate.scie"
+        BUILDER.build_scie(
+            wheel,
+            tmp_path,
+            tools,
+            pex_runtime,
+            sys.executable,
+            artifact,
+            tools / BUILDER.SCIENCE_ASSET,
+            assets_url,
+            tmp_path / "build",
+            "0",
+        )
+        assert artifact.is_file()
+        assert requests == []
+    finally:
+        server.shutdown()
+
+
 def test_scie_command_pins_runtime_inputs(tmp_path):
     wheel = tmp_path / "devlegate.whl"
     with ZipFile(wheel, "w") as archive:
@@ -266,7 +356,9 @@ def test_build_environment_uses_isolated_pex_root(tmp_path):
 
 def test_scie_builds_share_assets_but_not_pex_roots(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(BUILDER, "project_version_from_wheel", lambda _wheel: "0.5.6.dev0")
+    monkeypatch.setattr(
+        BUILDER, "project_version_from_wheel", lambda _wheel: "0.5.6.dev0"
+    )
 
     def fake_run(command, *, env=None, cwd=None):
         calls.append((command, env))
