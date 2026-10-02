@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "116de834e0a1e7a1e0943e6d594bef9f56b2755a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "986cc3c6ec0b4440987c0b1272a6e10a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-018/986cc3c6ec0b4440987c0b1272a6e10a.md",
+  "report_sha256": "0a446390ebaf9f85a3dc9141507190efdd21e123d94b372bcc60cc60743d8da9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the remaining standalone immutable-input consumer boundary fix. Focused standalone tests, repository tests, and Ruff checks for src/tests/tools pass; full-repository Ruff still reports pre-existing vendored PEX violations outside the changed scope.",
+    "summary": "Extended standalone asset consumption so pinned Science builds use the verified cached PBS and scie-jump blobs through a disposable loopback HTTP mirror, with an explicit Science --use-jump wrapper for build-time acquisition. Preserved independent A/B build roots and PEX_ROOT state, and updated the real consumer-boundary regression to deny external access while exercising the pinned PEX/Science path."
+  },
+  "workspace_head": "a8f162a70895e59e9b7f3aae308a7e8882cde607"
+}
