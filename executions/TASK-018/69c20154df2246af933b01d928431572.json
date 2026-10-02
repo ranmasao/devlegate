@@ -1,0 +1,32 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "incomplete",
+  "control_head": "97ca7e4eca81135aa025a7e77f83ccc2279dd791",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "69c20154df2246af933b01d928431572",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve the real PEX/Science consumer-boundary request to github.com:443 despite the local mirror manifest, then run the integration regression and full CI validation."
+  ],
+  "report_artifact": "executions/TASK-018/69c20154df2246af933b01d928431572.md",
+  "report_sha256": "b90b505c36f988bd8055e9a8af44c812df4248dc0e2221dd6ab027d8ca7104f7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve the real PEX/Science consumer-boundary request to github.com:443 despite the local mirror manifest, then run the integration regression and full CI validation."
+    ],
+    "report": "The non-integration standalone builder regressions pass and Ruff is clean. The real integration now runs instead of skipping, but currently fails closed because Science attempts an upstream github.com:443 request under the denial fixture.",
+    "summary": "Updated the real PEX/Science integration regression to self-prepare a dedicated temporary immutable-input cache on cold CI runs, while reusing a supplied cache when available. Added valid wheel RECORD metadata needed by the pinned PEX consumer path."
+  },
+  "workspace_head": "6717af1c4d284352cf55f8c1b67e4b3538f7278e"
+}
