@@ -1,7 +1,6 @@
 ---
 "type": "devlegate.ticket"
 "title": "Add forced retry across changed descendant ticket generations"
-"depends_on": []
 ---
 
 ## Milestone
