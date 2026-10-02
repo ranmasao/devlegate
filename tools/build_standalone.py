@@ -17,10 +17,13 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 try:
@@ -293,6 +296,33 @@ def download_url_to(path: Path, url: str) -> None:
         shutil.copyfileobj(response, destination)
 
 
+@contextlib.contextmanager
+def serve_asset_mirror(assets_base_url: str):
+    """Serve the disposable mirror over the HTTP transport Science supports."""
+    if not assets_base_url.startswith("file://"):
+        yield assets_base_url
+        return
+
+    directory = Path(assets_base_url.removeprefix("file://"))
+    handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        mirror_url = f"http://127.0.0.1:{server.server_port}"
+        for metadata in directory.glob(
+            f"providers/{PBS_PROVIDER}/download/*/distributions-*.json"
+        ):
+            content = json.loads(metadata.read_text())
+            content["base_url"] = f"{mirror_url}/providers/{PBS_PROVIDER}"
+            metadata.write_text(json.dumps(content, indent=2, sort_keys=True) + "\n")
+        yield mirror_url
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def materialize_standalone_assets(directory: Path) -> str:
     pbs = cached_input(
         PBS_ARCHIVE,
@@ -318,6 +348,9 @@ def materialize_standalone_assets(directory: Path) -> str:
     jump_dir = assets / "jump" / "download" / f"v{SCIE_JUMP_VERSION}"
     jump_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(scie_jump, jump_dir / SCIE_JUMP_ASSET)
+    (jump_dir / SCIE_JUMP_ASSET).chmod(
+        (jump_dir / SCIE_JUMP_ASSET).stat().st_mode | stat.S_IXUSR
+    )
     (jump_dir / f"{SCIE_JUMP_ASSET}.sha256").write_text(
         f"{SCIE_JUMP_SHA256} *{SCIE_JUMP_ASSET}\n"
     )
@@ -362,6 +395,37 @@ def materialize_standalone_assets(directory: Path) -> str:
         + "\n"
     )
     return assets.as_uri()
+
+
+def science_offline_wrapper(
+    science: Path, assets_base_url: str, build_root: Path
+) -> Path:
+    """Force Science lift builds to use the verified local scie-jump blob."""
+    if not assets_base_url.startswith("file://"):
+        return science
+    jump = (
+        Path(assets_base_url.removeprefix("file://"))
+        / "jump"
+        / "download"
+        / f"v{SCIE_JUMP_VERSION}"
+        / SCIE_JUMP_ASSET
+    )
+    wrapper = build_root / "science-offline-wrapper.py"
+    build_root.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import subprocess\n"
+        "import sys\n"
+        f"command = {str(science)!r}\n"
+        f"jump = {str(jump)!r}\n"
+        "args = list(sys.argv[1:])\n"
+        "if 'build' in args:\n"
+        "    index = args.index('build') + 1\n"
+        "    args[index:index] = ['--use-jump', jump]\n"
+        "raise SystemExit(subprocess.call([command, *args]))\n"
+    )
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    return wrapper
 
 
 def build_wheel(repo: Path, output: Path, python: str, epoch: str) -> Path:
@@ -531,18 +595,20 @@ def build_scie(
         "PYTHONPATH": str(pex_runtime),
         **build_environment(build_root, epoch),
     }
-    run(
-        scie_command(
-            python,
-            wheel,
-            wheel_dir,
-            tools_dir,
-            artifact,
-            science,
-            assets_base_url,
-        ),
-        env=environment,
-    )
+    science = science_offline_wrapper(science, assets_base_url, build_root)
+    with serve_asset_mirror(assets_base_url) as science_assets_base_url:
+        run(
+            scie_command(
+                python,
+                wheel,
+                wheel_dir,
+                tools_dir,
+                artifact,
+                science,
+                science_assets_base_url,
+            ),
+            env=environment,
+        )
     if not artifact.is_file() or not artifact.stat().st_mode & stat.S_IXUSR:
         raise BuildError(f"scie artifact is not executable: {artifact}")
     return artifact

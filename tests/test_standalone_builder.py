@@ -258,19 +258,13 @@ def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
     try:
         for variable in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
             monkeypatch.setenv(variable, server_url)
-        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         tools = tmp_path / "tools"
         _pex_wheel, pex_runtime, _tool_wheels, assets_url = (
             BUILDER.download_packaging_tools(sys.executable, tools)
         )
-        assets = Path(assets_url.removeprefix("file://"))
-        metadata = next(assets.glob("providers/*/download/*/distributions-*.json"))
-        provider_metadata = json.loads(metadata.read_text())
-        provider_metadata["base_url"] = server_url
-        metadata.write_text(json.dumps(provider_metadata, indent=2) + "\n")
-
         wheel = tmp_path / "devlegate-0.5.6.dev0-py3-none-any.whl"
         with ZipFile(wheel, "w") as archive:
             archive.writestr("devlegate/__init__.py", "")
@@ -403,9 +397,12 @@ def test_scie_builds_share_assets_but_not_pex_roots(tmp_path, monkeypatch):
         tmp_path / "build-b" / "scie", tmp_path / "science", common[5],
         tmp_path / "build-b", common[6]
     )
-    assert calls[0][0][calls[0][0].index("--scie-assets-base-url") + 1] == calls[1][0][
-        calls[1][0].index("--scie-assets-base-url") + 1
-    ]
+    assert calls[0][0][calls[0][0].index("--scie-assets-base-url") + 1].startswith(
+        "http://127.0.0.1:"
+    )
+    assert calls[1][0][calls[1][0].index("--scie-assets-base-url") + 1].startswith(
+        "http://127.0.0.1:"
+    )
     assert calls[0][1]["PEX_ROOT"] != calls[1][1]["PEX_ROOT"]
 
 
