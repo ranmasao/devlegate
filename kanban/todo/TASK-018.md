@@ -480,3 +480,202 @@ needed by the real PEX path.
 
 Return to review only after the real pinned PEX/Science build succeeds under the
 denial fixture and full CI, coverage, and Ruff are green.
+
+
+### Detailed executor instructions for the remaining upstream fetch
+
+Do not make another speculative mirror-layout change first. The next pass must
+isolate the network consumer and compare Devlegate's synthesized mirror against a
+reference mirror emitted by the exact pinned Science binary.
+
+Science 0.21 documents two important contracts:
+
+- `science download provider PythonBuildStandalone ... DEST_DIR` creates the
+  supported offline provider mirror;
+- the PythonBuildStandalone provider's `base_url` is expected to point at the
+  `providers/PythonBuildStandalone` subdirectory of such a mirror.
+
+Use those contracts as the diagnostic oracle instead of guessing filenames or JSON
+shape.
+
+#### Phase 1: produce a reference mirror with pinned Science
+
+During the preparation phase, before upstream denial is enabled:
+
+1. obtain the exact pinned Science 0.21.0 binary through the existing verified
+   Devlegate cache path;
+2. in a fresh temporary directory, invoke that exact binary directly to create a
+   reference mirror for the exact assets Devlegate pins:
+
+   ```text
+   science download scie-jump
+       --version 1.13.0
+       <reference-root>
+
+   science download provider PythonBuildStandalone
+       --version 3.12.14
+       --release 20260901
+       --flavor install_only_stripped
+       <reference-root>
+   ```
+
+   Include the existing platform/libc selectors if Science requires them to select
+   exactly `x86_64-unknown-linux-gnu`.
+
+3. record the complete relative file tree beneath `<reference-root>`;
+4. parse and record every generated provider metadata file relevant to the selected
+   PBS distribution;
+5. record the exact relative path and checksum-sidecar syntax for scie-jump and PBS.
+
+Do not commit downloaded binaries or generated reference files to the repository.
+They are ephemeral integration-test evidence.
+
+#### Phase 2: compare reference mirror to Devlegate mirror
+
+Using the already verified blobs from the Devlegate SHA-addressed cache, call
+`materialize_standalone_assets()` into a separate directory.
+
+Compare the two mirrors structurally and semantically. At minimum compare:
+
+- relative paths;
+- provider metadata filenames;
+- JSON keys and nesting;
+- `base_url` semantics;
+- `release`;
+- `version`;
+- `flavor` if present;
+- `target_triple`;
+- distribution `rel_path`;
+- digest representation;
+- size representation;
+- checksum-sidecar filenames and contents;
+- scie-jump release directory and asset filename.
+
+The test need not require byte-identical JSON formatting or key order. It must prove
+that every field/path consumed by Science has the same semantics as the reference
+mirror.
+
+If the two differ, fix Devlegate's mirror producer to reproduce the pinned Science
+contract. Do not invent a new private mirror format.
+
+#### Phase 3: test Science directly as a consumer
+
+Before involving PEX, prove that pinned Science itself can consume the Devlegate
+mirror with upstream access denied.
+
+Create a minimal Science operation using the exact provider selection and scie-jump
+version required by the standalone build. Configure its provider base explicitly to:
+
+```text
+<devlegate-mirror>/providers/PythonBuildStandalone
+```
+
+and configure the jump/mirror base through the documented Science mechanism used by
+the reference mirror.
+
+Then enable the denial proxy and run the pinned Science command directly.
+
+Expected result:
+
+```text
+pinned Science
+  -> Devlegate mirror
+  -> PBS local
+  -> scie-jump local
+  -> zero external requests
+```
+
+If this direct Science test performs external access, the bug is in the mirror or in
+how Science is configured. Fix that before testing PEX.
+
+#### Phase 4: test PEX forwarding separately
+
+Only after Phase 3 passes, run the pinned PEX 2.103.2 command that Devlegate actually
+uses, with `--scie-assets-base-url` pointing at the same Devlegate mirror and with
+upstream denial enabled.
+
+This distinguishes:
+
+```text
+Science consumes mirror correctly
+but
+PEX invocation still reaches network
+```
+
+from:
+
+```text
+Science itself cannot consume our mirror
+```
+
+If Science passes but PEX fails, inspect the exact PEX-generated Science invocation
+or manifest. Capture command/stderr/provenance sufficient to prove whether PEX:
+
+- fails to forward the mirror base;
+- rewrites the provider base URL;
+- requests another build-time asset;
+- invokes a second Science/bootstrap path with different configuration.
+
+Do not paper over this by allowing `github.com` through the proxy.
+
+#### Phase 5: make the denial fixture diagnostically useful
+
+A CONNECT-only log that says merely:
+
+```text
+github.com:443
+```
+
+is insufficient evidence for another implementation change.
+
+Instrument at the highest practical layer before HTTPS encryption. Prefer, in this
+order:
+
+1. capture the exact Science command/manifest generated by PEX;
+2. run the pinned Science binary directly with verbose/debug output if available;
+3. inspect the generated Science lift/provider manifest for every URL/base URL;
+4. if necessary, substitute distinct local/unreachable base URLs for each known
+   external input class during the diagnostic test so the failing class is
+   unambiguous.
+
+The executor must identify the requested resource class before changing production
+code.
+
+#### Known input classes to account for
+
+The final standalone build boundary currently includes at least:
+
+- PEX wheel;
+- wheel-build tool wheels;
+- PEX bootstrap wheels;
+- Science executable;
+- PythonBuildStandalone archive;
+- scie-jump executable.
+
+If the real consumer requests another immutable external artifact, add it explicitly
+to the inventory, pin its identity/digest, and route it through the same
+Devlegate-owned immutable cache model. Do not silently broaden the persisted cache to
+PEX_ROOT, Science's mutable cache, generated scies, wheels, or other intermediates.
+
+#### Required final regressions
+
+Return to review only when all of the following are true:
+
+1. a reference-mirror regression demonstrates that Devlegate's synthesized mirror
+   matches the relevant contract emitted by pinned Science 0.21.0;
+2. pinned Science directly consumes the Devlegate mirror under upstream denial;
+3. pinned PEX 2.103.2 consumes the same mirror through the production
+   `--scie-assets-base-url` path under upstream denial;
+4. the integration tests execute in normal supported Linux CI and do not skip;
+5. a cold CI run can prepare all pinned fixtures through verified downloads before
+   denial is enabled;
+6. a warm run performs no external download for the pinned immutable standalone
+   inputs;
+7. A/B retain separate temporary roots, wheel environments, PEX_ROOT, generated
+   wheels, and scie outputs;
+8. corrupt cached input still fails verification and is never admitted;
+9. full pytest, coverage, and Ruff are green.
+
+Do not return `completed` merely because a guessed mirror layout looks plausible.
+The acceptance boundary is the real pinned consumer path succeeding with external
+access denied.
