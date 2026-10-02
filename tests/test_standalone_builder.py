@@ -214,11 +214,8 @@ def test_standalone_assets_match_science_download_mirror_layout(tmp_path, monkey
 
 def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
     cache_name = os.environ.get("DEVLEGATE_STANDALONE_INTEGRATION_CACHE")
-    if not cache_name:
-        pytest.skip(
-            "set DEVLEGATE_STANDALONE_INTEGRATION_CACHE for toolchain integration"
-        )
-    cache = Path(cache_name)
+    cache = Path(cache_name) if cache_name else tmp_path / "integration-cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
     expected_digests = [
         BUILDER.PEX_SHA256,
         BUILDER.SCIENCE_SHA256,
@@ -227,19 +224,29 @@ def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
         *(digest for _, digest in BUILDER.WHEEL_BUILD_TOOLS.values()),
         *(digest for _, digest in BUILDER.PEX_BOOTSTRAP_TOOLS.values()),
     ]
-    if any(not (cache / digest).is_file() for digest in expected_digests):
-        pytest.skip("the pinned standalone integration cache is not warm")
+    cache_ready = True
     for digest in expected_digests:
+        if not (cache / digest).is_file():
+            cache_ready = False
+            break
         try:
             BUILDER.verify_file(cache / digest, digest)
         except BUILDER.BuildError:
-            pytest.skip("the pinned standalone integration cache is not warm")
-    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+            cache_ready = False
+            break
+    if not cache_ready:
+        BUILDER.download_packaging_tools(sys.executable, tmp_path / "prepare-tools")
+    for digest in expected_digests:
+        BUILDER.verify_file(cache / digest, digest)
 
     requests = []
 
     class UpstreamDenied(BaseHTTPRequestHandler):
         def do_GET(self):
+            requests.append(self.path)
+            self.send_error(503, "upstream access is forbidden in this test")
+
+        def do_CONNECT(self):
             requests.append(self.path)
             self.send_error(503, "upstream access is forbidden in this test")
 
@@ -278,6 +285,14 @@ def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
                 "devlegate-0.5.6.dev0.dist-info/WHEEL",
                 "Wheel-Version: 1.0\nGenerator: test\n"
                 "Root-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+            archive.writestr(
+                "devlegate-0.5.6.dev0.dist-info/RECORD",
+                "devlegate/__init__.py,,\n"
+                "devlegate/cli.py,,\n"
+                "devlegate-0.5.6.dev0.dist-info/METADATA,,\n"
+                "devlegate-0.5.6.dev0.dist-info/WHEEL,,\n"
+                "devlegate-0.5.6.dev0.dist-info/RECORD,,\n",
             )
 
         artifact = tmp_path / "devlegate.scie"
