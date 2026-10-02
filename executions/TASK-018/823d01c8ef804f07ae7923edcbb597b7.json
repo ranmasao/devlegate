@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "6f8a8faa074dd488fbffb50533c085e577265fe4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "823d01c8ef804f07ae7923edcbb597b7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a real pinned PEX/Science integration regression that uses a verified warm immutable-input cache, denies upstream access through a local proxy fixture, and confirms the Science-compatible mirror is consumed without network fallback. Fixed standalone builder and test lint violations while preserving the existing cache and independent build-root design."
+  },
+  "workspace_head": "ce35a819a9cfbaca70cd6bd75de2ee3c519b28e2"
+}
