@@ -84,6 +84,7 @@ PBS_PYTHON_VERSION = "3.12.14"
 PBS_ARCHIVE = (
     "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 )
+PBS_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
 PBS_SHA256 = "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
 SCIENCE_VERSION = "0.21.0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
@@ -314,10 +315,52 @@ def materialize_standalone_assets(directory: Path) -> str:
         ),
     )
     assets = directory / "science-assets"
-    (assets / "jump").mkdir(parents=True, exist_ok=True)
-    (assets / "providers" / PBS_PROVIDER).mkdir(parents=True, exist_ok=True)
-    shutil.copy2(scie_jump, assets / "jump" / SCIE_JUMP_ASSET)
-    shutil.copy2(pbs, assets / "providers" / PBS_PROVIDER / PBS_ARCHIVE)
+    jump_dir = assets / "jump" / "download" / f"v{SCIE_JUMP_VERSION}"
+    jump_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(scie_jump, jump_dir / SCIE_JUMP_ASSET)
+    (jump_dir / f"{SCIE_JUMP_ASSET}.sha256").write_text(
+        f"{SCIE_JUMP_SHA256} *{SCIE_JUMP_ASSET}\n"
+    )
+
+    provider_dir = (
+        assets
+        / "providers"
+        / PBS_PROVIDER
+        / "download"
+        / PBS_RELEASE
+    )
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(pbs, provider_dir / PBS_ARCHIVE)
+    (provider_dir / f"{PBS_ARCHIVE}.sha256").write_text(
+        f"{PBS_SHA256}  {PBS_ARCHIVE}\n"
+    )
+    metadata = provider_dir / (
+        f"distributions-{PBS_PYTHON_VERSION}-install_only_stripped.json"
+    )
+    metadata.write_text(
+        json.dumps(
+            {
+                "base_url": "https://github.com/astral-sh/python-build-standalone/releases",
+                "release": PBS_RELEASE,
+                "assets": [
+                    {
+                        "digest": {
+                            "fingerprint": PBS_SHA256,
+                            "size": pbs.stat().st_size,
+                        },
+                        "file_type": "tar.gz",
+                        "name": PBS_ARCHIVE,
+                        "rel_path": f"download/{PBS_RELEASE}/{PBS_ARCHIVE}",
+                        "target_triple": PBS_TARGET_TRIPLE,
+                        "version": PBS_PYTHON_VERSION,
+                    }
+                ],
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
     return assets.as_uri()
 
 

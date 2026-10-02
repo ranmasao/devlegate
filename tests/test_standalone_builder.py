@@ -110,10 +110,33 @@ def test_standalone_assets_use_cached_pbs_and_scie_jump(tmp_path, monkeypatch):
     monkeypatch.setattr(BUILDER, "download_url_to", fail_download)
     assets_url = BUILDER.materialize_standalone_assets(tmp_path / "tools")
     assets = Path(assets_url.removeprefix("file://"))
-    assert (assets / "jump" / BUILDER.SCIE_JUMP_ASSET).read_bytes() == jump
     assert (
-        assets / "providers" / BUILDER.PBS_PROVIDER / BUILDER.PBS_ARCHIVE
+        assets
+        / "jump"
+        / "download"
+        / f"v{BUILDER.SCIE_JUMP_VERSION}"
+        / BUILDER.SCIE_JUMP_ASSET
+    ).read_bytes() == jump
+    assert (
+        assets
+        / "providers"
+        / BUILDER.PBS_PROVIDER
+        / "download"
+        / BUILDER.PBS_RELEASE
+        / BUILDER.PBS_ARCHIVE
     ).read_bytes() == pbs
+    metadata = (
+        assets
+        / "providers"
+        / BUILDER.PBS_PROVIDER
+        / "download"
+        / BUILDER.PBS_RELEASE
+        / f"distributions-{BUILDER.PBS_PYTHON_VERSION}-install_only_stripped.json"
+    )
+    assert (
+        json.loads(metadata.read_text())["assets"][0]["digest"]["fingerprint"]
+        == pbs_digest
+    )
 
 
 def test_standalone_assets_reject_corrupt_cache_and_redownload(tmp_path, monkeypatch):
@@ -139,6 +162,51 @@ def test_standalone_assets_reject_corrupt_cache_and_redownload(tmp_path, monkeyp
     assert len(downloads) == 2
     assert (cache / pbs_digest).read_bytes() == pbs
     assert (cache / jump_digest).read_bytes() == jump
+
+
+def test_standalone_assets_match_science_download_mirror_layout(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+    pbs = b"pbs"
+    jump = b"jump"
+    pbs_digest = hashlib.sha256(pbs).hexdigest()
+    jump_digest = hashlib.sha256(jump).hexdigest()
+    cache.mkdir()
+    (cache / pbs_digest).write_bytes(pbs)
+    (cache / jump_digest).write_bytes(jump)
+    monkeypatch.setattr(BUILDER, "PBS_SHA256", pbs_digest)
+    monkeypatch.setattr(BUILDER, "SCIE_JUMP_SHA256", jump_digest)
+    monkeypatch.setattr(BUILDER, "download_url_to", lambda *_: pytest.fail("download"))
+
+    assets = Path(
+        BUILDER.materialize_standalone_assets(tmp_path / "tools").removeprefix("file://")
+    )
+    jump_path = (
+        assets
+        / "jump"
+        / "download"
+        / f"v{BUILDER.SCIE_JUMP_VERSION}"
+        / BUILDER.SCIE_JUMP_ASSET
+    )
+    provider_path = (
+        assets
+        / "providers"
+        / BUILDER.PBS_PROVIDER
+        / "download"
+        / BUILDER.PBS_RELEASE
+        / BUILDER.PBS_ARCHIVE
+    )
+    metadata = json.loads(
+        provider_path.with_name(
+            f"distributions-{BUILDER.PBS_PYTHON_VERSION}-install_only_stripped.json"
+        ).read_text()
+    )
+    assert jump_path.is_file()
+    assert provider_path.is_file()
+    assert metadata["assets"][0]["rel_path"] == (
+        f"download/{BUILDER.PBS_RELEASE}/{BUILDER.PBS_ARCHIVE}"
+    )
+    assert metadata["assets"][0]["target_triple"] == BUILDER.PBS_TARGET_TRIPLE
 
 
 def test_scie_command_pins_runtime_inputs(tmp_path):
