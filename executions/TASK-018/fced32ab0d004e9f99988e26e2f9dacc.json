@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "ef3386ac3d73166cae8488a241e5f2ba76a33ce5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "fced32ab0d004e9f99988e26e2f9dacc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-018/fced32ab0d004e9f99988e26e2f9dacc.md",
+  "report_sha256": "d46e490113ed71a120231e0172ecf87e6a37fa51338b641ebab2ae2a12d5d2f2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the remaining standalone immutable-input boundary rework in tools/build_standalone.py and tests/test_standalone_builder.py. Focused standalone builder tests pass; repository lint still reports only pre-existing E501 violations outside the changed lines.",
+    "summary": "Materialized the verified PBS and scie-jump blobs into the exact Science 0.21 mirror layout, including the PBS distribution manifest and checksum sidecars. Updated regressions to verify warm-cache use and Science-compatible paths while preserving independent A/B build state."
+  },
+  "workspace_head": "cdc754f631abd0e336cbbe3dcc06698ed299b0e5"
+}
