@@ -308,6 +308,149 @@ def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
         server.shutdown()
 
 
+def _prepare_standalone_cache(tmp_path, monkeypatch):
+    cache = tmp_path / "integration-cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+    BUILDER.download_packaging_tools(sys.executable, tmp_path / "prepare-tools")
+    return cache
+
+
+def _science_binary(tmp_path):
+    tools = tmp_path / "science-tools"
+    BUILDER.download_packaging_tools(sys.executable, tools)
+    return tools / BUILDER.SCIENCE_ASSET
+
+
+def test_standalone_assets_match_pinned_science_reference_mirror(
+    tmp_path, monkeypatch
+):
+    _prepare_standalone_cache(tmp_path, monkeypatch)
+    science = _science_binary(tmp_path)
+    reference = tmp_path / "reference"
+    BUILDER.run(
+        [
+            str(science),
+            "download",
+            "scie-jump",
+            "--version",
+            BUILDER.SCIE_JUMP_VERSION,
+            str(reference),
+        ]
+    )
+    BUILDER.run(
+        [
+            str(science),
+            "download",
+            "provider",
+            BUILDER.PBS_PROVIDER,
+            "--version",
+            BUILDER.PBS_PYTHON_VERSION,
+            "--release",
+            BUILDER.PBS_RELEASE,
+            "--flavor",
+            "install_only_stripped",
+            "--libc",
+            "gnu",
+            str(reference),
+        ]
+    )
+
+    actual = Path(
+        BUILDER.materialize_standalone_assets(tmp_path / "actual").removeprefix("file://")
+    )
+    actual_provider = actual / "providers" / BUILDER.PBS_PROVIDER
+    reference_provider = reference / "providers" / BUILDER.PBS_PROVIDER
+    actual_metadata = next(actual_provider.glob("**/distributions-*.json"))
+    reference_metadata = next(reference_provider.glob("**/distributions-*.json"))
+    actual_data = json.loads(actual_metadata.read_text())
+    reference_data = json.loads(reference_metadata.read_text())
+    actual_asset = next(
+        asset for asset in actual_data["assets"] if asset["name"] == BUILDER.PBS_ARCHIVE
+    )
+    reference_asset = next(
+        asset
+        for asset in reference_data["assets"]
+        if asset["name"] == BUILDER.PBS_ARCHIVE
+    )
+    assert actual_asset["digest"] == reference_asset["digest"]
+    assert actual_asset["file_type"] == reference_asset["file_type"]
+    assert actual_asset["name"] == reference_asset["name"]
+    assert actual_asset["rel_path"] == reference_asset["rel_path"]
+    assert actual_asset["target_triple"] == reference_asset["target_triple"]
+    assert actual_asset["version"] == reference_asset["version"]
+    actual_jump = actual / "jump" / "download" / f"v{BUILDER.SCIE_JUMP_VERSION}"
+    reference_jump = (
+        reference / "jump" / "download" / f"v{BUILDER.SCIE_JUMP_VERSION}"
+    )
+    assert (actual_jump / BUILDER.SCIE_JUMP_ASSET).read_bytes() == (
+        reference_jump / BUILDER.SCIE_JUMP_ASSET
+    ).read_bytes()
+
+
+def test_pinned_science_consumes_standalone_mirror_under_denial(tmp_path, monkeypatch):
+    _prepare_standalone_cache(tmp_path, monkeypatch)
+    science = _science_binary(tmp_path)
+    assets = Path(
+        BUILDER.materialize_standalone_assets(tmp_path / "actual").removeprefix("file://")
+    )
+    output = tmp_path / "provider-output"
+    requests = []
+
+    class UpstreamDenied(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_error(503, "upstream access is forbidden in this test")
+
+        def do_CONNECT(self):
+            requests.append(self.path)
+            self.send_error(503, "upstream access is forbidden in this test")
+
+        def log_message(self, _format, *_args):
+            pass
+
+    denial = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamDenied)
+    denial_url = f"http://127.0.0.1:{denial.server_port}"
+    thread = threading.Thread(target=denial.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for variable in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+            monkeypatch.setenv(variable, denial_url)
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+        with BUILDER.serve_asset_mirror(assets.as_uri()) as mirror:
+            BUILDER.run(
+                [
+                    str(science),
+                    "download",
+                    "provider",
+                    BUILDER.PBS_PROVIDER,
+                    "--version",
+                    BUILDER.PBS_PYTHON_VERSION,
+                    "--release",
+                    BUILDER.PBS_RELEASE,
+                    "--flavor",
+                    "install_only_stripped",
+                    "--libc",
+                    "gnu",
+                    "--base-url",
+                    f"{mirror}/providers/{BUILDER.PBS_PROVIDER}",
+                    str(output),
+                ]
+            )
+        downloaded = (
+            output
+            / "providers"
+            / BUILDER.PBS_PROVIDER
+            / "download"
+            / BUILDER.PBS_RELEASE
+            / BUILDER.PBS_ARCHIVE
+        )
+        assert downloaded.is_file()
+        BUILDER.verify_file(downloaded, BUILDER.PBS_SHA256)
+        assert requests == []
+    finally:
+        denial.shutdown()
+
+
 def test_scie_command_pins_runtime_inputs(tmp_path):
     wheel = tmp_path / "devlegate.whl"
     with ZipFile(wheel, "w") as archive:
