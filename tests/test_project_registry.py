@@ -571,6 +571,48 @@ def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
     assert "Traceback" not in captured.out
 
 
+def test_plain_managed_restart_does_not_require_service_ipc(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    env = project(tmp_path, "plain-restart")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = ProjectRegistry().register("plain", env)
+    unit = f"devlegate-{target.locator.state_key[:8]}.service"
+    SQLiteRuntimeStore(
+        target.locator.state_dir, target.locator.state_key
+    ).establish_systemd_authority(
+        unit_name=unit,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+    calls = []
+
+    class Supervisor:
+        def inspect(self, _locator, *, name=None, **_kwargs):
+            return True
+
+        def status(self, _locator, *, name=None):
+            return True
+
+        def restart(self, _locator, *, name=None):
+            calls.append(name)
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", Supervisor)
+    monkeypatch.setattr(
+        cli,
+        "request",
+        lambda *_args, **_kwargs: pytest.fail("plain restart used service IPC"),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "--env", str(env), "restart"]
+    )
+
+    assert cli.main() == 0
+    assert calls == [unit]
+    assert capsys.readouterr().out == "service restarted\n"
+
+
 def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -34,10 +34,12 @@ class IPCClientError(Exception):
         *,
         application: bool = False,
         uncertain: bool = False,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.application = application
         self.uncertain = uncertain
+        self.code = code
 
 
 def _uncertain_message(method: str) -> str:
@@ -137,6 +139,7 @@ def _request_once(
         raise IPCClientError(
             f"service error: {error.get('message', 'unknown application error')}",
             application=True,
+            code=error.get("code") if isinstance(error.get("code"), str) else None,
         )
     if response.result is None:
         if mutable:

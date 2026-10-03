@@ -87,6 +87,7 @@ def test_request_surfaces_application_error(tmp_path):
     with pytest.raises(IPCClientError, match="not ready") as raised:
         request(path, "status")
     assert raised.value.application is True
+    assert raised.value.code == "blocked"
     thread.join(timeout=2)
 
 

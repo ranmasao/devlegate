@@ -1178,6 +1178,75 @@ def test_real_cli_force_stop_escalates_existing_graceful_lifecycle(
                 pass
 
 
+def test_real_cli_force_restart_preserves_interrupted_execution(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
+    config = _recovery_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(ServiceEngine(config))
+    worker = git_fixture["tmp"] / "force-restart-worker.py"
+    pid_file = git_fixture["tmp"] / "force-restart-worker.pid"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+        "(workspace / 'must-not-complete.txt').write_text('completed\\n')\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    service = LiveService(git_fixture["working"], config)
+    try:
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and pid_file.exists()
+            ),
+            timeout=30,
+        )
+        before = _disk_state(config)
+        execution_id = before["execution_id"]
+        execution_path = Path(before["execution_path"])
+        execution_branch = before["execution_branch"]
+        worker_pid = int(pid_file.read_text())
+
+        result = service.cli("restart", "--force", timeout=30)
+
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert "service restarted" in result.stdout
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("execution_id") == execution_id
+                and _disk_state(config).get("execution_interruption_kind")
+                == "operator_abort"
+            ),
+            timeout=30,
+        )
+        with pytest.raises(ProcessLookupError):
+            os.kill(worker_pid, 0)
+        state = _disk_state(config)
+        assert state["execution_path"] == str(execution_path)
+        assert state["execution_branch"] == execution_branch
+        assert state["execution_stage"] == "post-checkpoint"
+        assert execution_path.exists()
+        assert state["pending_execution_report"]["execution_id"] == execution_id
+    finally:
+        if service.process is not None and service.process.poll() is None:
+            service.kill()
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
 @pytest.mark.parametrize("replacement_id", ["T-1", "T-2"])
 def test_real_service_drop_retire_old_lineage_and_runs_fresh(
     git_fixture, monkeypatch, replacement_id
@@ -2430,6 +2499,23 @@ def test_daemon_protocol_error_is_not_bypassed(
     assert (
         "service is running but its IPC endpoint is unavailable"
         in capsys.readouterr().err
+    )
+
+
+def test_force_payload_skew_detection_is_narrow() -> None:
+    assert cli._force_payload_rejected(
+        IPCClientError(
+            "service error: restart payload fields are invalid",
+            application=True,
+            code="invalid_request",
+        )
+    )
+    assert not cli._force_payload_rejected(
+        IPCClientError(
+            "service error: lifecycle intent conflicts with an active stop",
+            application=True,
+            code="application_error",
+        )
     )
 
 

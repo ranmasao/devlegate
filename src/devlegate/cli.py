@@ -734,6 +734,13 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | Non
     return ManagedSystemdOwner(supervisor, name)
 
 
+def _force_payload_rejected(error: IPCClientError) -> bool:
+    """Identify the old daemon response for the newly added force field."""
+    return error.code == "invalid_request" and (
+        "payload fields are invalid" in str(error)
+    )
+
+
 def _supervision_store(target: ProjectTarget) -> SQLiteRuntimeStore:
     store = SQLiteRuntimeStore(target.locator.state_dir, target.locator.state_key)
     try:
@@ -857,7 +864,7 @@ def _lifecycle_service(
                     request_id=uuid.uuid4().hex,
                 )
             except IPCClientError as error:
-                if force and error.application:
+                if force and _force_payload_rejected(error):
                     raise DevlegateError(
                         "forced stop is unsupported by the running service; "
                         "the installed CLI and daemon protocol versions differ"
@@ -887,26 +894,27 @@ def _lifecycle_service(
             print("service stopped")
             return 0
         try:
-            request_id = uuid.uuid4().hex
-            try:
-                response = request(
-                    locator.socket_path,
-                    "restart",
-                    payload={"force": True} if force else None,
-                    mutable=True,
-                    request_id=request_id,
-                )
-            except IPCClientError as error:
-                if force and error.application:
+            if force:
+                request_id = uuid.uuid4().hex
+                try:
+                    response = request(
+                        locator.socket_path,
+                        "restart",
+                        payload={"force": True},
+                        mutable=True,
+                        request_id=request_id,
+                    )
+                except IPCClientError as error:
+                    if _force_payload_rejected(error):
+                        raise DevlegateError(
+                            "forced restart is unsupported by the running service; "
+                            "the installed CLI and daemon protocol versions differ"
+                        ) from error
+                    raise DevlegateError(str(error)) from error
+                if response is not None and response.get("accepted") is not True:
                     raise DevlegateError(
-                        "forced restart is unsupported by the running service; "
-                        "the installed CLI and daemon protocol versions differ"
-                    ) from error
-                raise DevlegateError(str(error)) from error
-            if response is not None and response.get("accepted") is not True:
-                raise DevlegateError(
-                    "service IPC returned invalid restart acknowledgement"
-                )
+                        "service IPC returned invalid restart acknowledgement"
+                    )
             owner.supervisor.restart(locator, name=owner.unit)
         except SystemdSupervisorError as error:
             raise DevlegateError(str(error)) from error
@@ -939,7 +947,7 @@ def _lifecycle_service(
                 request_id=request_id,
             )
         except IPCClientError as error:
-            if force and error.application:
+            if force and _force_payload_rejected(error):
                 raise DevlegateError(
                     "forced restart is unsupported by the running service; "
                     "the installed CLI and daemon protocol versions differ"
