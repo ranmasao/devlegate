@@ -1,0 +1,28 @@
+{
+  "code_base_head": "272c592d7746d404bc35107cf45757e2c9ddf3f4",
+  "conclusion": "completed",
+  "control_head": "4cb3cca194d040d685af25e977286598ccf20cc3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-018",
+  "execution_id": "2f1b6f1ce43041e0b4b36a77e8833bad",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-018",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-018/2f1b6f1ce43041e0b4b36a77e8833bad.md",
+  "report_sha256": "846bd347867e37ecf1216a224d6aca07b2765f975413e77db794cacbae496aaf",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-018",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated tests/test_standalone_builder.py only. Focused standalone tests and Ruff pass; the existing full PEX consumer regression remains unchanged.",
+    "summary": "Added real pinned-Science integration regressions for the standalone asset boundary. Tests now compare the synthesized PBS/scie-jump mirror against a reference mirror emitted by Science 0.21.0 and verify direct Science provider consumption through the local mirror with upstream access denied."
+  },
+  "workspace_head": "6dd981467998ca0f3c3500fe53f49c463fe62029"
+}
