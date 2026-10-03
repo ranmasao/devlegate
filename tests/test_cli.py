@@ -1247,6 +1247,138 @@ def test_real_cli_force_restart_preserves_interrupted_execution(
                 pass
 
 
+def test_real_cli_force_restart_escalates_existing_graceful_lifecycle(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
+    config = _recovery_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(ServiceEngine(config))
+    worker = git_fixture["tmp"] / "force-restart-escalation-worker.py"
+    pid_file = git_fixture["tmp"] / "force-restart-escalation-worker.pid"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    service = LiveService(git_fixture["working"], config)
+    graceful = None
+    try:
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and pid_file.exists()
+            ),
+            timeout=30,
+        )
+        graceful = service.start_cli("restart")
+        service.wait_for(
+            lambda: ipc_request(service.locator.socket_path, "ping")["lifecycle"][
+                "phase"
+            ]
+            == "draining",
+            timeout=10,
+        )
+        first_request_id = ipc_request(service.locator.socket_path, "ping")[
+            "lifecycle"
+        ]["request_id"]
+        forced = service.cli("restart", "--force", timeout=30)
+
+        assert forced.returncode == 0, (forced.stdout, forced.stderr)
+        assert graceful.wait(timeout=30) == 0
+        service.wait_for(
+            lambda: (
+                service.process is not None
+                and service.process.poll() is None
+                and _disk_state(config).get("execution_interruption_kind")
+                == "operator_abort"
+            ),
+            timeout=30,
+        )
+        receipt_path = service.locator.state_dir / "lifecycle" / (
+            f"{service.locator.state_key}.json"
+        )
+        receipt = json.loads(receipt_path.read_text())
+        assert receipt["request_id"] == first_request_id
+        assert receipt["state"] == "completed"
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid_file.read_text()), 0)
+    finally:
+        if graceful is not None and graceful.poll() is None:
+            graceful.kill()
+            graceful.wait(timeout=5)
+        if service.process is not None and service.process.poll() is None:
+            service.kill()
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
+def test_real_cli_force_restart_escalates_uncooperative_worker(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
+    config = _recovery_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(ServiceEngine(config))
+    worker = git_fixture["tmp"] / "force-restart-uncooperative-worker.py"
+    pid_file = git_fixture["tmp"] / "force-restart-uncooperative-worker.pid"
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, signal, sys, time\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(60)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    service = LiveService(git_fixture["working"], config)
+    try:
+        service.start()
+        service.wait_ready()
+        service.wait_for(
+            lambda: (
+                _disk_state(config).get("execution_stage") == "worker-running"
+                and pid_file.exists()
+            ),
+            timeout=30,
+        )
+        result = service.cli("restart", "--force", timeout=30)
+
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        service.wait_for(
+            lambda: _disk_state(config).get("execution_interruption_kind")
+            == "operator_abort",
+            timeout=30,
+        )
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid_file.read_text()), 0)
+    finally:
+        if service.process is not None and service.process.poll() is None:
+            service.kill()
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
 @pytest.mark.parametrize("replacement_id", ["T-1", "T-2"])
 def test_real_service_drop_retire_old_lineage_and_runs_fresh(
     git_fixture, monkeypatch, replacement_id

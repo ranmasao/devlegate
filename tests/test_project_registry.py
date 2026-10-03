@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import devlegate.cli as cli
+from devlegate.ipc_client import IPCClientError
 from devlegate.project_registry import (
     ProjectRegistry,
     ProjectRegistryError,
@@ -611,6 +612,113 @@ def test_plain_managed_restart_does_not_require_service_ipc(
     assert cli.main() == 0
     assert calls == [unit]
     assert capsys.readouterr().out == "service restarted\n"
+
+
+def test_forced_managed_restart_admits_then_restarts_exact_unit(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    env = project(tmp_path, "forced-restart")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = ProjectRegistry().register("forced", env)
+    unit = f"devlegate-{target.locator.state_key[:8]}.service"
+    SQLiteRuntimeStore(
+        target.locator.state_dir, target.locator.state_key
+    ).establish_systemd_authority(
+        unit_name=unit,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+    calls: list[tuple[str, str | None, dict[str, object] | None]] = []
+
+    class Supervisor:
+        def inspect(self, _locator, *, name=None, **_kwargs):
+            return True
+
+        def status(self, _locator, *, name=None):
+            return True
+
+        def restart(self, _locator, *, name=None):
+            calls.append(("restart", name, None))
+
+    def request(*_args, **kwargs):
+        calls.append(("ipc", None, kwargs.get("payload")))
+        return {"accepted": True, "request_id": "lifecycle", "instance_id": "old"}
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", Supervisor)
+    monkeypatch.setattr(cli, "request", request)
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "--env", str(env), "restart", "--force"]
+    )
+
+    assert cli.main() == 0
+    assert calls == [
+        ("ipc", None, {"force": True}),
+        ("restart", unit, None),
+    ]
+    assert capsys.readouterr().out == "service restarted\n"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            IPCClientError(
+                "service error: restart payload fields are invalid",
+                application=True,
+                code="invalid_request",
+            ),
+            "installed CLI and daemon protocol versions differ",
+        ),
+        (
+            IPCClientError(
+                "service error: restart conflicts with an active stop",
+                application=True,
+                code="application_error",
+            ),
+            "restart conflicts with an active stop",
+        ),
+    ],
+)
+def test_forced_managed_restart_reports_skew_without_kill_fallback(
+    tmp_path, monkeypatch, capsys, error, expected
+) -> None:
+    env = project(tmp_path, "forced-restart-error")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = ProjectRegistry().register("forced", env)
+    unit = f"devlegate-{target.locator.state_key[:8]}.service"
+    SQLiteRuntimeStore(
+        target.locator.state_dir, target.locator.state_key
+    ).establish_systemd_authority(
+        unit_name=unit,
+        state_key=target.locator.state_key,
+        env_file=target.env_file,
+        repository=target.repo,
+    )
+    restarted = False
+
+    class Supervisor:
+        def inspect(self, _locator, *, name=None, **_kwargs):
+            return True
+
+        def status(self, _locator, *, name=None):
+            return True
+
+        def restart(self, _locator, *, name=None):
+            nonlocal restarted
+            restarted = True
+
+    monkeypatch.setattr(cli, "SystemdSupervisor", Supervisor)
+    monkeypatch.setattr(
+        cli, "request", lambda *_args, **_kwargs: (_ for _ in ()).throw(error)
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["devlegate", "--env", str(env), "restart", "--force"]
+    )
+
+    assert cli.main() == 1
+    assert expected in capsys.readouterr().err
+    assert not restarted
 
 
 def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
