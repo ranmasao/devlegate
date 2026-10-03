@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6dd981467998ca0f3c3500fe53f49c463fe62029",
+  "conclusion": "completed",
+  "control_head": "23d4ed93546b0bd12343e4a2a7320b8dc8da2947",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-043",
+  "execution_id": "164e75354b974936b00907826523aee8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-043",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-043/164e75354b974936b00907826523aee8.md",
+  "report_sha256": "e3da6f13cf8865d6bd9c2675b02082fcb0c3f17c0fede2fcadc2b7d7f97e4f86",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-043",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation and focused validation are complete. The broader selected test invocation exceeded the session timeout after substantial progress, while focused CLI, IPC, daemon, Ruff, compile, and diff checks passed.",
+    "summary": "Implemented `restart --force` across the CLI, IPC lifecycle protocol, daemon, and managed systemd path. Forced restart now closes admission, uses the existing worker interruption path, preserves authoritative lifecycle identity during escalation, and fails closed on unsupported daemon protocols; focused parser and lifecycle regressions were added."
+  },
+  "workspace_head": "8b597af805cdb483bddef579c9ed167a8a158e8b"
+}
