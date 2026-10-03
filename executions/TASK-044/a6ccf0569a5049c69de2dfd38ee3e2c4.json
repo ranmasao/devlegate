@@ -1,0 +1,28 @@
+{
+  "code_base_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76",
+  "conclusion": "completed",
+  "control_head": "88c4ab006c8c4e5ff82bb24153f965503d1f123d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-044",
+  "execution_id": "a6ccf0569a5049c69de2dfd38ee3e2c4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-044",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-044/a6ccf0569a5049c69de2dfd38ee3e2c4.md",
+  "report_sha256": "3c9e9b0ba7a6f4dd6d45a64bfc509162a1177f9f19aa47d3a6a1615099c3f677",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-044",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Plain retry semantics and fingerprints remain compatible with existing behavior. Validation was limited to compile, parser, diff, and whitespace checks because pytest and ruff are unavailable in the workspace environment.",
+    "summary": "Implemented synchronous `retry --force` across CLI, IPC, and owner runtime. Forced admission proves stranded worker absence, unchanged product, descendant control, current runnable changed ticket, and canonical workspace integrity; it checkpoints and pins recovery provenance, retires the old binding, and resumes via a fresh execution identity using the current ticket body."
+  },
+  "workspace_head": "be713661c9b81b512f20868a574a2a97f30c3ba8"
+}
