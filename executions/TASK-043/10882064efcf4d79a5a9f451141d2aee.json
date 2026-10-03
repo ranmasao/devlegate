@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6dd981467998ca0f3c3500fe53f49c463fe62029",
+  "conclusion": "completed",
+  "control_head": "27bbfd840fa192cd791117c06736b3a0d1444fd3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-043",
+  "execution_id": "10882064efcf4d79a5a9f451141d2aee",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-043",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-043/10882064efcf4d79a5a9f451141d2aee.md",
+  "report_sha256": "a8039110ece0266de8a7e913be4f3971b9affd6cb53f1dbdf7fd8821143b7498",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-043",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Validation completed with 1104 sequential tests passing under coverage, 1104 tests passing under pytest-xdist, and Ruff clean. The coverage-enabled xdist run encountered one unrelated existing timing-sensitive auto-resume failure; the same full suite passed sequentially.",
+    "summary": "Added public forced-restart regressions covering graceful-to-force lifecycle identity reuse, uncooperative worker hard escalation, exact managed systemd unit ordering, and fail-closed protocol-skew versus semantic errors. Plain managed restart behavior remains covered and unchanged."
+  },
+  "workspace_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76"
+}
