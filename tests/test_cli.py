@@ -294,6 +294,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert parser.parse_args(["once"]).command == "once"
     assert parser.parse_args(["foreground"]).command == "foreground"
     assert parser.parse_args(["start"]).command == "start"
+    assert parser.parse_args(["restart", "--force"]).force is True
     assert parser.parse_args(["control", "init"]).command == "control"
     control_reconcile = parser.parse_args(
         ["reconcile", "control", "--from", "a" * 40, "--to", "b" * 40]
@@ -340,6 +341,12 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
+
+
+@pytest.mark.parametrize("output", ["--json", "--yaml"])
+def test_restart_rejects_output_formats(output):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["restart", output])
 
 
 def test_bare_invocation_prints_help_without_starting_or_resolving(

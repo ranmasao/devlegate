@@ -436,6 +436,21 @@ def test_stop_dispatch_requests_service_lifecycle(running_server):
     assert called == [("stop", "id", False)]
 
 
+def test_force_restart_dispatch_requests_service_lifecycle(running_server):
+    engine, _state, _server = running_server
+    called = []
+    response = dispatch_mutation(
+        engine,
+        _request("restart", {"force": True}),
+        lifecycle=lambda intent, request_id, force: called.append(
+            (intent, request_id, force)
+        )
+        or {"phase": "draining", "request_id": request_id},
+    )
+    assert response["accepted"] is True
+    assert called == [("restart", "id", True)]
+
+
 def test_lifecycle_callback_type_error_is_not_retried(running_server):
     engine, _state, _server = running_server
     calls = []

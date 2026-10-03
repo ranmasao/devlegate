@@ -141,13 +141,17 @@ class ServiceHost:
         def request_lifecycle(
             intent: str, request_id: str, force: bool = False
         ) -> dict[str, object]:
-            if intent == "restart" and self.host_mode is not HostingMode.INTERNAL:
+            if (
+                intent == "restart"
+                and not force
+                and self.host_mode is not HostingMode.INTERNAL
+            ):
                 raise DevlegateError(
                     "restart is available only for internally hosted services"
                 )
             service_log(f"lifecycle {intent} accepted through devlegate {intent}")
             result = self.engine.request_lifecycle(intent, request_id, force=force)
-            if force and intent == "stop":
+            if force:
                 stop_intent.request("operator_abort", source="force")
                 self.engine.wake()
             write_lifecycle_receipt(
@@ -263,9 +267,15 @@ class ServiceHost:
                 end_owner()
             if restart_requested:
                 if self.host_mode is not HostingMode.INTERNAL:
-                    raise DevlegateError(
-                        "non-internal hosting cannot self-reexec for restart"
+                    force_restart = (
+                        self.engine.lifecycle_status_payload().get("force") is True
                     )
+                    authority.close()
+                    if not force_restart:
+                        raise DevlegateError(
+                            "non-internal hosting cannot self-reexec for restart"
+                        )
+                    return result
                 request_id = self._handoff_request_id or ""
                 try:
                     lifecycle_request_id = self.engine.lifecycle_status_payload()[

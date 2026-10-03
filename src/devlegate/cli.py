@@ -857,6 +857,11 @@ def _lifecycle_service(
                     request_id=uuid.uuid4().hex,
                 )
             except IPCClientError as error:
+                if force and error.application:
+                    raise DevlegateError(
+                        "forced stop is unsupported by the running service; "
+                        "the installed CLI and daemon protocol versions differ"
+                    ) from error
                 raise DevlegateError(str(error)) from error
             if response is not None and response.get("accepted") is not True:
                 raise DevlegateError(
@@ -882,6 +887,26 @@ def _lifecycle_service(
             print("service stopped")
             return 0
         try:
+            request_id = uuid.uuid4().hex
+            try:
+                response = request(
+                    locator.socket_path,
+                    "restart",
+                    payload={"force": True} if force else None,
+                    mutable=True,
+                    request_id=request_id,
+                )
+            except IPCClientError as error:
+                if force and error.application:
+                    raise DevlegateError(
+                        "forced restart is unsupported by the running service; "
+                        "the installed CLI and daemon protocol versions differ"
+                    ) from error
+                raise DevlegateError(str(error)) from error
+            if response is not None and response.get("accepted") is not True:
+                raise DevlegateError(
+                    "service IPC returned invalid restart acknowledgement"
+                )
             owner.supervisor.restart(locator, name=owner.unit)
         except SystemdSupervisorError as error:
             raise DevlegateError(str(error)) from error
@@ -907,9 +932,18 @@ def _lifecycle_service(
         request_id = uuid.uuid4().hex
         try:
             response = request(
-                locator.socket_path, intent, mutable=True, request_id=request_id
+                locator.socket_path,
+                intent,
+                payload={"force": True} if force else None,
+                mutable=True,
+                request_id=request_id,
             )
         except IPCClientError as error:
+            if force and error.application:
+                raise DevlegateError(
+                    "forced restart is unsupported by the running service; "
+                    "the installed CLI and daemon protocol versions differ"
+                ) from error
             raise DevlegateError(str(error)) from error
         if response.get("accepted") is not True:
             raise DevlegateError(
@@ -918,7 +952,14 @@ def _lifecycle_service(
         instance_id = response.get("instance_id")
         if not isinstance(instance_id, str) or not instance_id:
             raise DevlegateError("service IPC returned no service instance identity")
-        _wait_for_service_restart(locator, request_id, instance_id)
+        authoritative_request_id = response.get("request_id", request_id)
+        if not isinstance(
+            authoritative_request_id, str
+        ) or not authoritative_request_id:
+            raise DevlegateError(
+                "service IPC returned no authoritative lifecycle request identity"
+            )
+        _wait_for_service_restart(locator, authoritative_request_id, instance_id)
         result = {"result": "restarted", "service": "devlegate", "action": intent}
         emit(result, output_format, "service restarted")
     return 0
@@ -959,8 +1000,10 @@ def _stop_service(env_file: Path, force: bool | str = False) -> int:
     return _lifecycle_service(env_file, "table", "stop", force=force is True)
 
 
-def _restart_service(env_file: Path, _output_format: str | None = None) -> int:
-    return _lifecycle_service(env_file, "table", "restart")
+def _restart_service(
+    env_file: Path, _output_format: str | None = None, *, force: bool = False
+) -> int:
+    return _lifecycle_service(env_file, "table", "restart", force=force)
 
 
 def _healthy_service(env_file: Path) -> dict[str, object] | None:
@@ -2389,10 +2432,13 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument(
         "--force", action="store_true", help="interrupt the active worker immediately"
     )
-    commands.add_parser(
+    restart_parser = commands.add_parser(
         "restart",
         help="restart the persistent workflow service at a checkpoint",
         description="Restart the self-managed service after a graceful checkpoint.",
+    )
+    restart_parser.add_argument(
+        "--force", action="store_true", help="interrupt the active worker immediately"
     )
     check_parser = commands.add_parser(
         "check",
@@ -2917,7 +2963,7 @@ def main() -> int:
         if args.command == "stop":
             return _stop_service(env_file, args.force)
         if args.command == "restart":
-            return _restart_service(env_file)
+            return _restart_service(env_file, force=args.force)
         if args.command == "retry":
             return _retry_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "drop":

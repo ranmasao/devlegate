@@ -79,7 +79,7 @@ def dispatch_mutation(
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
     if request.method in {"stop", "restart"}:
-        allowed = {"force"} if request.method == "stop" else set()
+        allowed = {"force"}
         if set(request.payload) - allowed:
             raise IPCProtocolError(
                 "invalid_request", f"{request.method} payload fields are invalid"
@@ -90,7 +90,9 @@ def dispatch_mutation(
             )
         force = request.payload.get("force", False)
         if not isinstance(force, bool):
-            raise IPCProtocolError("invalid_request", "stop force must be boolean")
+            raise IPCProtocolError(
+                "invalid_request", f"{request.method} force must be boolean"
+            )
         lifecycle_result = lifecycle(request.method, request.request_id, force)
         return {
             "accepted": True,
