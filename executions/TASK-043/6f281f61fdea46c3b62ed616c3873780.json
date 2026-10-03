@@ -1,0 +1,32 @@
+{
+  "code_base_head": "6dd981467998ca0f3c3500fe53f49c463fe62029",
+  "conclusion": "incomplete",
+  "control_head": "14c5b6cd493da1a98cb6fb4031ef1d343e9a5bff",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-043",
+  "execution_id": "6f281f61fdea46c3b62ed616c3873780",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-043",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Install the repository test environment with coverage and the expected .venv executables, then rerun the three infrastructure-dependent full-suite tests."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-043",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Install the repository test environment with coverage and the expected .venv executables, then rerun the three infrastructure-dependent full-suite tests."
+    ],
+    "report": null,
+    "summary": "Preserved plain managed restart behavior by limiting the IPC lifecycle handshake to forced restart, and added structured IPC error codes so force-payload version skew is classified narrowly. Added real forced-restart recovery coverage for worker retirement and retained execution lineage, plus managed restart and skew-detection regressions."
+  },
+  "workspace_head": "2a0f75fd0e7d91c5fa433d137e66c5140f3d2293"
+}
