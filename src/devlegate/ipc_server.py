@@ -100,7 +100,9 @@ def dispatch_mutation(
             **lifecycle_result,
         }
     if request.method == "retry":
-        if set(request.payload) != {"ticket_id"}:
+        if not set(request.payload).issubset({"ticket_id", "force"}) or (
+            "ticket_id" not in request.payload
+        ):
             raise IPCProtocolError(
                 "invalid_request", "retry payload fields are invalid"
             )
@@ -109,7 +111,12 @@ def dispatch_mutation(
             raise IPCProtocolError(
                 "invalid_request", "retry ticket_id must be non-empty text"
             )
-        return engine.submit_retry(ticket_id, request_id=request.request_id)
+        force = request.payload.get("force", False)
+        if not isinstance(force, bool):
+            raise IPCProtocolError("invalid_request", "retry force must be boolean")
+        return engine.submit_retry(
+            ticket_id, force=force, request_id=request.request_id
+        )
     if request.method == "drop":
         if set(request.payload) != {"ticket_id", "execution_id"}:
             raise IPCProtocolError(

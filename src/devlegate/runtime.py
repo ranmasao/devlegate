@@ -85,6 +85,7 @@ class IterationIntent:
     """Explicit operator intent supplied to one scheduler iteration."""
 
     retry_ticket_id: str | None = None
+    force_retry: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,6 +106,10 @@ class ExecutionAuthorization:
     @property
     def is_zero_delta_retry(self) -> bool:
         return self.kind == "zero_delta_product_drift"
+
+    @property
+    def is_forced_retry(self) -> bool:
+        return self.kind == "forced_retry"
 
 
 class SnapshotChanged(Exception):
@@ -383,6 +388,7 @@ class OperatorCommand:
     onto: str | None = None
     execution_id: str | None = None
     rewrite_published: bool = False
+    force: bool = False
     resolution_class: str | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
@@ -401,8 +407,12 @@ def _mutation_fingerprint(method: str, payload: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _retry_request_fingerprint(ticket_id: str) -> str:
-    return _mutation_fingerprint("retry", {"ticket_id": ticket_id})
+def _retry_request_fingerprint(ticket_id: str, force: bool = False) -> str:
+    if not force:
+        return _mutation_fingerprint("retry", {"ticket_id": ticket_id})
+    return _mutation_fingerprint(
+        "retry", {"ticket_id": ticket_id, "force": "1" if force else "0"}
+    )
 
 
 def _drop_request_fingerprint(ticket_id: str, execution_id: str) -> str:
@@ -910,13 +920,16 @@ class ServiceEngine:
         """Return drop candidates from the current owner-published view."""
         return self.published_drop_candidates_view()
 
-    def submit_retry(self, ticket_id: str, *, request_id: str) -> dict[str, object]:
+    def submit_retry(
+        self, ticket_id: str, *, force: bool = False, request_id: str
+    ) -> dict[str, object]:
         """Submit one retry intent and wait only for owner-side admission."""
         return self._submit_operator_command(
             method="retry",
             ticket_id=ticket_id,
             request_id=request_id,
-            fingerprint=_retry_request_fingerprint(ticket_id),
+            fingerprint=_retry_request_fingerprint(ticket_id, force),
+            force=force,
         )
 
     def submit_drop(
@@ -1011,6 +1024,7 @@ class ServiceEngine:
         onto: str | None = None,
         execution_id: str | None = None,
         rewrite_published: bool = False,
+        force: bool = False,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
@@ -1066,6 +1080,7 @@ class ServiceEngine:
                     onto=onto,
                     execution_id=execution_id,
                     rewrite_published=rewrite_published,
+                    force=force,
                 )
                 self._operator_command = command
                 new_command = True
@@ -1090,8 +1105,11 @@ class ServiceEngine:
             )
         return self._admission_result(command)
 
-    def _validate_retry_admission(self, ticket_id: str) -> None:
+    def _validate_retry_admission(self, ticket_id: str, force: bool = False) -> None:
         """Validate retry admission on the owner thread."""
+        if force:
+            self._validate_force_retry_admission(ticket_id)
+            return
         if self.service_snapshot().worker_running:
             raise DevlegateError("service worker is already running")
         if self._state.get("phase") == "agent_running":
@@ -1121,6 +1139,209 @@ class ServiceEngine:
         }
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+
+    def _validate_force_retry_admission(self, ticket_id: str) -> None:
+        state = self._state
+        if state.get("phase") != "agent_running" or state.get(
+            "execution_stage"
+        ) not in {
+            "worker-launch",
+            "worker-running",
+        }:
+            raise DevlegateError(
+                "forced retry requires a stranded worker-running execution"
+            )
+        if state.get("execution_ticket_id") != ticket_id:
+            raise DevlegateError("requested ticket does not match the active execution")
+        execution_id = state.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise DevlegateError("forced retry requires an exact execution identity")
+        identity = _worker_identity_from_value(
+            state.get("worker_identity"), execution_id
+        )
+        if identity is None:
+            raise DevlegateError("worker ownership is not proven absent")
+        observation = self._workers.observe(identity)
+        if observation != "absent":
+            raise DevlegateError(
+                f"worker ownership is {observation}; forced retry requires absent"
+            )
+        admitted_product = state.get("local_head")
+        if not isinstance(admitted_product, str) or not admitted_product:
+            raise DevlegateError(
+                "forced retry product admission identity is incomplete"
+            )
+        product = self._observe_product_generation(admitted_product)
+        if not product["stable"]:
+            raise DevlegateError(
+                "product generation changed; use normal product reconciliation"
+            )
+        admitted_control = state.get("execution_control_head")
+        if not isinstance(admitted_control, str) or not admitted_control:
+            raise DevlegateError(
+                "forced retry control admission identity is incomplete"
+            )
+        self._validate_control_worktree()
+        current_control = _git(
+            self.control_worktree, "rev-parse", "HEAD", check=False
+        )
+        if current_control.returncode:
+            raise DevlegateError("current control generation could not be observed")
+        current_head = current_control.stdout.strip()
+        descendant = _git(
+            self.control_worktree,
+            "merge-base",
+            "--is-ancestor",
+            admitted_control,
+            current_head,
+            check=False,
+        )
+        if descendant.returncode:
+            raise DevlegateError(
+                "control history diverged; use explicit control reconciliation"
+            )
+        ticket_store = self._ticket_store()
+        ticket = ticket_store.by_id.get(ticket_id)
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+        ):
+            raise DevlegateError(f"ticket {ticket_id} is not currently runnable")
+        old_body = state.get("selected_ticket_body")
+        if not isinstance(old_body, str) or ticket.body == old_body:
+            raise DevlegateError(
+                "current ticket body is unchanged; use ordinary retry/recovery"
+            )
+        branch = state.get("execution_branch")
+        path = state.get("execution_path")
+        base = state.get("execution_base_head")
+        if not all(isinstance(value, str) and value for value in (branch, path, base)):
+            raise DevlegateError("persisted execution workspace identity is incomplete")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if branch != manager.branch or Path(path) != manager.path:
+            raise DevlegateError("retained execution workspace topology is invalid")
+        inspection = manager.inspect(base)
+        if inspection.classification not in {"REUSABLE", "UNSAFE"}:
+            raise DevlegateError(
+                f"retained execution workspace is not reusable: {inspection.reason}"
+            )
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if registration is None or not manager.path.is_dir():
+            raise DevlegateError("retained execution workspace is not registered")
+        try:
+            workspace = manager._validate_existing(registration, base)
+            manager.verify_submodules(workspace)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                f"retained execution workspace integrity could not be proven: {error}"
+            ) from error
+
+    def _force_retry_transition(self, ticket_id: str) -> None:
+        """Checkpoint and retire a proven stranded execution before retry."""
+        state = self._state
+        execution_id = str(state["execution_id"])
+        old_control = str(state["execution_control_head"])
+        current_control = _git(
+            self.control_worktree, "rev-parse", "HEAD"
+        ).stdout.strip()
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        registration = manager._registrations().get(manager.path.resolve())
+        if registration is None:
+            raise DevlegateError("retained execution workspace is not registered")
+        try:
+            workspace = manager._validate_existing(
+                registration, str(state["execution_base_head"])
+            )
+            manager.verify_submodules(workspace)
+            checkpoint = manager.checkpoint(
+                workspace,
+                execution_id,
+                title="forced retry recovery",
+                summary=(
+                    "preserve stranded worker progress before retrying changed "
+                    "ticket generation"
+                ),
+            )
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise DevlegateError(
+                f"forced retry workspace checkpoint failed: {error}"
+            ) from error
+        evidence_ref = f"refs/devlegate/recovery/force-retry/{ticket_id}/{execution_id}"
+        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        if (
+            existing.returncode == 0
+            and existing.stdout.strip() != checkpoint.after_head
+        ):
+            raise DevlegateError("forced retry evidence ref has conflicting identity")
+        if existing.returncode:
+            pinned = _git(
+                self.repo,
+                "update-ref",
+                evidence_ref,
+                checkpoint.after_head,
+                "",
+                check=False,
+            )
+            if pinned.returncode:
+                raise DevlegateError("cannot preserve forced retry evidence")
+        todo_fingerprint, _ = _todo_fingerprint(self.control_worktree, self.todo_path)
+        failed = self._state.get("failed_executions", {})
+        if not isinstance(failed, dict):
+            failed = {}
+        failed = {
+            **failed,
+            ticket_id: {
+                "execution_id": execution_id,
+                "product_head": state["local_head"],
+                "remote_head": state["remote_head"],
+                "control_head": old_control,
+                "current_control_head": current_control,
+                "todo_fingerprint": todo_fingerprint,
+                "interrupted": True,
+                "interruption_kind": "forced_retry",
+                "reason": (
+                    "forced retry after lost worker and changed descendant ticket "
+                    "generation"
+                ),
+                "checkpoint": checkpoint.after_head,
+                "evidence_ref": evidence_ref,
+            },
+        }
+        self._save_state(
+            "idle",
+            clear_execution=True,
+            execution_stage=None,
+            failed_executions=failed,
+            resume_required={
+                "status": "required",
+                "ticket_id": ticket_id,
+                "checkpoint": checkpoint.after_head,
+                "execution_id": execution_id,
+                "evidence_ref": evidence_ref,
+                "force_retry": True,
+            },
+            force_retry_provenance={
+                "old_execution_id": execution_id,
+                "ticket_id": ticket_id,
+                "admitted_control_head": old_control,
+                "current_control_head": current_control,
+                "product_head": state["local_head"],
+                "checkpoint": checkpoint.after_head,
+                "evidence_ref": evidence_ref,
+                "reason": (
+                    "forced retry after lost worker and changed descendant ticket "
+                    "generation"
+                ),
+            },
+            handled_control_head=current_control,
+            handled_todo_fingerprint=todo_fingerprint,
+        )
 
     def _validate_drop_admission(
         self, ticket_id: str, execution_id: str | None
@@ -1691,7 +1912,7 @@ class ServiceEngine:
 
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
         if command.method == "retry":
-            self._validate_retry_admission(command.ticket_id)
+            self._validate_retry_admission(command.ticket_id, command.force)
             return
         if command.method == "drop":
             self._validate_drop_admission(command.ticket_id, command.execution_id)
@@ -1859,6 +2080,8 @@ class ServiceEngine:
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
+        if command.method == "retry" and command.force:
+            self._force_retry_transition(command.ticket_id)
         if command.method == "drop":
             self._drop_owned(command.ticket_id, command.execution_id)
         with self._receipt_lock:
@@ -3233,7 +3456,10 @@ class ServiceEngine:
         """Execute exactly one scheduler iteration under host authority."""
         intent = intent or IterationIntent()
         authorization = (
-            ExecutionAuthorization(intent.retry_ticket_id, "explicit_retry")
+            ExecutionAuthorization(
+                intent.retry_ticket_id,
+                "forced_retry" if intent.force_retry else "explicit_retry",
+            )
             if intent.retry_ticket_id is not None
             else None
         )
@@ -3918,7 +4144,10 @@ class ServiceEngine:
                     return 0
             if authorization is not None:
                 authorized_ticket_id = authorization.ticket_id
-                if not authorization.is_zero_delta_retry:
+                if not (
+                    authorization.is_zero_delta_retry
+                    or authorization.is_forced_retry
+                ):
                     if not isinstance(failed_for_ticket, dict) or any(
                         failed_for_ticket.get(field) != expected
                         for field, expected in (
@@ -4080,6 +4309,7 @@ class ServiceEngine:
                 and authorization.is_explicit_retry
                 and (workspace.head != workspace.base_head or retrying_interrupted)
             )
+            or (authorization is not None and authorization.is_forced_retry)
         ):
             directive = WorkDirective.RESUME
         if execution_id is None:
@@ -6512,7 +6742,7 @@ class ServiceEngine:
         self, command: OperatorCommand, stop_event: threading.Event | None
     ) -> int:
         if command.method == "retry":
-            return self._retry_owned(command.ticket_id, stop_event)
+            return self._retry_owned(command.ticket_id, stop_event, command.force)
         if command.method == "drop":
             return 0
         if command.method == "recover":
@@ -7816,12 +8046,15 @@ class ServiceEngine:
             return self._retry_owned(ticket_id, stop_event)
 
     def _retry_owned(
-        self, ticket_id: str, stop_event: threading.Event | None = None
+        self,
+        ticket_id: str,
+        stop_event: threading.Event | None = None,
+        force: bool = False,
     ) -> int:
         """Execute retry semantics under an authority lock held by the caller."""
         if stop_event is not None and stop_event.is_set():
             return 0
-        if self._state.get("phase") == "agent_running":
+        if self._state.get("phase") == "agent_running" and not force:
             if self._state.get("execution_stage") in {
                 "worker-launch",
                 "worker-running",
@@ -7830,16 +8063,19 @@ class ServiceEngine:
                 self._reconcile_stranded_execution()
             else:
                 self._recover_interrupted_execution(ticket_id)
-        return self._retry_locked(ticket_id, stop_event)
+        return self._retry_locked(ticket_id, stop_event, force)
 
     def _retry_locked(
-        self, ticket_id: str, stop_event: threading.Event | None = None
+        self,
+        ticket_id: str,
+        stop_event: threading.Event | None = None,
+        force: bool = False,
     ) -> int:
         candidates = self._retry_candidates()
         candidate_ids = {candidate[0] for candidate in candidates}
         if ticket_id not in candidate_ids:
             raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
-        intent = IterationIntent(retry_ticket_id=ticket_id)
+        intent = IterationIntent(retry_ticket_id=ticket_id, force_retry=force)
         if stop_event is None:
             return self.run_iteration(intent)
         with self._stop_context(stop_event):

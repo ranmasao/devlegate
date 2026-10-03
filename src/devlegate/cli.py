@@ -243,7 +243,9 @@ def _select_candidate(
     return candidates[index - 1]
 
 
-def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
+def _retry_daemon(
+    env_file: Path, ticket_id: str | None, output_format: str, force: bool = False
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -286,17 +288,29 @@ def _retry_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> 
         result = request(
             locator.socket_path,
             "retry",
-            {"ticket_id": ticket_id},
+            (
+                {"ticket_id": ticket_id, "force": force}
+                if force
+                else {"ticket_id": ticket_id}
+            ),
             mutable=True,
         )
         decode_retry_ack(result, ticket_id)
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
-    result = {"result": "accepted", "ticket_id": ticket_id}
+    result = {
+        "result": "accepted",
+        "ticket_id": ticket_id,
+        **({"force": True} if force else {}),
+    }
     emit(
         result,
         output_format,
-        f"retry accepted: {ticket_id}",
+        (
+            f"forced retry admitted: {ticket_id}"
+            if force
+            else f"retry accepted: {ticket_id}"
+        ),
     )
     return 0
 
@@ -2555,6 +2569,14 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="ticket to retry; omit it to choose from current candidates",
     )
+    retry_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "retire a proven stranded execution and retry the current "
+            "ticket generation"
+        ),
+    )
     add_output_arguments(retry_parser)
     drop_parser = commands.add_parser(
         "drop",
@@ -2973,7 +2995,9 @@ def main() -> int:
         if args.command == "restart":
             return _restart_service(env_file, force=args.force)
         if args.command == "retry":
-            return _retry_daemon(env_file, args.ticket_id, args.output_format)
+            return _retry_daemon(
+                env_file, args.ticket_id, args.output_format, args.force
+            )
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "recover":
