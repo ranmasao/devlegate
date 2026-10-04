@@ -1,0 +1,28 @@
+{
+  "code_base_head": "1f9228eeac385998993e26bced064e9986356be8",
+  "conclusion": "completed",
+  "control_head": "e65d0bc57e048734a9d6ac7dabc8b223b06fa470",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-046",
+  "execution_id": "9fb8b91a22f24fbeaef3efdf1e1d7ba3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-046",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-046/9fb8b91a22f24fbeaef3efdf1e1d7ba3.md",
+  "report_sha256": "29b15c7de9728357e2e989deeb4cca5e1e24e3fc417e41d64d37a818cf44417f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-046",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused reconciliation and force-retry tests pass, and Ruff passes for src/tests. The full pytest invocation exceeded the environment timeout; repository-wide Ruff also reports pre-existing vendored packaging violations outside the changed files.",
+    "summary": "Preserved existing reconciliation behavior while keeping unobservable product remotes retryable without reconciliation evidence. Added recovery and stale remote-tracking regression coverage, including retention of the exact execution binding and checkpoint across restart."
+  },
+  "workspace_head": "2c8c918e9eaf34d211da7fd9e481e59f6382dd86"
+}

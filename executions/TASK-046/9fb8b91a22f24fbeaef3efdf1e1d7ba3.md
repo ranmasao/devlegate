@@ -1,0 +1,1 @@
+Focused reconciliation and force-retry tests pass, and Ruff passes for src/tests. The full pytest invocation exceeded the environment timeout; repository-wide Ruff also reports pre-existing vendored packaging violations outside the changed files.
