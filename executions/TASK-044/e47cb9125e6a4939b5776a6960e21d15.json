@@ -1,0 +1,28 @@
+{
+  "code_base_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76",
+  "conclusion": "completed",
+  "control_head": "2b9fab2b7c4bb6f8a38554d7f3da683e7127f7f8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-044",
+  "execution_id": "e47cb9125e6a4939b5776a6960e21d15",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-044",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-044/e47cb9125e6a4939b5776a6960e21d15.md",
+  "report_sha256": "dae9641b2c03e8ac28ccd07bf21a90460c7a2b750a48a5a1282335c2f644bcfe",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-044",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused tests, full coverage/xdist validation, and Ruff completed successfully.",
+    "summary": "Fixed ordinary retry compatibility by isolating forced authorization lookup to the force path. Added TASK-044 regression coverage for parser/IPC force routing, remote descendant dogfood recovery with checkpoint and immutable evidence, fresh execution and RESUME/current-body reuse, request replay, and live or indeterminate worker rejection."
+  },
+  "workspace_head": "4fb5ccf574a654cf3d568178c3624a7888cad00f"
+}
