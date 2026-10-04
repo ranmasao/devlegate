@@ -1419,15 +1419,27 @@ def test_real_service_drop_retire_old_lineage_and_runs_fresh(
         old_state = _disk_state(config)
         old_execution = old_state["execution_id"]
         old_control = old_state["execution_control_head"]
-        old_path = control / "kanban/todo/T-1.md"
+        publisher_control = _ensure_publisher_control(git_fixture)
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        old_path = publisher_control / "kanban/todo/T-1.md"
         old_path.unlink()
-        git(control, "add", "-A")
-        git(control, "commit", "-m", "withdraw old ticket")
-        replacement_path = control / f"kanban/todo/{replacement_id}.md"
+        git(publisher_control, "add", "-A")
+        git(publisher_control, "commit", "-m", "withdraw old ticket")
+        replacement_path = publisher_control / f"kanban/todo/{replacement_id}.md"
         replacement_path.write_text(ticket("Replacement ticket", "new work"))
-        git(control, "add", str(replacement_path.relative_to(control)))
-        git(control, "commit", "-m", "create replacement ticket")
-        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        git(
+            publisher_control,
+            "add",
+            str(replacement_path.relative_to(publisher_control)),
+        )
+        git(publisher_control, "commit", "-m", "create replacement ticket")
+        git(
+            publisher_control,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
         control_before_restart = git(control, "rev-parse", "HEAD").stdout.strip()
         service.wait_for(
             lambda: _disk_state(config).get("execution_stage") == "lifecycle",
@@ -1453,8 +1465,7 @@ def test_real_service_drop_retire_old_lineage_and_runs_fresh(
         git(publisher, "push", "origin", "HEAD:refs/heads/devlegate/control")
         later_control = git(publisher, "rev-parse", "HEAD").stdout.strip()
         assert (
-            git(control, "rev-parse", "origin/devlegate/control").stdout.strip()
-            == control_before_restart
+            git(control, "rev-parse", "HEAD").stdout.strip() == control_before_restart
         )
         service.start()
         service.wait_ready()
