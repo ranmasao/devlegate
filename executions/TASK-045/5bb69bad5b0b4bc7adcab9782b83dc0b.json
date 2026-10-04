@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6485f6b9fa3bcf4a58606e36e05684801a269f4d",
+  "conclusion": "completed",
+  "control_head": "84f1920e8e7ef31ab036036acfc798918d9a24fb",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-045",
+  "execution_id": "5bb69bad5b0b4bc7adcab9782b83dc0b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-045",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-045",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reformatted the lifecycle recovery reset and fast-forward merge invocations in src/devlegate/runtime.py to satisfy the configured 88-column Ruff limit without changing behavior."
+  },
+  "workspace_head": "1f9228eeac385998993e26bced064e9986356be8"
+}
