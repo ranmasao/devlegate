@@ -1,0 +1,28 @@
+{
+  "code_base_head": "1f9228eeac385998993e26bced064e9986356be8",
+  "conclusion": "completed",
+  "control_head": "6195c9f854b6c52dfea98531d1fa1b6e32593a37",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-046",
+  "execution_id": "4d954ccb67a74c9b9d0779cd12c1a9bd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-046",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-046/4d954ccb67a74c9b9d0779cd12c1a9bd.md",
+  "report_sha256": "c1232ce1a5c8a6fc9b601146e2dfd8c12e12f3c2f1fc83a219722f7cc5b88c19",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-046",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused control-plane, force-retry, execution-result, and runtime-store tests pass; Ruff passes. The repository-wide run reached an environment-only coverage failure because the subprocess Python environment lacks the `coverage` package.",
+    "summary": "Expanded TASK-046 recovery regressions to use a real non-zero-delta worker checkpoint and verify the same persisted execution transitions from an unobservable product remote to either normal lifecycle completion or complete product reconciliation. Existing runtime behavior required no production changes."
+  },
+  "workspace_head": "d254a3954f91735a64c79f886adc38cfe4aae66e"
+}
