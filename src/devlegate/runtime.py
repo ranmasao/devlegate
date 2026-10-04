@@ -6683,20 +6683,52 @@ class ServiceEngine:
                             )
                 return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
             if local_head != report.control_head:
-                self._prove_unpublished_lifecycle_lineage(
+                admitted_local = _git(
+                    self.control_worktree,
+                    "merge-base",
+                    "--is-ancestor",
+                    report.control_head,
+                    local_head,
+                    check=False,
+                )
+                local_remote = _git(
+                    self.control_worktree,
+                    "merge-base",
+                    "--is-ancestor",
                     local_head,
                     remote_head,
-                    report,
-                    apply_conclusion=apply_conclusion,
+                    check=False,
                 )
-                self._prove_control_descendant(remote_head, report)
-                reset = _git(
-                    self.control_worktree, "reset", "--hard", remote_head, check=False
-                )
-                if reset.returncode:
-                    raise WorkflowBlockedError(
-                        "cannot replay lifecycle on control descendant"
+                if admitted_local.returncode == 0 and local_remote.returncode == 0:
+                    # A locally observed commit can already be published when a
+                    # previous replay failed after fast-forwarding the worktree.
+                    # Do not mistake that published lineage for a local lifecycle
+                    # mutation; prove the bound ticket at the candidate remote head
+                    # and continue the idempotent replay from there.
+                    self._prove_control_descendant(remote_head, report)
+                else:
+                    self._prove_unpublished_lifecycle_lineage(
+                        local_head,
+                        remote_head,
+                        report,
+                        apply_conclusion=apply_conclusion,
                     )
+                    self._prove_control_descendant(remote_head, report)
+                    reset = _git(
+                        self.control_worktree, "reset", "--hard", remote_head, check=False
+                    )
+                    if reset.returncode:
+                        raise WorkflowBlockedError(
+                            "cannot replay lifecycle on control descendant"
+                        )
+                if local_remote.returncode == 0 and local_head != remote_head:
+                    merge = _git(
+                        self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+                    )
+                    if merge.returncode:
+                        raise WorkflowBlockedError(
+                            "cannot fast-forward control descendant"
+                        )
             elif remote_head != report.control_head:
                 self._prove_control_descendant(remote_head, report)
                 _log(

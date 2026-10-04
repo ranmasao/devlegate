@@ -35,7 +35,7 @@ from devlegate.execution_workspace import (
 from devlegate.host_installation import HostInstallation
 from devlegate.host_installation import write as write_installation
 from devlegate.project_registry import ProjectRegistry
-from devlegate.runtime import BlockedReason, _todo_fingerprint
+from devlegate.runtime import BlockedReason, WorkflowBlockedError, _todo_fingerprint
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import (
     WorkerAdmissionClosed,
@@ -990,6 +990,70 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
     report_path = next((control / "executions/T-1").glob("*.json"))
     report = json.loads(report_path.read_text())
     assert report["control_head"] == original_control
+
+
+def test_lifecycle_recovery_replays_after_fast_forwarded_validation_failure(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    monkeypatch.setattr(
+        devlegate._workers,
+        "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
+    )
+    monkeypatch.setattr(
+        devlegate,
+        "_apply_execution_lifecycle",
+        lambda _report: (_ for _ in ()).throw(
+            DevlegateError("simulated lifecycle interruption")
+        ),
+    )
+    with pytest.raises(DevlegateError, match="simulated lifecycle interruption"):
+        run_test_iteration(devlegate)
+    original_control = devlegate._state["execution_control_head"]
+
+    architect = tmp_path / "architect"
+    git(tmp_path, "clone", tmp_path / "remote.git", architect)
+    git(architect, "config", "user.email", "test@example.com")
+    git(architect, "config", "user.name", "Test User")
+    git(architect, "switch", "-c", "architect-control", "origin/devlegate/control")
+    (architect / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Future"\n---\nfuture\n'
+    )
+    git(architect, "add", "-A")
+    git(architect, "commit", "-m", "add future ticket")
+    descendant = git(architect, "rev-parse", "HEAD").stdout.strip()
+    git(architect, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered,
+        "_apply_lifecycle_once",
+        lambda _report, **_kwargs: (_ for _ in ()).throw(
+            WorkflowBlockedError("simulated validation failure")
+        ),
+    )
+    with pytest.raises(WorkflowBlockedError, match="simulated validation failure"):
+        run_test_iteration(recovered)
+    control = next((state / "worktrees").glob("*/control"))
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == descendant
+
+    recovered = Devlegate(config)
+    monkeypatch.setattr(
+        recovered._workers,
+        "run",
+        lambda *_args: pytest.fail("lifecycle recovery launched a worker"),
+    )
+    assert run_test_iteration(recovered) == 1
+    assert recovered._state["phase"] == "idle"
+    lifecycle = git(control, "rev-parse", "HEAD").stdout.strip()
+    assert git(control, "rev-parse", f"{lifecycle}^").stdout.strip() == descendant
+    report_path = next((control / "executions/T-1").glob("*.json"))
+    assert json.loads(report_path.read_text())["control_head"] == original_control
 
 
 def test_legacy_lifecycle_commit_replays_on_control_descendant_without_worker(
