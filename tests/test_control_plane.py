@@ -2584,14 +2584,19 @@ def test_post_checkpoint_unobservable_remote_retains_execution_binding(
     monkeypatch.setattr(
         engine._workers,
         "run",
-        lambda *_args, **_kwargs: WorkerRunResult(
-            0, None, WorkerClaim("blocked", "connectivity lost", (), ()), None
-        ),
+        lambda workspace, *_args, **_kwargs: (
+            (workspace.path / "worker-progress.txt").write_text("worker progress\n"),
+            WorkerRunResult(
+                0, None, WorkerClaim("blocked", "connectivity lost", (), ()), None
+            ),
+        )[-1],
     )
     assert run_test_iteration(engine) == 1
     retained = state_payload(state)
     assert retained["execution_stage"] == "post-checkpoint"
-    assert retained["pending_execution_report"]["workspace_head"] == base
+    checkpoint = retained["pending_execution_report"]["workspace_head"]
+    assert checkpoint != base
+    assert retained["execution_id"]
     assert "reconciliation" not in retained
     execution_id = retained["execution_id"]
 
@@ -2605,6 +2610,79 @@ def test_post_checkpoint_unobservable_remote_retains_execution_binding(
     assert recovered["execution_id"] == execution_id
     assert recovered["pending_execution_report"] == retained["pending_execution_report"]
     assert "reconciliation" not in recovered
+
+
+@pytest.mark.parametrize("product_changed", [False, True])
+def test_post_checkpoint_unobservable_remote_resumes_after_observation_returns(
+    tmp_path, monkeypatch, product_changed
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    original_observer = engine._observe_product_generation
+
+    def unavailable(_admitted_head):
+        return {
+            "classification": "unobservable",
+            "stable": False,
+            "branch": "main",
+            "local_head": base,
+            "remote_head": "",
+            "dirty": False,
+            "target_eligible": False,
+            "reason": "product remote could not be observed",
+        }
+
+    def worker(workspace, *_args, **_kwargs):
+        (workspace.path / "worker-progress.txt").write_text("worker progress\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "checkpointed work", (), ()), None
+        )
+
+    monkeypatch.setattr(engine, "_observe_product_generation", unavailable)
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    retained = state_payload(state)
+    checkpoint = retained["pending_execution_report"]["workspace_head"]
+    execution_id = retained["execution_id"]
+    assert checkpoint != base
+    assert retained["execution_stage"] == "post-checkpoint"
+    assert "reconciliation" not in retained
+
+    changed_head = base
+    if product_changed:
+        alternate = tmp_path / "restored-product"
+        git(working, "worktree", "add", "--detach", alternate, base)
+        git(alternate, "config", "user.email", "test@example.com")
+        git(alternate, "config", "user.name", "Test User")
+        (alternate / "restored-product.txt").write_text("product B\n")
+        git(alternate, "add", "restored-product.txt")
+        git(alternate, "commit", "-m", "advance restored product")
+        git(alternate, "push", "origin", "HEAD:main")
+        changed_head = git(alternate, "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.setattr(engine, "_observe_product_generation", original_observer)
+    if not product_changed:
+        assert run_test_iteration(engine) == 0
+        recovered = state_payload(state)
+        assert recovered["execution_id"] == execution_id
+        assert recovered.get("reconciliation") is None
+        assert recovered["phase"] == "idle"
+        control = next((state / "worktrees").glob("*/control"))
+        assert not (control / "kanban/todo/T-1.md").exists()
+    else:
+        with pytest.raises(WorkflowBlockedError, match="reconciliation required"):
+            run_test_iteration(engine)
+        recovered = state_payload(state)
+        reconciliation = recovered["reconciliation"]
+        assert recovered["execution_id"] == execution_id
+        assert reconciliation["worker_checkpoint"] == checkpoint
+        assert reconciliation["execution_report"]["execution_id"] == execution_id
+        assert reconciliation["product_remote_head"] == changed_head
+        assert reconciliation["product_remote_head"]
+        assert reconciliation["original_base"] == base
 
 
 def test_product_observation_does_not_use_stale_remote_tracking_ref(
