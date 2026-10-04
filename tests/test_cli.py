@@ -2100,6 +2100,35 @@ def test_retry_uses_daemon_authority_and_never_constructs_cli_engine(
     assert "retry accepted: T-1" in capsys.readouterr().out
 
 
+def test_force_retry_rejection_is_synchronous_and_has_no_success_ack(
+    cli_daemon, git_fixture, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cli,
+        "request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            IPCClientError("worker ownership is matching-live", application=True)
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "devlegate",
+            "--env",
+            str(_short_runtime_config(git_fixture)),
+            "retry",
+            "T-1",
+            "--force",
+        ],
+    )
+
+    assert main() == 1
+    output = capsys.readouterr()
+    assert "matching-live" in output.err
+    assert "forced retry admitted" not in output.out
+
+
 def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
     cli_daemon, git_fixture, monkeypatch, capsys
 ):

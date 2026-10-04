@@ -1218,7 +1218,9 @@ class ServiceEngine:
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("retained execution workspace topology is invalid")
         inspection = manager.inspect(base)
-        if inspection.classification not in {"REUSABLE", "UNSAFE"}:
+        if inspection.classification != "REUSABLE" and inspection.reason != (
+            "execution worktree is dirty"
+        ):
             raise DevlegateError(
                 f"retained execution workspace is not reusable: {inspection.reason}"
             )
