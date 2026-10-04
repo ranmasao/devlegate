@@ -62,6 +62,8 @@ def test_force_retry_dogfood_preserves_progress_and_uses_current_ticket(
     git(publisher, "add", "kanban/todo/T-1.md")
     git(publisher, "commit", "-m", "change current ticket")
     git(publisher, "push", "origin", "HEAD:devlegate/control")
+    git(control, "reset", "--hard", old_control)
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == old_control
 
     command = _force_command()
     with engine._lock():
@@ -86,10 +88,12 @@ def test_force_retry_dogfood_preserves_progress_and_uses_current_ticket(
 
     prompts = []
     execution_starts = []
+    execution_ids = []
 
     def worker(current_workspace, prompt, **_kwargs):
         prompts.append((current_workspace, prompt))
         execution_starts.append(engine._state.get("execution_start_head"))
+        execution_ids.append(engine._state.get("execution_id"))
         return WorkerRunResult(1, None, None, None)
 
     monkeypatch.setattr(engine._workers, "run", worker)
@@ -98,6 +102,7 @@ def test_force_retry_dogfood_preserves_progress_and_uses_current_ticket(
     assert prompts[0][0].path == workspace.path
     assert "Continue the existing implementation" in prompts[0][1]
     assert "changed current work" in prompts[0][1]
+    assert execution_ids and execution_ids[0] != "E1"
     assert engine._state["failed_executions"]["T-1"]["execution_id"] != "E1"
     assert execution_starts == [checkpoint]
 
@@ -155,7 +160,9 @@ def _prepare_changed_descendant(tmp_path, monkeypatch):
     return engine, workspace, control, old_control
 
 
-def test_force_retry_rejects_unchanged_descendant_without_mutation(tmp_path, monkeypatch):
+def test_force_retry_rejects_unchanged_descendant_without_mutation(
+    tmp_path, monkeypatch
+):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -263,6 +270,31 @@ def test_force_retry_save_failure_leaves_old_execution_retryable(tmp_path, monke
     assert engine._state["execution_id"] == "E1"
 
 
+def test_force_retry_reissues_after_precommit_save_failure(tmp_path, monkeypatch):
+    engine, _workspace, _control, _old_control = _prepare_changed_descendant(
+        tmp_path, monkeypatch
+    )
+    command = _force_command("retry-again")
+    engine._validate_operator_admission(command)
+    original_save = engine._save_state
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DevlegateError("injected state save failure")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_save_state", fail_once)
+    with pytest.raises(DevlegateError, match="state save failure"):
+        engine._record_operator_admission(command)
+    assert engine._state["execution_id"] == "E1"
+    engine._record_operator_admission(command)
+    assert engine._state["phase"] == "idle"
+    assert engine._state["force_retry_authorization"]["request_id"] == "retry-again"
+
+
 def test_force_retry_replays_after_restart_and_creates_one_fresh_execution(
     tmp_path, monkeypatch
 ):
@@ -301,3 +333,36 @@ def test_force_retry_duplicate_request_returns_same_receipt_without_second_check
     second = engine.submit_retry("T-1", force=True, request_id=command.request_id)
     assert first == second == {"accepted": True, "ticket_id": "T-1"}
     assert state_payload(engine.state_dir) == state_after
+
+
+def test_force_retry_authorization_is_consumed_once_after_restart(
+    tmp_path, monkeypatch
+):
+    engine, workspace, _control, _old_control = _prepare_changed_descendant(
+        tmp_path, monkeypatch
+    )
+    command = _force_command("restart-once")
+    engine._validate_operator_admission(command)
+    engine._record_operator_admission(command)
+    restarted = ServiceEngine(engine.env_file)
+    seen = []
+
+    def worker(current_workspace, _prompt, **kwargs):
+        seen.append((kwargs["execution_id"], current_workspace.path))
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(restarted._workers, "run", worker)
+    assert run_test_iteration(restarted) == 1
+    first_execution = seen[0][0]
+    assert first_execution != "E1"
+    assert seen[0][1] == workspace.path
+    assert restarted._state["force_retry_authorization"] is None
+
+    again = ServiceEngine(restarted.env_file)
+    monkeypatch.setattr(
+        again._workers,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("forced authorization replayed"),
+    )
+    assert again._state["execution_id"] == first_execution
+    assert again._state["phase"] == "idle"
