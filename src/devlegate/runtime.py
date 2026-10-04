@@ -1173,6 +1173,11 @@ class ServiceEngine:
             )
         product = self._observe_product_generation(admitted_product)
         if not product["stable"]:
+            if product["classification"] == "unobservable":
+                raise DevlegateError(
+                    "product remote could not be observed; "
+                    "retry when connectivity returns"
+                )
             raise DevlegateError(
                 "product generation changed; use normal product reconciliation"
             )
@@ -4511,6 +4516,19 @@ class ServiceEngine:
             self._refresh_published_status()
             return 0
         product = self._observe_product_generation(workspace.base_head)
+        if product["classification"] == "unobservable":
+            reason = (
+                "product remote could not be observed; "
+                "retrying when connectivity returns"
+            )
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            _log(reason)
+            return 1
+        if product["classification"] == "unsafe-local":
+            reason = f"product generation is unsafe-local; {product['reason']}"
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            _log(reason)
+            return 1
         current_product_remote = product["remote_head"]
         if not product["stable"]:
             if self._is_zero_delta_stale_product_drift(
@@ -5934,8 +5952,9 @@ class ServiceEngine:
             observation.append("wrong product branch or detached checkout")
         if dirty:
             observation.append("product checkout is dirty")
-        if not local_head or not remote_head:
-            observation.append("product generation could not be observed")
+        remote_observable = bool(fetch.returncode == 0 and remote_head)
+        if not remote_observable:
+            observation.append("product remote could not be observed")
         if local_head and local_head != admitted_head:
             observation.append("local product HEAD advanced")
         if remote_head and remote_head != admitted_head:
@@ -5946,7 +5965,16 @@ class ServiceEngine:
             and local_head == admitted_head
             and remote_head == admitted_head
         )
+        if not branch_ok or dirty:
+            classification = "unsafe-local"
+        elif not local_head or not remote_observable:
+            classification = "unobservable"
+        elif stable:
+            classification = "stable"
+        else:
+            classification = "changed"
         return {
+            "classification": classification,
             "stable": stable,
             "branch": branch,
             "local_head": local_head,
@@ -5955,6 +5983,74 @@ class ServiceEngine:
             "target_eligible": target_eligible,
             "reason": "; ".join(observation) if observation else "stable",
         }
+
+    def _persist_product_reconciliation(
+        self,
+        report: ExecutionReport,
+        product: dict[str, object],
+        execution_remote_head: object,
+    ) -> None:
+        product_remote_head = product["remote_head"]
+        if not isinstance(product_remote_head, str) or not product_remote_head:
+            raise WorkflowBlockedError(
+                "changed product lacks an observed remote identity"
+            )
+        observed_product = (
+            product["local_head"]
+            if product["local_head"] != report.code_base_head
+            else product_remote_head
+        )
+        if not isinstance(observed_product, str) or not observed_product:
+            raise WorkflowBlockedError("changed product lacks an observed identity")
+        evidence_ref = self._reconciliation_evidence_ref(
+            report.ticket_id, report.execution_id
+        )
+        existing_evidence = _git(
+            self.repo, "rev-parse", "--verify", evidence_ref, check=False
+        )
+        if existing_evidence.returncode == 0 and (
+            existing_evidence.stdout.strip() != report.workspace_head
+        ):
+            raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
+        pinned = _git(
+            self.repo,
+            "update-ref",
+            evidence_ref,
+            str(report.workspace_head),
+            check=False,
+        )
+        if pinned.returncode:
+            raise WorkflowBlockedError(
+                "cannot pin reconciliation worker checkpoint evidence"
+            )
+        reconciliation = {
+            "status": "pending",
+            "reason": str(product["reason"]),
+            "resolution": None,
+            "ticket_id": report.ticket_id,
+            "execution_id": report.execution_id,
+            "original_base": report.code_base_head,
+            "observed_product": observed_product,
+            "worker_checkpoint": report.workspace_head,
+            "execution_remote_head": execution_remote_head,
+            "product_remote_head": product_remote_head,
+            "control_head": str(self._state["execution_control_head"]),
+            "execution_branch": report.execution_branch,
+            "execution_path": report.execution_path,
+            "evidence_ref": evidence_ref,
+            "product_branch": product["branch"] or "",
+            "product_local_head": product["local_head"],
+            "product_dirty": product["dirty"],
+            "product_observation": product["reason"],
+            "product_target_eligible": product["target_eligible"],
+            "execution_report": report.as_dict(),
+        }
+        self._save_state(
+            "idle",
+            handled_remote_head=product_remote_head,
+            handled_control_head=str(self._state["control_head"]),
+            reconciliation=reconciliation,
+        )
 
     def _report_matches_execution_state(self, report: ExecutionReport) -> None:
         self._report_matches_execution_binding(report)
@@ -6206,9 +6302,17 @@ class ServiceEngine:
             stage = "post-checkpoint"
         product = (
             self._observe_product_generation(report.code_base_head)
-            if report.workspace_head == report.code_base_head
-            else None
         )
+        classification = product["classification"]
+        if classification == "unobservable":
+            raise WorkflowBlockedError(
+                "product remote could not be observed; "
+                "retrying when connectivity returns"
+            )
+        if classification == "unsafe-local":
+            raise WorkflowBlockedError(
+                f"product generation is unsafe-local; {product['reason']}"
+            )
         if product is not None and self._is_zero_delta_stale_product_drift(
             report.code_base_head, report.workspace_head, product
         ):
@@ -6220,7 +6324,13 @@ class ServiceEngine:
                 automatic_retry=retry,
             )
             return
-        self._prove_product_generation()
+        if classification != "stable":
+            self._persist_product_reconciliation(
+                report, product, self._state.get("execution_remote_head")
+            )
+            raise WorkflowBlockedError(
+                "product generation changed; reconciliation required"
+            )
         if stage in {"post-checkpoint", "publishing"}:
             if report.workspace_head is None or workspace.head != report.workspace_head:
                 raise WorkflowBlockedError(
@@ -8768,6 +8878,11 @@ class ServiceEngine:
             self._assert_product_checkout_unchanged(self.current_branch, original_base)
             product = self._observe_product_generation(original_base)
             if not product["stable"]:
+                if product["classification"] == "unobservable":
+                    raise DevlegateError(
+                        "product remote could not be observed; "
+                        "retry when connectivity returns"
+                    )
                 raise DevlegateError(
                     "same-base reconciliation requires a clean unchanged product "
                     "generation"
@@ -8844,6 +8959,11 @@ class ServiceEngine:
             # Re-observe immediately after the durable write-ahead intent.
             product = self._observe_product_generation(original_base)
             if not product["stable"]:
+                if product["classification"] == "unobservable":
+                    raise DevlegateError(
+                        "product remote could not be observed; "
+                        "retry when connectivity returns"
+                    )
                 raise DevlegateError("product generation changed before publication")
             reobserved_remote = self._execution_remote_head(manager.branch)
             if reobserved_remote != remote:
