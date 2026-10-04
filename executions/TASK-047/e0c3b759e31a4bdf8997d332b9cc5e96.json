@@ -1,0 +1,28 @@
+{
+  "code_base_head": "bfa69fcbaf176e560a6c968a103b5dfd1dd88d7e",
+  "conclusion": "completed",
+  "control_head": "76e8b0f8559b0a16991183a8c6aab9996ecfa8b5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-047",
+  "execution_id": "e0c3b759e31a4bdf8997d332b9cc5e96",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-047",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-047/e0c3b759e31a4bdf8997d332b9cc5e96.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-047",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Implemented execution-scoped log following based on the exact execution ID, durable execution reports, and runtime lifecycle state. The follower waits for delayed active logs, drains final output after terminalization, reports missing terminal logs clearly, and never switches to later executions; regression coverage was added for the required lifecycle cases."
+  },
+  "workspace_head": "5c0dc12e1e856a34ea545a4483015be6a112099d"
+}
