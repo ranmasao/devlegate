@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6485f6b9fa3bcf4a58606e36e05684801a269f4d",
+  "conclusion": "completed",
+  "control_head": "a2417e6fa3ec1aa4b03307b1331ba4c19541a6f5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-045",
+  "execution_id": "f7017873eab340b09ed3ef7be1f7deb5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-045",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-045/f7017873eab340b09ed3ef7be1f7deb5.md",
+  "report_sha256": "705b40b390b6493c774bfdf19a7e3491252d2a12dea9179192ce8ca2e068ea35",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-045",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Changed src/devlegate/runtime.py and tests/test_control_plane.py. Python compilation and git diff checks passed; pytest, uv, and ruff were unavailable in the workspace.",
+    "summary": "Added topology-aware lifecycle recovery for published control descendants, including the case where a prior replay fast-forwarded local control before lifecycle validation failed. Recovery now proves the admitted-to-candidate ancestry and active-ticket identity, fast-forwards published intermediate descendants safely, and retains exact unpublished lifecycle proof for local-only histories. Added a regression covering retry after a post-fast-forward lifecycle failure."
+  },
+  "workspace_head": "43c97e242c1907e1861eb533938afe65d1a9cacb"
+}
