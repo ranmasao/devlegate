@@ -12,6 +12,7 @@ from devlegate.log_reader import (
     LogReaderError,
     execution_id,
     execution_log,
+    follow_execution,
     follow_file,
     journal_command,
     service_unit,
@@ -289,3 +290,132 @@ def test_follow_remains_bound_to_resolved_execution(tmp_path, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "a-after\n" in output
     assert "b-after\n" not in output
+
+
+def test_execution_follow_drains_after_terminal_report(tmp_path, monkeypatch, capsys):
+    identifier = "a" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": identifier}
+    )
+    path = execution_log_path(state, "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("before\n")
+
+    calls = 0
+
+    def terminalize(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            path.write_text("before\nfinal\n")
+            _report(control, identifier)
+            SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", terminalize)
+    assert follow_execution(state, "key", control, identifier, 10) == 0
+    assert capsys.readouterr().out == "before\nfinal\n"
+
+
+def test_execution_follow_exits_for_already_terminal_execution(
+    tmp_path, monkeypatch, capsys
+):
+    identifier = "d" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    _report(control, identifier)
+    path = execution_log_path(state, "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("complete\n")
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", lambda _seconds: None)
+
+    assert follow_execution(state, "key", control, identifier, 10) == 0
+    assert capsys.readouterr().out == "complete\n"
+
+
+def test_execution_follow_ignores_leader_exit_before_terminal_report(
+    tmp_path, monkeypatch, capsys
+):
+    identifier = "e" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": identifier}
+    )
+    path = execution_log_path(state, "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("leader\n")
+    calls = 0
+
+    def lifecycle(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+        elif calls == 2:
+            path.write_text("leader\nretired\n")
+            _report(control, identifier)
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", lifecycle)
+    assert follow_execution(state, "key", control, identifier, 10) == 0
+    assert capsys.readouterr().out == "leader\nretired\n"
+
+
+def test_execution_follow_does_not_switch_to_later_ticket_execution(
+    tmp_path, monkeypatch, capsys
+):
+    first = "f" * 32
+    second = "1" + "f" * 31
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    _report(control, first, ticket="same-ticket")
+    _report(control, second, ticket="same-ticket")
+    first_path = execution_log_path(state, "key", first)
+    second_path = execution_log_path(state, "key", second)
+    first_path.parent.mkdir(parents=True)
+    first_path.write_text("first\n")
+    second_path.write_text("second\n")
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", lambda _seconds: None)
+
+    assert follow_execution(state, "key", control, first, 10) == 0
+    assert capsys.readouterr().out == "first\n"
+
+
+def test_execution_follow_waits_for_delayed_log_creation(tmp_path, monkeypatch, capsys):
+    identifier = "b" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": identifier}
+    )
+    path = execution_log_path(state, "key", identifier)
+    calls = 0
+
+    def create_then_terminalize(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            path.parent.mkdir(parents=True)
+            path.write_text("delayed\n")
+        elif calls == 2:
+            _report(control, identifier)
+            SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", create_then_terminalize)
+    assert follow_execution(state, "key", control, identifier, 10) == 0
+    assert capsys.readouterr().out == "delayed\n"
+
+
+def test_terminal_execution_without_log_fails_without_waiting(tmp_path, monkeypatch):
+    identifier = "c" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    _report(control, identifier)
+    monkeypatch.setattr(
+        "devlegate.log_reader.time.sleep",
+        lambda _seconds: pytest.fail("terminal execution must not wait"),
+    )
+
+    with pytest.raises(LogReaderError, match="execution log not found"):
+        follow_execution(state, "key", control, identifier, 10)

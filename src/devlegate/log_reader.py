@@ -201,3 +201,79 @@ def follow_file(path: Path, lines: int) -> int:
                     time.sleep(0.1)
         except KeyboardInterrupt:
             return 130
+
+
+def _execution_active(state_dir: Path, state_key: str, execution: str) -> bool:
+    try:
+        state = SQLiteRuntimeStore(state_dir, state_key).load()
+    except RuntimeStoreError as error:
+        raise LogReaderError(str(error)) from error
+    return (
+        isinstance(state, dict)
+        and state.get("phase") in {"agent_pending", "agent_running"}
+        and state.get("execution_id") == execution
+    )
+
+
+def _execution_terminal(control_worktree: Path, execution: str) -> bool:
+    try:
+        reports = ExecutionReportStore(control_worktree).list()
+    except ExecutionReportError as error:
+        raise LogReaderError(str(error)) from error
+    return any(report.execution_id == execution for report in reports)
+
+
+def follow_execution(
+    state_dir: Path,
+    state_key: str,
+    control_worktree: Path,
+    execution: str,
+    lines: int,
+) -> int:
+    """Follow one immutable execution until its durable report and log EOF."""
+    lines = _lines(lines)
+    try:
+        path = execution_log_path(state_dir, state_key, execution)
+    except OperationalLogError as error:
+        raise LogReaderError(str(error)) from error
+    handle = None
+    try:
+        while handle is None:
+            terminal = _execution_terminal(control_worktree, execution)
+            active = _execution_active(state_dir, state_key, execution)
+            if path.is_file():
+                print("".join(_read_file(path, lines)), end="", flush=True)
+                handle = path.open(encoding="utf-8")
+                handle.seek(0, 2)
+                break
+            if terminal or not active:
+                if terminal:
+                    raise LogReaderError(f"execution log not found: {path}")
+                raise LogReaderError(
+                    f"execution {execution} is no longer active and has no report"
+                )
+            time.sleep(0.1)
+
+        while True:
+            line = handle.readline()
+            if line:
+                print(line, end="", flush=True)
+                continue
+            if _execution_terminal(control_worktree, execution):
+                # The report is the lifecycle boundary; consume everything that
+                # was published before or during terminalization, then stop.
+                time.sleep(0.1)
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        return 0
+                    print(line, end="", flush=True)
+            if not _execution_active(state_dir, state_key, execution):
+                time.sleep(0.1)
+                continue
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        if handle is not None:
+            handle.close()

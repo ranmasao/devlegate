@@ -47,12 +47,13 @@ from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
 from devlegate.log_reader import (
     LogReaderError,
+    execution_id,
     execution_log,
-    follow_file,
+    follow_execution,
     service_unit,
     stream_journal,
 )
-from devlegate.operational_log import execution_log_path, service_log
+from devlegate.operational_log import service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_registry import (
@@ -2235,25 +2236,33 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
         if args.logs_source == "service":
             unit = service_unit(target.locator.state_dir, target.locator.state_key)
             return stream_journal(unit, args.lines, args.follow)
+        control_worktree = (
+            target.locator.state_dir
+            / "worktrees"
+            / target.locator.state_key
+            / "control"
+        )
+        if args.follow:
+            resolved = execution_id(
+                control_worktree,
+                args.execution_id,
+                state_dir=target.locator.state_dir,
+                state_key=target.locator.state_key,
+            )
+            return follow_execution(
+                target.locator.state_dir,
+                target.locator.state_key,
+                control_worktree,
+                resolved,
+                args.lines,
+            )
         resolved, content = execution_log(
             target.locator.state_dir,
             target.locator.state_key,
-            (
-                target.locator.state_dir
-                / "worktrees"
-                / target.locator.state_key
-                / "control"
-            ),
+            control_worktree,
             args.execution_id,
             args.lines,
         )
-        if args.follow:
-            return follow_file(
-                execution_log_path(
-                    target.locator.state_dir, target.locator.state_key, resolved
-                ),
-                args.lines,
-            )
         print("".join(content), end="")
         return 0
     except LogReaderError as error:
