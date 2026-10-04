@@ -1,0 +1,28 @@
+{
+  "code_base_head": "1f9228eeac385998993e26bced064e9986356be8",
+  "conclusion": "completed",
+  "control_head": "76e86740e42b4388f55a32335b0d640aa54e5cd6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-046",
+  "execution_id": "990a644e9bfd415cb027fdfa85320930",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-046",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-046",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened the live-service drop test to publish control withdrawal and replacement commits from an isolated publisher worktree while the daemon remains active. Updated the assertion to verify the service-owned control checkout remains unchanged."
+  },
+  "workspace_head": "bfa69fcbaf176e560a6c968a103b5dfd1dd88d7e"
+}
