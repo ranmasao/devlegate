@@ -114,9 +114,11 @@ def dispatch_mutation(
         force = request.payload.get("force", False)
         if not isinstance(force, bool):
             raise IPCProtocolError("invalid_request", "retry force must be boolean")
-        return engine.submit_retry(
-            ticket_id, force=force, request_id=request.request_id
-        )
+        if force:
+            return engine.submit_retry(
+                ticket_id, force=True, request_id=request.request_id
+            )
+        return engine.submit_retry(ticket_id, request_id=request.request_id)
     if request.method == "drop":
         if set(request.payload) != {"ticket_id", "execution_id"}:
             raise IPCProtocolError(

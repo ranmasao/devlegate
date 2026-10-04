@@ -1181,13 +1181,7 @@ class ServiceEngine:
             raise DevlegateError(
                 "forced retry control admission identity is incomplete"
             )
-        self._validate_control_worktree()
-        current_control = _git(
-            self.control_worktree, "rev-parse", "HEAD", check=False
-        )
-        if current_control.returncode:
-            raise DevlegateError("current control generation could not be observed")
-        current_head = current_control.stdout.strip()
+        current_head, _remote_head = self._sync_control()
         descendant = _git(
             self.control_worktree,
             "merge-base",
@@ -1240,14 +1234,18 @@ class ServiceEngine:
                 f"retained execution workspace integrity could not be proven: {error}"
             ) from error
 
-    def _force_retry_transition(self, ticket_id: str) -> None:
+    def _force_retry_transition(
+        self,
+        ticket_id: str,
+        request_id: str,
+        receipt: dict[str, object],
+        receipts: dict[str, object],
+    ) -> None:
         """Checkpoint and retire a proven stranded execution before retry."""
         state = self._state
         execution_id = str(state["execution_id"])
         old_control = str(state["execution_control_head"])
-        current_control = _git(
-            self.control_worktree, "rev-parse", "HEAD"
-        ).stdout.strip()
+        current_control, _remote_head = self._sync_control()
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id
         )
@@ -1316,6 +1314,7 @@ class ServiceEngine:
         self._save_state(
             "idle",
             clear_execution=True,
+            preserve_resume_required=True,
             execution_stage=None,
             failed_executions=failed,
             resume_required={
@@ -1325,7 +1324,21 @@ class ServiceEngine:
                 "execution_id": execution_id,
                 "evidence_ref": evidence_ref,
                 "force_retry": True,
+                "execution_base_head": state["execution_base_head"],
+                "execution_remote_head": state.get("execution_remote_head"),
             },
+            force_retry_authorization={
+                "status": "admitted",
+                "request_id": request_id,
+                "ticket_id": ticket_id,
+                "old_execution_id": execution_id,
+                "control_head": current_control,
+                "todo_fingerprint": todo_fingerprint,
+                "checkpoint": checkpoint.after_head,
+                "execution_base_head": state["execution_base_head"],
+                "execution_remote_head": state.get("execution_remote_head"),
+            },
+            mutable_receipts={**receipts, request_id: receipt},
             force_retry_provenance={
                 "old_execution_id": execution_id,
                 "ticket_id": ticket_id,
@@ -1340,7 +1353,9 @@ class ServiceEngine:
                 ),
             },
             handled_control_head=current_control,
-            handled_todo_fingerprint=todo_fingerprint,
+            # Leave the current ticket generation unhandled so the forced
+            # authorization produces the fresh execution below.
+            handled_todo_fingerprint="",
         )
 
     def _validate_drop_admission(
@@ -2080,8 +2095,6 @@ class ServiceEngine:
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
-        if command.method == "retry" and command.force:
-            self._force_retry_transition(command.ticket_id)
         if command.method == "drop":
             self._drop_owned(command.ticket_id, command.execution_id)
         with self._receipt_lock:
@@ -2108,6 +2121,11 @@ class ServiceEngine:
                 if command.resolution_class is None:
                     raise DevlegateError("automatic reconciliation was not classified")
                 receipt["resolution_class"] = command.resolution_class
+            if command.method == "retry" and command.force:
+                self._force_retry_transition(
+                    command.ticket_id, command.request_id, receipt, updated
+                )
+                return
             updated[command.request_id] = receipt
             reconciliation = None
             if command.method == "reconcile-resume":
@@ -3270,6 +3288,7 @@ class ServiceEngine:
         phase: str,
         *,
         clear_execution: bool = False,
+        preserve_resume_required: bool = False,
         clear_pre_worker_generation: bool = False,
         clear_operator_recovery: bool = False,
         **fields: object,
@@ -3284,7 +3303,7 @@ class ServiceEngine:
             state.pop("execution_interruption_kind", None)
             state["worker_identity"] = None
         if clear_execution:
-            for field in (
+            fields_to_clear = (
                 "execution_ticket_id",
                 "execution_base_head",
                 "execution_control_head",
@@ -3294,7 +3313,10 @@ class ServiceEngine:
                 "execution_remote_head",
                 "execution_start_head",
                 "resume_required",
-            ):
+            )
+            for field in fields_to_clear:
+                if field == "resume_required" and preserve_resume_required:
+                    continue
                 state.pop(field, None)
         if clear_pre_worker_generation:
             for field in (
@@ -3471,6 +3493,16 @@ class ServiceEngine:
 
     def _run_iteration_body(self, authorization: ExecutionAuthorization | None) -> int:
         self._publish_service_snapshot(lifecycle="processing")
+        persisted_force = self._state.get("force_retry_authorization")
+        if (
+            authorization is None
+            and isinstance(persisted_force, dict)
+            and persisted_force.get("status") == "admitted"
+            and isinstance(persisted_force.get("ticket_id"), str)
+        ):
+            authorization = ExecutionAuthorization(
+                persisted_force["ticket_id"], "forced_retry"
+            )
         if self._stop_requested() and self._state.get("phase") != "merge_pending":
             return 0
         self._workflow_validation_succeeded = False
@@ -4215,12 +4247,28 @@ class ServiceEngine:
                 else control_head
             )
             execution_base_head = (
-                self._state["execution_base_head"] if existing_lineage else local_head
+                self._state["execution_base_head"]
+                if existing_lineage
+                else (
+                    self._state.get("force_retry_authorization", {}).get(
+                        "execution_base_head", local_head
+                    )
+                    if authorization is not None and authorization.is_forced_retry
+                    else local_head
+                )
             )
             execution_remote_head = (
                 self._state.get("execution_remote_head")
                 if pending_agent_execution
-                else self._execution_remote_head(f"devlegate/work/{selected_ticket.id}")
+                else (
+                    self._state.get("force_retry_authorization", {}).get(
+                        "execution_remote_head"
+                    )
+                    if authorization is not None and authorization.is_forced_retry
+                    else self._execution_remote_head(
+                        f"devlegate/work/{selected_ticket.id}"
+                    )
+                )
             )
             if execution_remote_head is not None and not isinstance(
                 execution_remote_head, str
@@ -4264,6 +4312,7 @@ class ServiceEngine:
                 execution_remote_head=execution_remote_head,
                 worker_identity=None,
                 resume_required=None,
+                force_retry_authorization=None,
                 automatic_retry=(
                     {
                         **automatic_retry,
@@ -6742,7 +6791,9 @@ class ServiceEngine:
         self, command: OperatorCommand, stop_event: threading.Event | None
     ) -> int:
         if command.method == "retry":
-            return self._retry_owned(command.ticket_id, stop_event, command.force)
+            if command.force:
+                return self._retry_owned(command.ticket_id, stop_event, True)
+            return self._retry_owned(command.ticket_id, stop_event)
         if command.method == "drop":
             return 0
         if command.method == "recover":
@@ -8063,7 +8114,9 @@ class ServiceEngine:
                 self._reconcile_stranded_execution()
             else:
                 self._recover_interrupted_execution(ticket_id)
-        return self._retry_locked(ticket_id, stop_event, force)
+        if force:
+            return self._retry_locked(ticket_id, stop_event, True)
+        return self._retry_locked(ticket_id, stop_event)
 
     def _retry_locked(
         self,
@@ -8071,10 +8124,18 @@ class ServiceEngine:
         stop_event: threading.Event | None = None,
         force: bool = False,
     ) -> int:
-        candidates = self._retry_candidates()
-        candidate_ids = {candidate[0] for candidate in candidates}
-        if ticket_id not in candidate_ids:
-            raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
+        forced_authorization = self._state.get("force_retry_authorization")
+        forced = (
+            force
+            and isinstance(forced_authorization, dict)
+            and forced_authorization.get("status") == "admitted"
+            and forced_authorization.get("ticket_id") == ticket_id
+        )
+        if not forced:
+            candidates = self._retry_candidates()
+            candidate_ids = {candidate[0] for candidate in candidates}
+            if ticket_id not in candidate_ids:
+                raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         intent = IterationIntent(retry_ticket_id=ticket_id, force_retry=force)
         if stop_event is None:
             return self.run_iteration(intent)
