@@ -6715,7 +6715,11 @@ class ServiceEngine:
                     )
                     self._prove_control_descendant(remote_head, report)
                     reset = _git(
-                        self.control_worktree, "reset", "--hard", remote_head, check=False
+                        self.control_worktree,
+                        "reset",
+                        "--hard",
+                        remote_head,
+                        check=False,
                     )
                     if reset.returncode:
                         raise WorkflowBlockedError(
@@ -6723,7 +6727,11 @@ class ServiceEngine:
                         )
                 if local_remote.returncode == 0 and local_head != remote_head:
                     merge = _git(
-                        self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+                        self.control_worktree,
+                        "merge",
+                        "--ff-only",
+                        remote_ref,
+                        check=False,
                     )
                     if merge.returncode:
                         raise WorkflowBlockedError(
