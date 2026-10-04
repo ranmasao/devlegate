@@ -1,0 +1,22 @@
+{
+  "code_base_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76",
+  "conclusion": "failed",
+  "control_head": "fdaa5d94a0a558746be795ef1a52a55cff3b7173",
+  "egress_error": "exactly one devlegate_report event is required",
+  "egress_ok": false,
+  "execution_branch": "devlegate/work/TASK-044",
+  "execution_id": "2527642ee1794ed794721852c1dba2a9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-044",
+  "process_returncode": 1,
+  "questions": [],
+  "reason": "worker exited with status 1",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-044",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": null,
+  "workspace_head": "6ab57e8afab31fa37377ba41ee2b628f88057789"
+}
