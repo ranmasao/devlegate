@@ -1173,7 +1173,7 @@ class ServiceEngine:
             )
         product = self._observe_product_generation(admitted_product)
         if not product["stable"]:
-            if product["classification"] == "unobservable":
+            if product.get("classification") == "unobservable":
                 raise DevlegateError(
                     "product remote could not be observed; "
                     "retry when connectivity returns"
@@ -4524,7 +4524,10 @@ class ServiceEngine:
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             _log(reason)
             return 1
-        if product["classification"] == "unsafe-local":
+        if (
+            product["classification"] == "unsafe-local"
+            and not product.get("remote_head")
+        ):
             reason = f"product generation is unsafe-local; {product['reason']}"
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             _log(reason)
@@ -5965,7 +5968,9 @@ class ServiceEngine:
             and local_head == admitted_head
             and remote_head == admitted_head
         )
-        if not branch_ok or dirty:
+        if not branch_ok or dirty or (
+            local_head and local_head != admitted_head
+        ):
             classification = "unsafe-local"
         elif not local_head or not remote_observable:
             classification = "unobservable"
@@ -6309,7 +6314,7 @@ class ServiceEngine:
                 "product remote could not be observed; "
                 "retrying when connectivity returns"
             )
-        if classification == "unsafe-local":
+        if classification == "unsafe-local" and not product.get("remote_head"):
             raise WorkflowBlockedError(
                 f"product generation is unsafe-local; {product['reason']}"
             )

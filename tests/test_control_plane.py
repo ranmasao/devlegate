@@ -2559,6 +2559,79 @@ def test_zero_delta_checkpoint_recovery_observes_drift_after_restart(
     assert len(fresh_ids) == 1
 
 
+def test_post_checkpoint_unobservable_remote_retains_execution_binding(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    def unavailable(_admitted_head):
+        return {
+            "classification": "unobservable",
+            "stable": False,
+            "branch": "main",
+            "local_head": base,
+            "remote_head": "",
+            "dirty": False,
+            "target_eligible": False,
+            "reason": "product remote could not be observed",
+        }
+
+    monkeypatch.setattr(engine, "_observe_product_generation", unavailable)
+    monkeypatch.setattr(
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(
+            0, None, WorkerClaim("blocked", "connectivity lost", (), ()), None
+        ),
+    )
+    assert run_test_iteration(engine) == 1
+    retained = state_payload(state)
+    assert retained["execution_stage"] == "post-checkpoint"
+    assert retained["pending_execution_report"]["workspace_head"] == base
+    assert "reconciliation" not in retained
+    execution_id = retained["execution_id"]
+
+    restarted = Devlegate(config)
+    monkeypatch.setattr(restarted, "_observe_product_generation", unavailable)
+    with pytest.raises(
+        WorkflowBlockedError, match="product remote could not be observed"
+    ):
+        run_test_iteration(restarted)
+    recovered = state_payload(state)
+    assert recovered["execution_id"] == execution_id
+    assert recovered["pending_execution_report"] == retained["pending_execution_report"]
+    assert "reconciliation" not in recovered
+
+
+def test_product_observation_does_not_use_stale_remote_tracking_ref(
+    tmp_path, monkeypatch
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "rev-parse", "origin/main").stdout.strip() == base
+    git(working, "config", "remote.origin.url", str(tmp_path / "offline-remote"))
+
+    observation = engine._observe_product_generation(base)
+
+    assert observation["classification"] == "unobservable"
+    assert observation["remote_head"] == ""
+    assert observation["stable"] is False
+
+    (working / "local-change.txt").write_text("local change\n")
+    git(working, "add", "local-change.txt")
+    git(working, "commit", "-m", "local product change")
+    ambiguous = engine._observe_product_generation(base)
+    assert ambiguous["classification"] == "unsafe-local"
+    assert ambiguous["remote_head"] == ""
+
+
 def test_zero_delta_without_product_drift_does_not_retry(
     tmp_path, monkeypatch
 ):
