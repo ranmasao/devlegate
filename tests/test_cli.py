@@ -340,6 +340,7 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     )
     assert "  reconcile      perform explicit reconciliation" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
+    assert build_parser().parse_args(["retry", "T-1", "--force"]).force is True
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
 
 

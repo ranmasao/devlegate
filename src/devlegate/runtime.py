@@ -8124,13 +8124,14 @@ class ServiceEngine:
         stop_event: threading.Event | None = None,
         force: bool = False,
     ) -> int:
-        forced_authorization = self._state.get("force_retry_authorization")
-        forced = (
-            force
-            and isinstance(forced_authorization, dict)
-            and forced_authorization.get("status") == "admitted"
-            and forced_authorization.get("ticket_id") == ticket_id
-        )
+        forced = False
+        if force:
+            forced_authorization = self._state.get("force_retry_authorization")
+            forced = (
+                isinstance(forced_authorization, dict)
+                and forced_authorization.get("status") == "admitted"
+                and forced_authorization.get("ticket_id") == ticket_id
+            )
         if not forced:
             candidates = self._retry_candidates()
             candidate_ids = {candidate[0] for candidate in candidates}

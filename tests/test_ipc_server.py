@@ -1708,6 +1708,21 @@ def test_retry_mutation_payload_is_strict(payload):
         dispatch_mutation(FakeEngine(), _request("retry", payload))
 
 
+def test_force_retry_mutation_forwards_force_only_when_requested():
+    calls = []
+
+    class FakeEngine:
+        def submit_retry(self, ticket_id, *, request_id, force=False):
+            calls.append((ticket_id, force, request_id))
+            return {"accepted": True, "ticket_id": ticket_id}
+
+    result = dispatch_mutation(
+        FakeEngine(), _request("retry", {"ticket_id": "T-1", "force": True})
+    )
+    assert result == {"accepted": True, "ticket_id": "T-1"}
+    assert calls == [("T-1", True, "id")]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
