@@ -1,0 +1,28 @@
+{
+  "code_base_head": "1f9228eeac385998993e26bced064e9986356be8",
+  "conclusion": "completed",
+  "control_head": "9539756db37f15d48cc7a203505569369427f0da",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-046",
+  "execution_id": "306f8ac9fb7241058bcd4f8433d50971",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-046",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-046/306f8ac9fb7241058bcd4f8433d50971.md",
+  "report_sha256": "27f89bbeecfdda0c68aab2f6690d1a570bf8451f58d8302a38ba5a6d5133363f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-046",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated src/devlegate/runtime.py only. Validation available in this workspace passed for Ruff, compilation, and diff whitespace checks; pytest is not installed.",
+    "summary": "Hardened product generation observation with explicit stable, changed, unobservable, and unsafe-local classifications. Fetch failures now leave the durable post-checkpoint execution binding and report untouched with an operator-visible retryable blocked reason, while changed generations use complete observed reconciliation identities."
+  },
+  "workspace_head": "d83339f2b1a56ef2f4118f96d26ef05fff9cb907"
+}
