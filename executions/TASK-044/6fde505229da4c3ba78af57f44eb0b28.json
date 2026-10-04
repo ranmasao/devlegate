@@ -1,0 +1,34 @@
+{
+  "code_base_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76",
+  "conclusion": "incomplete",
+  "control_head": "bc1800846bd9df0a1b4780c75c309525685873ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-044",
+  "execution_id": "6fde505229da4c3ba78af57f44eb0b28",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-044",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add and run the mandatory TASK-044 regression matrix, including dogfood, ownership, topology, workspace, crash-boundary, identity, and acknowledgement cases.",
+    "Run the full pytest/coverage suite; pytest is unavailable in this workspace."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-044",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add and run the mandatory TASK-044 regression matrix, including dogfood, ownership, topology, workspace, crash-boundary, identity, and acknowledgement cases.",
+      "Run the full pytest/coverage suite; pytest is unavailable in this workspace."
+    ],
+    "report": null,
+    "summary": "Separated forced-retry current-generation authorization from old execution provenance, made the durable receipt and retirement transition atomic, refreshed control from remote before admission, and restored ordinary retry call compatibility. Persisted force authorization now survives restart and launches a fresh RESUME execution with the preserved checkpoint."
+  },
+  "workspace_head": "c01c9c9877c5b8be4e2b8e5059dd610d1076f6e7"
+}
