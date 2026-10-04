@@ -1,0 +1,28 @@
+{
+  "code_base_head": "fa6f3c23e2536d58cc316c961f71d01edbf78d76",
+  "conclusion": "completed",
+  "control_head": "da687f03ef6bd6fb1f866c068871e27685d47dd4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-044",
+  "execution_id": "1c556b6f3a2e440697fe9c5815b4be9a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-044",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-044/1c556b6f3a2e440697fe9c5815b4be9a.md",
+  "report_sha256": "33e3a273019e022935332e2d81b8146184666617e3c06ac1869b3afe9f9aff3f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-044",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated tests/test_force_retry.py only; no product implementation changes were needed because the current production architecture satisfied the added proofs.",
+    "summary": "Expanded forced-retry regression coverage to prove stale-local control synchronization, fresh execution identity, retry reissue after a pre-commit save failure, and one-time authorization consumption after restart. The existing forced-retry safety, provenance, workspace, crash, duplicate-request, and synchronous acknowledgement behavior remains covered."
+  },
+  "workspace_head": "6485f6b9fa3bcf4a58606e36e05684801a269f4d"
+}
