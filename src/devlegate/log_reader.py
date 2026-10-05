@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from collections.abc import Callable, Iterable
@@ -17,6 +18,9 @@ from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 
 class LogReaderError(RuntimeError):
     """A requested log could not be resolved or read."""
+
+
+_TICKET_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
 def _lines(value: int) -> int:
@@ -139,6 +143,128 @@ def execution_log(
     except OperationalLogError as error:
         raise LogReaderError(str(error)) from error
     return resolved, _read_file(path, lines)
+
+
+def _ticket_observation(
+    control_worktree: Path, ticket_id: str, workflow_paths: dict[str, str]
+) -> str:
+    if not _TICKET_ID.fullmatch(ticket_id):
+        raise LogReaderError(f"invalid ticket ID: {ticket_id}")
+    locations = []
+    for state, relative in workflow_paths.items():
+        path = control_worktree / relative / f"{ticket_id}.md"
+        if path.exists():
+            if path.is_symlink() or not path.is_file():
+                raise LogReaderError(f"ticket state is unsafe: {path}")
+            locations.append(state)
+    if len(locations) != 1:
+        if not locations:
+            raise LogReaderError(f"ticket not found: {ticket_id}")
+        raise LogReaderError(
+            f"ticket state is ambiguous: {ticket_id} ({', '.join(locations)})"
+        )
+    return locations[0]
+
+
+def _ticket_reports(control_worktree: Path, ticket_id: str):
+    try:
+        return ExecutionReportStore(control_worktree).list(ticket_id)
+    except ExecutionReportError as error:
+        raise LogReaderError(str(error)) from error
+
+
+def _active_ticket_execution(
+    state_dir: Path, state_key: str, ticket_id: str
+) -> str | None:
+    try:
+        state = SQLiteRuntimeStore(state_dir, state_key).load()
+    except RuntimeStoreError as error:
+        raise LogReaderError(str(error)) from error
+    if not isinstance(state, dict) or state.get("phase") not in {
+        "agent_pending",
+        "agent_running",
+    }:
+        return None
+    if state.get("execution_ticket_id") != ticket_id:
+        return None
+    execution = state.get("execution_id")
+    if not isinstance(execution, str) or not execution:
+        raise LogReaderError("invalid current execution identity")
+    return execution
+
+
+def _execution_header(execution: str, conclusion: str | None) -> str:
+    detail = f" conclusion={conclusion}" if conclusion is not None else " state=active"
+    return f"\n===== execution {execution}{detail} =====\n"
+
+
+def ticket_log(
+    state_dir: Path,
+    state_key: str,
+    control_worktree: Path,
+    ticket_id: str,
+    lines: int,
+    workflow_paths: dict[str, str],
+) -> tuple[str, Iterable[str]]:
+    """Read every durable execution log belonging to one ticket."""
+    _ticket_observation(control_worktree, ticket_id, workflow_paths)
+    reports = _ticket_reports(control_worktree, ticket_id)
+    known = {report.execution_id for report in reports}
+    active = _active_ticket_execution(state_dir, state_key, ticket_id)
+    records: list[str] = []
+    for report in reports:
+        path = execution_log_path(state_dir, state_key, report.execution_id)
+        records.append(_execution_header(report.execution_id, report.result.conclusion))
+        records.extend(_read_file(path, lines))
+    if active is not None and active not in known:
+        path = execution_log_path(state_dir, state_key, active)
+        records.append(_execution_header(active, None))
+        records.extend(_read_file(path, lines))
+    return ticket_id, tuple(records)
+
+
+def follow_ticket(
+    state_dir: Path,
+    state_key: str,
+    control_worktree: Path,
+    ticket_id: str,
+    lines: int,
+    workflow_paths: dict[str, str],
+) -> int:
+    """Follow all executions for a ticket until it reaches accepted or done."""
+    lines = _lines(lines)
+    printed: set[str] = set()
+    while True:
+        state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
+        reports = _ticket_reports(control_worktree, ticket_id)
+        for report in reports:
+            if report.execution_id in printed:
+                continue
+            path = execution_log_path(state_dir, state_key, report.execution_id)
+            print(_execution_header(report.execution_id, report.result.conclusion), end="")
+            print("".join(_read_file(path, lines)), end="", flush=True)
+            printed.add(report.execution_id)
+        if state in {"accepted", "done"}:
+            return 0
+        active = _active_ticket_execution(state_dir, state_key, ticket_id)
+        if active is not None:
+            if active not in printed:
+                print(_execution_header(active, None), end="", flush=True)
+            result = follow_execution(
+                state_dir,
+                state_key,
+                control_worktree,
+                active,
+                0 if active in printed else lines,
+            )
+            if result != 0:
+                return result
+            printed.add(active)
+            continue
+        try:
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            return 130
 
 
 def journal_command(unit: str, lines: int, follow: bool) -> list[str]:

@@ -49,9 +49,11 @@ from devlegate.log_reader import (
     LogReaderError,
     execution_id,
     execution_log,
+    follow_ticket,
     follow_execution,
     service_unit,
     stream_journal,
+    ticket_log,
 )
 from devlegate.operational_log import service_log
 from devlegate.output import add_output_arguments, emit, render_grid, render_table
@@ -2242,6 +2244,39 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
             / target.locator.state_key
             / "control"
         )
+        if args.logs_source == "ticket":
+            from devlegate.runtime import _read_env
+
+            config = _read_env(target.env_file)
+            setting = lambda name, default: config.get(
+                name, os.environ.get(name, default)
+            )
+            workflow_paths = {
+                "backlog": setting("BACKLOG_PATH", "kanban/backlog"),
+                "todo": setting("TODO_PATH", "kanban/todo"),
+                "review": setting("REVIEW_PATH", "kanban/review"),
+                "accepted": setting("ACCEPTED_PATH", "kanban/accepted"),
+                "done": setting("DONE_PATH", "kanban/done"),
+            }
+            if args.follow:
+                return follow_ticket(
+                    target.locator.state_dir,
+                    target.locator.state_key,
+                    control_worktree,
+                    args.ticket_id,
+                    args.lines,
+                    workflow_paths,
+                )
+            _, content = ticket_log(
+                target.locator.state_dir,
+                target.locator.state_key,
+                control_worktree,
+                args.ticket_id,
+                args.lines,
+                workflow_paths,
+            )
+            print("".join(content), end="")
+            return 0
         if args.follow:
             resolved = execution_id(
                 control_worktree,
@@ -2531,6 +2566,12 @@ def build_parser() -> argparse.ArgumentParser:
     execution_logs_parser.add_argument("execution_id", metavar="EXECUTION")
     execution_logs_parser.add_argument("--follow", "-f", action="store_true")
     execution_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
+    ticket_logs_parser = logs_commands.add_parser(
+        "ticket", help="read all execution logs for one ticket"
+    )
+    ticket_logs_parser.add_argument("ticket_id", metavar="TICKET")
+    ticket_logs_parser.add_argument("--follow", "-f", action="store_true")
+    ticket_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
     project_parser = commands.add_parser(
         "project",
         help="inspect and register local projects",
