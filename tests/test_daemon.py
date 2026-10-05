@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+"""Shared daemon fixtures and host/owner implementation-seam source.
+
+Semantic ``test_daemon_*`` collectors own host readiness, owner-loop policy,
+lifecycle drain, and worker-loss recovery. Production service companions stay
+in the CLI topology collector.
+"""
+__test__ = False
 import inspect
 import json
 import os

@@ -4,7 +4,15 @@
 import pytest
 from git_support import prepared_git_baselines
 from resource_helpers import owned_short_state_dir
-from test_cli import git_fixture
+from test_cli import cli_daemon, git_fixture, plain_project_fixture
+from test_ipc_server import running_server
+
+collect_ignore = [
+    "test_cli.py",
+    "test_control_plane.py",
+    "test_daemon.py",
+    "test_ipc_server.py",
+]
 
 
 @pytest.fixture
@@ -13,4 +21,11 @@ def short_state_dir():
         yield path
 
 
-__all__ = ["git_fixture", "prepared_git_baselines", "short_state_dir"]
+__all__ = [
+    "cli_daemon",
+    "git_fixture",
+    "plain_project_fixture",
+    "prepared_git_baselines",
+    "running_server",
+    "short_state_dir",
+]

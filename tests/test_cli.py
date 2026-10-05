@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+"""Shared CLI fixtures and implementation-seam source.
+
+Semantic ``test_cli_*`` collectors own parser/bootstrap, IPC client, host
+lifecycle, and production-topology selections. This module retains shared
+subprocess and Git fixture ownership and is not itself a collection target.
+"""
+__test__ = False
 import dataclasses
 import fcntl
 import hashlib

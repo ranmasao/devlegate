@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+"""Shared control-plane fixture and implementation-seam source.
+
+Semantic ``test_control_*`` collectors own the scheduler, workspace, recovery,
+and cross-layer selections. This module owns their expensive Git/control
+helpers and is not itself a pytest collection target.
+"""
+__test__ = False
 import copy
 import hashlib
 import json

@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+"""Shared IPC fixtures and dispatch/server implementation-seam source.
+
+Semantic ``test_ipc_*`` collectors own fake dispatch, transport/ownership,
+owner-thread handoff, and recovery-bridge selections. Real owner-thread tests
+stay separate from fake dispatch and retain their IPC proof boundary.
+"""
+__test__ = False
 import json
 import os
 import socket
