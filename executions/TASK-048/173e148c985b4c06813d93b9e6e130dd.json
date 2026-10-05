@@ -1,0 +1,28 @@
+{
+  "code_base_head": "5a8d07aacbaa83d28122ea1b22fdaaca868018b7",
+  "conclusion": "completed",
+  "control_head": "f38818352eae9d8957b9ba15c72ba3c58ed14c03",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-048",
+  "execution_id": "173e148c985b4c06813d93b9e6e130dd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-048",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-048/173e148c985b4c06813d93b9e6e130dd.md",
+  "report_sha256": "fb1f32fec34c0c9f73603c6a69e6fa19017b2244b4b04b720f2f2b1f5b3277df",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-048",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Scoped Ruff checks pass for src/devlegate/cli.py and src/devlegate/log_reader.py, and tests/test_log_reader.py passes. A repository-wide Ruff run still reports pre-existing issues in packaging/standalone-compliance/pex-vendored files, outside this assigned cleanup.",
+    "summary": "Fixed the three reported Ruff issues in the ticket-scoped log implementation: import ordering, lambda replacement, and execution-header line wrapping. Ticket-follow behavior is unchanged."
+  },
+  "workspace_head": "bf9ad6ce076b135decdf90d699f8d407a3429e8c"
+}
