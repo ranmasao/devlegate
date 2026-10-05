@@ -1,0 +1,28 @@
+{
+  "code_base_head": "bfa69fcbaf176e560a6c968a103b5dfd1dd88d7e",
+  "conclusion": "completed",
+  "control_head": "d189e27bb5c2fa2c8fa69952e808c6c506e988bf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-047",
+  "execution_id": "742e169cb25a49bda5b611eb5aa1c87e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-047",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-047/742e169cb25a49bda5b611eb5aa1c87e.md",
+  "report_sha256": "28df2f2954ba3dfd37c7f9d0f3e6af2c9a2a2f9d01dd4111db5315d76169b3d4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-047",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused same-ticket regression passes, all tests in tests/test_log_reader.py pass, and Ruff passes. The repository-wide pytest run exceeded the available two-minute command limit after partial progress.",
+    "summary": "Made the test execution-report helper reuse an existing ticket directory, allowing multiple execution reports for the same ticket while preserving the E1/E2 execution-scoping assertion."
+  },
+  "workspace_head": "5a8d07aacbaa83d28122ea1b22fdaaca868018b7"
+}
