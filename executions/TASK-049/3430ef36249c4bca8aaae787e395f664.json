@@ -1,0 +1,28 @@
+{
+  "code_base_head": "bf9ad6ce076b135decdf90d699f8d407a3429e8c",
+  "conclusion": "completed",
+  "control_head": "43b79272770d0850992ad03e26ea61d4ad81f0ea",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-049",
+  "execution_id": "3430ef36249c4bca8aaae787e395f664",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-049",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-049/3430ef36249c4bca8aaae787e395f664.md",
+  "report_sha256": "825ccc70c9582aae3dd3eff549a7f9d169058ae70992bc7a973c8b66f64e167f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-049",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The four mixed test inventories no longer contain hidden test functions or collector machinery; domain modules contain explicit test definitions, while support modules provide shared helpers and fixtures.",
+    "summary": "Replaced heuristic collector overlays with physically owned semantic test modules and extracted the former mixed modules into explicit CLI, control, daemon, and IPC support layers. Updated conftest fixture ownership and maintained placement guidance with focused semantic commands and proof-boundary notes."
+  },
+  "workspace_head": "41f6043157042fcb4d72f2e64e908735d2d00e5f"
+}
