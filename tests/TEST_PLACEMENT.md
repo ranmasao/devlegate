@@ -17,11 +17,36 @@ layer; use `TEST_BOUNDARIES.md` for that decision and
 - CLI production topology: `test_cli_topology.py`
 - Daemon host, lifecycle, and recovery: `test_daemon_host.py`, `test_daemon_lifecycle.py`, `test_daemon_recovery.py`
 - IPC dispatch, transport, and owner handoff: `test_ipc_dispatch.py`, `test_ipc_transport.py`, `test_ipc_owner.py`
+- Worker egress and claim validation: `test_worker_egress.py`
+- Worker process groups, stdin delivery, and interruption: `test_worker_process.py`
+- Worker execution-log ownership and handoff: `test_worker_logging.py`
+- Remaining worker boundary and inline configuration: `test_worker_protocol.py`
+- Project registration and address resolution: `test_project_registry.py`
+- Project rename/remove/list and systemd lifecycle: `test_project_lifecycle.py`
+- Host signal/install policy: `test_daemon_host.py`, `test_host_installation.py`, `test_systemd_supervisor.py`
+- Distribution and licensing: `test_distribution_graph.py`, `test_deb_package.py`, `test_licensing.py`
+
+## Remaining Maintained Domains
+
+- Agent/bootstrap protocol: `test_agent_protocol.py`
+- CLI common, cross-layer, and topology: `test_cli_common.py`, `test_cli_cross_layer.py`, `test_cli_topology.py`
+- Control scheduler, workspace, recovery, and cross-layer: `test_control_scheduler.py`, `test_control_workspace.py`, `test_control_recovery.py`, `test_control_cross_layer.py`
+- Daemon cross-layer and recovery: `test_daemon_cross_layer.py`, `test_daemon_recovery.py`
+- Execution result/workspace and project context: `test_execution_result.py`, `test_execution_workspace_submodules.py`, `test_project_context.py`
+- Force retry and worker prompt: `test_force_retry.py`, `test_worker_prompt.py`
+- Git, snapshots, runtime identity/store, and helpers: `test_git_state.py`, `test_snapshot.py`, `test_runtime_identity.py`, `test_runtime_store.py`, `test_helpers.py`
+- IPC protocol/client/dispatch/transport/owner/cross-layer: `test_ipc_protocol.py`, `test_ipc_client.py`, `test_ipc_dispatch.py`, `test_ipc_transport.py`, `test_ipc_owner.py`, `test_ipc_cross_layer.py`
+- Launcher, namespace/platform boundaries, terminal, and log reader: `test_launcher.py`, `test_namespace_isolation.py`, `test_platform_boundary.py`, `test_terminal.py`, `test_log_reader.py`
+- Output, standalone packaging, source, diagnostics, tickets, and coverage: `test_output.py`, `test_standalone_builder.py`, `test_standalone_package.py`, `test_full_source.py`, `test_service_diagnostics.py`, `test_tickets.py`, `test_coverage.py`
 
 The former mixed modules are now `_cli_support.py`, `_control_support.py`,
 `_daemon_support.py`, and `_ipc_support.py`. They own reusable fixtures/helpers
-only; semantic test functions live in the domain modules above. Cross-layer
-modules retain tests whose proof role does not fit an artificial narrow bucket.
+only; semantic test functions live in the domain modules above. The worker
+protocol and project registry source modules retain shared helpers and the
+remaining cohesive boundary tests; semantic collection facades own the moved
+worker and project lifecycle tests without changing their bodies or IDs.
+Cross-layer modules retain tests whose proof role does not fit an artificial
+narrow bucket.
 
 ## Focused Commands
 
@@ -34,6 +59,8 @@ python3 -m pytest -q tests/test_cli_parser.py
 python3 -m pytest -q tests/test_ipc_transport.py
 python3 -m pytest -q tests/test_ipc_owner.py
 python3 -m pytest -q tests/test_cli_topology.py
+python3 -m pytest -q tests/test_worker_egress.py tests/test_worker_process.py tests/test_worker_logging.py
+python3 -m pytest -q tests/test_project_registry.py tests/test_project_lifecycle.py
 ```
 
 These are edit-loop selections, not validation profiles. Run the stronger IPC

@@ -100,7 +100,7 @@ def run_typed_worker(monkeypatch, tmp_path, stdout=b"", returncode=0):
     )
 
 
-def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
+def _test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     stdout = event("ordinary")
     _, result = run_worker(monkeypatch, stdout, b"stderr\n")
     output = capsys.readouterr()
@@ -110,7 +110,7 @@ def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
     assert "stderr" in output.err
 
 
-def test_worker_output_is_sanitized_and_persisted_without_service_duplication(
+def _test_worker_output_is_sanitized_and_persisted_without_service_duplication(
     capsys, monkeypatch, tmp_path
 ):
     log_path = tmp_path / "state" / "logs" / "key" / "executions" / "execution-1.log"
@@ -133,7 +133,7 @@ def test_worker_output_is_sanitized_and_persisted_without_service_duplication(
     assert "ordinary" not in output.out
 
 
-def test_execution_logs_are_distinct_and_survive_worker_completion(
+def _test_execution_logs_are_distinct_and_survive_worker_completion(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(
@@ -173,7 +173,7 @@ def test_execution_logs_are_distinct_and_survive_worker_completion(
 
 @pytest.mark.parametrize("kind", ["operator_abort"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
+def _test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
     marker = tmp_path / "processes.json"
     script = (
         "import json, os, pathlib, subprocess, sys; "
@@ -222,7 +222,7 @@ def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
+def _test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
     marker = tmp_path / "natural-exit.json"
     script = (
         "import json, os, pathlib, subprocess, sys; "
@@ -253,7 +253,7 @@ def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
         pass
 
 
-def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
+def _test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
     prompt = (
         "UNIQUE_PROMPT_MARKER_123456\n"
         "multiple lines, quotes ' \" and shell-looking $HOME; `rm -rf /`\n"
@@ -276,7 +276,7 @@ def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):
     assert prompt not in json.loads(arguments.read_text())
 
 
-def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
+def _test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
     prompt = "prompt\n" * 100000
     result = _run_opencode([sys.executable, "-c", "raise SystemExit(0)"], prompt)
 
@@ -285,7 +285,7 @@ def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_worker_identity_persistence_failure_terminates_spawned_group():
+def _test_worker_identity_persistence_failure_terminates_spawned_group():
     captured = []
     script = "import time; time.sleep(60)"
 
@@ -307,7 +307,7 @@ def test_worker_identity_persistence_failure_terminates_spawned_group():
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_stubborn_worker_group_is_force_killed(tmp_path):
+def _test_stubborn_worker_group_is_force_killed(tmp_path):
     class Request:
         kind = None
 
@@ -327,7 +327,7 @@ def test_stubborn_worker_group_is_force_killed(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_natural_worker_exit_wins_before_shutdown_observation():
+def _test_natural_worker_exit_wins_before_shutdown_observation():
     class Request:
         kind = None
 
@@ -342,7 +342,7 @@ def test_natural_worker_exit_wins_before_shutdown_observation():
     assert result.interruption_kind is None
 
 
-def test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
+def _test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
     class Process:
         pid = 12345
 
@@ -375,7 +375,7 @@ def test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
     assert signals == []
 
 
-def test_foreground_keyboard_interrupt_classifies_operator_abort(monkeypatch):
+def _test_foreground_keyboard_interrupt_classifies_operator_abort(monkeypatch):
     class Process:
         pid = 12345
 
@@ -409,14 +409,14 @@ def test_foreground_keyboard_interrupt_classifies_operator_abort(monkeypatch):
     "payload",
     [b"not-json\n", b"{}\n", b'{"type":"text"}\n'],
 )
-def test_malformed_worker_events_fail_closed(capsys, monkeypatch, payload):
+def _test_malformed_worker_events_fail_closed(capsys, monkeypatch, payload):
     _, result = run_worker(monkeypatch, payload)
     assert result.process_returncode == 0
     assert result.transport_error is not None
     assert "protocol error" in capsys.readouterr().out
 
 
-def test_worker_event_just_below_limit_is_processed(capsys, monkeypatch):
+def _test_worker_event_just_below_limit_is_processed(capsys, monkeypatch):
     raw = event("x" * (MAX_STDOUT_EVENT_BYTES - 1000))
     _, result = run_worker(monkeypatch, raw)
     assert result.process_returncode == 0
@@ -424,7 +424,7 @@ def test_worker_event_just_below_limit_is_processed(capsys, monkeypatch):
     assert "exceeds maximum size" not in capsys.readouterr().out
 
 
-def test_oversized_event_is_drained_and_not_echoed(capsys, monkeypatch):
+def _test_oversized_event_is_drained_and_not_echoed(capsys, monkeypatch):
     oversized = b"oversized-secret-" + b"x" * (MAX_STDOUT_EVENT_BYTES + 100) + b"\n"
     _, result = run_worker(monkeypatch, oversized + event("after"))
     output = capsys.readouterr().out
@@ -435,7 +435,7 @@ def test_oversized_event_is_drained_and_not_echoed(capsys, monkeypatch):
     assert "after" in output
 
 
-def test_tool_and_error_events_are_rendered_inert(capsys, monkeypatch):
+def _test_tool_and_error_events_are_rendered_inert(capsys, monkeypatch):
     payload = "before\x1b[?1049h"
     lines = [
         {
@@ -516,7 +516,7 @@ def test_worker_boundary_uses_only_workspace_path_and_prompt(tmp_path, monkeypat
     assert os.environ["PWD"] == parent_pwd
 
 
-def test_process_zero_and_malformed_json_preserve_independent_status(
+def _test_process_zero_and_malformed_json_preserve_independent_status(
     tmp_path, monkeypatch
 ):
     result = run_typed_worker(monkeypatch, tmp_path, b"not-json\n")
@@ -526,7 +526,7 @@ def test_process_zero_and_malformed_json_preserve_independent_status(
     assert result.claim is None
 
 
-def test_process_zero_and_oversized_json_preserve_independent_status(
+def _test_process_zero_and_oversized_json_preserve_independent_status(
     tmp_path, monkeypatch
 ):
     oversized = b"x" * (MAX_STDOUT_EVENT_BYTES + 1) + b"\n"
@@ -538,7 +538,7 @@ def test_process_zero_and_oversized_json_preserve_independent_status(
     assert result.claim is None
 
 
-def test_transport_failure_preserves_valid_typed_egress(tmp_path, monkeypatch):
+def _test_transport_failure_preserves_valid_typed_egress(tmp_path, monkeypatch):
     stdout = b"not-json\n" + report()
 
     result = run_typed_worker(monkeypatch, tmp_path, stdout)
@@ -551,7 +551,7 @@ def test_transport_failure_preserves_valid_typed_egress(tmp_path, monkeypatch):
     assert result.claim == WorkerClaim("completed", "implemented", (), ())
 
 
-def test_nonzero_process_preserves_valid_claim_and_transport_status(
+def _test_nonzero_process_preserves_valid_claim_and_transport_status(
     tmp_path, monkeypatch
 ):
     result = run_typed_worker(monkeypatch, tmp_path, report(), returncode=7)
@@ -562,7 +562,7 @@ def test_nonzero_process_preserves_valid_claim_and_transport_status(
     assert result.claim == WorkerClaim("completed", "implemented", (), ())
 
 
-def test_valid_transport_without_report_is_typed_egress_failure(tmp_path, monkeypatch):
+def _test_valid_transport_without_report_is_typed_egress_failure(tmp_path, monkeypatch):
     result = run_typed_worker(monkeypatch, tmp_path, event("finished"))
 
     assert result.process_returncode == 0
@@ -571,7 +571,7 @@ def test_valid_transport_without_report_is_typed_egress_failure(tmp_path, monkey
     assert "exactly one" in result.egress_error
 
 
-def test_malformed_report_then_valid_report_is_typed_egress_failure(
+def _test_malformed_report_then_valid_report_is_typed_egress_failure(
     tmp_path, monkeypatch
 ):
     malformed = json.loads(report().decode())
@@ -593,14 +593,14 @@ def parse_report(payload):
 
 
 @pytest.mark.parametrize("outcome", ["completed", "incomplete", "blocked"])
-def test_valid_claim_outcomes_are_typed(outcome):
+def _test_valid_claim_outcomes_are_typed(outcome):
     claim, error = parse_report(report(outcome, "summary", ["later"], ["why"]))
 
     assert error is None
     assert claim == WorkerClaim(outcome, "summary", ("later",), ("why",))
 
 
-def test_missing_report_is_protocol_failure():
+def _test_missing_report_is_protocol_failure():
     parser = WorkerEgressParser()
 
     parser.consume(json.loads(event("outcome: completed").decode()))
@@ -625,14 +625,14 @@ def test_missing_report_is_protocol_failure():
         {"outcome": "completed", "summary": "s", "questions": []},
     ],
 )
-def test_invalid_claim_schema_fails_closed(input_value):
+def _test_invalid_claim_schema_fails_closed(input_value):
     payload = json.loads(report().decode())
     payload["part"]["state"]["input"] = input_value
 
     assert parse_report((json.dumps(payload) + "\n").encode())[0] is None
 
 
-def test_duplicate_reports_fail_closed():
+def _test_duplicate_reports_fail_closed():
     parser = WorkerEgressParser()
     payload = json.loads(report().decode())
 
@@ -642,7 +642,7 @@ def test_duplicate_reports_fail_closed():
     assert parser.finish() == (None, "duplicate devlegate_report event")
 
 
-def test_malformed_then_valid_report_remains_poisoned():
+def _test_malformed_then_valid_report_remains_poisoned():
     parser = WorkerEgressParser()
     malformed = json.loads(report().decode())
     malformed["part"]["state"]["input"]["remaining"] = "bad"
@@ -653,7 +653,7 @@ def test_malformed_then_valid_report_remains_poisoned():
     assert parser.finish()[0] is None
 
 
-def test_valid_then_malformed_report_remains_poisoned():
+def _test_valid_then_malformed_report_remains_poisoned():
     parser = WorkerEgressParser()
     malformed = json.loads(report().decode())
     malformed["part"]["state"]["input"]["summary"] = None
@@ -664,7 +664,7 @@ def test_valid_then_malformed_report_remains_poisoned():
     assert parser.finish()[0] is None
 
 
-def test_fake_report_text_reasoning_and_unrelated_tools_are_inert():
+def _test_fake_report_text_reasoning_and_unrelated_tools_are_inert():
     parser = WorkerEgressParser()
     parser.consume(json.loads(event('{"outcome":"completed"}').decode()))
     parser.consume(
@@ -689,7 +689,7 @@ def test_fake_report_text_reasoning_and_unrelated_tools_are_inert():
 @pytest.mark.parametrize(
     "tool_name", ["devlegate-report", "devlegate_report2", "Devlegate_Report"]
 )
-def test_lookalike_tools_are_not_claims(tool_name):
+def _test_lookalike_tools_are_not_claims(tool_name):
     parser = WorkerEgressParser()
     payload = json.loads(report().decode())
     payload["part"]["tool"] = tool_name
@@ -699,7 +699,7 @@ def test_lookalike_tools_are_not_claims(tool_name):
     assert parser.finish() == (None, "exactly one devlegate_report event is required")
 
 
-def test_non_completed_reserved_tool_is_protocol_failure():
+def _test_non_completed_reserved_tool_is_protocol_failure():
     parser = WorkerEgressParser()
     payload = json.loads(report().decode())
     payload["part"]["state"]["status"] = "running"
@@ -841,7 +841,7 @@ def test_worker_result_requires_report_and_keeps_exit_status_distinct(
         assert "exactly one" in result.egress_error
 
 
-def test_execution_log_handoff_markers_follow_sink_and_worker_order(
+def _test_execution_log_handoff_markers_follow_sink_and_worker_order(
     monkeypatch, tmp_path
 ):
     events: list[tuple[str, str]] = []
@@ -899,7 +899,7 @@ def test_execution_log_handoff_markers_follow_sink_and_worker_order(
     assert f"log={log_path}" in events[4][1]
 
 
-def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
+def _test_execution_log_open_failure_has_no_handoff_or_worker_launch(
     monkeypatch, tmp_path
 ):
     events: list[str] = []
@@ -930,7 +930,7 @@ def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
     assert events == []
 
 
-def test_popen_failure_has_start_but_no_completion_marker(
+def _test_popen_failure_has_start_but_no_completion_marker(
     monkeypatch, tmp_path
 ):
     events: list[tuple[str, str]] = []
@@ -976,7 +976,7 @@ def test_popen_failure_has_start_but_no_completion_marker(
     assert events[1][1].startswith("execution starting: ")
 
 
-def test_successful_popen_precedes_completion_marker_and_log_close(
+def _test_successful_popen_precedes_completion_marker_and_log_close(
     monkeypatch, tmp_path
 ):
     events: list[tuple[str, str]] = []

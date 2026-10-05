@@ -233,7 +233,9 @@ def test_systemd_address_forms_share_the_same_state_key_and_unit(
     ]
 
 
-def test_project_rename_preserves_runtime_identity(tmp_path: Path, monkeypatch, capsys):
+def _test_project_rename_preserves_runtime_identity(
+    tmp_path: Path, monkeypatch, capsys
+):
     env = project(tmp_path, "renameable")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     registry = ProjectRegistry()
@@ -261,7 +263,7 @@ def test_project_rename_preserves_runtime_identity(tmp_path: Path, monkeypatch, 
     assert "renamed @rslab2 to @ratil" in capsys.readouterr().out
 
 
-def test_project_remove_preserves_project_and_retained_state(
+def _test_project_remove_preserves_project_and_retained_state(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     env = project(tmp_path, "decommission")
@@ -299,7 +301,7 @@ def test_project_remove_preserves_project_and_retained_state(
     assert restored.locator.state_dir == registered.locator.state_dir
 
 
-def test_project_remove_compare_and_remove_preserves_replaced_alias(
+def _test_project_remove_compare_and_remove_preserves_replaced_alias(
     tmp_path: Path, monkeypatch
 ) -> None:
     env = project(tmp_path, "compare-remove")
@@ -313,7 +315,7 @@ def test_project_remove_compare_and_remove_preserves_replaced_alias(
     assert registry.target_for_alias("bar").env_file == canonical_env_path(env)
 
 
-def test_project_list_reports_persisted_unit_names_and_missing_projects(
+def _test_project_list_reports_persisted_unit_names_and_missing_projects(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
@@ -376,7 +378,7 @@ def test_project_list_reports_persisted_unit_names_and_missing_projects(
     }
 
 
-def test_project_alias_rename_does_not_change_systemd_identity(
+def _test_project_alias_rename_does_not_change_systemd_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
     env = project(tmp_path, "rename-unit")
@@ -401,7 +403,7 @@ def test_project_alias_rename_does_not_change_systemd_identity(
     assert store.supervision_authority()["unit_name"] == unit
 
 
-def test_start_systemd_reprovisions_persisted_legacy_name(tmp_path, monkeypatch):
+def _test_start_systemd_reprovisions_persisted_legacy_name(tmp_path, monkeypatch):
     env = project(tmp_path, "legacy-reprovision")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     target = ProjectRegistry().register("legacy", env)
@@ -493,7 +495,7 @@ def lifecycle_over_persisted_unit(
     return calls
 
 
-def test_top_level_lifecycle_uses_persisted_legacy_unit_name(
+def _test_top_level_lifecycle_uses_persisted_legacy_unit_name(
     tmp_path, monkeypatch, capsys
 ) -> None:
     env = project(tmp_path, "legacy-lifecycle")
@@ -507,7 +509,7 @@ def test_top_level_lifecycle_uses_persisted_legacy_unit_name(
     assert compact not in {name for _action, name in calls}
 
 
-def test_top_level_lifecycle_uses_persisted_compact_unit_name(
+def _test_top_level_lifecycle_uses_persisted_compact_unit_name(
     tmp_path, monkeypatch, capsys
 ) -> None:
     env = project(tmp_path, "compact-lifecycle")
@@ -520,7 +522,7 @@ def test_top_level_lifecycle_uses_persisted_compact_unit_name(
 
 
 @pytest.mark.parametrize("action", ["stop", "restart"])
-def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
+def _test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
     tmp_path, monkeypatch, capsys, action
 ) -> None:
     env = project(tmp_path, f"failing-{action}")
@@ -572,7 +574,7 @@ def test_top_level_lifecycle_systemd_failure_is_concise_cli_error(
     assert "Traceback" not in captured.out
 
 
-def test_plain_managed_restart_does_not_require_service_ipc(
+def _test_plain_managed_restart_does_not_require_service_ipc(
     tmp_path, monkeypatch, capsys
 ) -> None:
     env = project(tmp_path, "plain-restart")
@@ -614,7 +616,7 @@ def test_plain_managed_restart_does_not_require_service_ipc(
     assert capsys.readouterr().out == "service restarted\n"
 
 
-def test_forced_managed_restart_admits_then_restarts_exact_unit(
+def _test_forced_managed_restart_admits_then_restarts_exact_unit(
     tmp_path, monkeypatch, capsys
 ) -> None:
     env = project(tmp_path, "forced-restart")
@@ -680,7 +682,7 @@ def test_forced_managed_restart_admits_then_restarts_exact_unit(
         ),
     ],
 )
-def test_forced_managed_restart_reports_skew_without_kill_fallback(
+def _test_forced_managed_restart_reports_skew_without_kill_fallback(
     tmp_path, monkeypatch, capsys, error, expected
 ) -> None:
     env = project(tmp_path, "forced-restart-error")
@@ -721,7 +723,7 @@ def test_forced_managed_restart_reports_skew_without_kill_fallback(
     assert not restarted
 
 
-def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
+def _test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
     tmp_path: Path, monkeypatch
 ) -> None:
     env = project(tmp_path, "unmanaged")
@@ -740,7 +742,7 @@ def test_project_remove_refuses_unmanaged_unit_and_keeps_alias(
     assert registry.target_for_alias("foo").env_file == canonical_env_path(env)
 
 
-def test_project_remove_unit_failure_keeps_alias(tmp_path: Path, monkeypatch) -> None:
+def _test_project_remove_unit_failure_keeps_alias(tmp_path: Path, monkeypatch) -> None:
     env = project(tmp_path, "unit-failure")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     registry = ProjectRegistry()
@@ -764,7 +766,7 @@ def test_project_remove_unit_failure_keeps_alias(tmp_path: Path, monkeypatch) ->
     assert registry.target_for_alias("foo").env_file == canonical_env_path(env)
 
 
-def test_project_remove_removes_only_managed_unit_and_keeps_other_project(
+def _test_project_remove_removes_only_managed_unit_and_keeps_other_project(
     tmp_path: Path, monkeypatch
 ) -> None:
     env_a = project(tmp_path, "unit-a")
