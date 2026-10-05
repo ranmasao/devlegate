@@ -1,0 +1,32 @@
+{
+  "code_base_head": "41f6043157042fcb4d72f2e64e908735d2d00e5f",
+  "conclusion": "incomplete",
+  "control_head": "4b531e99bec0b8bbd652822666f1268cc37e7144",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-050",
+  "execution_id": "79e17f40c6704ec292621b5ed6636099",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-050",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Re-run full pytest, coverage collection, and repository checks in an environment with the missing .venv and coverage dependency."
+  ],
+  "report_artifact": "executions/TASK-050/79e17f40c6704ec292621b5ed6636099.md",
+  "report_sha256": "dfae965474ac6a6ca2f694fdda3f11e6260db3dee64e9647adfd39455ed18902",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-050",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Re-run full pytest, coverage collection, and repository checks in an environment with the missing .venv and coverage dependency."
+    ],
+    "report": "Focused worker/project tests, collection, Ruff, and diff checks pass. Full pytest reached 1128 passed with 3 environment-dependent failures because .venv/coverage is unavailable.",
+    "summary": "Decomposed worker protocol coverage into worker egress, process, and logging domains, and split project lifecycle coverage from registry semantics. Updated placement, boundary, and focused-audit documentation with the current inventory and intentional cohesive-module decisions."
+  },
+  "workspace_head": "3e3701a3352895c67bf7e8e5310c6d9cb740ff63"
+}
