@@ -241,7 +241,10 @@ def follow_ticket(
             if report.execution_id in printed:
                 continue
             path = execution_log_path(state_dir, state_key, report.execution_id)
-            print(_execution_header(report.execution_id, report.result.conclusion), end="")
+            print(
+                _execution_header(report.execution_id, report.result.conclusion),
+                end="",
+            )
             print("".join(_read_file(path, lines)), end="", flush=True)
             printed.add(report.execution_id)
         if state in {"accepted", "done"}:

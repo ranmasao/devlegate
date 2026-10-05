@@ -49,8 +49,8 @@ from devlegate.log_reader import (
     LogReaderError,
     execution_id,
     execution_log,
-    follow_ticket,
     follow_execution,
+    follow_ticket,
     service_unit,
     stream_journal,
     ticket_log,
@@ -2248,9 +2248,10 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
             from devlegate.runtime import _read_env
 
             config = _read_env(target.env_file)
-            setting = lambda name, default: config.get(
-                name, os.environ.get(name, default)
-            )
+
+            def setting(name: str, default: str) -> str:
+                return config.get(name, os.environ.get(name, default))
+
             workflow_paths = {
                 "backlog": setting("BACKLOG_PATH", "kanban/backlog"),
                 "todo": setting("TODO_PATH", "kanban/todo"),
