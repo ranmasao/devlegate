@@ -1,0 +1,28 @@
+{
+  "code_base_head": "5a8d07aacbaa83d28122ea1b22fdaaca868018b7",
+  "conclusion": "completed",
+  "control_head": "1415933c1aee91e6a67b9c68aa65725c6cd40ad7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-048",
+  "execution_id": "320cc5e9cfd14e98bb7f62e5890df68f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-048",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-048/320cc5e9cfd14e98bb7f62e5890df68f.md",
+  "report_sha256": "4b541b4dbc546d21c12502d0e643b149c191b644f97df9e95d45e4abbaba82b8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-048",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Ticket logs read all reports for the requested ticket, include active executions from runtime state, fail closed on missing or ambiguous ticket state, and terminate follow at accepted or done.",
+    "summary": "Added `logs ticket <ticket-id>` and `-f` support with durable ticket-state validation, execution history headers, and execution-ID-based follow switching across retries. Existing execution-scoped log behavior remains unchanged."
+  },
+  "workspace_head": "b1e7c2445f3fdeb81d29a81c8844cf7efc620f52"
+}
