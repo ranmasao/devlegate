@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+# ruff: noqa: I001
 import json
 import sqlite3
 
 import pytest
 from runtime_helpers import run_test_iteration
-from test_cli import _ensure_publisher, git, invoke, publish_control, ticket
+from _cli_support import _ensure_publisher, git, invoke, publish_control, ticket
 
 from devlegate.cli import Devlegate, DevlegateError
 

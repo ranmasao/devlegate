@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+# ruff: noqa: I001
 """Regression coverage for forced retry admission and recovery."""
 
 from __future__ import annotations
@@ -8,7 +9,7 @@ from __future__ import annotations
 import pytest
 from git_support import control_publisher
 from runtime_helpers import run_test_iteration
-from test_control_plane import (
+from _control_support import (
     control_fixture,
     git,
     invoke,

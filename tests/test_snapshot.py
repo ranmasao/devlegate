@@ -2,7 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import pytest
-from test_cli import git, publish_control, ticket
+from _cli_support import git, publish_control, ticket
 
 from devlegate.cli import Devlegate, DevlegateError
 

@@ -18,10 +18,10 @@ layer; use `TEST_BOUNDARIES.md` for that decision and
 - Daemon host, lifecycle, and recovery: `test_daemon_host.py`, `test_daemon_lifecycle.py`, `test_daemon_recovery.py`
 - IPC dispatch, transport, and owner handoff: `test_ipc_dispatch.py`, `test_ipc_transport.py`, `test_ipc_owner.py`
 
-The original large modules are fixture/helper sources. Their semantic tests are
-collected through the domain modules so Git, socket, worker, and subprocess
-ownership is not duplicated. Cross-layer modules retain tests whose proof role
-does not fit an artificial narrow bucket.
+The former mixed modules are now `_cli_support.py`, `_control_support.py`,
+`_daemon_support.py`, and `_ipc_support.py`. They own reusable fixtures/helpers
+only; semantic test functions live in the domain modules above. Cross-layer
+modules retain tests whose proof role does not fit an artificial narrow bucket.
 
 ## Focused Commands
 

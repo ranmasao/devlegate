@@ -5,7 +5,7 @@ import json
 import sys
 
 import pytest
-from test_control_plane import control_fixture, invoke
+from _control_support import control_fixture, invoke
 
 import devlegate.cli as cli
 from devlegate.daemon import run_service

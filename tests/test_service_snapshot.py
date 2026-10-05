@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+# ruff: noqa: I001
 import dataclasses
 import threading
 
 import pytest
 from runtime_helpers import run_test_iteration
-from test_control_plane import control_fixture, git, invoke
+from _control_support import control_fixture, git, invoke
 
 from devlegate.runtime import BlockedReason, ServiceSnapshot
 from devlegate.service import ServiceEngine
