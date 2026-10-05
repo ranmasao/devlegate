@@ -44,7 +44,7 @@ def _report(control: Path, execution: str, ticket: str = "ticket") -> None:
         "reason": "worker exited with status 1",
     }
     root = control / "executions" / ticket
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     (root / f"{execution}.json").write_text(json.dumps(payload))
 
 
