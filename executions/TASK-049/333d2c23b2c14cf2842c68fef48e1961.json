@@ -1,0 +1,32 @@
+{
+  "code_base_head": "bf9ad6ce076b135decdf90d699f8d407a3429e8c",
+  "conclusion": "completed",
+  "control_head": "7f016db3d04595a4d67c3dc2f9a0265a9a6dd5a1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-049",
+  "execution_id": "333d2c23b2c14cf2842c68fef48e1961",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-049",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Provision the repository .venv and coverage dependency before rerunning the environment-dependent coverage and namespace-isolation tests."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-049",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Provision the repository .venv and coverage dependency before rerunning the environment-dependent coverage and namespace-isolation tests."
+    ],
+    "report": null,
+    "summary": "Added semantic pytest collector modules for control-plane, CLI, daemon, and IPC domains while retaining shared fixture ownership and proof-boundary companions. Added maintained test-placement guidance, module ownership documentation, and centralized fixture registration so focused domain runs do not collect the original mixed modules."
+  },
+  "workspace_head": "5ac8e3e0fb9ff9a0c5e810f26cae2be4ded67c37"
+}
