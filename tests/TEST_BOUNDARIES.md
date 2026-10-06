@@ -47,23 +47,23 @@ The counts are grouping counts, not test-case counts.
 | `test_runtime_store.py` | Pure/component | SQLite schema, revisions, malformed data, atomic failed commit behavior | Direct database tests do not prove client access policy |
 | `test_tickets.py`, `test_project_context.py`, `test_worker_prompt.py`, `test_execution_result.py`, `test_execution_workspace_submodules.py`, `test_helpers.py`, `test_terminal.py` | Pure/component | Ticket/context parsing, worker protocol data, report/workspace/terminal/helper behavior | Real files/Git are semantic realism, not process topology |
 | `test_git_state.py`, `test_snapshot.py` | Engine semantic/component | Git observation, synchronization/recovery decisions and stable snapshot retries | No service or independent CLI path |
-| `test_control_plane.py` direct `Devlegate` tests | Engine semantic | Control-plane validation, workspace binding, checkpoints, lifecycle/publication rules, accepted integration state, reconciliation semantics | `invoke()` setup is a subprocess bootstrap helper; most assertions exercise direct engine methods |
+| `test_control_scheduler.py`, `test_control_workspace.py`, `test_control_recovery.py`, `test_control_cross_layer.py` | Engine semantic | Control-plane validation, workspace binding, checkpoints, lifecycle/publication rules, accepted integration state, reconciliation semantics | `invoke()` setup is a subprocess bootstrap helper; most assertions exercise direct engine methods |
 | `test_service_snapshot.py` | Engine semantic | Immutable published projections, read-only snapshot behavior, worker lifecycle projection | The long-worker test uses a fake `WorkerSupervisor.run`; it proves engine publication ordering, not OS worker behavior |
-| `test_daemon.py` | Engine/host component | Signal intent, checkpoint-aware drain, graceful stop/restart behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production service startup |
+| `test_daemon_host.py`, `test_daemon_lifecycle.py`, `test_daemon_recovery.py`, `test_daemon_cross_layer.py` | Engine/host component | Signal intent, checkpoint-aware drain, graceful stop/restart behavior, host delegation, selected engine error policy | Fake engines and monkeypatched iterations do not prove production service startup |
 | `test_worker_supervisor.py` | Worker/process component | `WorkerSupervisor` live ownership, worker launch configuration, and process supervision seams | Component tests do not prove production service/CLI topology |
 | `test_worker_protocol.py` | Pure/component plus worker protocol | `WorkerEgressParser`, typed claims, malformed/duplicate reports, transport-vs-claim status, reserved tool semantics, and worker process regression coverage | Some legacy process tests use real child processes, but this is the worker boundary, not production service/CLI topology |
-| `test_worker_egress.py` | Pure/component plus worker transport | Worker stdout framing, report claims, schema rejection, duplicate/poisoned egress, and transport-vs-claim status | Re-exported semantic tests retain shared worker fixtures in `test_worker_protocol.py`; no service topology claim |
+| `test_worker_egress.py` | Pure/component plus worker transport | Worker stdout framing, report claims, schema rejection, duplicate/poisoned egress, and transport-vs-claim status | Shared worker fixtures live in support modules; no service topology claim |
 | `test_worker_process.py` | Worker/process component | Process groups, stdin prompt delivery, interruption classification, and worker identity failure cleanup | Real child processes prove worker process ownership only, not production service topology |
 | `test_worker_logging.py` | Worker/process component | Execution-log sink ownership, sanitization, handoff markers, and launch/close ordering | Service log assertions are intentional cross-layer worker-supervisor proof, not daemon lifecycle proof |
 | `test_project_registry.py` | Pure/component plus CLI semantic | Alias validation, registration uniqueness, address resolution, and selector rules | Direct CLI calls do not prove independent CLI/service process topology |
 | `test_project_lifecycle.py` | CLI/systemd semantic | Project rename/remove/list behavior, retained state, persisted unit identity, and managed stop/restart policy | Systemd doubles and direct `main()` calls prove policy and CLI translation, not host installation or independent service lifetime |
-| `test_ipc_server.py` fake dispatch tests | IPC/component | Request validation and read-only dispatch against a minimal fake engine | `dispatch_*` with `FakeEngine` cannot prove mutation serialization or real engine semantics |
-| `test_ipc_server.py` `running_server` tests | IPC transport | Real Unix socket framing, malformed/disconnected/idle client isolation, endpoint permissions, cleanup, multiple endpoints | Most use a server without an owner loop; mutable authority claims require the owner-thread families below |
-| `test_ipc_server.py` owner-thread tests | IPC/owner handoff | `test_retry_submission_runs_on_service_owner_thread`, read-only availability during owner retry, shutdown admission race, retry/reconcile receipt semantics | In-process owner thread proves handoff and serialization, not independent process lifetime |
-| `test_cli.py` parser/render/bootstrap tests | Pure/component/bootstrap | Argument parsing, formatting, command routing, `init`, `render`, `check`, repository-root and readiness rules | In-process `main()` and `invoke()` do not prove CLI/service separation |
-| `test_cli.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses service IPC, authority/socket fail-closed behavior, read-only projection selection | `cli_daemon` is an in-process socket server; it is not production topology |
-| `test_cli.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, recovery and concurrency behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
-| `test_daemon.py` fake-host tests | Host component | Signal installation and return-code policy for `run_service` | Fake `ServiceEngine` is intentionally not service topology |
+| `test_ipc_dispatch.py` fake dispatch tests | IPC/component | Request validation and read-only dispatch against a minimal fake engine | `dispatch_*` with `FakeEngine` cannot prove mutation serialization or real engine semantics |
+| `test_ipc_transport.py` socket tests | IPC transport | Real Unix socket framing, malformed/disconnected/idle client isolation, endpoint permissions, cleanup, multiple endpoints | Most use a server without an owner loop; mutable authority claims require the owner-thread families below |
+| `test_ipc_owner.py` owner-thread tests | IPC/owner handoff | `test_retry_submission_runs_on_service_owner_thread`, read-only availability during owner retry, shutdown admission race, retry/reconcile receipt semantics | In-process owner thread proves handoff and serialization, not independent process lifetime |
+| `test_cli_parser.py`, `test_cli_common.py` parser/render/bootstrap tests | Pure/component/bootstrap | Argument parsing, formatting, command routing, `init`, `render`, `check`, repository-root and readiness rules | In-process `main()` and `invoke()` do not prove CLI/service separation |
+| `test_cli_ipc.py` IPC boundary tests | IPC/owner boundary | CLI refuses mutable fallback, uses service IPC, authority/socket fail-closed behavior, read-only projection selection | In-process socket servers are not production topology |
+| `test_cli_ipc.py`, `test_cli_topology.py` `test_real_service_*` families | Production topology | Real service subprocess, real CLI subprocess, socket authority, worker process identity, recovery and concurrency behavior | These names are truthful; assertions still define the exact claim, and pytest disk inspection remains controller-side observation |
+| `test_daemon_host.py` fake-host tests | Host component | Signal installation and return-code policy for `run_service` | Fake `ServiceEngine` is intentionally not service topology |
 | `test_daemon_host.py` | Host component and lifecycle | Signal ownership, readiness, graceful/abort host policy, and host delegation | In-process host tests do not replace production service topology tests |
 | `test_systemd_supervisor.py` | Host/install component | Unit rendering, install/remove/status/restart command policy, and legacy unit compatibility | Command runners are policy doubles; they do not prove systemd itself accepted a unit |
 | `test_distribution_graph.py`, `test_deb_package.py`, `test_licensing.py` | Distribution/release component | Archive contents, package metadata, license notices, and distribution policy | Archive inspection does not prove runtime behavior or repository history beyond asserted files |
@@ -72,16 +72,16 @@ The counts are grouping counts, not test-case counts.
 
 | Invariant | Semantic proof | IPC/owner proof | Subprocess proof | Status |
 | --- | --- | --- | --- | --- |
-| Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in `test_control_plane.py`, `test_daemon.py`, and `test_cli.py` | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and recovery receipt tests | KEEP; intentional defense in depth |
-| CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-service failure | `test_ipc_server.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
+| Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in the control, daemon, and CLI semantic modules | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and recovery receipt tests | KEEP; intentional defense in depth |
+| CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-service failure | `test_ipc_owner.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
 | Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, service view tests | IPC view/decoder and many-client tests | `test_run_hosts_real_ipc_status_and_plan_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
-| Matching/stale state is not mutation authority | Direct admission and validation tests in `test_control_plane.py` | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
+| Matching/stale state is not mutation authority | Direct admission and validation tests in the control semantic modules | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
 | Mutable request IDs are idempotent and collision-safe | Direct receipt/state tests | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | Real same-ID and receipt-restart tests | KEEP; failure modes differ by boundary |
 | Concurrent mutation is serialized and cannot duplicate work | Direct admission/retry semantics | Owner-thread and concurrent IPC tests | Real concurrent retry tests and observer-during-retry tests | KEEP cross-layer |
 | Acknowledged CLI lifetime does not own service lifetime | Owner admission semantics | Owner-thread admission tests | `test_real_service_admitted_retry_outlives_cli_process` | KEEP; normal client exit after ACK is the release invariant |
 | Lost mutable response after durable admission is uncertain | Client replay semantics and receipt persistence | Fake-peer uncertain delivery and receipt tests | `test_real_service_crash_during_mutable_response_reports_uncertain_delivery` | KEEP; real crash timing is proven |
-| Worker result/state transitions are durable and fail closed | `test_control_plane.py`, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and recovery process-loss tests | KEEP |
-| Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_server.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
+| Worker result/state transitions are durable and fail closed | Control semantic modules, `test_service_snapshot.py`, `test_execution_result.py` | Owner dispatch tests do not replace this | Real worker/retry and recovery process-loss tests | KEEP |
+| Clients do not need SQLite fallback when authority exists | Runtime locator/CLI fail-closed tests | Socket/authority tests in `test_ipc_transport.py` and `test_ipc_cross_layer.py` | Real CLI/service socket tests | KEEP; controller disk inspection is not a fallback |
 | Socket ownership and cleanup are safe | Locator and server component tests | Real Unix socket tests, endpoint replacement and shutdown families | `LiveService` readiness/stop/restart | KEEP; topology adds process lifetime |
 | Graceful lifecycle commands close admission before exit | `test_lifecycle_drain_rejects_submitted_command_before_owner_admission`, checkpoint-barrier tests | Lifecycle IPC dispatch and service identity tests | `test_real_service_graceful_lifecycle_waits_for_active_worker` | KEEP; SIGINT remains abort-only |
 | Explicit drop retires only a proven execution and preserves provenance | Drop admission, evidence-ref, and workspace-retirement tests | IPC/owner handoff and shared selector tests | `test_real_service_drop_retire_old_lineage_and_runs_fresh` | KEEP; same-ID and distinct-ID generations are fresh |
@@ -93,7 +93,8 @@ failure modes and fail faster.
 
 ## Recovery Evidence
 
-The recovery process boundary is real only in `test_cli.py` tests using `LiveService`.
+The recovery process boundary is real only in the `test_cli_ipc.py` and
+`test_cli_topology.py` tests using `LiveService`.
 `LiveService` launches an independent `python -m devlegate foreground` process, waits
 through the actual authority socket with `ping`, invokes the normal CLI path in
 separate subprocesses, captures output, and can SIGKILL/restart the service.
@@ -113,7 +114,7 @@ test driver, not a substitute engine.
 | Accepted integration R/H/C recovery is exact | `test_real_service_accepted_integration_restart_is_idempotent` and the foreign, exact-local, remote, interleaving, and divergent-history tests | Subprocess | `recovery_driver.py` crash points plus exact parent/remote SHA and fail-closed assertions |
 | Mutable receipt is admission evidence, not a queue | `test_real_service_receipt_restart_is_not_a_persistent_command_queue`, `test_real_service_reconcile_receipt_restart_is_not_a_queue` | Subprocess | Crash after receipt save; restart preserves receipt without dispatch, new request required |
 
-The direct/private tests in `test_control_plane.py` establish deterministic
+The direct semantic tests in the control modules establish deterministic
 recovery semantics such as checkpoint rejection, lifecycle lineage, and exact R/H/C
 rules. They do not replace the corresponding real restart tests. The recovery
 matrix (`RECOVERY_MATRIX.md`) is the durable-state/recovery contract; this map adds
@@ -125,7 +126,7 @@ The concurrency matrix is split deliberately:
 
 | Concurrency claim | IPC/component evidence | Production-topology evidence |
 | --- | --- | --- |
-| Idle/incomplete/malformed clients do not block others | `test_idle_connection_does_not_block_unrelated_client`, `test_incomplete_frame_does_not_block_unrelated_client`, malformed/disconnect tests in `test_ipc_server.py` | Real socket is exercised, but no independent service process is required for this transport claim |
+| Idle/incomplete/malformed clients do not block others | `test_idle_connection_does_not_block_unrelated_client`, `test_incomplete_frame_does_not_block_unrelated_client`, malformed/disconnect tests in `test_ipc_transport.py` | Real socket is exercised, but no independent service process is required for this transport claim |
 | Many observers and read-only state remain available | `test_many_read_only_clients_overlap_without_mutating_runtime`, client round-trip tests | `test_real_service_many_observers_succeed_while_worker_runs`, `test_real_service_observers_succeed_during_owner_retry` |
 | Mutable submission crosses handler to owner thread | `test_retry_submission_runs_on_service_owner_thread`, reconcile owner-thread test | Real CLI retry/reconcile tests prove the same handoff through separate processes |
 | Same request ID executes once; collision is rejected | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | `test_real_service_same_request_id_retries_concurrently_once` |
@@ -144,8 +145,8 @@ Bootstrap commands intentionally work before a service exists. The following
 families are bootstrap/component evidence, not service-topology evidence:
 
 - `test_help_and_parser_expose_phase1_commands`
-- `test_init_*`, `test_render_*`, and `test_check_*` in `test_cli.py`
-- control initialization and preflight tests in `test_control_plane.py`
+- `test_init_*`, `test_render_*`, and `test_check_*` in `test_cli_parser.py`
+- control initialization and preflight tests in the control semantic modules
 
 `invoke()` starts a short-lived CLI subprocess, which is useful for command
 boundary and filesystem effects. Unless it starts a persistent service and uses a
@@ -174,7 +175,7 @@ coverage.
 | `ServiceEngine.retry()` / `reconcile_update_base()` / `reconcile_resume()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py`; owner command handling routes through the corresponding owned methods |
 | `runtime.Devlegate` alias | No supported callers or documented contract | REMOVED in 0.5.2 - obsolete alias | `src/devlegate/runtime.py` no longer defines the alias |
 | `ServiceEngine.status()` / `plan()` | No supported callers; canonical views are `status_view()` and `plan_view()` | REMOVED in 0.5.2 - obsolete spellings | `src/devlegate/runtime.py`, `src/devlegate/cli.py` |
-| Historical helper reexports from `devlegate.cli` | Tests now import runtime-owned helpers directly; `_git` remains a current CLI dependency | REMOVED in 0.5.2 - private test compatibility | `tests/test_cli.py`, `tests/test_terminal.py`, `tests/test_worker_protocol.py` |
+| Historical helper reexports from `devlegate.cli` | Tests now import runtime-owned helpers directly; `_git` remains a current CLI dependency | REMOVED in 0.5.2 - private test compatibility | `tests/test_cli_common.py`, `tests/test_terminal.py`, `tests/test_worker_protocol.py` |
 
 ### Construction Map
 
@@ -223,8 +224,8 @@ remain valid after the architecture cleanup:
   canonical engine view contract.
 - `test_cli_status_and_plan_render_fake_engine_without_runtime` checks cheap
   rendering without claiming production topology.
-- Runtime-owned private helpers and methods in `test_control_plane.py`,
-  `test_daemon.py`, and `test_worker_protocol.py` are direct semantic seams.
+- Runtime-owned private helpers and methods in the control and daemon semantic
+  modules, plus `test_worker_protocol.py`, are direct semantic seams.
 
 These tests are not production topology proof. The production reachability
 audit above now resolves `Devlegate`, `ServiceEngine`, and the persistent
@@ -244,7 +245,7 @@ helper seams were also removed; remaining direct engine tests use
 - All `test_real_service_*` tests covering SIGKILL, restart, real socket
   authority, worker PID identity, CLI/service separation, or persisted process
   loss. These claims cannot be established in-process.
-- `test_ipc_server.py` incomplete-client, handler-cleanup, endpoint ownership,
+- `test_ipc_transport.py` incomplete-client, handler-cleanup, endpoint ownership,
   and owner-thread tests. Their transport and handoff failure modes are
   distinct from subprocess failures.
 - Recovery and concurrency matrix documents plus their exact assertions.

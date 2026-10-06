@@ -12,9 +12,10 @@ pytest version:
 python3 -m pytest --collect-only -q
 ```
 
-The current result was 1,131 tests collected in 1.77 seconds across 56 test
-modules. Collection is the supported way to verify the inventory because
-parametrized cases are included in the count.
+The current result was 1,136 tests collected in 1.77 seconds across 56 test
+modules. The maintained suite baseline is 1,135 passed and 1 skipped, with 79%
+coverage and Ruff green. Collection is the supported way to verify the
+inventory because parametrized cases are included in the count.
 
 The focused worker and project command was also run:
 
@@ -31,27 +32,28 @@ python3 -m pytest -q tests/test_worker_protocol.py tests/test_project_registry.p
 
 It passed 18 tests in 1.50 seconds.
 
-## Before And After
+## Current Ownership
 
-The direct comparison is the parent tree at `HEAD` versus this working tree.
-The parent had 52 `tests/test_*.py` modules. The current tree has 56. The four
-new focused modules are `test_worker_egress.py`, `test_worker_process.py`,
-`test_worker_logging.py`, and `test_project_lifecycle.py`.
+Each semantic test function physically lives in the module for the narrowest
+domain it proves. The support modules `_worker_support.py` and
+`_project_support.py`, together with the other `_*_support.py` modules, own
+reusable fixtures and helpers only; semantic test functions are collected
+directly from their owning modules.
 
-The split keeps shared implementations in the existing modules. Tests moved
-behind facades are renamed with a leading underscore in the source module and
-re-exported by the focused module. Therefore they are collected once, under
-the facade path, while their existing test bodies and fixture globals remain
-usable.
+The worker and project domains are intentionally represented by their current
+semantic modules. `test_worker_protocol.py` and `test_project_registry.py`
+retain their cohesive boundary tests, while the egress, process, logging, and
+project-lifecycle regressions are directly collected from their corresponding
+modules.
 
 | Area | Before in parent tree | After in current tree |
 | --- | --- | --- |
 | Worker egress, logging, and process tests | `test_worker_protocol.py` | `test_worker_egress.py` (30), `test_worker_logging.py` (7), `test_worker_process.py` (9); `test_worker_protocol.py` retains 6 |
 | Project registry and lifecycle tests | `test_project_registry.py` | `test_project_registry.py` (12) and `test_project_lifecycle.py` (17) |
-| Entire pytest inventory | 52 test modules | 56 test modules, 1,131 collected tests |
+| Entire pytest inventory | 52 test modules | 56 test modules, 1,136 collected tests |
 
-No test module was removed by this change. The old 39-module inventory and
-the old monolith names are not descriptions of the current tree.
+The old 39-module inventory and old monolith names are not descriptions of the
+current tree. Counts below are refreshed from current collection evidence.
 
 ## Current Inventory
 
@@ -69,14 +71,14 @@ parametrized cases.
 | `test_daemon_cross_layer.py` | 18 | `test_daemon_host.py` | 20 |
 | `test_daemon_lifecycle.py` | 36 | `test_daemon_recovery.py` | 9 |
 | `test_deb_package.py` | 13 | `test_distribution_graph.py` | 28 |
-| `test_execution_result.py` | 26 | `test_execution_workspace_submodules.py` | 16 |
+| `test_execution_result.py` | 29 | `test_execution_workspace_submodules.py` | 16 |
 | `test_force_retry.py` | 14 | `test_full_source.py` | 14 |
 | `test_git_state.py` | 8 | `test_helpers.py` | 2 |
 | `test_host_installation.py` | 17 | `test_ipc_client.py` | 17 |
 | `test_ipc_cross_layer.py` | 11 | `test_ipc_dispatch.py` | 6 |
 | `test_ipc_owner.py` | 36 | `test_ipc_protocol.py` | 21 |
 | `test_ipc_transport.py` | 25 | `test_launcher.py` | 7 |
-| `test_licensing.py` | 8 | `test_log_reader.py` | 30 |
+| `test_licensing.py` | 8 | `test_log_reader.py` | 32 |
 | `test_namespace_isolation.py` | 2 | `test_output.py` | 26 |
 | `test_platform_boundary.py` | 8 | `test_project_context.py` | 14 |
 | `test_project_lifecycle.py` | 17 | `test_project_registry.py` | 12 |
@@ -126,14 +128,9 @@ current scheduler/workspace/recovery, parser/common/IPC/topology, host/
 lifecycle/recovery, and protocol/client/dispatch/transport/owner modules.
 Their cross-layer files remain separate where the proof boundary requires it.
 
-## Facade Check
+## Proof Strength
 
-The facade modules import successfully during collection. The original worker
-and project modules retain only their remaining directly named tests, while
-the moved tests appear once under the new facade paths. The focused collection
-count is 75 and the focused run passed, so no import or collection change is
-needed.
-
-The facade pattern is organizational: it does not claim that fixture setup or
-runtime cost has changed. Stronger service, IPC, host, packaging, and release
-claims still require their existing cross-layer tests and full CI coverage.
+Focused semantic modules provide cheap edit-loop feedback, but they do not
+replace stronger IPC, service, host, recovery, packaging, or production-topology
+evidence. Those claims still require the corresponding cross-layer tests and
+full CI coverage described by `TEST_BOUNDARIES.md`.
