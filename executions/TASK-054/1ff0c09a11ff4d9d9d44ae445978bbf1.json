@@ -1,0 +1,34 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "2e5a2449ebf1c0506fb1e99fcacee6dda1f642e2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "1ff0c09a11ff4d9d9d44ae445978bbf1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run authoritative CI including the full test suite and Ruff.",
+    "Build the package and retain real Arch x86_64 pacman inspect/install/ownership/smoke/remove evidence on a host with zstd and pacman."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run authoritative CI including the full test suite and Ruff.",
+      "Build the package and retain real Arch x86_64 pacman inspect/install/ownership/smoke/remove evidence on a host with zstd and pacman."
+    ],
+    "report": null,
+    "summary": "Updated Arch package member normalization so the validator ignores only the archive-root entry emitted by tar while retaining strict rejection of unexpected payload files. The existing Arch and distribution tooling remains otherwise unchanged."
+  },
+  "workspace_head": "b72ee59551219abb6bdb24f124dd22824ac5655e"
+}
