@@ -1,0 +1,38 @@
+{
+  "code_base_head": "41f6043157042fcb4d72f2e64e908735d2d00e5f",
+  "conclusion": "incomplete",
+  "control_head": "08d46ca609d37ed1d451b6c8289d13a997d44446",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-050",
+  "execution_id": "933efc53ca8b448ab6ffdf4afef7ccb0",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-050",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Physically move worker logging test bodies into test_worker_logging.py and remove their private source definitions from test_worker_protocol.py.",
+    "Physically move project lifecycle test bodies into test_project_lifecycle.py and remove their private source definitions from test_project_registry.py.",
+    "Refactor the original protocol/registry shared setup to use the new explicit support modules without retaining hidden moved-test inventories.",
+    "Run the full test suite and coverage collection after completing the physical moves."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-050",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Physically move worker logging test bodies into test_worker_logging.py and remove their private source definitions from test_worker_protocol.py.",
+      "Physically move project lifecycle test bodies into test_project_lifecycle.py and remove their private source definitions from test_project_registry.py.",
+      "Refactor the original protocol/registry shared setup to use the new explicit support modules without retaining hidden moved-test inventories.",
+      "Run the full test suite and coverage collection after completing the physical moves."
+    ],
+    "report": null,
+    "summary": "Replaced the four globals().update collection facades with explicit test definitions for worker egress/process and project lifecycle, added worker/project support modules, updated placement guidance, and preserved the 1,131-case collection count. Focused tests and Ruff pass, but worker logging and project lifecycle definitions still delegate to private bodies retained in the original protocol/registry modules, so physical semantic ownership is not complete."
+  },
+  "workspace_head": "a396728b12c1669d49571d1138c8704d7a20de36"
+}
