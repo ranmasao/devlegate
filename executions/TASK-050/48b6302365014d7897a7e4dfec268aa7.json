@@ -1,0 +1,32 @@
+{
+  "code_base_head": "41f6043157042fcb4d72f2e64e908735d2d00e5f",
+  "conclusion": "incomplete",
+  "control_head": "74ff7e6cdfac822ecbfe04004100da86e4689a71",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-050",
+  "execution_id": "48b6302365014d7897a7e4dfec268aa7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-050",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete full-suite coverage collection and report generation; the serial project command and equivalent four-worker coverage run exceeded the available execution timeout, while focused worker coverage completed successfully."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-050",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete full-suite coverage collection and report generation; the serial project command and equivalent four-worker coverage run exceeded the available execution timeout, while focused worker coverage completed successfully."
+    ],
+    "report": null,
+    "summary": "Removed the duplicated private worker process and egress test inventories from test_worker_protocol.py, leaving boundary/configuration regressions there while semantic bodies remain in test_worker_process.py and test_worker_egress.py. Cleaned stale imports in the moved project lifecycle, project registry, and worker logging modules; no facade or hidden _test_ inventory remains."
+  },
+  "workspace_head": "6ca731a4125c29ad342aac44fc2854dc4783a278"
+}
