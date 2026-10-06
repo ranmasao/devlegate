@@ -1,0 +1,28 @@
+{
+  "code_base_head": "6ca731a4125c29ad342aac44fc2854dc4783a278",
+  "conclusion": "completed",
+  "control_head": "ac508b587c5a544a9a673069ad7a323acbb6c8f2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-052",
+  "execution_id": "7e94553fd36742c9a5e5699c0cbea41e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-052",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-052/7e94553fd36742c9a5e5699c0cbea41e.md",
+  "report_sha256": "1f65c292188526a8aad5384fcecd80dd3100127b525c1f87ad608adb30b93c51",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-052",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Compilation and diff validation completed. The focused pytest command could not run because pytest is not installed in the workspace.",
+    "summary": "Implemented ticket-oriented log lifecycle handling: missing per-ticket report history is now empty while unsafe roots and ticket paths still fail closed, and ticket follow continues through accepted, failed, incomplete, and retry/waiting states until done. Added focused regressions for empty history, unsafe report directories, and accepted-state waiting."
+  },
+  "workspace_head": "23042ef69f470f5b426a791bbf895e6b8f317447"
+}
