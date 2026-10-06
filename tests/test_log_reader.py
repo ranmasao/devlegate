@@ -14,9 +14,11 @@ from devlegate.log_reader import (
     execution_log,
     follow_execution,
     follow_file,
+    follow_ticket,
     journal_command,
     service_unit,
     stream_journal,
+    ticket_log,
 )
 from devlegate.operational_log import execution_log_path
 from devlegate.runtime_store import SQLiteRuntimeStore
@@ -46,6 +48,12 @@ def _report(control: Path, execution: str, ticket: str = "ticket") -> None:
     root = control / "executions" / ticket
     root.mkdir(parents=True, exist_ok=True)
     (root / f"{execution}.json").write_text(json.dumps(payload))
+
+
+def _ticket(control: Path, ticket: str, state: str) -> None:
+    path = control / "kanban" / state / f"{ticket}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ticket)
 
 
 def test_execution_prefix_requires_unique_report(tmp_path):
@@ -419,3 +427,47 @@ def test_terminal_execution_without_log_fails_without_waiting(tmp_path, monkeypa
 
     with pytest.raises(LogReaderError, match="execution log not found"):
         follow_execution(state, "key", control, identifier, 10)
+
+
+def test_ticket_log_without_history_is_empty(tmp_path):
+    control = tmp_path / "control"
+    state = tmp_path / "state"
+    _ticket(control, "T-1", "todo")
+
+    ticket, content = ticket_log(
+        state, "key", control, "T-1", 10, {"todo": "kanban/todo"}
+    )
+
+    assert ticket == "T-1"
+    assert tuple(content) == ()
+
+
+def test_ticket_follow_waits_in_accepted_until_done(tmp_path, monkeypatch):
+    control = tmp_path / "control"
+    state = tmp_path / "state"
+    _ticket(control, "T-1", "accepted")
+    calls = 0
+
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (control / "kanban" / "accepted" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    (control / "kanban" / "done").mkdir(parents=True)
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+
+    assert (
+        follow_ticket(
+            state,
+            "key",
+            control,
+            "T-1",
+            10,
+            {"accepted": "kanban/accepted", "done": "kanban/done"},
+        )
+        == 0
+    )
+    assert calls == 2

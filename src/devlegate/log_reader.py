@@ -188,7 +188,9 @@ def _active_ticket_execution(
     if state.get("execution_ticket_id") != ticket_id:
         return None
     execution = state.get("execution_id")
-    if not isinstance(execution, str) or not execution:
+    if not isinstance(execution, str) or not execution or any(
+        character not in "0123456789abcdef" for character in execution
+    ):
         raise LogReaderError("invalid current execution identity")
     return execution
 
@@ -231,7 +233,7 @@ def follow_ticket(
     lines: int,
     workflow_paths: dict[str, str],
 ) -> int:
-    """Follow all executions for a ticket until it reaches accepted or done."""
+    """Follow all executions for a ticket until it reaches its terminal state."""
     lines = _lines(lines)
     printed: set[str] = set()
     while True:
@@ -247,7 +249,9 @@ def follow_ticket(
             )
             print("".join(_read_file(path, lines)), end="", flush=True)
             printed.add(report.execution_id)
-        if state in {"accepted", "done"}:
+        # Accepted is an intermediate integration boundary. Keep observing until
+        # the ticket reaches the canonical workflow terminal state.
+        if state == "done":
             return 0
         active = _active_ticket_execution(state_dir, state_key, ticket_id)
         if active is not None:

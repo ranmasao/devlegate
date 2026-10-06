@@ -37,6 +37,25 @@ def test_valid_claim_outcomes_become_canonical_conclusions():
     assert build_execution_result(run("blocked")).conclusion == "blocked"
 
 
+def test_listing_missing_ticket_report_directory_is_empty(tmp_path):
+    assert ExecutionReportStore(tmp_path).list("T-1") == ()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "file"])
+def test_listing_unsafe_ticket_report_directory_fails_closed(tmp_path, kind):
+    root = tmp_path / "executions"
+    root.mkdir()
+    target = tmp_path / "target"
+    if kind == "symlink":
+        target.mkdir()
+        (root / "T-1").symlink_to(target, target_is_directory=True)
+    else:
+        (root / "T-1").write_text("unsafe")
+
+    with pytest.raises(ExecutionReportError, match="ticket directory is unsafe"):
+        ExecutionReportStore(tmp_path).list("T-1")
+
+
 @pytest.mark.parametrize(
     "worker_run",
     [

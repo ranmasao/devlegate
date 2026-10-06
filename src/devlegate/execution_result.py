@@ -495,10 +495,28 @@ class ExecutionReportStore:
     def list(self, ticket_id: str | None = None) -> tuple[ExecutionReport, ...]:
         """Read immutable reports in deterministic order."""
         self._validate_roots()
-        roots = [self.root / ticket_id] if ticket_id is not None else sorted(
-            (path for path in self.root.iterdir() if path.is_dir()),
-            key=lambda path: path.name,
-        ) if self.root.is_dir() else []
+        if ticket_id is not None:
+            if not _IDENTIFIER.fullmatch(ticket_id):
+                raise ExecutionReportError("invalid execution report identity")
+            ticket_root = self.root / ticket_id
+            if ticket_root.is_symlink():
+                raise ExecutionReportError(
+                    "execution report ticket directory is unsafe"
+                )
+            if self.root.exists() and not self.root.is_dir():
+                raise ExecutionReportError("execution report root is unsafe")
+            if not ticket_root.exists():
+                return ()
+            roots = [ticket_root]
+        else:
+            roots = (
+                sorted(
+                    (path for path in self.root.iterdir() if path.is_dir()),
+                    key=lambda path: path.name,
+                )
+                if self.root.is_dir()
+                else []
+            )
         reports: list[ExecutionReport] = []
         for root in roots:
             if root.is_symlink() or not root.is_dir():
