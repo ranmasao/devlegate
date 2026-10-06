@@ -28,6 +28,7 @@ def test_target_expansion_and_dependency_order():
         "sdist",
         "standalone",
         "deb",
+        "arch",
         "full-source",
     )
 
@@ -39,6 +40,14 @@ def test_semantic_plan_is_frozen_and_in_dependency_order():
     ] * 7
     assert plan[0].name == "build wheel"
     assert plan[-1].name == "prove Debian extracted binary"
+
+
+def test_arch_target_depends_on_standalone_and_has_package_validation_proof():
+    assert GRAPH.dependency_order(("arch",)) == ("wheel", "standalone", "arch")
+    plan = GRAPH.semantic_plan(("arch",))
+    assert plan[-4].name == "build Arch package"
+    assert plan[-2].name == "validate Arch package"
+    assert plan[-1].name == "prove Arch extracted binary"
 
 
 def test_direct_wheel_includes_install_proof_but_dependency_wheel_does_not():

@@ -48,15 +48,25 @@ except ModuleNotFoundError:
         freeze_plan,
     )
 
-TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
+TARGETS = (
+    "wheel",
+    "sdist",
+    "python",
+    "standalone",
+    "deb",
+    "arch",
+    "full-source",
+    "all",
+)
 GRAPH = {
     "wheel": (),
     "sdist": (),
     "standalone": ("wheel",),
     "deb": ("standalone",),
+    "arch": ("standalone",),
     "full-source": (),
 }
-ALL_TARGETS = ("wheel", "sdist", "standalone", "deb", "full-source")
+ALL_TARGETS = ("wheel", "sdist", "standalone", "deb", "arch", "full-source")
 
 
 class DistributionError(RuntimeError):
@@ -748,6 +758,56 @@ def build_deb(
     return package
 
 
+def build_arch(
+    source: Source,
+    standalone: dict[str, Artifact],
+    work: Path,
+    reporter: ProgressReporter | None = None,
+    emit: Callable[[ComponentEvent], None] | None = None,
+) -> Artifact:
+    require_tools(("tar", "zstd"))
+    try:
+        from tools.package_arch import package as arch_package
+        from tools.validate_arch import validate as validate_arch
+    except ModuleNotFoundError:
+        from package_arch import package as arch_package
+        from validate_arch import validate as validate_arch
+    package = Artifact(
+        arch_package(
+            repo=source.repo,
+            archive=standalone["archive"].path,
+            sidecar=standalone["sidecar"].path,
+            build_report=standalone["report"].path,
+            output_dir=work / "arch",
+            emit=emit,
+        ),
+        "Arch package",
+    )
+    validated = work / "arch-validated"
+    binary = component_step(
+        emit,
+        "validate-arch",
+        "validate Arch package",
+        lambda: validate_arch(package.path, standalone["report"].path, validated),
+    )
+
+    def prove() -> None:
+        result = subprocess.run(
+            [str(binary), "version"],
+            cwd=work,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode:
+            raise DistributionError(
+                f"Arch extracted-binary proof failed:\n{result.stderr}"
+            )
+
+    component_step(emit, "prove-arch", "prove Arch extracted binary", prove)
+    return package
+
+
 def build_full_source(
     source: Source,
     work: Path,
@@ -850,6 +910,11 @@ def _owned_component_plan(target: str) -> ComponentPlan:
             from tools.package_deb import component_plan as plan
         except ModuleNotFoundError:
             from package_deb import component_plan as plan
+    elif target == "arch":
+        try:
+            from tools.package_arch import component_plan as plan
+        except ModuleNotFoundError:
+            from package_arch import component_plan as plan
     else:
         plans = {
             "wheel": ("build wheel", "validate wheel"),
@@ -895,6 +960,17 @@ def _target_plan(target: str, *, include_proof: bool = False) -> ComponentPlan:
             (ComponentPlan(owned.name, owned.children, key="package"),
              _leaf_plan("validate-deb", "validate Debian package"),
              _leaf_plan("prove-deb", "prove Debian extracted binary")),
+            key=target,
+        )
+    if target == "arch":
+        owned = _owned_component_plan(target)
+        return ComponentPlan(
+            target,
+            (
+                ComponentPlan(owned.name, owned.children, key="package"),
+                _leaf_plan("validate-arch", "validate Arch package"),
+                _leaf_plan("prove-arch", "prove Arch extracted binary"),
+            ),
             key=target,
         )
     plans = {
@@ -1145,6 +1221,57 @@ def _component_for_target(
             leaf("validate-deb", validate_action),
             leaf("prove-deb", prove_action),
         )
+    elif target == "arch":
+        try:
+            from tools.package_arch import package as arch_package
+            from tools.validate_arch import validate as validate_arch
+        except ModuleNotFoundError:
+            from package_arch import package as arch_package
+            from validate_arch import validate as validate_arch
+        package_component_plan = next(
+            child for child in plan.children if child.key == "package"
+        )
+
+        def package_action(emit: Callable[[ComponentEvent], None]) -> object:
+            values["arch"] = Artifact(
+                arch_package(
+                    repo=source.repo,
+                    archive=values["standalone"]["archive"].path,
+                    sidecar=values["standalone"]["sidecar"].path,
+                    build_report=values["standalone"]["report"].path,
+                    output_dir=work / "arch",
+                    emit=emit,
+                ),
+                "Arch package",
+            )
+            return values["arch"]
+
+        def validate_action() -> object:
+            values["arch-binary"] = validate_arch(
+                values["arch"].path,
+                values["standalone"]["report"].path,
+                work / "arch-validated",
+            )
+            return values["arch-binary"]
+
+        def prove_action() -> None:
+            result = subprocess.run(
+                [str(values["arch-binary"]), "version"],
+                cwd=work,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode:
+                raise DistributionError(
+                    f"Arch extracted-binary proof failed:\n{result.stderr}"
+                )
+
+        children = (
+            FunctionComponent(package_component_plan, package_action),
+            leaf("validate-arch", validate_action),
+            leaf("prove-arch", prove_action),
+        )
     else:
         raise DistributionError(f"unsupported component target: {target}")
     return TreeComponent(plan, tuple(children))
@@ -1231,6 +1358,10 @@ def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
         package = values["deb"]
         files.append(package.path)
         files.append(package.path.with_name(f"{package.path.name}.sha256"))
+    if target in {"arch", "all"}:
+        package = values["arch"]
+        files.append(package.path)
+        files.append(package.path.with_name(f"{package.path.name}.sha256"))
     if target in {"full-source", "all"}:
         full_source = values["full-source"]
         files.extend((full_source["archive"].path, full_source["sidecar"].path))
@@ -1241,7 +1372,7 @@ def retain_stage_reports(
     target: str, values: dict[str, object], output_path: Path, evidence: EvidenceLog
 ) -> None:
     """Copy reports out of the temporary workspace before it is removed."""
-    if target not in {"standalone", "deb", "all"}:
+    if target not in {"standalone", "deb", "arch", "all"}:
         return
     standalone = values.get("standalone")
     if not isinstance(standalone, dict) or "report" not in standalone:
@@ -1263,7 +1394,7 @@ def package(args: argparse.Namespace) -> int:
     try:
         source = source_identity(repo, str(Path(args.python)))
         require_tools(("git",))
-        if args.target in {"standalone", "deb", "all"}:
+        if args.target in {"standalone", "deb", "arch", "all"}:
             require_tools(("file",))
         if args.target in {"deb", "all"}:
             require_tools(("dpkg-deb",))
@@ -1422,6 +1553,10 @@ def parser() -> argparse.ArgumentParser:
         ),
         "deb": (
             "Build and validate the Debian package. Wheel and standalone "
+            "prerequisites are built automatically."
+        ),
+        "arch": (
+            "Build and validate the Arch package. Wheel and standalone "
             "prerequisites are built automatically."
         ),
         "full-source": "Build and validate the materialized full-source archive.",
