@@ -6,41 +6,22 @@
 import json
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
-from argparse import Namespace
+from _project_support import project
 
+import devlegate.cli as cli
 from devlegate.ipc_client import IPCClientError
-from devlegate.project_registry import ProjectRegistry, ProjectRegistryError, canonical_env_path
+from devlegate.project_registry import (
+    ProjectRegistry,
+    ProjectRegistryError,
+    canonical_env_path,
+)
 from devlegate.runtime_locator import RuntimeLocator
 from devlegate.runtime_store import SQLiteRuntimeStore
 from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
-import devlegate.cli as cli
-from _project_support import project
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_project_rename_preserves_runtime_identity(

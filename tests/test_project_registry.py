@@ -5,24 +5,19 @@
 from __future__ import annotations
 
 import json
-import sys
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
+from _project_support import project
 
 import devlegate.cli as cli
-from devlegate.ipc_client import IPCClientError
 from devlegate.project_registry import (
     ProjectRegistry,
     ProjectRegistryError,
     canonical_env_path,
     validate_alias,
 )
-from devlegate.runtime_locator import RuntimeLocator
-from devlegate.runtime_store import SQLiteRuntimeStore
-from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
-from _project_support import project
 
 
 def test_alias_validation_is_conservative() -> None:

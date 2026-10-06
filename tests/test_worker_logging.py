@@ -6,13 +6,13 @@
 import subprocess
 
 import pytest
+from _worker_support import FakeProcess, event, run_worker
 
 import devlegate.worker_supervisor as worker_supervisor
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import open_execution_log
 from devlegate.worker_egress import OpenCodeRunResult
 from devlegate.worker_supervisor import WorkerSupervisor
-from _worker_support import event, run_worker, FakeProcess
 
 
 def test_worker_protocol_renders_events_and_stderr(capsys, monkeypatch):
