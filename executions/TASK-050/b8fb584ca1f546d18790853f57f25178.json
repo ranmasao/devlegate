@@ -1,0 +1,36 @@
+{
+  "code_base_head": "41f6043157042fcb4d72f2e64e908735d2d00e5f",
+  "conclusion": "incomplete",
+  "control_head": "96ddc577b2fd49d99856070307586552f75738cf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-050",
+  "execution_id": "b8fb584ca1f546d18790853f57f25178",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-050",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete an authoritative full test run beyond the local five-minute timeout.",
+    "Run coverage collection with pytest-cov installed.",
+    "Run Ruff in an environment providing the ruff executable."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-050",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete an authoritative full test run beyond the local five-minute timeout.",
+      "Run coverage collection with pytest-cov installed.",
+      "Run Ruff in an environment providing the ruff executable."
+    ],
+    "report": null,
+    "summary": "Physically moved worker logging regressions into test_worker_logging.py and project lifecycle regressions into test_project_lifecycle.py, using the existing support modules for shared setup. Removed the corresponding private inventories and facade delegation from the original semantic modules."
+  },
+  "workspace_head": "e0a823df69165add6859560681fe1a7d631c9cd7"
+}
