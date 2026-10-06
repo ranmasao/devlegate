@@ -16,8 +16,8 @@ echo '$ pacman --root TESTROOT --dbpath TESTROOT/var/lib/pacman -Qip PACKAGE'
 pacman $pacman_args -Qip "$package"
 echo '$ pacman --root TESTROOT --dbpath TESTROOT/var/lib/pacman -U PACKAGE'
 pacman $pacman_args --noconfirm -U "$package"
-echo '$ pacman --root TESTROOT --dbpath TESTROOT/var/lib/pacman -Qqo /usr/bin/devlegate'
-owner=$(pacman $pacman_args -Qqo /usr/bin/devlegate)
+echo '$ pacman --root TESTROOT --dbpath TESTROOT/var/lib/pacman -Qqo TESTROOT/usr/bin/devlegate'
+owner=$(pacman $pacman_args -Qqo "$root/usr/bin/devlegate")
 test "$owner" = devlegate
 echo "owner: $owner"
 echo '$ devlegate --version'

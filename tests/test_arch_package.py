@@ -86,7 +86,8 @@ def make_arch_package(tmp_path: Path, *, arch: str = "x86_64") -> tuple[Path, Pa
         encoding="ascii",
     )
     (root / ".PKGINFO").write_text(
-        "pkgname = devlegate\npkgbase = devlegate\npkgver = 0.5.6.dev0\npkgrel = 1\n"
+        "pkgname = devlegate\npkgbase = devlegate\nxdata = pkgtype=pkg\n"
+        "pkgver = 0.5.6.dev0-1\n"
         f"arch = {arch}\nlicense = EUPL-1.2\n",
         encoding="ascii",
     )

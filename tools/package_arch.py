@@ -157,8 +157,8 @@ def package(
             pkginfo.write_text(
                 "pkgname = devlegate\n"
                 "pkgbase = devlegate\n"
-                f"pkgver = {pkgver}\n"
-                "pkgrel = 1\n"
+                "xdata = pkgtype=pkg\n"
+                f"pkgver = {pkgver}-1\n"
                 "pkgdesc = deterministic local agent orchestrator\n"
                 "url = https://github.com/ranmasao/devlegate\n"
                 f"builddate = {timestamp}\n"
@@ -184,7 +184,8 @@ def package(
                     str(output),
                     "-C",
                     str(package_root),
-                    ".",
+                    ".PKGINFO",
+                    "usr",
                 ],
                 env=environment,
                 text=True,

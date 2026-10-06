@@ -42,11 +42,18 @@ def members(package: Path) -> list[str]:
 
 def fields(package: Path) -> dict[str, list[str]]:
     result = subprocess.run(
-        ["tar", "--zstd", "-xOf", str(package), "./.PKGINFO"],
+        ["tar", "--zstd", "-xOf", str(package), ".PKGINFO"],
         text=True,
         capture_output=True,
         check=False,
     )
+    if result.returncode:
+        result = subprocess.run(
+            ["tar", "--zstd", "-xOf", str(package), "./.PKGINFO"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     if result.returncode:
         raise PackageError("Arch package lacks .PKGINFO")
     values: dict[str, list[str]] = {}
@@ -63,7 +70,7 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     expected = {
         "pkgname": ["devlegate"],
         "pkgbase": ["devlegate"],
-        "pkgrel": ["1"],
+        "xdata": ["pkgtype=pkg"],
         "arch": ["x86_64"],
     }
     for key, value in expected.items():
@@ -77,7 +84,7 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     except (KeyError, IndexError) as error:
         raise PackageError("Arch package lacks pkgver") from error
     report = json.loads(build_report.read_text(encoding="utf-8"))
-    if pkgver != report["wheel"]["version"].replace("+", "."):
+    if pkgver != f'{report["wheel"]["version"].replace("+", ".")}-1':
         raise PackageError("Arch version does not match standalone build report")
     names = members(package)
     if len(names) != len(set(names)) or ".PKGINFO" not in names:
