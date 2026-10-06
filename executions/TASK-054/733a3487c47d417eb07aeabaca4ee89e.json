@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "f29599f04fc6ae34a193c4abf9ca30d67f6f7ef0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "733a3487c47d417eb07aeabaca4ee89e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-054/733a3487c47d417eb07aeabaca4ee89e.md",
+  "report_sha256": "88961a94f30e844c51e861cf56cbeedd17ff68cef77fd9cf1ca97541ee4c545e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused Arch packaging and distribution tests pass, Ruff passes for changed Python tooling, and the disposable Arch x86_64 pacman lifecycle completed successfully.",
+    "summary": "Aligned Arch package metadata and tar member layout with pacman 7 requirements, including pkgtype metadata, release encoding, root-level package members, and corrected disposable-root ownership validation. Added durable Arch host validation evidence covering metadata inspection, install, ownership, CLI smoke, removal, and unrelated-state preservation."
+  },
+  "workspace_head": "408541fc45bd37a1b9b58f5a9f8f43f2f137d4de"
+}
