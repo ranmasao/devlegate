@@ -31,9 +31,11 @@ def members(package: Path) -> list[str]:
     if result.returncode:
         raise PackageError(result.stderr.strip() or "cannot read Arch package")
     return [
-        line.removeprefix("./").removesuffix("/")
+        name
         for line in result.stdout.splitlines()
         if line
+        for name in (line.removeprefix("./").removesuffix("/"),)
+        if name
     ]
 
 
