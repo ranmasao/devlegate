@@ -40,11 +40,12 @@ layer; use `TEST_BOUNDARIES.md` for that decision and
 - Output, standalone packaging, source, diagnostics, tickets, and coverage: `test_output.py`, `test_standalone_builder.py`, `test_standalone_package.py`, `test_full_source.py`, `test_service_diagnostics.py`, `test_tickets.py`, `test_coverage.py`
 
 The former mixed modules are now `_cli_support.py`, `_control_support.py`,
-`_daemon_support.py`, and `_ipc_support.py`. They own reusable fixtures/helpers
-only; semantic test functions live in the domain modules above. The worker
-protocol and project registry source modules retain shared helpers and the
-remaining cohesive boundary tests; semantic collection facades own the moved
-worker and project lifecycle tests without changing their bodies or IDs.
+`_daemon_support.py`, and `_ipc_support.py`. Worker and project semantic modules
+also use `_worker_support.py` and `_project_support.py` for reusable setup. These
+support modules own fixtures/helpers only; semantic test functions physically
+live in their narrowest domain module. Worker protocol and project registry
+retain only their cohesive boundary tests. There are no collection facades or
+hidden `_test_*` inventories.
 Cross-layer modules retain tests whose proof role does not fit an artificial
 narrow bucket.
 
