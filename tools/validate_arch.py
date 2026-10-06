@@ -30,13 +30,14 @@ def members(package: Path) -> list[str]:
     )
     if result.returncode:
         raise PackageError(result.stderr.strip() or "cannot read Arch package")
-    return [
-        name
-        for line in result.stdout.splitlines()
-        if line
-        for name in (line.removeprefix("./").removesuffix("/"),)
-        if name
-    ]
+    names = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        name = line.removeprefix("./").removesuffix("/")
+        if name and name != ".":
+            names.append(name)
+    return names
 
 
 def fields(package: Path) -> dict[str, list[str]]:
