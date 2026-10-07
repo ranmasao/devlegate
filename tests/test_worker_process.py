@@ -163,6 +163,71 @@ def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
         pass
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_setsid_descendant_does_not_prove_execution_retirement(tmp_path):
+    marker = tmp_path / "escaped.json"
+    script = (
+        "import json, os, pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import os, time; os.setsid(); time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'child': child.pid})); "
+        "time.sleep(0.2); os._exit(0)"
+    )
+    identities = []
+    result = _run_opencode(
+        [sys.executable, "-c", script, str(marker)],
+        "prompt",
+        execution_id="execution-setsid",
+        worker_identity_handler=identities.append,
+    )
+    child = __import__("json").loads(marker.read_text())["child"]
+    assert result.worker_group_retired is False
+    assert "known execution-owned descendant" in (result.transport_error or "")
+    try:
+        os.kill(child, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_forced_interruption_kills_escaped_descendant(tmp_path):
+    marker = tmp_path / "escaped-interrupt.json"
+    script = (
+        "import json, os, pathlib, subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import os, time; os.setsid(); time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'child': child.pid})); "
+        "child.wait()"
+    )
+
+    class Request:
+        kind = None
+
+    request = Request()
+    timer = threading.Timer(0.3, setattr, args=(request, "kind", "operator_abort"))
+    timer.start()
+    result = _run_opencode(
+        [sys.executable, "-c", script, str(marker)],
+        "prompt",
+        stop_request=request,
+        execution_id="execution-setsid-interrupt",
+        worker_identity_handler=lambda _identity: None,
+    )
+    timer.cancel()
+    child = __import__("json").loads(marker.read_text())["child"]
+    assert result.interruption_kind == "operator_abort"
+    for _ in range(100):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("escaped descendant survived forced interruption")
+
+
 def test_natural_worker_exit_wins_between_timeout_and_signal(monkeypatch):
     class Process:
         pid = 12345
