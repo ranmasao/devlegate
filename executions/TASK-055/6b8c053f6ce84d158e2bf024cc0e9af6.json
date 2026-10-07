@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "dba26c0a0a9bbde0ff152c3b30ce5ca387fc23c2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "6b8c053f6ce84d158e2bf024cc0e9af6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/6b8c053f6ce84d158e2bf024cc0e9af6.md",
+  "report_sha256": "f0a37b73e2b604c1ef025d0e5d3b178665be14c2ab03855440f7456f34f05ca5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused worker, supervisor, recovery, lifecycle, and Ruff checks pass. The full pytest run was attempted twice but exceeded the available timeout after progressing without reported failures; repository-wide Ruff remains blocked by pre-existing vendored packaging violations outside the changed files.",
+    "summary": "Hardened Linux worker retirement by tracking observed descendant identities with boot-id and start-time validation, including descendants that escape the worker PGID via setsid(). Forced interruption now signals tracked escaped descendants, while retirement fails closed when ownership tracking is unavailable or any known execution-owned descendant remains alive. Added deterministic setsid escape and forced-interruption regressions."
+  },
+  "workspace_head": "b62216c8606303e22c8b381d089206992646c7af"
+}
