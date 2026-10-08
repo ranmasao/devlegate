@@ -4430,7 +4430,7 @@ class ServiceEngine:
             self._refresh_published_status()
         if not worker_run.worker_group_retired:
             raise DevlegateError(
-                "worker leader exited but execution process group is still alive"
+                "execution cgroup remains populated; worker retirement is unproven"
             )
         try:
             manager = ExecutionWorkspaceManager(

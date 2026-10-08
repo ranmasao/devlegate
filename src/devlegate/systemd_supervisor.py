@@ -120,6 +120,9 @@ def render_unit(
             "KillMode=mixed",
             "TimeoutStopSec=infinity",
             "Restart=no",
+            # The service manager delegates a subtree; Devlegate owns each
+            # execution child cgroup inside it without creating transient scopes.
+            "Delegate=yes",
             "",
             "[Install]",
             "WantedBy=default.target",

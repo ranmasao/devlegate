@@ -116,6 +116,12 @@ it automatically for the project service. If not, it runs attached to the
 terminal instead. See [Project Setup](docs/PROJECT_SETUP.md) and
 [Operations](docs/OPERATIONS.md) for details.
 
+On Linux, every hosted worker requires a delegated writable cgroup v2 subtree.
+The worker joins its execution cgroup before exec, and retirement is accepted
+only after the kernel reports that cgroup as unpopulated. Systemd installation
+uses `Delegate=yes`; another supervisor or container may provide the equivalent
+delegated subtree through `DEVLEGATE_CGROUP_ROOT`.
+
 ## What Works Today
 
 - Local Git repositories with ticket-driven work.

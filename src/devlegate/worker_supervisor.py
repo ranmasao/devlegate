@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+from devlegate.execution_containment import ContainmentError, ExecutionContainment
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
 from devlegate.worker_egress import (
@@ -64,119 +65,6 @@ def _linux_process_start_time(pid: int) -> int:
         raise WorkerSupervisionError("worker process identity is malformed") from error
 
 
-def _linux_process_parent_and_start_time(pid: int) -> tuple[int, int]:
-    """Read the parent PID and start time from one Linux process record."""
-    stat = Path(f"/proc/{pid}/stat").read_text()
-    closing = stat.rfind(")")
-    if closing < 0:
-        raise WorkerSupervisionError("process identity is malformed")
-    fields = stat[closing + 2 :].split()
-    try:
-        return int(fields[1]), int(fields[19])
-    except (IndexError, ValueError) as error:
-        raise WorkerSupervisionError("process identity is malformed") from error
-
-
-@dataclasses.dataclass(frozen=True)
-class _OwnedDescendant:
-    pid: int
-    boot_id: str
-    start_time: int
-
-
-def _linux_descendants(root_pid: int) -> dict[int, int]:
-    """Return descendant PID to start-time mappings without signaling anything."""
-    children: dict[int, list[tuple[int, int]]] = {}
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        try:
-            parent, start_time = _linux_process_parent_and_start_time(pid)
-        except (OSError, WorkerSupervisionError):
-            continue
-        children.setdefault(parent, []).append((pid, start_time))
-    descendants: dict[int, int] = {}
-    pending = [root_pid]
-    while pending:
-        parent = pending.pop()
-        for pid, start_time in children.get(parent, ()):
-            if pid in descendants:
-                continue
-            descendants[pid] = start_time
-            pending.append(pid)
-    return descendants
-
-
-def _linux_identity_status(identity: _OwnedDescendant) -> str:
-    """Classify an observed identity without treating inspection failure as death."""
-    try:
-        if (
-            _linux_boot_id() == identity.boot_id
-            and _linux_process_start_time(identity.pid) == identity.start_time
-        ):
-            return "matching-live"
-        return "absent"
-    except (OSError, WorkerSupervisionError):
-        return "indeterminate"
-
-
-class _DescendantTracker:
-    """Bounded ownership proof for descendants observed before reparenting."""
-
-    # PPID sampling cannot prove that an unobserved child did not escape after
-    # the leader exited. Keep this explicit until executions have a cgroup
-    # boundary that is recursive by construction.
-    recursive_ownership_proven = False
-
-    def __init__(self, root_pid: int) -> None:
-        self.root_pid = root_pid
-        self.boot_id = _linux_boot_id()
-        self.owned: dict[int, _OwnedDescendant] = {}
-        self.failed = False
-        self.stop = threading.Event()
-        self.thread = threading.Thread(target=self._watch, daemon=True)
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def _sample(self) -> None:
-        for pid, start_time in _linux_descendants(self.root_pid).items():
-            self.owned.setdefault(pid, _OwnedDescendant(pid, self.boot_id, start_time))
-
-    def _watch(self) -> None:
-        while not self.stop.is_set():
-            try:
-                self._sample()
-            except (OSError, WorkerSupervisionError):
-                self.failed = True
-                return
-            self.stop.wait(WORKER_WAIT_INTERVAL)
-
-    def finish(self) -> None:
-        try:
-            self._sample()
-        except (OSError, WorkerSupervisionError):
-            self.failed = True
-        self.stop.set()
-        self.thread.join(WORKER_TERMINATION_TIMEOUT)
-
-    def signal_live(self, signum: signal.Signals) -> None:
-        for identity in tuple(self.owned.values()):
-            if _linux_identity_status(identity) != "matching-live":
-                continue
-            try:
-                os.kill(identity.pid, signum)
-            except (OSError, ProcessLookupError):
-                pass
-
-    def has_live_descendants(self) -> bool:
-        return any(
-            _linux_identity_status(identity) != "absent"
-            for identity in self.owned.values()
-        )
-
-
 def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentity:
     if os.name != "posix" or not sys.platform.startswith("linux"):
         raise WorkerSupervisionError("strong worker process identity is unavailable")
@@ -194,30 +82,6 @@ def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentit
     return WorkerProcessIdentity(execution_id, pid, pgid, sid, boot_id, start_time)
 
 
-def _worker_group_exists(pgid: int) -> bool | None:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return None
-    return True
-
-
-def _prove_worker_group_retired(pgid: int) -> bool:
-    """Prove a recorded group is gone without signaling it."""
-    deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
-    while True:
-        observed = _worker_group_exists(pgid)
-        if observed is False:
-            return True
-        if observed is None or time.monotonic() >= deadline:
-            return False
-        time.sleep(WORKER_WAIT_INTERVAL)
-
-
 def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
     """Classify recorded worker ownership without mutating runtime state."""
     if os.name != "posix" or not sys.platform.startswith("linux"):
@@ -227,16 +91,14 @@ def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
             return "absent"
         current_start = _linux_process_start_time(identity.pid)
     except (WorkerSupervisionError, OSError):
-        group = _worker_group_exists(identity.pgid)
-        return "absent" if group is False else "indeterminate"
+        return "indeterminate"
     try:
         if (
             current_start != identity.start_time
             or os.getpgid(identity.pid) != identity.pgid
             or os.getsid(identity.pid) != identity.sid
         ):
-            group = _worker_group_exists(identity.pgid)
-            return "absent" if group is False else "indeterminate"
+            return "indeterminate"
     except OSError:
         return "indeterminate"
     return "matching-live"
@@ -386,30 +248,39 @@ def _run_opencode(
     execution_log: ExecutionLog | None = None,
     show_worker_output: bool = True,
     worker_started_handler: Callable[[], None] | None = None,
+    containment: ExecutionContainment | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-    )
-    descendant_tracker = None
-    descendant_tracking_error = False
-    if (
-        worker_identity_handler is not None
-        and os.name == "posix"
-        and sys.platform.startswith("linux")
-    ):
+    if worker_identity_handler is not None and containment is None:
         try:
-            descendant_tracker = _DescendantTracker(process.pid)
-            descendant_tracker.start()
-        except (OSError, WorkerSupervisionError):
-            # Do not claim retirement without a usable ownership boundary.
-            descendant_tracking_error = True
+            containment = ExecutionContainment.create(execution_id or "unknown")
+        except ContainmentError as error:
+            return OpenCodeRunResult(
+                -1, f"execution containment failed: {error}", None, False
+            )
+    try:
+        if containment is not None:
+            process = containment.spawn(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+            )
+        else:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+            )
+    except (OSError, ContainmentError) as error:
+        return OpenCodeRunResult(-1, f"execution containment failed: {error}", None, False)
     if worker_started_handler is not None:
         worker_started_handler()
     output_lock = threading.Lock()
@@ -550,8 +421,8 @@ def _run_opencode(
             return
         if process.poll() is not None or worker_process_group is None:
             return
-        if descendant_tracker is not None:
-            descendant_tracker.signal_live(signal.SIGTERM)
+        if containment is not None:
+            containment.request_graceful(process.pid)
         try:
             os.killpg(
                 worker_process_group,
@@ -570,16 +441,16 @@ def _run_opencode(
         try:
             returncode = process.wait(timeout=WORKER_TERMINATION_TIMEOUT)
         except subprocess.TimeoutExpired:
-            if descendant_tracker is not None:
-                descendant_tracker.signal_live(signal.SIGKILL)
+            if containment is not None:
+                containment.force_terminate()
             try:
                 if worker_process_group is not None:
                     os.killpg(worker_process_group, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
             returncode = process.wait()
-        if descendant_tracker is not None:
-            descendant_tracker.signal_live(signal.SIGKILL)
+        if containment is not None:
+            containment.force_terminate()
         return returncode
 
     identity_error: str | None = None
@@ -623,8 +494,6 @@ def _run_opencode(
         except (OSError, ValueError):
             pass
     prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
-    if descendant_tracker is not None:
-        descendant_tracker.finish()
     if identity_error is not None:
         transport_error = identity_error
     elif log_error is not None:
@@ -633,58 +502,28 @@ def _run_opencode(
         transport_error = interruption_error
     elif prompt_error is not None and interruption_kind is None:
         transport_error = transport_error or prompt_error
-    group_retired = (
-        True
-        if worker_identity_handler is None
-        else (
-            worker_process_group is not None
-            and not descendant_tracking_error
-            and (descendant_tracker is None or not descendant_tracker.failed)
-            and _prove_worker_group_retired(worker_process_group)
-            and (
-                descendant_tracker is None
-                or not descendant_tracker.has_live_descendants()
-            )
-            and (
-                descendant_tracker is None
-                or descendant_tracker.recursive_ownership_proven
-            )
+    try:
+        group_retired = (
+            containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
+            if containment is not None
+            else worker_identity_handler is None
         )
-    )
+    except (ContainmentError, OSError):
+        group_retired = False
+    if not group_retired and interruption_kind is not None and containment is not None:
+        containment.force_terminate()
+        try:
+            group_retired = containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
+        except (ContainmentError, OSError):
+            group_retired = False
     if not group_retired:
-        if descendant_tracking_error or (
-            descendant_tracker is not None and descendant_tracker.failed
-        ):
-            transport_error = transport_error or (
-                "execution descendant ownership could not be established"
-            )
-        elif (
-            descendant_tracker is not None
-            and descendant_tracker.has_live_descendants()
-        ):
-            transport_error = transport_error or (
-                "worker leader exited but a known execution-owned descendant "
-                "is still alive"
-            )
-        elif (
-            worker_process_group is not None
-            and _worker_group_exists(worker_process_group) is True
-        ):
-            transport_error = transport_error or (
-                "worker leader exited but execution process group is still alive"
-            )
-        elif (
-            descendant_tracker is not None
-            and not descendant_tracker.recursive_ownership_proven
-        ):
-            transport_error = transport_error or (
-                "recursive execution ownership could not be proven; "
-                "an execution-specific cgroup is required"
-            )
-        else:
-            transport_error = transport_error or (
-                "worker leader exited but execution process group is still alive"
-            )
+        transport_error = transport_error or "execution cgroup remains populated"
+    elif containment is not None:
+        try:
+            containment.destroy()
+        except ContainmentError as error:
+            transport_error = transport_error or str(error)
+            group_retired = False
     return OpenCodeRunResult(
         returncode, transport_error, interruption_kind, group_retired
     )
@@ -829,6 +668,9 @@ export default tool({
                     f"ticket={workspace.ticket_id} execution={execution_id} "
                     f"log={execution_log.path}"
                 )
+            containment = None
+            if identity_handler is not None:
+                containment = ExecutionContainment.create(execution_id)
             opencode_result = _run_opencode(
                 command,
                 prompt,
@@ -842,6 +684,7 @@ export default tool({
                 execution_log=execution_log,
                 show_worker_output=self.show_worker_output,
                 worker_started_handler=mark_worker_started,
+                containment=containment,
             )
             claim, egress_error = parser.finish()
             result = WorkerRunResult(
@@ -860,7 +703,7 @@ export default tool({
                 )
                 completion_logged = True
             return result
-        except OSError as error:
+        except (ContainmentError, OSError) as error:
             return WorkerRunResult(-1, str(error), None, None)
         finally:
             if (
