@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "ea80b401aee0333694f3a4c1b6780a8c052a8c88",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "afc1833228f242e3b1b9af4f5b0d1cab",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/afc1833228f242e3b1b9af4f5b0d1cab.md",
+  "report_sha256": "fcc3f265b8b46db9b73d5b2ac22630b3ab985b5157a2bd683c985c1a4196b032",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation is complete. Python compilation, diff checks, capability probing, and an end-to-end cgroup spawn/force-terminate/destroy smoke test passed; the repository test runner and Ruff were unavailable because the local .venv/tools are not installed.",
+    "summary": "Implemented Linux execution ownership with per-execution cgroup v2 boundaries, pre-exec cgroup joining, kernel-population retirement proof, and recursive forced termination. Removed sampled /proc descendant tracking from worker ownership logic, added capability probing and fail-closed admission, enabled systemd subtree delegation, and documented equivalent non-systemd provisioning."
+  },
+  "workspace_head": "43e656c1de7a45c708f324d9cb23cab09672dba7"
+}
