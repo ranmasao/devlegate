@@ -108,18 +108,26 @@ def _linux_descendants(root_pid: int) -> dict[int, int]:
     return descendants
 
 
-def _linux_identity_live(identity: _OwnedDescendant) -> bool:
+def _linux_identity_status(identity: _OwnedDescendant) -> str:
+    """Classify an observed identity without treating inspection failure as death."""
     try:
-        return (
+        if (
             _linux_boot_id() == identity.boot_id
             and _linux_process_start_time(identity.pid) == identity.start_time
-        )
+        ):
+            return "matching-live"
+        return "absent"
     except (OSError, WorkerSupervisionError):
-        return False
+        return "indeterminate"
 
 
 class _DescendantTracker:
     """Bounded ownership proof for descendants observed before reparenting."""
+
+    # PPID sampling cannot prove that an unobserved child did not escape after
+    # the leader exited. Keep this explicit until executions have a cgroup
+    # boundary that is recursive by construction.
+    recursive_ownership_proven = False
 
     def __init__(self, root_pid: int) -> None:
         self.root_pid = root_pid
@@ -155,7 +163,7 @@ class _DescendantTracker:
 
     def signal_live(self, signum: signal.Signals) -> None:
         for identity in tuple(self.owned.values()):
-            if not _linux_identity_live(identity):
+            if _linux_identity_status(identity) != "matching-live":
                 continue
             try:
                 os.kill(identity.pid, signum)
@@ -163,7 +171,10 @@ class _DescendantTracker:
                 pass
 
     def has_live_descendants(self) -> bool:
-        return any(_linux_identity_live(identity) for identity in self.owned.values())
+        return any(
+            _linux_identity_status(identity) != "absent"
+            for identity in self.owned.values()
+        )
 
 
 def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentity:
@@ -634,6 +645,10 @@ def _run_opencode(
                 descendant_tracker is None
                 or not descendant_tracker.has_live_descendants()
             )
+            and (
+                descendant_tracker is None
+                or descendant_tracker.recursive_ownership_proven
+            )
         )
     )
     if not group_retired:
@@ -650,6 +665,21 @@ def _run_opencode(
             transport_error = transport_error or (
                 "worker leader exited but a known execution-owned descendant "
                 "is still alive"
+            )
+        elif (
+            worker_process_group is not None
+            and _worker_group_exists(worker_process_group) is True
+        ):
+            transport_error = transport_error or (
+                "worker leader exited but execution process group is still alive"
+            )
+        elif (
+            descendant_tracker is not None
+            and not descendant_tracker.recursive_ownership_proven
+        ):
+            transport_error = transport_error or (
+                "recursive execution ownership could not be proven; "
+                "an execution-specific cgroup is required"
             )
         else:
             transport_error = transport_error or (

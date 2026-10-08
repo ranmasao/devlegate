@@ -38,6 +38,16 @@ PTY allocation for terminal-oriented tools, and predictable cleanup and
 recovery after worker failure. These are architectural concerns, not a
 commitment to a particular sandbox implementation.
 
+### Focused Follow-Up: Per-Execution Scope
+
+Linux process groups and sampled `/proc` ancestry cannot prove recursive
+ownership after a descendant creates a new session and is reparented. A
+focused implementation is needed to launch each execution in an
+execution-specific systemd scope/cgroup, signal only that scope during forced
+stop, and prove scope retirement before reporting execution completion. This
+must preserve PID/start-time identity checks and avoid using the service
+cgroup, which also contains unrelated service processes.
+
 ## Parallelism And Worker Lifecycle
 
 General parallel worker execution remains deferred. Future designs may need

@@ -191,6 +191,35 @@ def test_setsid_descendant_does_not_prove_execution_retirement(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_immediate_reparent_escape_is_not_hidden_by_tracker_sampling(tmp_path):
+    marker = tmp_path / "immediate-escaped.json"
+    script = (
+        "import json, os, pathlib, subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import os, time; os.setsid(); time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'child': child.pid})); "
+        "os._exit(0)"
+    )
+    result = _run_opencode(
+        [sys.executable, "-c", script, str(marker)],
+        "prompt",
+        execution_id="execution-setsid-immediate",
+        worker_identity_handler=lambda _identity: None,
+    )
+    child = __import__("json").loads(marker.read_text())["child"]
+    # The leader exits immediately, so a polling PPID walk may never observe
+    # the child. It must not be presented as a recursive execution proof.
+    assert result.worker_group_retired is False
+    assert result.transport_error
+    assert os.kill(child, 0) is None
+    try:
+        os.kill(child, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_forced_interruption_kills_escaped_descendant(tmp_path):
     marker = tmp_path / "escaped-interrupt.json"
     script = (
