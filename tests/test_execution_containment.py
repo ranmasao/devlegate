@@ -137,6 +137,16 @@ def test_durable_provider_keeps_reparented_descendant_live_after_leader_exit(
     restarted = DurableDeterministicContainmentProvider(tmp_path / "root")
     assert descendant.exists()
     assert restarted.observe(boundary.identity) == "matching-live"
+    deadline = time.monotonic() + 2
+    while not boundary.diagnostics() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    diagnostic = boundary.diagnostics()
+    assert "pid=" in diagnostic
+    assert "ppid=" in diagnostic
+    assert "pgrp=" in diagnostic
+    assert "session=" in diagnostic
+    assert "state=" in diagnostic
+    assert "comm=" in diagnostic
 
     os.kill(int(descendant.read_text()), signal.SIGTERM)
     assert boundary.wait_empty(2) is True

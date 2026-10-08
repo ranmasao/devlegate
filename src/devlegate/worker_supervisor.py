@@ -560,7 +560,11 @@ def _run_opencode(
         except (ContainmentError, OSError):
             group_retired = False
     if not group_retired:
-        transport_error = transport_error or "execution cgroup remains populated"
+        detail = getattr(containment, "diagnostics", lambda: "")()
+        populated_error = "execution cgroup remains populated"
+        if detail:
+            populated_error = f"{populated_error}: {detail}"
+        transport_error = transport_error or populated_error
     elif containment is not None:
         try:
             containment.destroy()

@@ -216,7 +216,7 @@ _TRUSTED_JOINER = (
 
 _DURABLE_MONITOR = (
     "import ctypes,os,signal,subprocess,sys,time;"
-    "s,pf,ef=sys.argv[1:4];a=sys.argv[sys.argv.index('--')+1:];"
+    "s,pf,ef,df=sys.argv[1:5];a=sys.argv[sys.argv.index('--')+1:];"
     # PR_SET_CHILD_SUBREAPER keeps detached descendants observable by this
     # test-only monitor after the worker leader exits.
     "ctypes.CDLL(None).prctl(36,1,0,0,0);"
@@ -231,33 +231,44 @@ _DURABLE_MONITOR = (
     "def w(path,value):\n"
     " t=path+'.tmp-'+str(os.getpid());f=open(t,'w',encoding='ascii');"
     "f.write(value);f.flush();os.fsync(f.fileno());f.close();os.replace(t,path)\n"
+    "def reap():\n"
+    " while True:\n"
+    "  try: x=os.waitpid(-1,os.WNOHANG)\n"
+    "  except ChildProcessError: break\n"
+    "  if x[0]==0: break\n"
     "def g():\n"
     " m=os.getpid();parents={}\n"
     " for n in os.listdir('/proc'):\n"
     "  if not n.isdigit(): continue\n"
-    "  try: pid=int(n);x=open('/proc/'+n+'/stat').read().split(') ',1)[1].split();"
-    "parents[pid]=(int(x[1]),x[0])\n"
+    "  try: pid=int(n);raw=open('/proc/'+n+'/stat').read();"
+    "comm=raw.split('(',1)[1].rsplit(')',1)[0];x=raw.rsplit(') ',1)[1].split();"
+    "parents[pid]=(int(x[1]),x[0],int(x[2]),int(x[3]),comm)\n"
     "  except (OSError,IndexError,ValueError): continue\n"
-    " for pid,(parent,state) in parents.items():\n"
+    " members=[]\n"
+    " for pid,(parent,state,pgrp,session,comm) in parents.items():\n"
     "  if pid==m or state=='Z': continue\n"
     "  seen=set()\n"
     "  while parent and parent not in seen:\n"
-    "   if parent==m: return True\n"
+    "   if parent==m:\n"
+    "    members.append('pid=%d ppid=%d pgrp=%d session=%d state=%s comm=%s' % (\n"
+    "     pid,parents[pid][0],pgrp,session,state,comm));break\n"
     "   seen.add(parent);entry=parents.get(parent)\n"
     "   if entry is None: break\n"
     "   parent=entry[0]\n"
-    " return False\n"
-    "r=p.wait();time.sleep(0.01);alive=g()\n"
-    "if not alive: w(s,'absent\\n')\n"
+    " return members\n"
+    "def d(members): w(df,'\\n'.join(members)+'\\n' if members else '')\n"
+    "returncode=p.wait();time.sleep(0.01);reap();alive=g();d(alive)\n"
+    "if not alive: reap();w(s,'absent\\n')\n"
     "et=ef+'.tmp-'+str(os.getpid());"
-    "f=open(et,'w',encoding='ascii');f.write(str(r)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
+    "f=open(et,'w',encoding='ascii');f.write(str(returncode)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
     "os.replace(et,ef);\n"
     "if alive:\n"
     " while True:\n"
-    "  if not g(): break\n"
+    "  reap();alive=g();d(alive)\n"
+    "  if not alive: reap();break\n"
     "  time.sleep(0.01)\n"
     " w(s,'absent\\n');\n"
-    "sys.exit(r)"
+    "sys.exit(returncode)"
 )
 
 
@@ -574,14 +585,17 @@ class DurableDeterministicContainmentProvider:
             self.state = state
             self.identity = identity
             self._process = None
+            self._diagnostic_file = None
 
         def spawn(self, command: Sequence[str], **kwargs):
             self.state.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(self.state, "matching-live\n")
             pid_file = self.state.with_suffix(".pid")
             exit_file = self.state.with_suffix(".exit")
+            diagnostic_file = self.state.with_suffix(".members")
             pid_file.unlink(missing_ok=True)
             exit_file.unlink(missing_ok=True)
+            diagnostic_file.unlink(missing_ok=True)
             monitor = [
                 sys.executable,
                 "-I",
@@ -591,6 +605,7 @@ class DurableDeterministicContainmentProvider:
                 str(self.state),
                 str(pid_file),
                 str(exit_file),
+                str(diagnostic_file),
                 "--",
                 *command,
             ]
@@ -614,7 +629,18 @@ class DurableDeterministicContainmentProvider:
             self._process = _MonitoredProcess(
                 monitor_process, worker_pid, exit_file
             )
+            self._diagnostic_file = diagnostic_file
             return self._process
+
+        def diagnostics(self) -> str:
+            """Return concrete synthetic members when retirement is blocked."""
+            path = getattr(self, "_diagnostic_file", None)
+            if path is None:
+                return ""
+            try:
+                return path.read_text(encoding="ascii").strip()
+            except (FileNotFoundError, OSError):
+                return ""
 
         def request_graceful(self, pid: int | None) -> None:
             if pid is not None:
@@ -643,4 +669,5 @@ class DurableDeterministicContainmentProvider:
         def destroy(self) -> None:
             self.state.with_suffix(".pid").unlink(missing_ok=True)
             self.state.with_suffix(".exit").unlink(missing_ok=True)
+            self.state.with_suffix(".members").unlink(missing_ok=True)
             self.state.unlink(missing_ok=True)
