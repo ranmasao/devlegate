@@ -929,6 +929,22 @@ def prove(args: argparse.Namespace) -> int:
             ],
             env={**environment, "PEX_INTERPRETER": "1"},
         ).stdout.strip()
+        launcher_probe = root / "launcher-probe"
+        launcher_probe_script = (
+            "import pathlib, subprocess, sys; "
+            "b=pathlib.Path(sys.argv[1]); b.mkdir(); "
+            "(b/'cgroup.procs').write_text(''); "
+            "w=b/'worker'; "
+            "joiner=__import__('devlegate.execution_containment', fromlist=['_launcher_command'])._launcher_command; "
+            "worker=[sys.executable, '-c', \"import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('joined')\", str(w)]; "
+            "subprocess.run(joiner(b, worker), check=True); "
+            "assert w.read_text() == 'joined'; "
+            "assert (b/'cgroup.procs').read_text()"
+        )
+        run(
+            [str(executable), "-c", launcher_probe_script, str(launcher_probe)],
+            env={**environment, "PEX_INTERPRETER": "1"},
+        )
         pex_info = run(
             [str(executable), "info"],
             env={**environment, "PEX_TOOLS": "1"},

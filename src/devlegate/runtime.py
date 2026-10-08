@@ -476,7 +476,7 @@ def _worker_identity_from_value(
             "sid",
             "boot_id",
             "start_time",
-            "containment_path",
+            "containment_id",
         }
     ) or set(value) < {
         "execution_id",
@@ -504,9 +504,9 @@ def _worker_identity_from_value(
         or not isinstance(value["boot_id"], str)
         or not value["boot_id"]
         or (
-            "containment_path" in value
-            and value["containment_path"] is not None
-            and not isinstance(value["containment_path"], str)
+            "containment_id" in value
+            and value["containment_id"] is not None
+            and not isinstance(value["containment_id"], str)
         )
     ):
         raise DevlegateError("invalid worker identity")
@@ -517,7 +517,7 @@ def _worker_identity_from_value(
         value["sid"],
         value["boot_id"],
         value["start_time"],
-        value.get("containment_path"),
+        value.get("containment_id"),
     )
 
 

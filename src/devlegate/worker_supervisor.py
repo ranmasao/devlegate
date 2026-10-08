@@ -47,7 +47,7 @@ class WorkerProcessIdentity:
     sid: int
     boot_id: str
     start_time: int
-    containment_path: str | None = None
+    containment_id: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return dataclasses.asdict(self)
@@ -70,7 +70,7 @@ def _linux_process_start_time(pid: int) -> int:
 
 
 def _capture_worker_identity(
-    process, execution_id: str, containment_path: str | None = None
+    process, execution_id: str, containment_id: str | None = None
 ) -> WorkerProcessIdentity:
     if os.name != "posix" or not sys.platform.startswith("linux"):
         raise WorkerSupervisionError("strong worker process identity is unavailable")
@@ -86,7 +86,7 @@ def _capture_worker_identity(
     if not boot_id or start_time < 0:
         raise WorkerSupervisionError("worker process identity is incomplete")
     return WorkerProcessIdentity(
-        execution_id, pid, pgid, sid, boot_id, start_time, containment_path
+        execution_id, pid, pgid, sid, boot_id, start_time, containment_id
     )
 
 
@@ -102,22 +102,6 @@ def _worker_group_exists(pgid: int) -> bool:
 def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
     """Classify recorded worker ownership without mutating runtime state."""
     if os.name != "posix" or not sys.platform.startswith("linux"):
-        return "indeterminate"
-    if identity.containment_path:
-        events = Path(identity.containment_path) / "cgroup.events"
-        try:
-            values = events.read_text().splitlines()
-        except FileNotFoundError:
-            return "absent"
-        except OSError:
-            return "indeterminate"
-        populated = next(
-            (line for line in values if line.startswith("populated ")), None
-        )
-        if populated == "populated 1":
-            return "matching-live"
-        if populated == "populated 0":
-            return "absent"
         return "indeterminate"
     try:
         if _linux_boot_id() != identity.boot_id:
@@ -514,7 +498,7 @@ def _run_opencode(
                     _capture_worker_identity(
                         process,
                         execution_id,
-                        str(getattr(containment, "path", "")) or None,
+                        getattr(containment, "identity", None),
                     )
                 )
             except Exception as error:
@@ -637,8 +621,9 @@ class WorkerSupervisor:
         with self._lock:
             return execution_id in self._active
 
-    @staticmethod
-    def observe(identity: WorkerProcessIdentity) -> str:
+    def observe(self, identity: WorkerProcessIdentity) -> str:
+        if identity.containment_id:
+            return self.containment_provider.observe(identity.containment_id)
         return observe_worker_identity(identity)
 
     def run(

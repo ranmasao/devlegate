@@ -69,7 +69,8 @@ class LiveService:
                 "import devlegate.worker_supervisor as ws; "
                 "ec.default_containment_provider = "
                 "ws.default_containment_provider = "
-                "ec.DeterministicContainmentProvider; "
+                "lambda: ec.DurableDeterministicContainmentProvider("
+                f"{str(self.registry_home / 'containment')!r}); "
                 "from devlegate.cli import main; "
                 "raise SystemExit(main())"
             ),

@@ -45,6 +45,9 @@ class ContainmentProvider(Protocol):
     def create(self, execution_id: str) -> ContainmentBoundary:
         """Create an empty boundary for one execution."""
 
+    def observe(self, identity: str) -> str:
+        """Classify a persisted boundary as live, absent, or indeterminate."""
+
 
 def default_containment_provider() -> ContainmentProvider:
     """Return the mandatory production containment provider."""
@@ -229,6 +232,7 @@ class ExecutionContainment:
     def __init__(self, path: Path, *, recursive_kill: bool) -> None:
         self.path = path
         self.recursive_kill = recursive_kill
+        self.identity = f"cgroup:{path}"
 
     @classmethod
     def create(cls, execution_id: str) -> ExecutionContainment:
@@ -316,6 +320,25 @@ class LinuxCgroupContainmentProvider:
     def create(self, execution_id: str) -> ExecutionContainment:
         return ExecutionContainment.create(execution_id)
 
+    def observe(self, identity: str) -> str:
+        if not identity.startswith("cgroup:"):
+            return "indeterminate"
+        path = Path(identity.removeprefix("cgroup:"))
+        try:
+            values = (path / "cgroup.events").read_text().splitlines()
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "indeterminate"
+        populated = next(
+            (line for line in values if line.startswith("populated ")), None
+        )
+        if populated == "populated 1":
+            return "matching-live"
+        if populated == "populated 0":
+            return "absent"
+        return "indeterminate"
+
 
 class DeterministicContainmentProvider:
     """Small non-production provider for semantic and supervisor tests.
@@ -328,10 +351,16 @@ class DeterministicContainmentProvider:
     def __init__(self, *, populated_after_leader_exit: bool = False) -> None:
         self.populated_after_leader_exit = populated_after_leader_exit
 
+    def observe(self, identity: str) -> str:
+        return "indeterminate"
+
     class _Boundary:
         def __init__(self, *, populated_after_leader_exit: bool = False) -> None:
             self._process = None
             self._synthetic_populated = populated_after_leader_exit
+            # The lightweight double is intentionally not durable across a
+            # daemon lifetime; use the legacy diagnostic identity fallback.
+            self.identity = None
 
         def spawn(self, command: Sequence[str], **kwargs):
             self._process = subprocess.Popen(command, **kwargs)
@@ -356,12 +385,11 @@ class DeterministicContainmentProvider:
                 return False
             if self._process is None:
                 return True
-            try:
-                self._process.wait(timeout=timeout)
-            except TypeError:
-                self._process.wait()
-            except subprocess.TimeoutExpired:
-                return False
+            deadline = time.monotonic() + timeout
+            while self._process.poll() is None:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.01)
             return True
 
         def mark_populated(self) -> None:
@@ -380,3 +408,81 @@ class DeterministicContainmentProvider:
         return self._Boundary(
             populated_after_leader_exit=self.populated_after_leader_exit
         )
+
+
+class DurableDeterministicContainmentProvider:
+    """Filesystem-backed test boundary that survives a daemon restart.
+
+    This is test composition only.  It models the durable observation contract
+    without pretending that a regular file is a kernel ownership boundary.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def create(
+        self, execution_id: str
+    ) -> DurableDeterministicContainmentProvider._Boundary:
+        safe_id = "".join(
+            character if character.isalnum() or character in "-_" else "_"
+            for character in execution_id
+        )
+        return self._Boundary(
+            self.root / f"execution-{safe_id}", f"deterministic:{safe_id}"
+        )
+
+    def observe(self, identity: str) -> str:
+        if not identity.startswith("deterministic:"):
+            return "indeterminate"
+        safe_id = identity.removeprefix("deterministic:")
+        if not safe_id or Path(safe_id).name != safe_id:
+            return "indeterminate"
+        state = self.root / f"execution-{safe_id}"
+        try:
+            value = state.read_text().strip()
+            return value if value in {"matching-live", "absent"} else "indeterminate"
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "indeterminate"
+
+    class _Boundary:
+        def __init__(self, state: Path, identity: str) -> None:
+            self.state = state
+            self.identity = identity
+            self._process = None
+
+        def spawn(self, command: Sequence[str], **kwargs):
+            self.state.parent.mkdir(parents=True, exist_ok=True)
+            self.state.write_text("matching-live")
+            self._process = subprocess.Popen(command, **kwargs)
+            return self._process
+
+        def request_graceful(self, pid: int | None) -> None:
+            if pid is not None:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+
+        def force_terminate(self) -> None:
+            if self._process is not None and self._process.poll() is None:
+                try:
+                    os.killpg(self._process.pid, signal.SIGKILL)
+                except OSError:
+                    self._process.kill()
+
+        def wait_empty(self, timeout: float) -> bool:
+            if self._process is None:
+                return True
+            deadline = time.monotonic() + timeout
+            while self._process.poll() is None:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.01)
+            self.state.write_text("absent")
+            return True
+
+        def destroy(self) -> None:
+            self.state.unlink(missing_ok=True)
