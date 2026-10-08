@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "b2e4598fb98b742ec6de1e2fff796b7697300618",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "f1cc081041de4690986588716049fe45",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/f1cc081041de4690986588716049fe45.md",
+  "report_sha256": "2fa7d246e08b2348b3fe7577db2da86c9edd15c081c34dad8b2693b74acf566b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused containment, worker-supervisor, recovery, and service-topology tests pass. Ruff passes for changed source and focused test files; repository-wide Ruff still reports pre-existing vendored/standalone-builder violations.",
+    "summary": "Added atomic durable-monitor survivor diagnostics with PID, PPID, process-group, session, state, and command fields; exposed diagnostics through the containment boundary and supervisor timeout errors. Added explicit adopted-child reaping around monitor retirement and regression coverage for reparented descendant diagnostics."
+  },
+  "workspace_head": "591f8f554449826dfdc4c8f117e8edf2da946c38"
+}
