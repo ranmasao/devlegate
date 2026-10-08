@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "dc4f5493a157d8edf58195c4f0cb2018eeeec655",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "e79de747c5bc4340af6ee1e95cdfb91e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/e79de747c5bc4340af6ee1e95cdfb91e.md",
+  "report_sha256": "2ed2fc7bdb2af398864e46e8f65b313146a754484477bfcde3b1532c7b134e3b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the assigned containment lifecycle hardening changes.",
+    "summary": "Moved recovery observation behind the containment-provider contract with opaque persisted containment identities, added a filesystem-backed deterministic provider for daemon-restart topology tests, and kept production composition on Linux cgroup v2. Replaced unbounded test-double waits and added a packaged-artifact launcher probe to the standalone lifecycle proof."
+  },
+  "workspace_head": "f972cf33434795a1b7e6e6b0f53233d13506a812"
+}
