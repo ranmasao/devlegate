@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "b8af6a29041267bb6e20348cc6f28141b000eb50",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "c81355baab3f4404a084dfc17e5b9415",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/c81355baab3f4404a084dfc17e5b9415.md",
+  "report_sha256": "248be3fc752adac4c200d75ac3e0da8a066b87a05264ebef627acfda6e7615c1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation is complete. Python compilation, a durable cross-provider smoke test, and diff whitespace validation succeeded; pytest and Ruff were unavailable because neither executable is installed in the workspace environment.",
+    "summary": "Normalized DurableDeterministicContainmentProvider roots at its API boundary so string and Path inputs work across service subprocess composition. Added focused durable-provider restart/observation lifecycle tests and Linux cgroup observation-state regressions."
+  },
+  "workspace_head": "aad797e013bb5b2288331da78cda88925f669de6"
+}
