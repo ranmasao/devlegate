@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import os
+import signal
 import subprocess
 import sys
+import time
 
 from devlegate.execution_containment import (
     DurableDeterministicContainmentProvider,
@@ -79,6 +81,51 @@ def test_durable_provider_observes_boundary_after_provider_restart(tmp_path):
     assert second.observe(boundary.identity) == "absent"
     assert boundary.wait_empty(1) is True
     assert second.observe(boundary.identity) == "absent"
+
+
+def test_durable_provider_pid_handshake_is_complete(tmp_path):
+    provider = DurableDeterministicContainmentProvider(tmp_path / "root")
+    for index in range(20):
+        boundary = provider.create(f"handshake-{index}")
+        process = boundary.spawn([sys.executable, "-c", "pass"])
+        assert process.pid > 0
+        assert process.wait(timeout=2) == 0
+        assert boundary.wait_empty(2) is True
+
+
+def test_durable_provider_keeps_reparented_descendant_live_after_leader_exit(
+    tmp_path,
+):
+    provider = DurableDeterministicContainmentProvider(tmp_path / "root")
+    boundary = provider.create("reparented")
+    descendant = tmp_path / "descendant.pid"
+    process = boundary.spawn(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os, pathlib, sys, time; "
+                "pid=pathlib.Path(sys.argv[1]); "
+                "child=os.fork(); "
+                "(pid.write_text(str(child)) if child == 0 else os._exit(0)); "
+                "time.sleep(30)"
+            ),
+            str(descendant),
+        ]
+    )
+
+    process.wait(timeout=2)
+    deadline = time.monotonic() + 2
+    while not descendant.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    restarted = DurableDeterministicContainmentProvider(tmp_path / "root")
+    assert descendant.exists()
+    assert restarted.observe(boundary.identity) == "matching-live"
+
+    os.kill(int(descendant.read_text()), signal.SIGTERM)
+    assert boundary.wait_empty(2) is True
+    assert restarted.observe(boundary.identity) == "absent"
 
 
 def test_durable_provider_observes_absent_after_boundary_is_destroyed(tmp_path):

@@ -202,14 +202,30 @@ _TRUSTED_JOINER = (
 
 
 _DURABLE_MONITOR = (
-    "import os,signal,subprocess,sys;"
-    "s,pf=sys.argv[1:3];a=sys.argv[sys.argv.index('--')+1:];"
+    "import os,signal,subprocess,sys,time;"
+    "s,pf,ef=sys.argv[1:4];a=sys.argv[sys.argv.index('--')+1:];"
     "p=subprocess.Popen(a,start_new_session=True);"
-    "open(pf,'w',encoding='ascii').write(str(p.pid));"
-    "h=lambda n,f: os.kill(p.pid,n);"
+    "tmp=pf+'.tmp-'+str(os.getpid());"
+    "open(tmp,'w',encoding='ascii').write(str(p.pid)+'\\n');"
+    "os.replace(tmp,pf);\n"
+    "def h(n,f):\n"
+    "    try: os.killpg(p.pid,n)\n"
+    "    except (ProcessLookupError,OSError): pass\n"
     "signal.signal(signal.SIGTERM,h);signal.signal(signal.SIGINT,h);"
-    "r=p.wait();"
-    "open(s,'w',encoding='ascii').write('absent\\n');"
+    "r=p.wait();\n"
+    "alive=True\n"
+    "try: os.killpg(p.pid,0)\n"
+    "except (ProcessLookupError,OSError): alive=False\n"
+    "if not alive: open(s,'w',encoding='ascii').write('absent\\n')\n"
+    "et=ef+'.tmp-'+str(os.getpid());"
+    "open(et,'w',encoding='ascii').write(str(r)+'\\n');"
+    "os.replace(et,ef);\n"
+    "if alive:\n"
+    " while True:\n"
+    "  try: os.killpg(p.pid,0)\n"
+    "  except (ProcessLookupError,OSError): break\n"
+    "  time.sleep(0.01)\n"
+    " open(s,'w',encoding='ascii').write('absent\\n');"
     "sys.exit(r)"
 )
 
@@ -262,8 +278,9 @@ def _process_is_running(process) -> bool:
 class _MonitoredProcess:
     """Expose the worker identity while a detached monitor owns retirement."""
 
-    def __init__(self, monitor, pid: int) -> None:
+    def __init__(self, monitor, pid: int, exit_file: Path) -> None:
         self._monitor = monitor
+        self._exit_file = exit_file
         self.pid = pid
         self.stdin = monitor.stdin
         self.stdout = monitor.stdout
@@ -271,15 +288,27 @@ class _MonitoredProcess:
 
     @property
     def returncode(self):
-        return self._monitor.returncode
+        try:
+            return int(self._exit_file.read_text(encoding="ascii").strip())
+        except (FileNotFoundError, OSError, ValueError):
+            return None
 
     def poll(self):
-        return self._monitor.poll()
+        return self.returncode
 
     def wait(self, timeout=None):
-        if timeout is None:
-            return self._monitor.wait()
-        return self._monitor.wait(timeout=timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            result = self.returncode
+            if result is not None:
+                return result
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(self._monitor.args, timeout)
+            if self._monitor.poll() is not None:
+                result = self.returncode
+                if result is not None:
+                    return result
+            time.sleep(0.01)
 
     def terminate(self):
         return self._monitor.terminate()
@@ -431,16 +460,16 @@ class DeterministicContainmentProvider:
         def request_graceful(self, pid: int | None) -> None:
             if pid is not None:
                 try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
+                    os.killpg(pid, signal.SIGTERM)
+                except (OSError, ProcessLookupError):
                     pass
 
         def force_terminate(self) -> None:
             if self._process is not None and _process_is_running(self._process):
                 try:
                     os.killpg(self._process.pid, signal.SIGKILL)
-                except OSError:
-                    self._process.kill()
+                except (OSError, ProcessLookupError):
+                    pass
 
         def wait_empty(self, timeout: float) -> bool:
             if self._synthetic_populated:
@@ -519,7 +548,9 @@ class DurableDeterministicContainmentProvider:
             self.state.parent.mkdir(parents=True, exist_ok=True)
             self.state.write_text("matching-live")
             pid_file = self.state.with_suffix(".pid")
+            exit_file = self.state.with_suffix(".exit")
             pid_file.unlink(missing_ok=True)
+            exit_file.unlink(missing_ok=True)
             monitor = [
                 sys.executable,
                 "-I",
@@ -528,50 +559,57 @@ class DurableDeterministicContainmentProvider:
                 _DURABLE_MONITOR,
                 str(self.state),
                 str(pid_file),
+                str(exit_file),
                 "--",
                 *command,
             ]
             monitor_process = subprocess.Popen(monitor, **kwargs)
             deadline = time.monotonic() + 5
-            while not pid_file.is_file() and monitor_process.poll() is None:
+            while monitor_process.poll() is None:
                 if time.monotonic() >= deadline:
                     monitor_process.kill()
                     raise ContainmentError("durable containment monitor did not start")
+                if pid_file.is_file():
+                    try:
+                        worker_pid = int(pid_file.read_text(encoding="ascii").strip())
+                    except (OSError, ValueError):
+                        time.sleep(0.01)
+                        continue
+                    if worker_pid > 0:
+                        break
                 time.sleep(0.01)
-            if not pid_file.is_file():
+            else:
                 raise ContainmentError("durable containment worker did not start")
             self._process = _MonitoredProcess(
-                monitor_process, int(pid_file.read_text())
+                monitor_process, worker_pid, exit_file
             )
             return self._process
 
         def request_graceful(self, pid: int | None) -> None:
             if pid is not None:
                 try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
+                    os.killpg(pid, signal.SIGTERM)
+                except (OSError, ProcessLookupError):
                     pass
 
         def force_terminate(self) -> None:
             if self._process is not None and _process_is_running(self._process):
                 try:
                     os.killpg(self._process.pid, signal.SIGKILL)
-                except OSError:
-                    self._process.kill()
+                except (OSError, ProcessLookupError):
+                    pass
 
         def wait_empty(self, timeout: float) -> bool:
             if self._process is None:
                 return True
             deadline = time.monotonic() + timeout
-            while _process_is_running(self._process):
+            while self._process._monitor.poll() is None:
                 if time.monotonic() >= deadline:
                     return False
                 time.sleep(0.01)
-            # The monitor owns this transition, so it also occurs if the
-            # daemon that created the boundary is terminated abruptly.
-            self.state.write_text("absent")
             return True
 
         def destroy(self) -> None:
             self.state.with_suffix(".pid").unlink(missing_ok=True)
+            self.state.with_suffix(".exit").unlink(missing_ok=True)
             self.state.unlink(missing_ok=True)
