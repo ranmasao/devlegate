@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "ba8015518228173aa39b0a31df3be77c07e7e0f9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "d495f883ca7b475cba81d65ed168893f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/d495f883ca7b475cba81d65ed168893f.md",
+  "report_sha256": "42c1c0f9d8666a29ab1662100d06911a4b1000952364e80d8836b4bd5d1b4d5f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused containment, recovery, topology, and worker-process tests pass. Scoped Ruff passes; the full local suite's remaining failures are environment-dependent missing coverage/pex tooling and a flaky unrelated marker publication race.",
+    "summary": "Fixed durable containment monitoring so worker leader completion is published separately from recursive boundary retirement, while durable state remains live until all non-zombie process-group descendants exit. Corrected the descendant regression to publish the actual child PID."
+  },
+  "workspace_head": "0dcf56814dc81f7b622e0ca146ed1b39d75bd1e5"
+}
