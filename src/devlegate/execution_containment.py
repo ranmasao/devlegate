@@ -189,6 +189,19 @@ def sys_platform_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
+def _atomic_write(path: Path, value: str) -> None:
+    """Publish a complete synthetic boundary state in one rename."""
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        with temporary.open("w", encoding="ascii") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 _TRUSTED_JOINER = (
     "import os,sys;"
     "a=sys.argv[1:];"
@@ -202,33 +215,48 @@ _TRUSTED_JOINER = (
 
 
 _DURABLE_MONITOR = (
-    "import os,signal,subprocess,sys,time;"
+    "import ctypes,os,signal,subprocess,sys,time;"
     "s,pf,ef=sys.argv[1:4];a=sys.argv[sys.argv.index('--')+1:];"
+    # PR_SET_CHILD_SUBREAPER keeps detached descendants observable by this
+    # test-only monitor after the worker leader exits.
+    "ctypes.CDLL(None).prctl(36,1,0,0,0);"
     "p=subprocess.Popen(a,start_new_session=True);"
     "tmp=pf+'.tmp-'+str(os.getpid());"
-    "open(tmp,'w',encoding='ascii').write(str(p.pid)+'\\n');"
+    "f=open(tmp,'w',encoding='ascii');f.write(str(p.pid)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
     "os.replace(tmp,pf);\n"
     "def h(n,f):\n"
     "    try: os.killpg(p.pid,n)\n"
     "    except (ProcessLookupError,OSError): pass\n"
     "signal.signal(signal.SIGTERM,h);signal.signal(signal.SIGINT,h);\n"
+    "def w(path,value):\n"
+    " t=path+'.tmp-'+str(os.getpid());f=open(t,'w',encoding='ascii');"
+    "f.write(value);f.flush();os.fsync(f.fileno());f.close();os.replace(t,path)\n"
     "def g():\n"
+    " m=os.getpid();parents={}\n"
     " for n in os.listdir('/proc'):\n"
     "  if not n.isdigit(): continue\n"
-    "  try: x=open('/proc/'+n+'/stat').read().split(') ',1)[1].split();\n"
+    "  try: pid=int(n);x=open('/proc/'+n+'/stat').read().split(') ',1)[1].split();"
+    "parents[pid]=(int(x[1]),x[0])\n"
     "  except (OSError,IndexError,ValueError): continue\n"
-    "  if x[2]==str(p.pid) and x[0]!='Z': return True\n"
+    " for pid,(parent,state) in parents.items():\n"
+    "  if pid==m or state=='Z': continue\n"
+    "  seen=set()\n"
+    "  while parent and parent not in seen:\n"
+    "   if parent==m: return True\n"
+    "   seen.add(parent);entry=parents.get(parent)\n"
+    "   if entry is None: break\n"
+    "   parent=entry[0]\n"
     " return False\n"
     "r=p.wait();time.sleep(0.01);alive=g()\n"
-    "if not alive: open(s,'w',encoding='ascii').write('absent\\n')\n"
+    "if not alive: w(s,'absent\\n')\n"
     "et=ef+'.tmp-'+str(os.getpid());"
-    "open(et,'w',encoding='ascii').write(str(r)+'\\n');"
+    "f=open(et,'w',encoding='ascii');f.write(str(r)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
     "os.replace(et,ef);\n"
     "if alive:\n"
     " while True:\n"
     "  if not g(): break\n"
     "  time.sleep(0.01)\n"
-    " open(s,'w',encoding='ascii').write('absent\\n');\n"
+    " w(s,'absent\\n');\n"
     "sys.exit(r)"
 )
 
@@ -549,7 +577,7 @@ class DurableDeterministicContainmentProvider:
 
         def spawn(self, command: Sequence[str], **kwargs):
             self.state.parent.mkdir(parents=True, exist_ok=True)
-            self.state.write_text("matching-live")
+            _atomic_write(self.state, "matching-live\n")
             pid_file = self.state.with_suffix(".pid")
             exit_file = self.state.with_suffix(".exit")
             pid_file.unlink(missing_ok=True)

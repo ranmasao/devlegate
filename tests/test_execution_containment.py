@@ -93,6 +93,21 @@ def test_durable_provider_pid_handshake_is_complete(tmp_path):
         assert boundary.wait_empty(2) is True
 
 
+def test_durable_provider_state_transitions_are_atomic(tmp_path):
+    root = tmp_path / "root"
+    provider = DurableDeterministicContainmentProvider(root)
+    observer = DurableDeterministicContainmentProvider(root)
+
+    for index in range(20):
+        boundary = provider.create(f"state-{index}")
+        process = boundary.spawn([sys.executable, "-c", "import time; time.sleep(.01)"])
+        assert observer.observe(boundary.identity) == "matching-live"
+        while process.poll() is None:
+            assert observer.observe(boundary.identity) in {"matching-live", "absent"}
+        assert boundary.wait_empty(2) is True
+        assert observer.observe(boundary.identity) == "absent"
+
+
 def test_durable_provider_keeps_reparented_descendant_live_after_leader_exit(
     tmp_path,
 ):
