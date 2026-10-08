@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "f4764dfa13ebf0402141d13e054e94ff83402138",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "eba87edebfaa454fb7eb2d48c79b1173",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/eba87edebfaa454fb7eb2d48c79b1173.md",
+  "report_sha256": "62e440df07ea3c8163fcbd64d6fec2153fd713df910c662eae9b402ce0dd5000",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused worker-process regressions pass (12 tests), Python compilation passes, and Ruff passes for the changed Python files.",
+    "summary": "Hardened descendant identity checks to fail closed on inspection uncertainty and prevented sampled /proc ancestry from being treated as recursive execution retirement. Added an immediate reparent/setsid regression plus execution ownership documentation, roadmap follow-up, and explicit orderly-shutdown semantics."
+  },
+  "workspace_head": "0617614ee5a288d4d90135c5a7c38e2491ca5c77"
+}
