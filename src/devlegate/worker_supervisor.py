@@ -13,7 +13,6 @@ import sys
 import tempfile
 import termios
 import threading
-import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -124,12 +123,22 @@ def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
         if _linux_boot_id() != identity.boot_id:
             return "absent"
         current_start = _linux_process_start_time(identity.pid)
-    except (WorkerSupervisionError, OSError):
+    except WorkerSupervisionError:
         return "indeterminate"
+    except OSError:
+        # Legacy identities have no kernel ownership boundary to inspect.
+        # A surviving group keeps recovery conservative; an absent group is
+        # enough to classify the recorded leader as gone.
+        return (
+            "indeterminate"
+            if _worker_group_exists(identity.pgid)
+            else "absent"
+        )
+    if current_start != identity.start_time:
+        return "absent"
     try:
         if (
-            current_start != identity.start_time
-            or os.getpgid(identity.pid) != identity.pgid
+            os.getpgid(identity.pid) != identity.pgid
             or os.getsid(identity.pid) != identity.sid
         ):
             return "indeterminate"

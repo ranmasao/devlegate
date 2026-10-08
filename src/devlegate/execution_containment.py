@@ -15,9 +15,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Protocol
 
 
 class ContainmentError(RuntimeError):
@@ -43,6 +44,11 @@ class ContainmentProvider(Protocol):
 
     def create(self, execution_id: str) -> ContainmentBoundary:
         """Create an empty boundary for one execution."""
+
+
+def default_containment_provider() -> ContainmentProvider:
+    """Return the mandatory production containment provider."""
+    return LinuxCgroupContainmentProvider()
 
 
 @dataclass(frozen=True)
@@ -124,23 +130,19 @@ def probe_containment() -> ContainmentCapability:
             os.close(descriptor)
             marker = Path(marker_name)
             marker.unlink()
-            command = [
-                _launcher_interpreter(),
-                "-I",
-                "-S",
-                str(Path(__file__).with_name("execution_launcher.py")),
-                "--cgroup",
-                str(probe),
-                "--",
-                sys.executable,
-                "-c",
-                (
-                    "import pathlib; "
-                    "pathlib.Path(__import__('sys').argv[1]).write_text("
-                    "pathlib.Path('/proc/self/cgroup').read_text())"
-                ),
-                str(marker),
-            ]
+            command = _launcher_command(
+                probe,
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import pathlib; "
+                        "pathlib.Path(__import__('sys').argv[1]).write_text("
+                        "pathlib.Path('/proc/self/cgroup').read_text())"
+                    ),
+                    str(marker),
+                ],
+            )
             child = subprocess.run(
                 command, capture_output=True, text=True, check=False
             )
@@ -184,6 +186,34 @@ def sys_platform_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
+_TRUSTED_JOINER = (
+    "import os,sys;"
+    "a=sys.argv[1:];"
+    "i=a.index('--');"
+    "c=a[a.index('--cgroup')+1];"
+    "f=os.open(os.path.join(c,'cgroup.procs'),os.O_WRONLY);"
+    "os.write(f,(str(os.getpid())+'\\n').encode('ascii'));"
+    "os.close(f);"
+    "os.execvpe(a[i+1],a[i+1:],os.environ)"
+)
+
+
+def _launcher_command(cgroup: Path, command: Sequence[str]) -> list[str]:
+    """Build an isolated joiner that also works inside packaged runtimes."""
+    return [
+        _launcher_interpreter(),
+        "-I",
+        "-S",
+        "-c",
+        _TRUSTED_JOINER,
+        "execution-launcher",
+        "--cgroup",
+        str(cgroup),
+        "--",
+        *command,
+    ]
+
+
 def _launcher_interpreter() -> str:
     """Use the embedded interpreter rather than the outer standalone stub."""
     if os.environ.get("PEX") or os.environ.get("SCIE"):
@@ -201,7 +231,7 @@ class ExecutionContainment:
         self.recursive_kill = recursive_kill
 
     @classmethod
-    def create(cls, execution_id: str) -> "ExecutionContainment":
+    def create(cls, execution_id: str) -> ExecutionContainment:
         capability = probe_containment()
         if not capability.usable or capability.root is None:
             raise ContainmentError(
@@ -227,16 +257,7 @@ class ExecutionContainment:
         """Start a trusted joiner that execs the worker after joining."""
         if not isinstance(command, (list, tuple)) or not command:
             raise ContainmentError("execution command must be a non-empty argv")
-        launcher = [
-            _launcher_interpreter(),
-            "-I",
-            "-S",
-            str(Path(__file__).with_name("execution_launcher.py")),
-            "--cgroup",
-            str(self.path),
-            "--",
-            *command,
-        ]
+        launcher = _launcher_command(self.path, command)
         return subprocess.Popen(launcher, **kwargs)
 
     def populated(self) -> bool:
@@ -338,6 +359,6 @@ class DeterministicContainmentProvider:
         def destroy(self) -> None:
             return None
 
-    def create(self, execution_id: str) -> "DeterministicContainmentProvider._Boundary":
+    def create(self, execution_id: str) -> DeterministicContainmentProvider._Boundary:
         del execution_id
         return self._Boundary()
