@@ -107,7 +107,7 @@ def test_durable_provider_keeps_reparented_descendant_live_after_leader_exit(
                 "import os, pathlib, sys, time; "
                 "pid=pathlib.Path(sys.argv[1]); "
                 "child=os.fork(); "
-                "(pid.write_text(str(child)) if child == 0 else os._exit(0)); "
+                "(pid.write_text(str(os.getpid())) if child == 0 else os._exit(0)); "
                 "time.sleep(30)"
             ),
             str(descendant),
