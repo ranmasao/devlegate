@@ -417,8 +417,8 @@ class DurableDeterministicContainmentProvider:
     without pretending that a regular file is a kernel ownership boundary.
     """
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def create(

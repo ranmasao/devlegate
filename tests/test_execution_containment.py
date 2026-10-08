@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from devlegate.execution_containment import (
+    DurableDeterministicContainmentProvider,
     LinuxCgroupContainmentProvider,
     _launcher_command,
     default_containment_provider,
@@ -62,3 +63,55 @@ def test_isolated_joiner_has_no_source_launcher_dependency(tmp_path):
 
     assert "execution_launcher.py" not in command
     assert command[1:4] == ["-I", "-S", "-c"]
+
+
+def test_durable_provider_observes_boundary_after_provider_restart(tmp_path):
+    first = DurableDeterministicContainmentProvider(str(tmp_path / "root"))
+    boundary = first.create("execution/one")
+    process = boundary.spawn([sys.executable, "-c", "pass"])
+
+    second = DurableDeterministicContainmentProvider(tmp_path / "root")
+
+    assert boundary.identity == "deterministic:execution_one"
+    assert second.observe(boundary.identity) == "matching-live"
+
+    process.wait()
+    assert boundary.wait_empty(1) is True
+    assert second.observe(boundary.identity) == "absent"
+
+
+def test_durable_provider_observes_absent_after_boundary_is_destroyed(tmp_path):
+    provider = DurableDeterministicContainmentProvider(tmp_path / "root")
+    boundary = provider.create("finished")
+    boundary.state.parent.mkdir(parents=True, exist_ok=True)
+    boundary.state.write_text("absent")
+
+    boundary.destroy()
+
+    restarted = DurableDeterministicContainmentProvider(str(tmp_path / "root"))
+    assert restarted.observe(boundary.identity) == "absent"
+
+
+def test_durable_provider_rejects_malformed_or_foreign_identity(tmp_path):
+    provider = DurableDeterministicContainmentProvider(tmp_path / "root")
+
+    assert provider.observe("cgroup:/some/path") == "indeterminate"
+    assert provider.observe("deterministic:") == "indeterminate"
+    assert provider.observe("deterministic:../escape") == "indeterminate"
+    assert provider.observe("deterministic:missing") == "absent"
+
+
+def test_linux_provider_observes_cgroup_states(tmp_path):
+    provider = LinuxCgroupContainmentProvider()
+    boundary = tmp_path / "execution"
+    boundary.mkdir()
+    events = boundary / "cgroup.events"
+    identity = f"cgroup:{boundary}"
+
+    events.write_text("populated 1\n")
+    assert provider.observe(identity) == "matching-live"
+    events.write_text("populated 0\n")
+    assert provider.observe(identity) == "absent"
+    events.write_text("not-a-cgroup-state\n")
+    assert provider.observe(identity) == "indeterminate"
+    assert provider.observe(f"cgroup:{tmp_path / 'missing'}") == "absent"
