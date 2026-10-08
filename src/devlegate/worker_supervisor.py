@@ -669,8 +669,7 @@ export default tool({
                     f"log={execution_log.path}"
                 )
             containment = None
-            if identity_handler is not None:
-                containment = ExecutionContainment.create(execution_id)
+            containment = ExecutionContainment.create(execution_id)
             opencode_result = _run_opencode(
                 command,
                 prompt,

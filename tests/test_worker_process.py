@@ -164,7 +164,7 @@ def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_setsid_descendant_does_not_prove_execution_retirement(tmp_path):
+def test_setsid_descendant_keeps_execution_cgroup_populated(tmp_path):
     marker = tmp_path / "escaped.json"
     script = (
         "import json, os, pathlib, subprocess, sys, time; "
@@ -183,7 +183,7 @@ def test_setsid_descendant_does_not_prove_execution_retirement(tmp_path):
     )
     child = __import__("json").loads(marker.read_text())["child"]
     assert result.worker_group_retired is False
-    assert "known execution-owned descendant" in (result.transport_error or "")
+    assert "execution cgroup remains populated" in (result.transport_error or "")
     try:
         os.kill(child, signal.SIGKILL)
     except ProcessLookupError:
@@ -191,7 +191,7 @@ def test_setsid_descendant_does_not_prove_execution_retirement(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_immediate_reparent_escape_is_not_hidden_by_tracker_sampling(tmp_path):
+def test_immediate_reparented_child_keeps_execution_cgroup_populated(tmp_path):
     marker = tmp_path / "immediate-escaped.json"
     script = (
         "import json, os, pathlib, subprocess, sys; "
@@ -208,8 +208,7 @@ def test_immediate_reparent_escape_is_not_hidden_by_tracker_sampling(tmp_path):
         worker_identity_handler=lambda _identity: None,
     )
     child = __import__("json").loads(marker.read_text())["child"]
-    # The leader exits immediately, so a polling PPID walk may never observe
-    # the child. It must not be presented as a recursive execution proof.
+    # The leader exits immediately, but the cgroup remains populated.
     assert result.worker_group_retired is False
     assert result.transport_error
     assert os.kill(child, 0) is None
@@ -220,7 +219,7 @@ def test_immediate_reparent_escape_is_not_hidden_by_tracker_sampling(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_forced_interruption_kills_escaped_descendant(tmp_path):
+def test_forced_interruption_kills_reparented_descendant(tmp_path):
     marker = tmp_path / "escaped-interrupt.json"
     script = (
         "import json, os, pathlib, subprocess, sys; "

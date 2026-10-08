@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,13 +82,66 @@ def probe_containment() -> ContainmentCapability:
             "no-delegated-subtree", detail="no delegated cgroup root"
         )
     probe: Path | None = None
+    marker: Path | None = None
     try:
         probe = root / ".devlegate-capability-probe"
         probe.mkdir()
-        (probe / "cgroup.procs").open("a").close()
+        # cgroup.procs being writable is not enough: admission requires that a
+        # separate process can join before it executes workload code.  The
+        # disposable child proves that exact operation without moving the
+        # daemon itself.
         recursive_kill = (probe / "cgroup.kill").is_file()
+        if not recursive_kill:
+            capability = ContainmentCapability(
+                "no-recursive-kill",
+                root,
+                detail="cgroup.kill is required for recursive termination",
+            )
+        else:
+            descriptor, marker_name = tempfile.mkstemp(prefix="devlegate-cgroup-")
+            os.close(descriptor)
+            marker = Path(marker_name)
+            marker.unlink()
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("execution_launcher.py")),
+                "--cgroup",
+                str(probe),
+                "--",
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib; "
+                    "pathlib.Path(__import__('sys').argv[1]).write_text("
+                    "pathlib.Path('/proc/self/cgroup').read_text())"
+                ),
+                str(marker),
+            ]
+            child = subprocess.run(
+                command, capture_output=True, text=True, check=False
+            )
+            expected = probe.relative_to(mount)
+            observed = marker.read_text().splitlines() if marker.is_file() else []
+            expected_record = f"0::/{expected}"
+            if child.returncode or expected_record not in observed:
+                detail = (
+                    child.stderr.strip()
+                    or "disposable child joined but membership was not observed"
+                )
+                capability = ContainmentCapability(
+                    "no-delegated-subtree", root, detail=detail
+                )
+            else:
+                capability = ContainmentCapability(
+                    "available", root, recursive_kill=True
+                )
+        if marker is not None:
+            marker.unlink(missing_ok=True)
         probe.rmdir()
-    except OSError as error:
+        return capability
+    except (OSError, ValueError) as error:
+        if marker is not None:
+            marker.unlink(missing_ok=True)
         if probe is not None:
             try:
                 probe.rmdir()
@@ -95,7 +150,7 @@ def probe_containment() -> ContainmentCapability:
         return ContainmentCapability(
             "no-delegated-subtree", root, detail=str(error)
         )
-    return ContainmentCapability("available", root, recursive_kill)
+    return ContainmentCapability("no-delegated-subtree", root, detail="probe failed")
 
 
 probe_cgroup_v2 = probe_containment
@@ -136,14 +191,18 @@ class ExecutionContainment:
         return cls(path, recursive_kill=capability.recursive_kill)
 
     def spawn(self, command, **kwargs):
-        """Start a child whose first trusted action is joining this cgroup."""
-
-        def join() -> None:
-            (self.path / "cgroup.procs").write_text(f"{os.getpid()}\n")
-
-        import subprocess
-
-        return subprocess.Popen(command, preexec_fn=join, **kwargs)
+        """Start a trusted joiner that execs the worker after joining."""
+        if not isinstance(command, (list, tuple)) or not command:
+            raise ContainmentError("execution command must be a non-empty argv")
+        launcher = [
+            sys.executable,
+            str(Path(__file__).with_name("execution_launcher.py")),
+            "--cgroup",
+            str(self.path),
+            "--",
+            *command,
+        ]
+        return subprocess.Popen(launcher, **kwargs)
 
     def populated(self) -> bool:
         values = (self.path / "cgroup.events").read_text().splitlines()
@@ -160,26 +219,14 @@ class ExecutionContainment:
                 pass
 
     def force_terminate(self) -> None:
-        if self.recursive_kill:
-            try:
-                (self.path / "cgroup.kill").write_text("1\n")
-                return
-            except OSError:
-                pass
-        # cgroup.procs is kernel-maintained and includes reparented descendants.
-        for _ in range(20):
-            try:
-                pids = (self.path / "cgroup.procs").read_text().splitlines()
-            except OSError:
-                return
-            for line in pids:
-                try:
-                    os.kill(int(line), signal.SIGKILL)
-                except (OSError, ValueError, ProcessLookupError):
-                    pass
-            if not pids:
-                return
-            time.sleep(0.01)
+        if not self.recursive_kill:
+            raise ContainmentError("recursive cgroup termination is unavailable")
+        try:
+            (self.path / "cgroup.kill").write_text("1\n")
+        except OSError as error:
+            raise ContainmentError(
+                f"cannot recursively terminate execution cgroup: {error}"
+            ) from error
 
     def wait_empty(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout

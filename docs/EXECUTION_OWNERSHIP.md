@@ -1,37 +1,28 @@
 # Execution Ownership Boundary
 
-Worker processes are launched in a dedicated session and process group. The
-group identity is protected by PID start time, boot ID, and exact PGID/SID
-checks, so forced interruption does not target a reused PID or PGID.
+Each Linux execution has a child cgroup in a delegated cgroup v2 subtree. A
+trusted launcher joins that cgroup before `execve()` starts the worker. Every
+descendant inherits the cgroup membership, including descendants that call
+`setsid()`, change process groups, double-fork, or are reparented.
 
-The descendant tracker is additional best-effort cleanup. It records
-descendants observed through `/proc` before they are reparented and validates
-recorded identities fail closed. A `/proc` PPID walk is not a recursive
-ownership boundary: a worker can fork, have the child call `setsid()`, and
-exit before the next walk. After reparenting, the child is no longer
-distinguishable from an unrelated process using the available process-group
-and ancestry primitives.
+The execution cgroup, not a PID, PGID, session, or sampled `/proc` ancestry,
+is the ownership boundary. Those identities may remain useful for diagnostics
+and graceful signaling, but they cannot prove ownership or retirement.
 
-Consequently, `worker_group_retired` proves retirement of the recorded worker
-process group and all observed descendant identities, not absence of every
-execution descendant in the service cgroup. Since that distinction is not a
-safe execution retirement proof, the supervisor currently fails closed when
-the tracker is active instead of reporting retirement. A known observed
-descendant or an identity inspection failure also keeps retirement unproven.
-Cleanup of observed descendants remains bounded by exact PID/start-time
-identity checks and never signals a stale PID or unrelated process.
+The minimum admitted capability includes `cgroup.kill`. Forced termination
+writes that kernel control once, which recursively terminates processes in the
+execution cgroup and its descendants without affecting sibling executions.
+There is deliberately no parent-only `cgroup.procs` fallback: it cannot prove
+recursive termination when a child cgroup is populated.
 
-The 2026-10-06 left-over-process incident is consistent with this limitation:
-an escaped child can remain in the service cgroup after the worker group is
-gone, while systemd later cleans it up at service stop. A focused follow-up is
-required to place each execution in its own systemd scope/cgroup and use that
-scope as the recursive ownership boundary. That work must define scope
-creation, membership, forced-stop signaling, retirement observation, and
-protection against stale scope/PID identity before strengthening orderly-stop
-claims. This ticket intentionally does not redesign service-manager
-integration.
+Retirement is successful only after `cgroup.events` reports `populated 0`.
+Leader exit, process-group disappearance, and absence of known PIDs never make
+an execution retired. The supervisor waits for this state before destroying
+the execution cgroup or reporting orderly shutdown completion.
 
-The daemon's `orderly shutdown complete` log means that the daemon has
-finished its own orderly shutdown path and does not claim that systemd's
-service cgroup is empty. Systemd remains the final service-level containment
-boundary until the execution-scope follow-up supplies a recursive boundary.
+The capability probe verifies both creation and actual join-before-exec using a
+disposable trusted child. It reports missing unified cgroup v2, an unusable or
+undelegated subtree, and a usable execution containment capability separately.
+Host provisioning is outside this API. On systemd, `Delegate=yes` gives the
+service a writable subtree; a future OpenRC or container integration only needs
+to provide an equivalent delegated cgroup v2 root.
