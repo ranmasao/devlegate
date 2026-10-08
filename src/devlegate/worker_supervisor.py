@@ -18,7 +18,11 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
-from devlegate.execution_containment import ContainmentError, ExecutionContainment
+from devlegate.execution_containment import (
+    ContainmentError,
+    ContainmentProvider,
+    default_containment_provider,
+)
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
 from devlegate.worker_egress import (
@@ -44,6 +48,7 @@ class WorkerProcessIdentity:
     sid: int
     boot_id: str
     start_time: int
+    containment_path: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return dataclasses.asdict(self)
@@ -65,7 +70,9 @@ def _linux_process_start_time(pid: int) -> int:
         raise WorkerSupervisionError("worker process identity is malformed") from error
 
 
-def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentity:
+def _capture_worker_identity(
+    process, execution_id: str, containment_path: str | None = None
+) -> WorkerProcessIdentity:
     if os.name != "posix" or not sys.platform.startswith("linux"):
         raise WorkerSupervisionError("strong worker process identity is unavailable")
     if process.poll() is not None:
@@ -79,12 +86,39 @@ def _capture_worker_identity(process, execution_id: str) -> WorkerProcessIdentit
     start_time = _linux_process_start_time(pid)
     if not boot_id or start_time < 0:
         raise WorkerSupervisionError("worker process identity is incomplete")
-    return WorkerProcessIdentity(execution_id, pid, pgid, sid, boot_id, start_time)
+    return WorkerProcessIdentity(
+        execution_id, pid, pgid, sid, boot_id, start_time, containment_path
+    )
+
+
+def _worker_group_exists(pgid: int) -> bool:
+    """Diagnostic-only legacy probe; never establishes execution ownership."""
+    try:
+        os.killpg(pgid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
     """Classify recorded worker ownership without mutating runtime state."""
     if os.name != "posix" or not sys.platform.startswith("linux"):
+        return "indeterminate"
+    if identity.containment_path:
+        events = Path(identity.containment_path) / "cgroup.events"
+        try:
+            values = events.read_text().splitlines()
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "indeterminate"
+        populated = next(
+            (line for line in values if line.startswith("populated ")), None
+        )
+        if populated == "populated 1":
+            return "matching-live"
+        if populated == "populated 0":
+            return "absent"
         return "indeterminate"
     try:
         if _linux_boot_id() != identity.boot_id:
@@ -248,16 +282,9 @@ def _run_opencode(
     execution_log: ExecutionLog | None = None,
     show_worker_output: bool = True,
     worker_started_handler: Callable[[], None] | None = None,
-    containment: ExecutionContainment | None = None,
+    containment=None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
-    if worker_identity_handler is not None and containment is None:
-        try:
-            containment = ExecutionContainment.create(execution_id or "unknown")
-        except ContainmentError as error:
-            return OpenCodeRunResult(
-                -1, f"execution containment failed: {error}", None, False
-            )
     try:
         if containment is not None:
             process = containment.spawn(
@@ -280,7 +307,14 @@ def _run_opencode(
                 start_new_session=True,
             )
     except (OSError, ContainmentError) as error:
-        return OpenCodeRunResult(-1, f"execution containment failed: {error}", None, False)
+        if containment is not None:
+            try:
+                containment.destroy()
+            except (ContainmentError, OSError):
+                pass
+        return OpenCodeRunResult(
+            -1, f"execution containment failed: {error}", None, False
+        )
     if worker_started_handler is not None:
         worker_started_handler()
     output_lock = threading.Lock()
@@ -457,7 +491,13 @@ def _run_opencode(
     if worker_identity_handler is not None and execution_id is not None:
         if process.poll() is None:
             try:
-                worker_identity_handler(_capture_worker_identity(process, execution_id))
+                worker_identity_handler(
+                    _capture_worker_identity(
+                        process,
+                        execution_id,
+                        str(getattr(containment, "path", "")) or None,
+                    )
+                )
             except Exception as error:
                 if process.poll() is None:
                     identity_error = f"worker identity persistence failed: {error}"
@@ -541,6 +581,7 @@ class WorkerSupervisor:
         state_dir: Path | None = None,
         state_key: str | None = None,
         show_worker_output: bool = True,
+        containment_provider: ContainmentProvider | None = None,
     ) -> None:
         self.opencode_bin = opencode_bin
         self.opencode_model = model
@@ -548,6 +589,9 @@ class WorkerSupervisor:
         self.state_dir = state_dir
         self.state_key = state_key
         self.show_worker_output = show_worker_output
+        self.containment_provider = (
+            containment_provider or default_containment_provider()
+        )
         self._active: dict[str, object] = {}
         self._lock = threading.Lock()
         self._draining = False
@@ -668,8 +712,7 @@ export default tool({
                     f"ticket={workspace.ticket_id} execution={execution_id} "
                     f"log={execution_log.path}"
                 )
-            containment = None
-            containment = ExecutionContainment.create(execution_id)
+            containment = self.containment_provider.create(execution_id)
             opencode_result = _run_opencode(
                 command,
                 prompt,

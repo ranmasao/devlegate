@@ -26,3 +26,9 @@ undelegated subtree, and a usable execution containment capability separately.
 Host provisioning is outside this API. On systemd, `Delegate=yes` gives the
 service a writable subtree; a future OpenRC or container integration only needs
 to provide an equivalent delegated cgroup v2 root.
+
+Worker supervision receives containment through a provider contract. Production
+composition uses the Linux cgroup-v2 provider and fails closed when its probe is
+not usable. Semantic tests may inject a deterministic provider with the same
+create, spawn, terminate, wait, and destroy lifecycle; that test double is not
+a production fallback and does not weaken admission requirements.

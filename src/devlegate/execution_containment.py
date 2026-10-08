@@ -17,10 +17,32 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, Sequence
 
 
 class ContainmentError(RuntimeError):
     """The host cannot provide a usable execution containment boundary."""
+
+
+class ContainmentBoundary(Protocol):
+    """Lifecycle contract shared by production and test boundaries."""
+
+    def spawn(self, command: Sequence[str], **kwargs): ...
+
+    def request_graceful(self, pid: int | None) -> None: ...
+
+    def force_terminate(self) -> None: ...
+
+    def wait_empty(self, timeout: float) -> bool: ...
+
+    def destroy(self) -> None: ...
+
+
+class ContainmentProvider(Protocol):
+    """Provider seam for mandatory execution containment."""
+
+    def create(self, execution_id: str) -> ContainmentBoundary:
+        """Create an empty boundary for one execution."""
 
 
 @dataclass(frozen=True)
@@ -103,7 +125,9 @@ def probe_containment() -> ContainmentCapability:
             marker = Path(marker_name)
             marker.unlink()
             command = [
-                sys.executable,
+                _launcher_interpreter(),
+                "-I",
+                "-S",
                 str(Path(__file__).with_name("execution_launcher.py")),
                 "--cgroup",
                 str(probe),
@@ -160,6 +184,15 @@ def sys_platform_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
+def _launcher_interpreter() -> str:
+    """Use the embedded interpreter rather than the outer standalone stub."""
+    if os.environ.get("PEX") or os.environ.get("SCIE"):
+        base = getattr(sys, "_base_executable", "")
+        if base and Path(base).is_file():
+            return base
+    return sys.executable
+
+
 class ExecutionContainment:
     """One execution-specific cgroup, including its lifecycle proof."""
 
@@ -190,12 +223,14 @@ class ExecutionContainment:
             ) from error
         return cls(path, recursive_kill=capability.recursive_kill)
 
-    def spawn(self, command, **kwargs):
+    def spawn(self, command: Sequence[str], **kwargs):
         """Start a trusted joiner that execs the worker after joining."""
         if not isinstance(command, (list, tuple)) or not command:
             raise ContainmentError("execution command must be a non-empty argv")
         launcher = [
-            sys.executable,
+            _launcher_interpreter(),
+            "-I",
+            "-S",
             str(Path(__file__).with_name("execution_launcher.py")),
             "--cgroup",
             str(self.path),
@@ -248,3 +283,61 @@ class ExecutionContainment:
             raise ContainmentError(
                 f"cannot destroy execution cgroup {self.path}: {error}"
             ) from error
+
+
+class LinuxCgroupContainmentProvider:
+    """Production cgroup-v2 provider.
+
+    Host supervisors only provision the delegated root.  They are deliberately
+    absent from this provider's contract.
+    """
+
+    def create(self, execution_id: str) -> ExecutionContainment:
+        return ExecutionContainment.create(execution_id)
+
+
+class DeterministicContainmentProvider:
+    """Small non-production provider for semantic and supervisor tests.
+
+    It preserves the containment lifecycle contract while using an isolated
+    process group instead of claiming kernel cgroup ownership.  Production
+    composition never selects this provider.
+    """
+
+    class _Boundary:
+        def __init__(self) -> None:
+            self._process = None
+
+        def spawn(self, command: Sequence[str], **kwargs):
+            self._process = subprocess.Popen(command, **kwargs)
+            return self._process
+
+        def request_graceful(self, pid: int | None) -> None:
+            if pid is not None:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+
+        def force_terminate(self) -> None:
+            if self._process is not None and self._process.poll() is None:
+                try:
+                    os.killpg(self._process.pid, signal.SIGKILL)
+                except OSError:
+                    self._process.kill()
+
+        def wait_empty(self, timeout: float) -> bool:
+            if self._process is None:
+                return True
+            try:
+                self._process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return False
+            return True
+
+        def destroy(self) -> None:
+            return None
+
+    def create(self, execution_id: str) -> "DeterministicContainmentProvider._Boundary":
+        del execution_id
+        return self._Boundary()

@@ -468,7 +468,17 @@ def _worker_identity_from_value(
 ) -> WorkerProcessIdentity | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or not set(value).issubset(
+        {
+            "execution_id",
+            "pid",
+            "pgid",
+            "sid",
+            "boot_id",
+            "start_time",
+            "containment_path",
+        }
+    ) or set(value) < {
         "execution_id",
         "pid",
         "pgid",
@@ -493,6 +503,11 @@ def _worker_identity_from_value(
         or value["start_time"] < 0
         or not isinstance(value["boot_id"], str)
         or not value["boot_id"]
+        or (
+            "containment_path" in value
+            and value["containment_path"] is not None
+            and not isinstance(value["containment_path"], str)
+        )
     ):
         raise DevlegateError("invalid worker identity")
     return WorkerProcessIdentity(
@@ -502,6 +517,7 @@ def _worker_identity_from_value(
         value["sid"],
         value["boot_id"],
         value["start_time"],
+        value.get("containment_path"),
     )
 
 
