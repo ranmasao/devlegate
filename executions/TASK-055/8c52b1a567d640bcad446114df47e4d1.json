@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "882c277d060cc1b4a98d571c314d7ecef696b3be",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "8c52b1a567d640bcad446114df47e4d1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/8c52b1a567d640bcad446114df47e4d1.md",
+  "report_sha256": "b0d98c7a6c790f92c1c85979ce7c92b0b1966a7130f4bead51d64a88f1a2e3a5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The delegated cgroup probe and direct launcher smoke test succeeded in this workspace. Syntax compilation and diff checks passed; pytest and Ruff could not be run because those executables are not installed.",
+    "summary": "Replaced the unsafe Python preexec_fn cgroup join with a trusted launcher that joins the execution cgroup before execve, made cgroup.kill a deliberate minimum for recursive forced termination, and strengthened capability probing with an actual disposable child join observation. Updated worker admission, ownership documentation, and stale process-tracker regressions to use cgroup v2 semantics."
+  },
+  "workspace_head": "6d24616d81e0cacbf8dd986260f1813072802eb4"
+}
