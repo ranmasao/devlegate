@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "fbd4f10cee72463a88a7a01d7bbedf0e66563bbf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "97bd74693fa04b86a0e1cc62254d845a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/97bd74693fa04b86a0e1cc62254d845a.md",
+  "report_sha256": "b52c0b8f3f2d9f9768dd2d311637c93d3444201663c2bdb33c94f4ed85ab71e8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused validation was limited by the environment: pytest is not installed. Git whitespace validation passed.",
+    "summary": "Introduced an explicit execution-containment provider seam with production Linux cgroup-v2 selection and a deterministic test provider, while preserving fail-closed production admission. Hardened the trusted launcher startup, persisted cgroup identity for recovery decisions, and documented the provider boundary and non-systemd provisioning model."
+  },
+  "workspace_head": "a50dcf82b4b1c58902fee9a8ed74ef5dba732c6b"
+}
