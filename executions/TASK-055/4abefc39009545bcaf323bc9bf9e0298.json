@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "98a10918eea542dc108e23f03d235da73088ba2d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "4abefc39009545bcaf323bc9bf9e0298",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/4abefc39009545bcaf323bc9bf9e0298.md",
+  "report_sha256": "d964f8ea3ccaffb400a59cfcd9d30d511a888d87b778a71958c3759d027f47a4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The containment provider seam now works across service subprocesses without an environment-selected production fallback, and failed launches no longer emit completion lifecycle records.",
+    "summary": "Added an explicit test-service composition path that injects the deterministic containment provider only in the test subprocess harness, while production composition remains cgroup-v2 based. Decoupled supervisor waiting from stricter Popen timeout behavior, added synthetic population controls for containment contract tests, and updated recovery coverage to assert cgroup retirement semantics rather than PGID wording."
+  },
+  "workspace_head": "e6c04101a98a3efbc5afd125052d5a2343425c1d"
+}
