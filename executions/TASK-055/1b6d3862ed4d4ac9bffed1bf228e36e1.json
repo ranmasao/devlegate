@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "36c4231d1202a1ed6c302f96476853040cf18c9a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "1b6d3862ed4d4ac9bffed1bf228e36e1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/1b6d3862ed4d4ac9bffed1bf228e36e1.md",
+  "report_sha256": "b8ce11a2b806cfa1e93e5785d7046a5d0e29ad94764be35bce7fed524d764a89",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused containment, worker, recovery, and topology tests pass; Ruff and diff checks pass. Full suite reached 1144 passed with one unrelated failure because the environment lacks the coverage package.",
+    "summary": "Updated deterministic containment test boundaries to avoid requiring FakeProcess.poll or unbounded waits. Durable test containment now uses an independent monitor process, exposes the actual worker identity, and updates persisted ownership state after daemon loss; added restart-observation coverage."
+  },
+  "workspace_head": "68242d2753c792328964f68bfe14b6fd95b37d20"
+}
