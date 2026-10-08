@@ -76,6 +76,7 @@ def test_durable_provider_observes_boundary_after_provider_restart(tmp_path):
     assert second.observe(boundary.identity) == "matching-live"
 
     process.wait()
+    assert second.observe(boundary.identity) == "absent"
     assert boundary.wait_empty(1) is True
     assert second.observe(boundary.identity) == "absent"
 
