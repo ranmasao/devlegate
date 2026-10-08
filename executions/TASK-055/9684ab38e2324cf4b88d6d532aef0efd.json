@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "efa379a5d7b71c65bac97d0140d9c6662baff864",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "9684ab38e2324cf4b88d6d532aef0efd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/9684ab38e2324cf4b88d6d532aef0efd.md",
+  "report_sha256": "e0f7ceb75a12ebc75350039682bd213ce84ede55e09b3742ec8b76cc000be6d9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused containment, launcher, recovery, worker-process, worker-supervisor, and launcher tests pass; Ruff and diff checks pass.",
+    "summary": "Defined the mandatory production containment composition point and replaced the source-path launcher with an isolated, package-independent trusted joiner using Python -I -S. Preserved cgroup-authoritative retirement and diagnostics-only legacy identity handling, and removed the obsolete detached-descendant fallback regression while adding launcher startup-hook and standalone-path coverage."
+  },
+  "workspace_head": "0cb5980304771e6f91d82bcd65245be5fa5d955c"
+}
