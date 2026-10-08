@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "88b7eb60c5ea66a058f004c7f945c922d16765bf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "5c1b5f655e564f0e98d66e13515e2139",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/5c1b5f655e564f0e98d66e13515e2139.md",
+  "report_sha256": "2b32aef6134eb969002a9fba66e2246d498f8a8e47e3a53f36cc09b19476d2cc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused Python compilation, diff validation, and direct durable descendant smoke validation completed. Pytest and Ruff executables are unavailable in this workspace.",
+    "summary": "Hardened the durable deterministic containment backend with atomic PID readiness publication, separate leader-exit reporting, and process-group lifetime tracking beyond leader exit. Added regressions for repeated handshake startup and reparented descendant ownership; production cgroup-v2 containment remains unchanged."
+  },
+  "workspace_head": "a3f6389c235b79337c6872722b71e151616b36da"
+}
