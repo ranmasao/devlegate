@@ -241,6 +241,16 @@ MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 WORKER_TERMINATION_TIMEOUT = 1.0
 WORKER_WAIT_INTERVAL = 0.05
 
+
+def _wait_process(process, timeout: float | None = None):
+    """Wait for Popen-like objects without extending the process contract."""
+    if timeout is None:
+        return process.wait()
+    try:
+        return process.wait(timeout=timeout)
+    except TypeError:
+        return process.wait()
+
 _HOST_CONTROL_ENVIRONMENT = frozenset(
     {
         "NOTIFY_SOCKET",
@@ -482,7 +492,7 @@ def _run_opencode(
 
     def finish_interrupted() -> int:
         try:
-            returncode = process.wait(timeout=WORKER_TERMINATION_TIMEOUT)
+            returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
         except subprocess.TimeoutExpired:
             if containment is not None:
                 containment.force_terminate()
@@ -491,7 +501,7 @@ def _run_opencode(
                     os.killpg(worker_process_group, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
-            returncode = process.wait()
+            returncode = _wait_process(process)
         if containment is not None:
             containment.force_terminate()
         return returncode
@@ -520,14 +530,14 @@ def _run_opencode(
         returncode = finish_interrupted()
     elif stop_request is None:
         try:
-            returncode = process.wait()
+            returncode = _wait_process(process)
         except KeyboardInterrupt:
             interrupt("operator_abort")
             returncode = finish_interrupted()
     else:
         while True:
             try:
-                returncode = process.wait(timeout=WORKER_WAIT_INTERVAL)
+                returncode = _wait_process(process, WORKER_WAIT_INTERVAL)
                 break
             except subprocess.TimeoutExpired:
                 kind = getattr(stop_request, "kind", None)
@@ -746,7 +756,7 @@ export default tool({
                 opencode_result.interruption_kind,
                 opencode_result.worker_group_retired,
             )
-            if execution_log is not None:
+            if execution_log is not None and worker_started:
                 service_log(
                     "execution finished: "
                     f"ticket={workspace.ticket_id} execution={execution_id} "

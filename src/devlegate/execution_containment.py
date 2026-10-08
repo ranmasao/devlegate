@@ -325,9 +325,13 @@ class DeterministicContainmentProvider:
     composition never selects this provider.
     """
 
+    def __init__(self, *, populated_after_leader_exit: bool = False) -> None:
+        self.populated_after_leader_exit = populated_after_leader_exit
+
     class _Boundary:
-        def __init__(self) -> None:
+        def __init__(self, *, populated_after_leader_exit: bool = False) -> None:
             self._process = None
+            self._synthetic_populated = populated_after_leader_exit
 
         def spawn(self, command: Sequence[str], **kwargs):
             self._process = subprocess.Popen(command, **kwargs)
@@ -348,17 +352,31 @@ class DeterministicContainmentProvider:
                     self._process.kill()
 
         def wait_empty(self, timeout: float) -> bool:
+            if self._synthetic_populated:
+                return False
             if self._process is None:
                 return True
             try:
                 self._process.wait(timeout=timeout)
+            except TypeError:
+                self._process.wait()
             except subprocess.TimeoutExpired:
                 return False
             return True
+
+        def mark_populated(self) -> None:
+            """Model a descendant in contract tests without PGID inference."""
+            self._synthetic_populated = True
+
+        def mark_empty(self) -> None:
+            """Release synthetic descendant population in contract tests."""
+            self._synthetic_populated = False
 
         def destroy(self) -> None:
             return None
 
     def create(self, execution_id: str) -> DeterministicContainmentProvider._Boundary:
         del execution_id
-        return self._Boundary()
+        return self._Boundary(
+            populated_after_leader_exit=self.populated_after_leader_exit
+        )

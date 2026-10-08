@@ -6,6 +6,8 @@
 
 from _daemon_support import *  # noqa: F403,F405
 
+from devlegate.execution_containment import DeterministicContainmentProvider
+
 @pytest.mark.parametrize(
     "stage",
     ["checkpointing", "post-checkpoint", "publishing", "post-publication", "lifecycle"],
@@ -242,6 +244,9 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
     monkeypatch.chdir(working)
     monkeypatch.setenv("DEVLEGATE_TEST_MARKER", str(marker))
     engine = ServiceEngine(config)
+    engine._workers.containment_provider = DeterministicContainmentProvider(
+        populated_after_leader_exit=True
+    )
     original_worker = engine._workers.run
 
     def run_worker(workspace, prompt, **_kwargs):
@@ -251,7 +256,9 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
 
     monkeypatch.setattr(engine._workers, "run", run_worker)
     try:
-        with pytest.raises(DevlegateError, match="process group is still alive"):
+        with pytest.raises(
+            DevlegateError, match="execution cgroup remains populated"
+        ):
             run_test_iteration(engine)
         assert marker.exists()
         processes = json.loads(marker.read_text())

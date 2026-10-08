@@ -63,8 +63,16 @@ class LiveService:
         }
         command = self.command or (
             sys.executable,
-            "-m",
-            "devlegate",
+            "-c",
+            (
+                "import devlegate.execution_containment as ec; "
+                "import devlegate.worker_supervisor as ws; "
+                "ec.default_containment_provider = "
+                "ws.default_containment_provider = "
+                "ec.DeterministicContainmentProvider; "
+                "from devlegate.cli import main; "
+                "raise SystemExit(main())"
+            ),
             "--env",
             str(self.env_file),
             "foreground",
