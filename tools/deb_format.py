@@ -224,6 +224,8 @@ def extract(package: Path, destination: Path, *, control_only: bool = False) -> 
                     "Debian archive contains an unsafe or duplicate member"
                 )
             if member.issym():
+                if PurePosixPath(member.linkname).is_absolute():
+                    raise DebFormatError("Debian archive contains an unsafe link")
                 link = posixpath.normpath(
                     posixpath.join(posixpath.dirname(member.name), member.linkname)
                 )
@@ -234,18 +236,24 @@ def extract(package: Path, destination: Path, *, control_only: bool = False) -> 
         for member in tar_members:
             target = destination / PurePosixPath(member.name)
             parent = target.parent
-            parent.mkdir(parents=True, exist_ok=True)
             current = destination
             for component in PurePosixPath(member.name).parts[:-1]:
                 current /= component
                 if current.is_symlink() or not current.is_dir():
                     raise DebFormatError("Debian archive escapes extraction root")
+            parent.mkdir(parents=True, exist_ok=True)
             if member.isdir():
+                if target.is_symlink() or (target.exists() and not target.is_dir()):
+                    raise DebFormatError("Debian archive has a directory conflict")
                 target.mkdir(exist_ok=True)
                 continue
             if member.issym():
+                if target.exists() or target.is_symlink():
+                    raise DebFormatError("Debian archive has a link conflict")
                 target.symlink_to(member.linkname)
                 continue
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise DebFormatError("Debian archive has a file conflict")
             source = archive.extractfile(member)
             if source is None:
                 raise DebFormatError("Debian archive member has no payload")

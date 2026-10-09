@@ -119,7 +119,12 @@ def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     names: set[str] = set()
     for member in members:
         path = PurePosixPath(member.name)
-        if not member.name or path.is_absolute() or ".." in path.parts:
+        if (
+            not member.name
+            or path.is_absolute()
+            or path == PurePosixPath(".")
+            or ".." in path.parts
+        ):
             raise ArchFormatError("Arch archive contains an unsafe path")
         if member.name in names:
             raise ArchFormatError("Arch archive contains duplicate members")
@@ -129,10 +134,17 @@ def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     return members
 
 
+def _open_archive(package: Path) -> tarfile.TarFile:
+    try:
+        return tarfile.open(fileobj=io.BytesIO(_zstd_decode(package.read_bytes())))
+    except (OSError, tarfile.TarError, ArchFormatError) as error:
+        if isinstance(error, ArchFormatError):
+            raise
+        raise ArchFormatError("invalid Arch tar stream") from error
+
+
 def members(package: Path) -> dict[str, bytes]:
-    with tarfile.open(
-        fileobj=io.BytesIO(_zstd_decode(package.read_bytes()))
-    ) as archive:
+    with _open_archive(package) as archive:
         result = {}
         for member in _safe_members(archive):
             if member.isreg():
@@ -144,9 +156,7 @@ def members(package: Path) -> dict[str, bytes]:
 
 def extract(package: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(
-        fileobj=io.BytesIO(_zstd_decode(package.read_bytes()))
-    ) as archive:
+    with _open_archive(package) as archive:
         for member in _safe_members(archive):
             target = destination / PurePosixPath(member.name)
             try:
@@ -157,7 +167,9 @@ def extract(package: Path, destination: Path) -> None:
                 ) from error
             if member.isdir():
                 if target.is_symlink() or (target.exists() and not target.is_dir()):
-                    raise ArchFormatError("Arch archive directory conflicts with a file")
+                    raise ArchFormatError(
+                        "Arch archive directory conflicts with a file"
+                    )
                 target.mkdir(parents=True, exist_ok=True)
                 target.chmod(member.mode & 0o7777)
                 continue
@@ -168,7 +180,9 @@ def extract(package: Path, destination: Path) -> None:
                 current = current.parent
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.is_symlink() or (target.exists() and not target.is_file()):
-                raise ArchFormatError("Arch archive member conflicts with an existing file")
+                raise ArchFormatError(
+                    "Arch archive member conflicts with an existing file"
+                )
             source = archive.extractfile(member)
             if source is None:
                 raise ArchFormatError("Arch archive member has no payload")

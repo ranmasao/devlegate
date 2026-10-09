@@ -26,10 +26,17 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
         metadata = members(package)
     except (ArchFormatError, OSError) as error:
         raise PackageError(str(error)) from error
-    required = {".PKGINFO", "usr/bin/devlegate"}
+    required = {
+        ".PKGINFO",
+        "usr/bin/devlegate",
+        "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json",
+    }
     if not required <= metadata.keys():
         raise PackageError("Arch package lacks required metadata or executable")
-    pkginfo = metadata[".PKGINFO"].decode("ascii")
+    try:
+        pkginfo = metadata[".PKGINFO"].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise PackageError("Arch metadata is not valid ASCII") from error
     fields: dict[str, str] = {}
     for line in pkginfo.splitlines():
         if " = " not in line:
@@ -39,22 +46,51 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
             raise PackageError("Arch metadata contains an invalid or duplicate field")
         fields[name] = value
     report = json.loads(build_report.read_text(encoding="utf-8"))
-    required_fields = {"pkgname", "pkgbase", "pkgver", "size", "arch", "xdata"}
+    required_fields = {
+        "pkgname",
+        "pkgbase",
+        "pkgver",
+        "size",
+        "pkgdesc",
+        "url",
+        "builddate",
+        "packager",
+        "arch",
+        "license",
+        "xdata",
+    }
     if not required_fields <= fields.keys() or fields.get("xdata") != "pkgtype=pkg":
         raise PackageError("Arch metadata lacks mandatory PKGINFO v2 fields")
     if (
         fields.get("pkgname") != "devlegate"
         or fields.get("pkgbase") != "devlegate"
         or fields.get("arch") != "x86_64"
+        or fields.get("license") != "EUPL-1.2"
+        or fields.get("xdata") != "pkgtype=pkg"
     ):
         raise PackageError("Arch metadata has the wrong package or architecture")
     if fields.get("pkgver") != f'{report["wheel"]["version"]}-1':
-        raise PackageError("Arch version identity does not match standalone build report")
+        raise PackageError(
+            "Arch version identity does not match standalone build report"
+        )
     try:
-        if int(fields["size"]) < 0:
+        if int(fields["size"]) <= 0:
             raise ValueError
     except ValueError as error:
         raise PackageError("Arch metadata has an invalid installed size") from error
+    expected = {
+        ".PKGINFO",
+        "usr/bin/devlegate",
+        "usr/share/doc/devlegate/LICENSE",
+        "usr/share/doc/devlegate/NOTICE",
+        "usr/share/doc/devlegate/LICENSING.md",
+        "usr/share/doc/devlegate/THIRD_PARTY_NOTICES.md",
+        "usr/share/doc/devlegate/BUILD-PROVENANCE.json",
+        "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json",
+        "usr/share/doc/devlegate/LICENSES/standalone-compliance-manifest.json",
+    }
+    if set(metadata) != expected:
+        raise PackageError("Arch package contains unexpected files")
     if any(name == "dev" or name.startswith("dev/") for name in metadata):
         raise PackageError("Arch package contains source-tree developer tooling")
     if extract_dir.exists():
@@ -65,11 +101,17 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
     except (ArchFormatError, OSError) as error:
         raise PackageError(str(error)) from error
     binary = extract_dir / "usr/bin/devlegate"
-    if not stat.S_ISREG(binary.stat().st_mode) or not stat.S_IXUSR & binary.stat().st_mode:
+    mode = binary.stat().st_mode
+    if not stat.S_ISREG(mode) or not stat.S_IXUSR & mode:
         raise PackageError("Arch executable must be a regular executable file")
     marker = extract_dir / "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
     marker_value = json.loads(marker.read_text(encoding="ascii"))
-    if hashlib.sha256(binary.read_bytes()).hexdigest() != marker_value.get("payload_sha256"):
+    if marker_value.get("distribution") != "arch":
+        raise PackageError("Arch installation provenance has the wrong distribution")
+    if (
+        hashlib.sha256(binary.read_bytes()).hexdigest()
+        != marker_value.get("payload_sha256")
+    ):
         raise PackageError("Arch installation provenance does not match payload")
     return binary
 

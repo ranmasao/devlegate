@@ -2,8 +2,8 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
-import hashlib
 import gzip
+import hashlib
 import importlib.util
 import io
 import json
@@ -287,3 +287,18 @@ def test_deb_extractor_rejects_duplicate_and_link_escape_members(tmp_path):
     )
     with pytest.raises(DEB.DebFormatError, match="duplicate"):
         DEB.extract(package, tmp_path / "extract")
+
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w", format=tarfile.GNU_FORMAT) as archive:
+        link = tarfile.TarInfo("usr/bin/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/tmp/escape"
+        archive.addfile(link)
+    absolute = tmp_path / "absolute-link.deb"
+    absolute.write_bytes(
+        b"!<arch>\n"
+        + DEB._ar_member("debian-binary", b"2.0\n", 0)
+        + DEB._ar_member("data.tar.gz", gzip.compress(payload.getvalue(), mtime=0), 0)
+    )
+    with pytest.raises(DEB.DebFormatError, match="unsafe link"):
+        DEB.extract(absolute, tmp_path / "absolute-extract")

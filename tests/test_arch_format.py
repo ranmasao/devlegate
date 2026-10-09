@@ -74,3 +74,10 @@ def test_arch_rejects_duplicate_and_link_members(tmp_path):
     link_package.write_bytes(ARCH._zstd_encode(output.getvalue()))
     with pytest.raises(ARCH.ArchFormatError, match="unsupported"):
         ARCH.members(link_package)
+
+
+def test_arch_rejects_malformed_tar_stream(tmp_path):
+    package = tmp_path / "malformed.pkg.tar.zst"
+    package.write_bytes(ARCH._zstd_encode(b"not a tar stream"))
+    with pytest.raises(ARCH.ArchFormatError, match="invalid Arch tar stream"):
+        ARCH.members(package)
