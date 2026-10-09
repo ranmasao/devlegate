@@ -7,6 +7,7 @@
 from _daemon_support import *  # noqa: F403,F405
 
 from devlegate.execution_containment import DeterministicContainmentProvider
+from service_harness import compose_test_service_command
 
 @pytest.mark.parametrize(
     "stage",
@@ -139,14 +140,17 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(
         "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
     }
     daemon_process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "devlegate",
-            "--env",
-            str(config),
-            "foreground",
-        ],
+        compose_test_service_command(
+            [
+                sys.executable,
+                "-m",
+                "devlegate",
+                "--env",
+                str(config),
+                "foreground",
+            ],
+            tmp_path / "registry-config" / "containment",
+        ),
         cwd=working,
         env=environment,
         text=True,

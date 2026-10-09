@@ -10,12 +10,27 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from devlegate.execution_containment import DurableDeterministicContainmentProvider
 from devlegate.host_installation import HostInstallation
 from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import IPCClientError, request
 from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime_locator import RuntimeLocator, read_env
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
+
+
+def compose_test_service_command(
+    command: tuple[str, ...] | list[str], containment_root: Path
+) -> list[str]:
+    """Run a subprocess-backed service with the test containment provider."""
+    return [
+        sys.executable,
+        str(Path(__file__).with_name("service_bootstrap.py")),
+        "--containment-root",
+        str(containment_root),
+        "--",
+        *command,
+    ]
 
 
 class LiveService:
@@ -70,13 +85,8 @@ class LiveService:
             str(self.env_file),
             "foreground",
         )
-        command = (
-            sys.executable,
-            str(Path(__file__).with_name("service_bootstrap.py")),
-            "--containment-root",
-            str(self.registry_home / "containment"),
-            "--",
-            *command,
+        command = compose_test_service_command(
+            command, self.registry_home / "containment"
         )
         self._output_dir = tempfile.TemporaryDirectory(prefix="devlegate-service-")
         self._stdout_file = open(
