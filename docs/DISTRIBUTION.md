@@ -29,8 +29,8 @@ The build pins PEX `2.103.2`, Science `0.21.0`, Python Standalone Builds release
 environment containing exact, hash-verified pip `24.3.1`, setuptools `77.0.3`,
 and wheel `0.45.1`. The local wheel is resolved without PyPI for the Devlegate
 payload, and the scie is assembled with eager mode. PEX 2.103.2 also requires
-its own isolated bootstrap wheels, pip `23.2`, setuptools `68.0.0`, and wheel
-`0.40.0`; these are build-tool inputs for PEX resolution, not the Devlegate
+its own isolated bootstrap wheels, pip `24.1`, setuptools `70.1.0`, and wheel
+`0.43.0`; these are build-tool inputs for PEX resolution, not the Devlegate
 wheel build backend or runtime dependencies. It does not modify the normal
 runtime dependency set or invoke package managers at runtime.
 

@@ -44,6 +44,38 @@ def test_verified_artifact_rejects_wrong_hash(tmp_path):
         BUILDER.verify_file(artifact, "0" * 64)
 
 
+def test_pex_bootstrap_policy_matches_pinned_pex(tmp_path):
+    pex = tmp_path / BUILDER.PEX_WHEEL
+    source = (
+        "v24_1 = PipVersionValue(\n"
+        '    version="24.1",\n'
+        '    setuptools_version="70.1.0",\n'
+        '    wheel_version="0.43.0",\n'
+    )
+    with ZipFile(pex, "w") as archive:
+        archive.writestr("pex/pip/version.py", source)
+
+    assert BUILDER.pex_bootstrap_requirements(pex) == {
+        "pip": "24.1",
+        "setuptools": "70.1.0",
+        "wheel": "0.43.0",
+    }
+    BUILDER.verify_pex_bootstrap_policy(pex)
+
+
+def test_stale_pex_bootstrap_policy_fails_before_materialization(tmp_path):
+    pex = tmp_path / BUILDER.PEX_WHEEL
+    with ZipFile(pex, "w") as archive:
+        archive.writestr(
+            "pex/pip/version.py",
+            'v24_1 = PipVersionValue(version="24.1", '
+            'setuptools_version="70.1.0", wheel_version="0.42.0")',
+        )
+
+    with pytest.raises(BUILDER.BuildError, match="bootstrap policy mismatch"):
+        BUILDER.verify_pex_bootstrap_policy(pex)
+
+
 def test_cached_input_uses_verified_blob_without_download(tmp_path, monkeypatch):
     cache = tmp_path / "cache"
     destination = tmp_path / "tools" / "input.bin"
@@ -75,6 +107,34 @@ def test_cached_input_replaces_corrupt_blob_atomically(tmp_path, monkeypatch):
     BUILDER.cached_input("input.bin", digest, destination, download)
     assert destination.read_bytes() == payload
     assert (cache / digest).read_bytes() == payload
+
+
+def test_cached_pex_bootstrap_wheels_are_reused_without_download(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+    for filename, digest in BUILDER.PEX_BOOTSTRAP_TOOLS.values():
+        payload = filename.encode()
+        actual_digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setitem(
+            BUILDER.PEX_BOOTSTRAP_TOOLS,
+            filename.split("-")[0],
+            (filename, actual_digest),
+        )
+        (cache / actual_digest).parent.mkdir(parents=True, exist_ok=True)
+        (cache / actual_digest).write_bytes(payload)
+
+    materialized = tmp_path / "tools"
+
+    def fail_download(_path):
+        pytest.fail("verified PEX bootstrap cache attempted a download")
+
+    def download(filename, expected_hash, requirement):
+        return BUILDER.cached_input(
+            filename, expected_hash, materialized / filename, fail_download
+        )
+
+    for name, (filename, digest) in BUILDER.PEX_BOOTSTRAP_TOOLS.items():
+        assert download(filename, digest, f"{name}=={filename.split('-')[1]}")
 
 
 def test_cached_input_does_not_publish_failed_download(tmp_path, monkeypatch):
@@ -265,6 +325,11 @@ def test_real_pex_science_consumes_warm_asset_mirror(tmp_path, monkeypatch):
         _pex_wheel, pex_runtime, _tool_wheels, assets_url = (
             BUILDER.download_packaging_tools(sys.executable, tools)
         )
+        assert BUILDER.pex_bootstrap_requirements(tools / BUILDER.PEX_WHEEL) == {
+            "pip": BUILDER.PEX_BOOTSTRAP_PIP_VERSION,
+            "setuptools": "70.1.0",
+            "wheel": "0.43.0",
+        }
         wheel = tmp_path / "devlegate-0.5.6.dev0-py3-none-any.whl"
         with ZipFile(wheel, "w") as archive:
             archive.writestr("devlegate/__init__.py", "")
@@ -547,6 +612,8 @@ def test_scie_builds_share_assets_but_not_pex_roots(tmp_path, monkeypatch):
         "http://127.0.0.1:"
     )
     assert calls[0][1]["PEX_ROOT"] != calls[1][1]["PEX_ROOT"]
+    assert calls[0][1]["_PEX_PIP_VERSION"] == BUILDER.PEX_BOOTSTRAP_PIP_VERSION
+    assert calls[1][1]["_PEX_PIP_VERSION"] == BUILDER.PEX_BOOTSTRAP_PIP_VERSION
 
 
 def test_scie_inspection_rejects_custom_runtime_base(tmp_path):

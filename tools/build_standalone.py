@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import select
 import shutil
 import stat
@@ -99,6 +100,7 @@ SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7
 LIBC = "glibc"
 PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"
+PEX_BOOTSTRAP_PIP_VERSION = "24.1"
 WHEEL_BUILD_TOOLS = {
     "pip": (
         "pip-24.3.1-py3-none-any.whl",
@@ -113,18 +115,20 @@ WHEEL_BUILD_TOOLS = {
         "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248",
     ),
 }
+# PEX 2.103.2 owns these versions. The artifact names and digests below are
+# the reproducible materialization of the policy embedded in pex/pip/version.py.
 PEX_BOOTSTRAP_TOOLS = {
     "pip": (
-        "pip-23.2-py3-none-any.whl",
-        "78e5353a9dda374b462f2054f83a7b63f3f065c98236a68361845c1b0ee7e35f",
+        "pip-24.1-py3-none-any.whl",
+        "a775837439bf5da2c1a0c2fa43d5744854497c689ddbd9344cf3ea6d00598540",
     ),
     "setuptools": (
-        "setuptools-68.0.0-py3-none-any.whl",
-        "11e52c67415a381d10d6b462ced9cfb97066179f0e871399e006c4ab101fc85f",
+        "setuptools-70.1.0-py3-none-any.whl",
+        "d9b8b771455a97c8a9f3ab3448ebe0b29b5e105f1228bba41028be116985a267",
     ),
     "wheel": (
-        "wheel-0.40.0-py3-none-any.whl",
-        "d236b20e7cb522daf2390fa84c55eea81c5c30190f90f29ae2ca1ad8355bf247",
+        "wheel-0.43.0-py3-none-any.whl",
+        "55c570405f142630c6b9f72fe09d9b67cf1477fcf543ae5b8dcb1f5b7377da81",
     ),
 }
 
@@ -230,6 +234,43 @@ def verify_file(path: Path, expected: str) -> None:
     if actual != expected:
         raise BuildError(
             f"sha256 mismatch for {path.name}: expected {expected}, found {actual}"
+        )
+
+
+def pex_bootstrap_requirements(pex_wheel: Path) -> dict[str, str]:
+    """Read the Python 3.12 bootstrap policy from the pinned PEX release.
+
+    PEX does not expose this as a public API. Keep the extraction narrow and
+    fail closed if the pinned source changes instead of silently using stale
+    Devlegate policy.
+    """
+    with zipfile.ZipFile(pex_wheel) as archive:
+        source = archive.read("pex/pip/version.py").decode()
+    match = re.search(
+        r"v24_1 = PipVersionValue\(\s*"
+        r"version=\"(?P<pip>24\.1)\",\s*"
+        r"setuptools_version=\"(?P<setuptools>[^\"]+)\",\s*"
+        r"wheel_version=\"(?P<wheel>[^\"]+)\"",
+        source,
+    )
+    if match is None:
+        raise BuildError(
+            f"PEX {PEX_VERSION} does not expose its expected Python 3.12 "
+            "bootstrap policy"
+        )
+    return match.groupdict()
+
+
+def verify_pex_bootstrap_policy(pex_wheel: Path) -> None:
+    observed = pex_bootstrap_requirements(pex_wheel)
+    expected = {
+        name: filename.split("-")[1]
+        for name, (filename, _digest) in PEX_BOOTSTRAP_TOOLS.items()
+    }
+    if observed != expected:
+        raise BuildError(
+            "PEX bootstrap policy mismatch before materialization: "
+            f"expected {observed}, managed {expected}"
         )
 
 
@@ -525,10 +566,11 @@ def download_packaging_tools(
             download(filename, expected_hash, f"{name}=={filename.split('-')[1]}")
 
     download_tools({"pex": (PEX_WHEEL, PEX_SHA256)})
-    download_tools(WHEEL_BUILD_TOOLS)
-    download_tools(PEX_BOOTSTRAP_TOOLS)
     pex_wheel = directory / PEX_WHEEL
     verify_file(pex_wheel, PEX_SHA256)
+    verify_pex_bootstrap_policy(pex_wheel)
+    download_tools(WHEEL_BUILD_TOOLS)
+    download_tools(PEX_BOOTSTRAP_TOOLS)
     tool_wheels = []
     for name, (filename, expected_hash) in WHEEL_BUILD_TOOLS.items():
         path = directory / filename
@@ -542,7 +584,8 @@ def download_packaging_tools(
         path = directory / filename
         if not path.is_file():
             raise BuildError(
-                f"expected PEX bootstrap tool was not downloaded: {filename}"
+                "required PEX bootstrap wheel is absent from managed inputs: "
+                f"{filename}"
             )
         verify_file(path, expected_hash)
     runtime = directory / "pex-runtime"
@@ -593,6 +636,9 @@ def build_scie(
     environment = {
         **os.environ,
         "PYTHONPATH": str(pex_runtime),
+        # Select the PEX-owned policy explicitly so host Python minor versions
+        # cannot make the bootstrap set vary between supported builders.
+        "_PEX_PIP_VERSION": PEX_BOOTSTRAP_PIP_VERSION,
         **build_environment(build_root, epoch),
     }
     science = science_offline_wrapper(science, assets_base_url, build_root)
