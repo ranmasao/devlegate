@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Small deterministic Arch package container implementation.
 
 The Arch package format is a tar stream compressed with zstd.  The encoder uses
@@ -146,11 +149,26 @@ def extract(package: Path, destination: Path) -> None:
     ) as archive:
         for member in _safe_members(archive):
             target = destination / PurePosixPath(member.name)
+            try:
+                target.relative_to(destination)
+            except ValueError as error:
+                raise ArchFormatError(
+                    "Arch archive member escapes extraction root"
+                ) from error
             if member.isdir():
+                if target.is_symlink() or (target.exists() and not target.is_dir()):
+                    raise ArchFormatError("Arch archive directory conflicts with a file")
                 target.mkdir(parents=True, exist_ok=True)
                 target.chmod(member.mode & 0o7777)
                 continue
+            current = target.parent
+            while current != destination:
+                if current.is_symlink():
+                    raise ArchFormatError("Arch archive path traverses a symlink")
+                current = current.parent
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise ArchFormatError("Arch archive member conflicts with an existing file")
             source = archive.extractfile(member)
             if source is None:
                 raise ArchFormatError("Arch archive member has no payload")

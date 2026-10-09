@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
+
 import importlib.util
 import io
 import tarfile
@@ -45,3 +49,28 @@ def test_arch_rejects_duplicate_and_traversal_members(tmp_path):
     package.write_bytes(ARCH._zstd_encode(output.getvalue()))
     with pytest.raises(ARCH.ArchFormatError, match="unsafe"):
         ARCH.members(package)
+
+
+def test_arch_rejects_duplicate_and_link_members(tmp_path):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name in (".PKGINFO", ".PKGINFO"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+    duplicate = tmp_path / "duplicate.pkg.tar.zst"
+    duplicate.write_bytes(ARCH._zstd_encode(output.getvalue()))
+    with pytest.raises(ARCH.ArchFormatError, match="duplicate"):
+        ARCH.members(duplicate)
+
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        archive.addfile(tarfile.TarInfo("usr"))
+        link = tarfile.TarInfo("usr/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../escape"
+        archive.addfile(link)
+    link_package = tmp_path / "link.pkg.tar.zst"
+    link_package.write_bytes(ARCH._zstd_encode(output.getvalue()))
+    with pytest.raises(ARCH.ArchFormatError, match="unsupported"):
+        ARCH.members(link_package)

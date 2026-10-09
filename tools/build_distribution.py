@@ -67,7 +67,7 @@ GRAPH = {
     "arch": ("standalone",),
     "full-source": (),
 }
-ALL_TARGETS = ("wheel", "sdist", "standalone", "deb", "full-source")
+ALL_TARGETS = ("wheel", "sdist", "standalone", "deb", "arch", "full-source")
 
 
 class DistributionError(RuntimeError):
@@ -1158,8 +1158,8 @@ def _component_for_target(
                     archive=values["standalone"]["archive"].path,
                     sidecar=values["standalone"]["sidecar"].path,
                     build_report=values["standalone"]["report"].path,
-                    output_dir=work / "deb",
-                    **({"emit": emit} if target == "deb" else {}),
+                    output_dir=work / target,
+                    emit=emit,
                 ),
                 f"{target} package",
             )
@@ -1296,7 +1296,7 @@ def retain_stage_reports(
     target: str, values: dict[str, object], output_path: Path, evidence: EvidenceLog
 ) -> None:
     """Copy reports out of the temporary workspace before it is removed."""
-    if target not in {"standalone", "deb", "all"}:
+    if target not in {"standalone", "deb", "arch", "all"}:
         return
     standalone = values.get("standalone")
     if not isinstance(standalone, dict) or "report" not in standalone:
@@ -1318,7 +1318,7 @@ def package(args: argparse.Namespace) -> int:
     try:
         source = source_identity(repo, str(Path(args.python)))
         require_tools(("git",))
-        if args.target in {"standalone", "deb", "all"}:
+        if args.target in {"standalone", "deb", "arch", "all"}:
             require_tools(("file",))
     except Exception as error:
         evidence.write(f"FAILED before semantic plan: {error}")

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Validate the portable Arch package contract without pacman."""
 
 from __future__ import annotations
@@ -27,12 +30,31 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
     if not required <= metadata.keys():
         raise PackageError("Arch package lacks required metadata or executable")
     pkginfo = metadata[".PKGINFO"].decode("ascii")
-    fields = dict(line.split(" = ", 1) for line in pkginfo.splitlines() if " = " in line)
+    fields: dict[str, str] = {}
+    for line in pkginfo.splitlines():
+        if " = " not in line:
+            continue
+        name, value = line.split(" = ", 1)
+        if not name or name in fields:
+            raise PackageError("Arch metadata contains an invalid or duplicate field")
+        fields[name] = value
     report = json.loads(build_report.read_text(encoding="utf-8"))
-    if fields.get("pkgname") != "devlegate" or fields.get("arch") != "x86_64":
+    required_fields = {"pkgname", "pkgbase", "pkgver", "size", "arch", "xdata"}
+    if not required_fields <= fields.keys() or fields.get("xdata") != "pkgtype=pkg":
+        raise PackageError("Arch metadata lacks mandatory PKGINFO v2 fields")
+    if (
+        fields.get("pkgname") != "devlegate"
+        or fields.get("pkgbase") != "devlegate"
+        or fields.get("arch") != "x86_64"
+    ):
         raise PackageError("Arch metadata has the wrong package or architecture")
-    if fields.get("pkgver") != report["wheel"]["version"] or fields.get("pkgrel") != "1":
+    if fields.get("pkgver") != f'{report["wheel"]["version"]}-1':
         raise PackageError("Arch version identity does not match standalone build report")
+    try:
+        if int(fields["size"]) < 0:
+            raise ValueError
+    except ValueError as error:
+        raise PackageError("Arch metadata has an invalid installed size") from error
     if any(name == "dev" or name.startswith("dev/") for name in metadata):
         raise PackageError("Arch package contains source-tree developer tooling")
     if extract_dir.exists():

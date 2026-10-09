@@ -28,6 +28,7 @@ def test_target_expansion_and_dependency_order():
         "sdist",
         "standalone",
         "deb",
+        "arch",
         "full-source",
     )
 
