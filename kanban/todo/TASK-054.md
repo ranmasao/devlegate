@@ -214,3 +214,118 @@ that complete production composition.
 This is a targeted completion defect in the TASK-058-derived packaging
 pipeline, owned by the already revised TASK-054 release-readiness scope.
 Do not resurrect or merge the older TASK-054 builder implementation.
+
+## Review decision — 2026-10-09, checkpoint f330f4ae36f8 (REQUEST CHANGES)
+
+Do not accept or integrate checkpoint
+`f330f4ae36f81ac15e2db17f2e86e30d96ac3534` yet. It contains a focused
+fix, but is not release-ready:
+
+- Positive: `tools/validate_arch.py` now derives expected license members
+  from the checked-out, verified standalone compliance manifest, verifies
+  the embedded manifest bytes, and the new `test_arch_format.py` regression
+  exercises real Arch assembly, nested license names, and rejection of an
+  extra member. The packaging graph passes the authoritative manifest context.
+- CI run `37947874400` for the exact checkpoint **failed**, although the
+  tests-with-coverage step passed. Ruff reported two E501 violations in
+  `tools/validate_arch.py` at lines 144 and 147. Fix and rerun.
+- The regression mocks standalone validation and uses a synthetic binary:
+  it is **not** a successful clean-source `./dev package arch` end-to-end
+  proof, much less native pacman compatibility evidence.
+- `tools/package_deb.py` and `tools/package_arch.py` still separately
+  validate the input, copy the same executable/legal tree, create
+  installation provenance, normalize timestamps and generate checksums.
+  Meanwhile `validate_deb.py` admits additional payload members under
+  documentation / LICENSES that `validate_arch.py` rejects. Shared
+  installed-payload policy is still missing.
+- The Arch validator matches expected **member names** from the manifest,
+  but does not compare the unpacked license snapshot **bytes/hashes** to
+  the authoritative standalone material. Matching filenames alone cannot
+  prove preservation of exact legal texts.
+
+### Required scope clarification: reusable native payload contract
+
+The next iteration must finish TASK-054 through a **small shared native
+packaging layer** reused by both existing DEB and Arch adapters. This is a
+targeted cross-format correction to the duplicated payload policy and
+supersedes the earlier "targeted hardening only" restriction **only to this
+extent**. It must not become a generic distro framework or implement RPM
+or any additional output target in this ticket.
+
+1. **Single source of truth.** Use the one independently validated standalone
+   archive / executable, associated build report and checked-out validated
+   compliance manifest as authority. Represent the logical installed payload
+   with one explicit, normalized inventory/contract: relative destination
+   paths, required file type and permissions, expected source/hash, required
+   license snapshots and provenance rules. Derive the legal inventory from
+   the authoritative manifest, including nested files. Never accept a
+   self-declared embedded manifest as authorization for extra package members.
+2. **Shared assembly.** Factor the *actually duplicated* work out of
+   `package_deb.py` and `package_arch.py`: executable and legal-file copying,
+   installation-provenance construction, deterministic file/timestamp policy
+   and checksum helpers where appropriate. A new format adapter should
+   consume this prepared logical native payload instead of reimplementing
+   its contents. Avoid double-building the standalone runtime or copying
+   source-only `dev`/source integrations into released payloads.
+3. **Explicit format boundary.** Keep Debian control fields, version and
+   architecture mapping, Installed-Size semantics, `ar`/`data.tar` encoding
+   and Debian-specific policy in the DEB adapter. Keep Arch `.PKGINFO`,
+   pkgrel, architecture mapping, installed-size semantics and `tar.zst`
+   encoding in the Arch adapter. Each adapter supplies only necessary
+   distribution-specific metadata/layout mapping and selects its package
+   container writer. Do not assume all future distributions use Debian/Arch
+   installation paths, metadata or the same dependency model. No dynamic
+   adapter registry/plugin system is required.
+4. **Shared post-extraction assertions.** Both independent format decoders
+   must call a common policy validator on the *actual extracted installed
+   payload*. Verify exact authorized regular files and permitted directory
+   layout, no unauthorized extra files/symlinks/hooks/runtime dependencies,
+   executable mode and SHA-256 identity, provenance marker identity and
+   metadata consistency, and manifest-derived license files with the
+   **correct exact content/digests**, not only the correct names. The
+   `INSTALLATION-PROVENANCE.json` distribution and tool identity are
+   adapter inputs, not an excuse to duplicate the shared validation.
+   Native-format metadata validation must remain separately strict.
+5. **Cross-format parity and regression.** Use the same representative
+   validated standalone input (including several nested license snapshots)
+   to assemble DEB and Arch through their real adapters. Assert their
+   normalized logical payload is identical except for deliberately
+   format-specific provenance/metadata/layout. Both must reject injected
+   extras, missing licenses, changed license contents, changed manifest,
+   binary tampering, wrong execution mode and a broken provenance marker.
+   Keep the existing valid DEB compatibility and format-specific tests green.
+   Do not weaken Arch validation to match the previous DEB gaps.
+6. **Minimal integration contract.** Document the short, concrete path for
+   adding a third native format later: supply metadata/layout mapping,
+   format encoder/decoder, native-format checks and an integration target;
+   reuse the common payload assembly and verification without copying
+   DEB/Arch code. Show this seam in tested interfaces or a focused
+   design note. Do not add speculative generic metadata schemas, extension
+   registries or build-time dependencies just to demonstrate extensibility.
+7. **Build and release proof.** Fix Ruff E501, obtain authoritative green
+   tests/coverage/Ruff on the new exact checkpoint. Run the **real**
+   `./dev package arch` from a clean non-Arch checkout and retain artifact,
+   sidecar, hash, report and logs. Then validate the **same hash** on native
+   Arch with the full pacman inspection/install/ownership/integrity/CLI/
+   removal transcript. Preserve all existing evidence boundaries above.
+   Do not claim native proof from mock tests, self-produced tar parsing or
+   a different archive. If native host access is unavailable to the agent,
+   state the limitation and provide reproducible operator-run commands.
+
+### Review acceptance delta
+
+In addition to the pre-existing TASK-054 criteria, acceptance now requires:
+
+- One shared authoritative native payload inventory, used by **both**
+  builders and independent package validators; no duplicated fixed license
+  allowlists or divergent permissive DEB validation.
+- DEB and Arch produce equal logical payload content and enforce the same
+  allowlist/integrity tests, while retaining their respective native rules.
+- A future distro adapter needs no reimplementation of payload-copying,
+  legal manifest handling or shared installed-file checks.
+- Clean `./dev package arch` proof, exact-artifact native pacman lifecycle
+  evidence, and fully green CI at the final reviewed code SHA.
+
+Retain the existing `f330f4ae` changes as a starting point. This review
+is a request to **complete and refactor the current implementation**, not
+permission to resurrect the pre-TASK-058 Arch packaging branch.
