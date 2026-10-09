@@ -303,6 +303,54 @@ def test_real_debian_adapter_emits_package_and_post_build_steps(monkeypatch, tmp
     assert events[-1].leaf_id == "prove-deb"
 
 
+def test_real_arch_adapter_emits_package_and_post_build_steps(monkeypatch, tmp_path):
+    import tools.package_arch as package_arch
+    import tools.validate_arch as validate_arch
+
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    archive = tmp_path / "standalone.tar.gz"
+    sidecar = tmp_path / "standalone.sha256"
+    report = tmp_path / "standalone-build.json"
+    archive.write_bytes(b"archive")
+    sidecar.write_text("checksum")
+    report.write_text(json.dumps({"wheel": {"version": "1.2.3"}}))
+    arch = tmp_path / "devlegate-1.2.3-1-x86_64.pkg.tar.zst"
+    values = {
+        "standalone": {
+            "archive": GRAPH.Artifact(archive, "archive"),
+            "sidecar": GRAPH.Artifact(sidecar, "checksum"),
+            "report": GRAPH.Artifact(report, "report"),
+        }
+    }
+
+    def fake_package(*, emit=None, **_kwargs):
+        arch.write_bytes(b"arch")
+        for step in package_arch.semantic_plan():
+            emit(GRAPH.ComponentEvent("start", step, step.identity))
+            emit(GRAPH.ComponentEvent("complete", step, step.identity))
+        return arch
+
+    binary = tmp_path / "devlegate"
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr(package_arch, "package", fake_package)
+    monkeypatch.setattr(validate_arch, "validate", lambda *_args: binary)
+    monkeypatch.setattr(
+        GRAPH.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+    )
+
+    component = GRAPH._component_for_target("arch", source, tmp_path, values)
+    frozen = GRAPH.freeze_plan(GRAPH._target_plan("arch"))
+    events = []
+    component.run(events.append)
+
+    assert [event.leaf_id for event in events if event.action == "complete"] == [
+        leaf_id for leaf_id, _step in frozen
+    ]
+    assert events[-1].leaf_id == "prove-arch"
+
+
 def test_real_component_progress_output_is_deterministic_and_noninteractive(
     monkeypatch, tmp_path, capsys
 ):

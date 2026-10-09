@@ -12,6 +12,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 try:
@@ -27,6 +28,22 @@ except ModuleNotFoundError:
     from tools.arch_format import TOOL_IDENTITY, build
     from tools.package_standalone import run as package_run
     from tools.validate_standalone_package import validate
+
+
+@contextmanager
+def progress_stage(emit: Callable | None, step: ComponentStep):
+    """Emit the package component's exact local build leaf events."""
+    if emit is not None:
+        emit(ComponentEvent("start", step, step.identity))
+    try:
+        yield
+    except Exception:
+        if emit is not None:
+            emit(ComponentEvent("fail", step, step.identity))
+        raise
+    else:
+        if emit is not None:
+            emit(ComponentEvent("complete", step, step.identity))
 
 
 def git_timestamp(repo: Path, commit: str) -> int:
