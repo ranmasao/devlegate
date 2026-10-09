@@ -1,0 +1,40 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "a85976c766616a6b16706b5ae3148c5847a1cd47",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "e18bf6d7fbb640578cf802f750afbe1d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [
+    "Native Arch host access and clean-checkpoint artifact retention are still required outside this worker environment."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run ./dev package arch from a clean checkout and retain the artifact, sidecar, report, and build evidence.",
+    "Transfer the exact artifact to an Arch x86_64 host and complete the pacman inspection/install/integrity/smoke/removal transcript.",
+    "Complete authoritative full CI coverage/Ruff validation on the final clean checkpoint."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Native Arch host access and clean-checkpoint artifact retention are still required outside this worker environment."
+    ],
+    "remaining": [
+      "Run ./dev package arch from a clean checkout and retain the artifact, sidecar, report, and build evidence.",
+      "Transfer the exact artifact to an Arch x86_64 host and complete the pacman inspection/install/integrity/smoke/removal transcript.",
+      "Complete authoritative full CI coverage/Ruff validation on the final clean checkpoint."
+    ],
+    "report": null,
+    "summary": "Added a shared native payload assembly and validation layer used by both Debian and Arch adapters. It derives legal payload members from the checked-out compliance manifest, verifies exact snapshot hashes and provenance, and preserves format-specific metadata validation; the Arch regression now uses real snapshot bytes."
+  },
+  "workspace_head": "6d366ee1877dc773bc5fbe3a1bc67768b00872a6"
+}
