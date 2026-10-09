@@ -1,0 +1,34 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "af1022877647491886b480dd7318079f99af0c2a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "387c7c8085454931af7cda4ec329a18b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete an authoritative full pytest run to confirm the transient auto-resume topology failure does not recur.",
+    "Run authoritative Ruff in the same validation environment after the completed pytest run."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete an authoritative full pytest run to confirm the transient auto-resume topology failure does not recur.",
+      "Run authoritative Ruff in the same validation environment after the completed pytest run."
+    ],
+    "report": null,
+    "summary": "Formatted the standalone artifact launcher probe without changing its behavior. Verified the containment contract, coverage regression, topology suite, and Ruff locally."
+  },
+  "workspace_head": "46dfa43d22904f8ad81f99e89d218bc81cb4b606"
+}
