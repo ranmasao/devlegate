@@ -1,0 +1,34 @@
+{
+  "code_base_head": "6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9",
+  "conclusion": "incomplete",
+  "control_head": "ce5669094997b2141589bf332b405eb305c04fe8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-058",
+  "execution_id": "9a21b09a8821431eb71a6615dac0bcf8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-058",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the resulting exact checkpoint through authoritative GitHub CI with coverage and Ruff, then record the successful run identity in execution evidence.",
+    "Run Ruff once the repository CI/tool environment provides the Ruff executable; it is not installed in this workspace."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-058",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the resulting exact checkpoint through authoritative GitHub CI with coverage and Ruff, then record the successful run identity in execution evidence.",
+      "Run Ruff once the repository CI/tool environment provides the Ruff executable; it is not installed in this workspace."
+    ],
+    "report": null,
+    "summary": "Added a distro-independent Arch package-format builder and validator using deterministic tar plus zstd raw-block encoding, integrated the `arch` distribution target, and recorded format source identity in build evidence. Replaced the DEB placeholder provenance identity with a verifiable source SHA-256 and hardened DEB archive extraction against duplicate, traversal, and unsafe link members while preserving standalone packaging behavior."
+  },
+  "workspace_head": "af97e69904a33c5e76e5c1cfec79788046140d08"
+}
