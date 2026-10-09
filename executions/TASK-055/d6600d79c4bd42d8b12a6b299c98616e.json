@@ -1,0 +1,32 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "c8ceafd167689d06d1286cc0c4b413cb0d91de63",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "d6600d79c4bd42d8b12a6b299c98616e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the full authoritative pytest run; the local run exceeded the execution timeout before completion despite focused topology, IPC, containment, and recovery tests passing."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the full authoritative pytest run; the local run exceeded the execution timeout before completion despite focused topology, IPC, containment, and recovery tests passing."
+    ],
+    "report": null,
+    "summary": "Updated the service topology harness to include durable synthetic containment survivor records in early-exit and timeout assertions. This surfaces each surviving execution member with the monitor's PID, PPID, process group, session, state, and command name while leaving production cgroup ownership unchanged."
+  },
+  "workspace_head": "b3abda29720dfe4eb5dcffe6f2a4c50118302a9a"
+}
