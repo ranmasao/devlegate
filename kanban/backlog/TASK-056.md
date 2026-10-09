@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Add worker inactivity watchdog with deterministic recovery context"
-"depends_on": ["TASK-055"]
+"depends_on": ["TASK-055", "TASK-061"]
 ---
 
 ## Milestone
@@ -12,8 +12,10 @@ Devlegate 0.5.7 — worker liveness and autonomous recovery hardening.
 
 Deferred from 0.5.6 to 0.5.7. Do not schedule TASK-056 on the 0.5.6
 release line. TASK-055 (execution ownership boundary) is already completed;
-TASK-057 (forced-restart continuation intent) remains in the 0.5.6 scope and
-may provide reusable lifecycle semantics for this watchdog implementation.
+TASK-057 (forced-restart continuation intent) remains in the 0.5.6 scope.
+TASK-061 must first extract the shared workflow recovery/reconciliation
+boundary during 0.5.7; the watchdog must reuse it rather than adding new
+recovery paths inside the existing runtime.py monolith.
 
 
 ## Goal
