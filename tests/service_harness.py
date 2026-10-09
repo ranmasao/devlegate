@@ -182,6 +182,7 @@ class LiveService:
                     f"service exited while waiting (return code "
                     f"{self.process.returncode})\nstdout:\n{self.stdout}\n"
                     f"stderr:\n{self.stderr}"
+                    f"{self._containment_diagnostics()}"
                 )
             if predicate():
                 return
@@ -190,7 +191,31 @@ class LiveService:
         raise AssertionError(
             "service condition did not become true before timeout\n"
             f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
+            f"{self._containment_diagnostics()}"
         )
+
+    def _containment_diagnostics(self) -> str:
+        """Expose synthetic boundary survivors in topology failures.
+
+        The service harness uses the durable deterministic provider instead of
+        host cgroups. Its monitor publishes one ``.members`` file per
+        execution, so include those records in the assertion that actually
+        fails when a restarted service does not converge.
+        """
+        containment_root = self.registry_home / "containment"
+        if not containment_root.is_dir():
+            return ""
+        records = []
+        for path in sorted(containment_root.glob("*.members")):
+            try:
+                value = path.read_text(encoding="ascii").strip()
+            except OSError:
+                continue
+            if value:
+                records.append(f"{path.name}:\n{value}")
+        if not records:
+            return ""
+        return "\nsynthetic containment survivors:\n" + "\n".join(records)
 
     def kill(self, timeout: float = 10) -> None:
         """Abruptly kill the service while preserving its durable artifacts."""
