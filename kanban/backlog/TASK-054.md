@@ -1,216 +1,153 @@
 ---
 "type": "devlegate.ticket"
-"title": "Add Arch-family x86_64 native package"
+"title": "Finalize Arch-family x86_64 native package and pacman validation"
 "depends_on": ["TASK-018", "TASK-060", "TASK-058"]
 ---
 
 ## Milestone
 
-Native Linux distribution packaging.
+Devlegate 0.5.6 — Arch-family native distribution validation and release readiness.
 
 ## Goal
 
-Add a native package for Arch-family x86_64 systems, built from the existing
-self-contained standalone Devlegate payload, so Devlegate can be installed,
-upgraded, validated, and removed with pacman without requiring a system Python
-runtime or project development environment.
+Finish and independently validate the existing Arch-family x86_64 package
+produced by the distribution pipeline established by TASK-058. Prove the real
+package lifecycle with pacman on an Arch Linux host, retain artifact-bound
+evidence, and correct only concrete compatibility or release-readiness defects.
 
-The intended artifact is an Arch package in the normal pacman format
-(`.pkg.tar.zst`) for `x86_64`.
+**This is no longer an Arch package builder implementation task.** The
+distro-agnostic builder, package validator, `arch` target and `all` graph
+integration were implemented by TASK-058 and must be reused, not recreated.
 
-## Context
+## Existing implementation baseline
 
-Devlegate already has a standalone x86_64 Linux payload and Debian-package
-packaging/validation machinery. The Arch-family package should reuse the same
-standalone runtime payload and licensing/provenance inputs rather than creating
-another Python installation path.
+TASK-058 provides the implementation foundation:
 
-A real Arch Linux x86_64 machine is now available for manual/host smoke testing,
-so this ticket should include an explicit native-install validation path rather
-than only archive-structure tests.
+- `tools/arch_format.py`: deterministic Arch `.pkg.tar.zst` container;
+- `tools/package_arch.py`: package the already-built standalone executable;
+- `tools/validate_arch.py`: generic, pacman-independent package validation;
+- `tools/build_distribution.py`: wheel -> standalone -> Arch build/validation
+  graph, plus the `all` target, build reports and package SHA-256 sidecars;
+- `./dev package arch`: build and validate Arch distribution artifacts on a
+  supported non-Arch host without host pacman, makepkg or zstd tooling.
 
-Runtime remains stdlib-only and dependency-free from the user's point of view:
-the package must not depend on a system Python interpreter or a venv.
+The verified TASK-058 checkpoint is
+`e10eea1572dfc3632de059f8cf1c39e7cf9898f4`;
+GitHub Actions run `37925856821` passed tests/coverage and Ruff. That
+checkpoint is the implementation reference, not a substitute for real
+Arch package-manager validation.
 
-## Required behavior
+TASK-054 had earlier implementation attempts and review findings, including
+checkpoint `b72ee59551219abb6bdb24f124dd22824ac5655e` and CI
+`37522140115`. Those historical results do not authorize merging the old
+TASK-054 branch into the new implementation. The earlier package-member
+mismatch was resolved in that lineage; its remaining native-host requirement
+is carried forward here. Historical ticket contents remain in Git history.
 
-- Produce a conventional Arch-family `.pkg.tar.zst` package for `x86_64`.
-- Package the already-built standalone Devlegate executable; do not rebuild a
-  separate runtime inside the Arch packaging step.
-- Install the executable as a regular executable at:
-  - `/usr/bin/devlegate`
-- Install the maintained licensing and provenance material under an appropriate
-  `/usr/share/doc/devlegate/` and/or conventional license location, preserving
-  the same source/build provenance guarantees as other native artifacts.
-- Preserve executable permissions and deterministic payload identity.
-- Do not install the source-tree-only `dev` helper.
-- Do not install repository integration, project files, test files, development
-  dependencies, venvs, or Python package metadata that are not needed by the
-  standalone runtime.
-- Do not declare a runtime dependency on Python.
-- Avoid package install scripts/hooks unless a concrete Arch packaging invariant
-  requires one; ordinary install/remove must be declarative file ownership.
-- Package metadata must derive the Devlegate version from the same authoritative
-  build metadata used by the existing distribution pipeline.
-- Use conventional Arch version/release fields and map Devlegate's current
-  version into them deterministically.
-- Record enough installation provenance to identify:
-  - distribution/package family;
-  - Devlegate version;
-  - source/build identity;
-  - standalone payload digest.
-- Add a validator that inspects the built package rather than trusting the
-  packaging command's success.
-- Fail closed on wrong architecture, unexpected runtime dependencies, unexpected
-  files, missing executable, symlink/launcher substitutions where a regular
-  executable is required, missing provenance/licensing material, or payload
-  digest mismatch.
-- Integrate the new package target into the existing distribution graph without
-  changing the semantics of current wheel/sdist/standalone/deb/full-source
-  targets.
-- Keep the packaging/build tooling itself outside the distributed runtime.
+## Execution and dependency boundary
 
-## Arch-family host validation
+- Retain the formal dependency on TASK-058. Perform this work on the current
+  product/release line **after TASK-058 is accepted and integrated**. Treat
+  the old TASK-054 work branch as historical until its ancestry is reconciled;
+  do not blindly rebase/cherry-pick an obsolete native builder/validator over
+  the newer TASK-058 modules.
+- Avoid rebuilding the standalone runtime inside native package wrapping.
+  The package must contain the same validated standalone executable.
+- The package is built once on a supported non-Arch host (currently WSL2
+  Ubuntu 24.04 is available) and that **exact file** is transferred to a
+  separate Arch x86_64 host for native validation.
+- Do not modify the source code to accommodate an unverified expectation
+  about pacman. First establish package identity and reproduce the problem.
+- Keep TASK-059 (source submodule preflight) separate. No watchdog, QA
+  transition, RPM, or general distribution-toolchain expansion belongs here.
 
-On an actual Arch Linux x86_64 host, demonstrate the package lifecycle with the
-normal package manager tooling:
+## Required native Arch validation
 
-- inspect package metadata before installation;
-- install the built package with pacman;
-- prove `/usr/bin/devlegate` is owned by the package;
-- run at least:
-  - `devlegate --version` or the current equivalent version command;
-  - a non-mutating/basic CLI smoke command such as `devlegate --help`;
-- remove the package with pacman;
-- prove package-owned Devlegate files are removed and unrelated user/project
-  state is not deleted.
+Use a disposable environment or a safely controlled Arch x86_64 test host.
+Do not overwrite a pre-existing unrelated Devlegate installation or owned
+files; inspect package ownership and existing host state first.
 
-Host validation must use a disposable/test package installation context and must
-not rely on copying files manually into `/usr/bin`.
+### Build-side evidence (non-Arch host)
+
+1. Record the exact Git commit, source checkout cleanliness, architecture,
+   build environment, and `./dev package arch` command/exit result.
+2. Retain the `.pkg.tar.zst` artifact, its `.sha256` sidecar, the packaging
+   build log and the retained standalone build report.
+3. Verify the sidecar against the produced artifact; record the SHA-256.
+4. Verify the package was produced without Arch build/package-manager tools
+   and that the package-format validator independently accepted it.
+
+### Native package-manager evidence (Arch host)
+
+Use the exact transferred `.pkg.tar.zst` (same SHA-256), **no rebuild**:
+
+1. Verify its SHA-256 before any pacman operation.
+2. Inspect metadata and payload using `pacman -Qip` and `pacman -Qlp`.
+   Check package name, full version/release, x86_64 architecture, dependencies,
+   and the expected executable/documentation payload.
+3. Install using `pacman -U`, and retain its result.
+4. Verify package registration, ownership and file integrity with relevant
+   `pacman -Qi`, `pacman -Ql`, `pacman -Qo /usr/bin/devlegate`,
+   and `pacman -Qk` commands.
+5. Execute `/usr/bin/devlegate --version` and a non-mutating CLI smoke test
+   (`/usr/bin/devlegate --help` or equivalent), including a check that the
+   installation does not require system Python, pip or a venv.
+6. Verify the package's upgrade/reinstallation behavior, where a safe test
+   fixture/version is available. Do not fabricate an older released Arch
+   package just to claim upgrade coverage. If a genuine upgrade test cannot
+   be carried out, record the limitation; the basic install/remove proof
+   remains mandatory.
+7. Remove through `pacman -R devlegate`. Confirm package-owned files are
+   gone, unrelated user/project state survives and no unexpected hook or
+   scriptlet has modified it.
+
+A real Arch machine is available for operator-run validation. If native
+testing cannot be executed from the worker environment, the worker must
+provide an exact reproducible command/transcript plan and stop at review
+with the missing host evidence clearly identified. Do not claim native proof
+from generic TAR parsing or the project's own validator.
+
+## Targeted hardening only
+
+When native testing exposes a concrete incompatibility, fix it in the
+current TASK-058-derived package pipeline, and add a focused regression:
+
+- correct Arch PKGINFO v2 metadata and version/release identity;
+- package-manager-readable zstd/tar format and file ownership/permissions;
+- accurate version, package type, licensing, and installation provenance;
+- no unexpected runtime dependencies (especially Python), files or hooks;
+- regular executable at `/usr/bin/devlegate` with correct executable mode;
+- no source-only `dev`, project configuration, tests, build tooling or venv;
+- embedded payload SHA-256 must match the validated standalone executable;
+- removal must not delete user/project state or unrelated files.
+
+Do not duplicate or replace existing successful format tests merely to
+satisfy this ticket. Add only evidence-backed missing coverage, especially
+cross-checks against pacman/libalpm.
 
 ## Acceptance criteria
 
-- A reproducible x86_64 Arch-family package is produced in the distribution
-  output.
-- The package installs a regular standalone `/usr/bin/devlegate`.
-- No system Python/venv/runtime dependency is required.
-- Package contents, metadata, provenance, licensing, architecture, and payload
-  digest are independently validated.
-- Existing standalone and Debian package semantics remain unchanged.
-- Distribution graph ordering/dependency tests cover the new target.
-- Focused package tests are green.
-- Full authoritative CI and Ruff are green.
-- Real Arch x86_64 install/smoke/remove evidence is recorded.
+- Arch package is produced by the TASK-058 portable distribution pipeline on
+  a non-Arch x86_64 host and passes generic format validation.
+- The exact same package checksum is established on the producer and on the
+  native Arch validation host.
+- Native pacman inspects, installs, registers, owns and removes the artifact
+  without packaging it again; package-managed files are gone after removal.
+- Installed executable passes version and non-mutating CLI smoke tests,
+  without a system Python, venv or runtime pip dependency.
+- Metadata, provenance, licensing and executable payload identity are correct;
+  no unexpected package files or scriptlets appear.
+- Unrelated state is preserved.
+- Any concrete native compatibility defect has a minimal fix and regression
+  against the existing implementation; existing standalone/DEB paths stay green.
+- Full authoritative CI with coverage and Ruff is green on the exact final
+  implementation checkpoint (the existing green TASK-058 run may support an
+  unchanged implementation, but does not replace native host evidence).
+- The native Arch validation transcript, build-side provenance and package
+  SHA-256 are durable and attributable to this ticket.
 
-## Required regressions / evidence
+## Non-goals
 
-- production Arch package builder emits the expected package metadata and file
-  layout;
-- validator accepts a valid dependency-free package;
-- validator rejects wrong architecture;
-- validator rejects Python/runtime dependencies;
-- validator rejects unexpected package payload files;
-- validator rejects missing/non-regular `/usr/bin/devlegate`;
-- validator rejects missing or inconsistent provenance/licensing data;
-- validator rejects standalone payload digest mismatch;
-- source-tree-only `dev` helper is absent;
-- distribution target expansion and dependency ordering include the Arch package
-  only when requested (and in `all` if that is the current native-package
-  policy);
-- real Arch x86_64 pacman install/ownership/smoke/remove transcript or equivalent
-  durable evidence is attached/reported.
-
-## Scope
-
-This ticket adds one Arch-family native package for Linux `x86_64`.
-
-It does not add AUR publication, signing infrastructure, repository hosting,
-automatic mirror publication, other CPU architectures, or compatibility layers.
-Those can be separate work if/when needed.
-
-
-## Review findings
-
-The first implementation is not acceptable yet.
-
-Authoritative CI run 37503956346 failed with:
-
-```text
-2 failed, 1137 passed, 1 skipped
-```
-
-Both failures are in the new Arch package validation path:
-
-- `test_arch_validator_accepts_dependency_free_payload`
-- `test_production_arch_builder_emits_valid_package`
-
-Both fail because the package built by the new builder is rejected by the new
-validator as:
-
-```text
-Arch package contains unexpected files
-```
-
-Builder and validator must agree on the exact package member contract before
-host validation. Fix the package-member/layout mismatch, rerun focused Arch
-package/distribution tests, obtain a fully green authoritative CI run including
-Ruff, then perform and retain the real Arch x86_64 pacman
-inspect/install/ownership/smoke/remove evidence required by this ticket.
-
-
-## Review findings — current pass
-
-The previous builder/validator package-member mismatch is fixed.
-
-Latest implementation checkpoint:
-
-```text
-b72ee59551219abb6bdb24f124dd22824ac5655e
-```
-
-Authoritative CI run `37522140115` is green:
-
-```text
-1139 passed, 1 skipped
-Ruff: All checks passed!
-```
-
-The remaining blocker is the ticket's required real Arch x86_64 host evidence.
-
-The latest valid ExecutionReport (`1ff0c09a11ff4d9d9d44ae445978bbf1`) explicitly leaves:
-
-```text
-Build the package and retain real Arch x86_64 pacman
-inspect/install/ownership/smoke/remove evidence on a host with zstd and pacman.
-```
-
-No durable transcript/evidence for the required native pacman lifecycle is present
-in the reviewed control history.
-
-Before returning to review, run the produced package on the actual Arch x86_64
-host using the provided validation path and retain evidence covering:
-
-- package metadata inspection before install;
-- pacman install;
-- ownership of `/usr/bin/devlegate`;
-- `devlegate --version`;
-- `devlegate --help` (or equivalent basic non-mutating smoke);
-- pacman removal;
-- proof package-owned files are removed;
-- proof unrelated user/project state remains untouched.
-
-Do not change the already-green package implementation unless the native host
-validation exposes a real defect.
-
-
-## Scheduling note
-
-TASK-054 is intentionally returned to backlog after native Arch validation
-because clean-host testing exposed a prerequisite standalone-build defect and the
-native packaging layer is about to be generalized.
-
-Do not continue patching the current TASK-054 lineage on its old base.
-
-Resume this ticket only after TASK-060 and TASK-058 are integrated. Then update
-the TASK-054 execution base/rebase onto the new product generation and rerun the
-Arch package build and native validation against that foundation.
+This ticket does not reimplement portable package builders, add RPM or other
+formats, create an AUR entry, configure package repositories or signing,
+implement host systemd policy, or introduce compatibility/migration layers.
