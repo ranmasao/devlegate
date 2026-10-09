@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ class ExecutionResult:
     questions: tuple[str, ...]
     remaining: tuple[str, ...]
     reason: str
+    process_started: bool = True
 
     @property
     def egress_ok(self) -> bool:
@@ -71,6 +73,7 @@ class ExecutionReport:
             "execution_path": self.execution_path,
             "workspace_head": self.workspace_head,
             "process_returncode": self.result.process_returncode,
+            "process_started": self.result.process_started,
             "transport_error": self.result.transport_error,
             "transport_ok": self.result.transport_error is None,
             "egress_error": self.result.egress_error,
@@ -121,7 +124,7 @@ class ExecutionReport:
             "remaining",
             "reason",
         }
-        optional = {"report_artifact", "report_sha256"}
+        optional = {"report_artifact", "report_sha256", "process_started"}
         if not required.issubset(payload) or set(payload) - required - optional:
             raise ExecutionReportError("execution report fields are invalid")
         if payload["schema"] != _REPORT_SCHEMA:
@@ -163,6 +166,9 @@ class ExecutionReport:
             payload["process_returncode"], bool
         ):
             raise ExecutionReportError("execution report process status is invalid")
+        process_started = payload.get("process_started", True)
+        if not isinstance(process_started, bool):
+            raise ExecutionReportError("execution report process provenance is invalid")
         if not isinstance(payload["transport_error"], (str, type(None))):
             raise ExecutionReportError("execution report transport error is invalid")
         if not isinstance(payload["egress_error"], (str, type(None))):
@@ -208,6 +214,7 @@ class ExecutionReport:
             payload["transport_error"],
             payload["egress_error"],
             claim,
+            process_started,
         )
         if conclusion != expected_conclusion:
             raise ExecutionReportError("execution report conclusion is inconsistent")
@@ -222,6 +229,7 @@ class ExecutionReport:
             questions,
             remaining,
             payload["reason"],
+            process_started,
         )
         return cls(
             payload["execution_id"],
@@ -276,11 +284,21 @@ def _canonical_result(
     transport_error: str | None,
     egress_error: str | None,
     claim: WorkerClaim | None,
+    process_started: bool = True,
 ) -> tuple[str, str]:
     if claim is not None and egress_error is not None:
         raise ExecutionReportError(
             "worker claim cannot coexist with typed-egress error"
         )
+    if not process_started:
+        return "failed", f"worker launch failed: {transport_error or 'unknown error'}"
+    if process_returncode < 0:
+        number = -process_returncode
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            name = "UNKNOWN"
+        return "failed", f"worker terminated by signal {number} ({name})"
     if process_returncode != 0:
         return "failed", f"worker exited with status {process_returncode}"
     if transport_error is not None:
@@ -298,7 +316,11 @@ def build_execution_result(run: WorkerRunResult) -> ExecutionResult:
     questions = claim.questions if claim is not None else ()
     remaining = claim.remaining if claim is not None else ()
     conclusion, reason = _canonical_result(
-        run.process_returncode, run.transport_error, run.egress_error, claim
+        run.process_returncode,
+        run.transport_error,
+        run.egress_error,
+        claim,
+        run.process_started,
     )
     return ExecutionResult(
         run.process_returncode,
@@ -309,6 +331,7 @@ def build_execution_result(run: WorkerRunResult) -> ExecutionResult:
         questions,
         remaining,
         reason,
+        run.process_started,
     )
 
 

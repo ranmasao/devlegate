@@ -119,6 +119,7 @@ def test_execution_log_open_failure_has_no_handoff_or_worker_launch(
     workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
     result = supervisor.run(workspace, "prompt", execution_id="execution-1")
     assert result.process_returncode == -1
+    assert result.process_started is False
     assert "cannot open" in result.transport_error
     assert events == []
 
@@ -143,6 +144,7 @@ def test_popen_failure_has_start_but_no_completion_marker(monkeypatch, tmp_path)
     workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
     result = supervisor.run(workspace, "prompt", execution_id="execution-1")
     assert result.process_returncode == -1
+    assert result.process_started is False
     assert "cannot launch" in result.transport_error
     assert [event[0] for event in events] == ["open", "service", "popen", "close"]
     assert events[1][1].startswith("execution starting: ")

@@ -84,6 +84,52 @@ def test_failed_result_preserves_questions_and_remaining():
     assert result.questions == ("Which API?",)
 
 
+def test_signal_termination_is_reported_with_signal_identity():
+    result = build_execution_result(run(process=-1))
+
+    assert result.reason == "worker terminated by signal 1 (SIGHUP)"
+
+
+def test_launch_failure_is_not_reported_as_signal_termination():
+    result = build_execution_result(
+        WorkerRunResult(
+            -1,
+            "execution containment failed: unavailable",
+            None,
+            None,
+            process_started=False,
+        )
+    )
+
+    assert result.reason == (
+        "worker launch failed: execution containment failed: unavailable"
+    )
+
+
+def test_launch_provenance_round_trips_in_execution_report():
+    report = build_execution_report(
+        execution_id="attempt-1",
+        ticket_id="T-1",
+        code_base_head="code",
+        control_head="control",
+        execution_branch="branch",
+        execution_path="path",
+        workspace_head=None,
+        run=WorkerRunResult(
+            -1,
+            "execution containment failed: unavailable",
+            None,
+            None,
+            process_started=False,
+        ),
+    )
+
+    restored = report.from_dict(json.loads(report.to_json()))
+
+    assert restored == report
+    assert restored.result.process_started is False
+
+
 def test_valid_claim_cannot_have_typed_egress_error():
     with pytest.raises(ExecutionReportError, match="typed-egress"):
         build_execution_result(run(egress_error="invalid typed egress"))

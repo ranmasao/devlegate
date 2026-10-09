@@ -26,6 +26,7 @@ class OpenCodeRunResult:
     transport_error: str | None = None
     interruption_kind: str | None = None
     worker_group_retired: bool = True
+    process_started: bool = True
 
     @property
     def transport_ok(self) -> bool:
@@ -40,6 +41,7 @@ class WorkerRunResult:
     egress_error: str | None
     interruption_kind: str | None = None
     worker_group_retired: bool = True
+    process_started: bool = True
 
     @property
     def transport_ok(self) -> bool:

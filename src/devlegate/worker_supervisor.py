@@ -326,7 +326,7 @@ def _run_opencode(
             except (ContainmentError, OSError):
                 pass
         return OpenCodeRunResult(
-            -1, f"execution containment failed: {error}", None, False
+            -1, f"execution containment failed: {error}", None, False, False
         )
     if worker_started_handler is not None:
         worker_started_handler()
@@ -582,7 +582,7 @@ def _run_opencode(
             transport_error = transport_error or str(error)
             group_retired = False
     return OpenCodeRunResult(
-        returncode, transport_error, interruption_kind, group_retired
+        returncode, transport_error, interruption_kind, group_retired, True
     )
 
 
@@ -754,6 +754,7 @@ export default tool({
                 egress_error,
                 opencode_result.interruption_kind,
                 opencode_result.worker_group_retired,
+                opencode_result.process_started,
             )
             if execution_log is not None and worker_started:
                 service_log(
@@ -764,7 +765,7 @@ export default tool({
                 completion_logged = True
             return result
         except (ContainmentError, OSError) as error:
-            return WorkerRunResult(-1, str(error), None, None)
+            return WorkerRunResult(-1, str(error), None, None, process_started=False)
         finally:
             if (
                 execution_log is not None
