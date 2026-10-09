@@ -1,0 +1,32 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "3a32731d0030ddf0d284ec6e1f6d63d1375f3355",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "3d694f4eb5b04937bc10731dd98a5461",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the authoritative full pytest run in an environment with the coverage dependency installed; the local run reached 442 passing tests before the coverage regression failed to import coverage, and the extended run exceeded the local timeout."
+  ],
+  "report_artifact": "executions/TASK-055/3d694f4eb5b04937bc10731dd98a5461.md",
+  "report_sha256": "b62af8ac58c60f8fa3ed2b9556d27e6f7b392ced8c58777d51d276b3f3ffe7f5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the authoritative full pytest run in an environment with the coverage dependency installed; the local run reached 442 passing tests before the coverage regression failed to import coverage, and the extended run exceeded the local timeout."
+    ],
+    "report": "Focused worker, execution-result, cross-layer, and logging tests pass. Ruff passes for project-owned src/tests/tools; full-repository Ruff still reports existing vendored packaging violations.",
+    "summary": "Added explicit worker launch provenance so synthetic admission/launch failures are distinct from real child signal exits. Failure reasons now include signal number/name or a launch-failure prefix, and the provenance is persisted compatibly in execution reports."
+  },
+  "workspace_head": "031afabc68274498ae9597e278fe9e7ba12551d0"
+}
