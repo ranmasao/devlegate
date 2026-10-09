@@ -329,3 +329,71 @@ In addition to the pre-existing TASK-054 criteria, acceptance now requires:
 Retain the existing `f330f4ae` changes as a starting point. This review
 is a request to **complete and refactor the current implementation**, not
 permission to resurrect the pre-TASK-058 Arch packaging branch.
+
+## Review decision — 2026-10-09, checkpoint 6d366ee1877d (REQUEST CHANGES)
+
+Execution `e18bf6d7fbb640578cf802f750afbe1d` produced
+`6d366ee1877dc773bc5fbe3a1bc67768b00872a6`, conclusion `incomplete`.
+The new `tools/native_payload.py` is a useful shared starting point:
+DEB and Arch builders call `assemble()`, and their production graph
+validators call `validate()`. Retain the checkpoint and complete the
+implementation rather than starting again.
+
+**CI is not green.** Run `37950620748` finished with 1161 passing tests,
+2 failures and 1 skip; Ruff did not run. Required immediate corrections:
+
+1. `test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra`
+   still expects `unexpected files`, but shared validation raises
+   `native package contains unexpected files`. Update the negative
+   assertion to the intended shared diagnostic, preserving coverage.
+2. `test_devlegate_owned_source_has_exact_eupl_header` fails because
+   `tools/native_payload.py` lacks the mandatory EUPL-1.2 header after
+   the shebang.
+
+**Remaining shared-contract review findings:**
+
+3. `validate_deb.validate()` uses strict shared checks only when
+   `repo` is provided. The existing fallback is less strict; make
+   successful package validation consistently require verified source
+   authority. Keep limited metadata inspection separate if necessary.
+4. The strict DEB branch currently returns before checking actual
+   `Installed-Size` against the extracted payload. Preserve this
+   Debian-specific invariant on every successful validation path.
+5. `native_payload.validate()` unconditionally discards `.PKGINFO`
+   from its file inventory. Only the Arch adapter should exclude its
+   package metadata; an unexpected Debian payload member must fail.
+6. Comparing a binary SHA-256 only with a provenance marker inside the
+   *same* package is insufficient independent verification. Bind the
+   installed executable to the previously validated standalone build
+   report or equivalent authoritative inventory. Check required fixed
+   legal documents as well as manifest-listed license snapshots.
+7. Enforce exact file and directory inventory, member types and
+   non-executable document modes consistently across the two formats.
+   Both should reject altered nested licenses, missing files and
+   additional payload members through their real decoders.
+8. `native_payload.assemble()` currently copies the full
+   `LICENSES/` tree if the authoritative manifest is absent. Make
+   manifest validation mandatory in the shared API, with no permissive
+   alternate route.
+9. Add paired DEB/Arch tests from the same validated input, asserting
+   equivalent logical payload except deliberately format-specific
+   metadata/provenance. Preserve DEB-only and Arch-only metadata tests,
+   byte reproducibility, existing standalone behavior, and stdlib-only
+   runtime packaging. Do not add third-format builders in TASK-054.
+
+**Outstanding release evidence (mandatory):**
+
+- From a clean non-Arch x86_64 checkout at the exact final SHA, run
+  `./dev package arch`; retain artifact, SHA-256 sidecar, build report
+  and evidence log. The isolated builder regression is not sufficient.
+- On a real Arch x86_64 host, test the same checksum-matched artifact
+  with native `pacman` inspection, installation, package registration,
+  ownership/integrity, CLI smoke and removal; retain the transcript.
+- Obtain fully green CI (tests, coverage, Ruff, licensing) at the
+  final implementation SHA. Do not mark complete without the evidence.
+
+**Disposition:** Return TASK-054 from `review` to `todo`.
+Resume from `6d366ee1877d` with the existing shared payload layer.
+The scope remains the DEB/Arch native payload contract and real Arch
+release validation, not development of RPM or a speculative packaging
+framework.
