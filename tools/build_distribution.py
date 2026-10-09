@@ -49,12 +49,22 @@ except ModuleNotFoundError:
         freeze_plan,
     )
 
-TARGETS = ("wheel", "sdist", "python", "standalone", "deb", "full-source", "all")
+TARGETS = (
+    "wheel",
+    "sdist",
+    "python",
+    "standalone",
+    "deb",
+    "arch",
+    "full-source",
+    "all",
+)
 GRAPH = {
     "wheel": (),
     "sdist": (),
     "standalone": ("wheel",),
     "deb": ("standalone",),
+    "arch": ("standalone",),
     "full-source": (),
 }
 ALL_TARGETS = ("wheel", "sdist", "standalone", "deb", "full-source")
@@ -851,11 +861,17 @@ def _owned_component_plan(target: str) -> ComponentPlan:
             from tools.build_standalone import component_plan as plan
         except ModuleNotFoundError:
             from build_standalone import component_plan as plan
-    elif target == "deb":
+    elif target in {"deb", "arch"}:
         try:
-            from tools.package_deb import component_plan as plan
+            if target == "arch":
+                from tools.package_arch import component_plan as plan
+            else:
+                from tools.package_deb import component_plan as plan
         except ModuleNotFoundError:
-            from package_deb import component_plan as plan
+            if target == "arch":
+                from package_arch import component_plan as plan
+            else:
+                from package_deb import component_plan as plan
     else:
         plans = {
             "wheel": ("build wheel", "validate wheel"),
@@ -894,13 +910,25 @@ def _target_plan(target: str, *, include_proof: bool = False) -> ComponentPlan:
             ),
             key=target,
         )
-    if target == "deb":
+    if target in {"deb", "arch"}:
         owned = _owned_component_plan(target)
         return ComponentPlan(
             target,
-            (ComponentPlan(owned.name, owned.children, key="package"),
-             _leaf_plan("validate-deb", "validate Debian package"),
-             _leaf_plan("prove-deb", "prove Debian extracted binary")),
+            (
+                ComponentPlan(owned.name, owned.children, key="package"),
+                _leaf_plan(
+                    "validate-" + target,
+                    "validate Debian package"
+                    if target == "deb"
+                    else "validate arch package",
+                ),
+                _leaf_plan(
+                    "prove-" + target,
+                    "prove Debian extracted binary"
+                    if target == "deb"
+                    else "prove arch extracted binary",
+                ),
+            ),
             key=target,
         )
     plans = {
@@ -1100,42 +1128,59 @@ def _component_for_target(
                 lambda: prove_standalone(values["standalone-root"], work),
             ),
         )
-    elif target == "deb":
+    elif target in {"deb", "arch"}:
         try:
-            from tools.package_deb import package as deb_package
-            from tools.validate_deb import validate as validate_deb
+            if target == "arch":
+                from tools.arch_format import TOOL_IDENTITY as format_tool_identity
+                from tools.package_arch import package as format_package
+                from tools.validate_arch import validate as validate_format
+            else:
+                from tools.deb_format import TOOL_IDENTITY as format_tool_identity
+                from tools.package_deb import package as format_package
+                from tools.validate_deb import validate as validate_format
         except ModuleNotFoundError:
-            from package_deb import package as deb_package
-            from validate_deb import validate as validate_deb
+            if target == "arch":
+                from arch_format import TOOL_IDENTITY as format_tool_identity
+                from package_arch import package as format_package
+                from validate_arch import validate as validate_format
+            else:
+                from deb_format import TOOL_IDENTITY as format_tool_identity
+                from package_deb import package as format_package
+                from validate_deb import validate as validate_format
         package_component_plan = next(
             child for child in plan.children if child.key == "package"
         )
 
         def package_action(emit: Callable[[ComponentEvent], None]) -> object:
-            values["deb"] = Artifact(
-                deb_package(
+            values[target] = Artifact(
+                format_package(
                     repo=source.repo,
                     archive=values["standalone"]["archive"].path,
                     sidecar=values["standalone"]["sidecar"].path,
                     build_report=values["standalone"]["report"].path,
                     output_dir=work / "deb",
-                    emit=emit,
+                    **({"emit": emit} if target == "deb" else {}),
                 ),
-                "Debian package",
+                f"{target} package",
             )
-            return values["deb"]
+            if _ACTIVE_EVIDENCE is not None:
+                _ACTIVE_EVIDENCE.write(
+                    "Package format tool: "
+                    + json.dumps(format_tool_identity, sort_keys=True)
+                )
+            return values[target]
 
         def validate_action() -> object:
-            values["deb-binary"] = validate_deb(
-                values["deb"].path,
+            values[target + "-binary"] = validate_format(
+                values[target].path,
                 values["standalone"]["report"].path,
-                work / "deb-validated",
+                work / (target + "-validated"),
             )
-            return values["deb-binary"]
+            return values[target + "-binary"]
 
         def prove_action() -> None:
             result = subprocess.run(
-                [str(values["deb-binary"]), "version"],
+                [str(values[target + "-binary"]), "version"],
                 cwd=work,
                 text=True,
                 capture_output=True,
@@ -1143,13 +1188,13 @@ def _component_for_target(
             )
             if result.returncode:
                 raise DistributionError(
-                    f"Debian extracted-binary proof failed:\n{result.stderr}"
+                    f"{target} extracted-binary proof failed:\n{result.stderr}"
                 )
 
         children = (
             FunctionComponent(package_component_plan, package_action),
-            leaf("validate-deb", validate_action),
-            leaf("prove-deb", prove_action),
+            leaf("validate-" + target, validate_action),
+            leaf("prove-" + target, prove_action),
         )
     else:
         raise DistributionError(f"unsupported component target: {target}")
@@ -1235,6 +1280,10 @@ def selected_final_files(target: str, values: dict[str, object]) -> list[Path]:
         files.extend((standalone["archive"].path, standalone["sidecar"].path))
     if target in {"deb", "all"}:
         package = values["deb"]
+        files.append(package.path)
+        files.append(package.path.with_name(f"{package.path.name}.sha256"))
+    if target in {"arch", "all"}:
+        package = values["arch"]
         files.append(package.path)
         files.append(package.path.with_name(f"{package.path.name}.sha256"))
     if target in {"full-source", "all"}:
@@ -1426,6 +1475,10 @@ def parser() -> argparse.ArgumentParser:
         ),
         "deb": (
             "Build and validate the Debian package. Wheel and standalone "
+            "prerequisites are built automatically."
+        ),
+        "arch": (
+            "Build and validate the Arch package. Wheel and standalone "
             "prerequisites are built automatically."
         ),
         "full-source": "Build and validate the materialized full-source archive.",

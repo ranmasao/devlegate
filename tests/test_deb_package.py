@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import hashlib
+import gzip
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -29,6 +32,7 @@ def load_tool(name):
 
 VALIDATOR = load_tool("validate_deb")
 BUILDER = load_tool("package_deb")
+DEB = load_tool("deb_format")
 
 
 def make_package(
@@ -266,3 +270,20 @@ def test_deb_validator_rejects_repository_integration(tmp_path):
     package, report = make_package(tmp_path, repository_integration=True)
     with pytest.raises(VALIDATOR.PackageError, match="repository integration"):
         VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+def test_deb_extractor_rejects_duplicate_and_link_escape_members(tmp_path):
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w", format=tarfile.GNU_FORMAT) as archive:
+        for name in ("usr/bin/devlegate", "usr/bin/devlegate"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+    package = tmp_path / "duplicate.deb"
+    package.write_bytes(
+        b"!<arch>\n"
+        + DEB._ar_member("debian-binary", b"2.0\n", 0)
+        + DEB._ar_member("data.tar.gz", gzip.compress(payload.getvalue(), mtime=0), 0)
+    )
+    with pytest.raises(DEB.DebFormatError, match="duplicate"):
+        DEB.extract(package, tmp_path / "extract")

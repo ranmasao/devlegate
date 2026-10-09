@@ -6,16 +6,31 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import gzip
+import hashlib
 import io
+import posixpath
+import re
 import tarfile
 from pathlib import Path, PurePosixPath
+
+
+def _source_digest() -> str:
+    source = Path(__file__).read_bytes()
+    source = re.sub(
+        rb'("digest":\s*")[0-9a-f]{64}("),?',
+        rb'\1<source-sha256>\2',
+        source,
+        count=1,
+    )
+    return hashlib.sha256(source).hexdigest()
+
 
 TOOL_IDENTITY = {
     "name": "devlegate-deb-format",
     "version": "1",
     "platform": "python-stdlib",
     "source": "tools/deb_format.py",
-    "digest": "owned-source-v1",
+    "digest": _source_digest(),
 }
 
 
@@ -96,6 +111,8 @@ def members(package: Path) -> dict[str, bytes]:
         end = start + size
         if end > len(data):
             raise DebFormatError("truncated Debian ar member")
+        if not name or name in result:
+            raise DebFormatError("Debian ar archive contains duplicate members")
         result[name] = data[start:end]
         position = end + (size % 2)
     if "debian-binary" not in result:
@@ -150,6 +167,20 @@ def control(package: Path) -> dict[str, str]:
     name, payload = _member_payload(container, "control.tar.")
     archive = tarfile.open(fileobj=io.BytesIO(_decompress(payload, name)))
     try:
+        names: set[str] = set()
+        for member in archive.getmembers():
+            path = PurePosixPath(member.name)
+            if (
+                not member.name
+                or path.is_absolute()
+                or ".." in path.parts
+                or member.name in names
+                or not (member.isdir() or member.isreg())
+            ):
+                raise DebFormatError(
+                    "Debian control archive contains an unsafe member"
+                )
+            names.add(member.name)
         try:
             control_member = next(
                 member
@@ -175,8 +206,45 @@ def extract(package: Path, destination: Path, *, control_only: bool = False) -> 
         payload, "control.tar." if control_only else "data.tar."
     )
     with tarfile.open(fileobj=io.BytesIO(_decompress(compressed, name))) as archive:
-        for member in archive.getmembers():
+        tar_members = archive.getmembers()
+        names: set[str] = set()
+        for member in tar_members:
             relative = PurePosixPath(member.name)
-            if relative.is_absolute() or ".." in relative.parts:
-                raise DebFormatError("Debian archive contains an unsafe path")
-            archive.extract(member, destination)
+            if (
+                not member.name
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or member.name in names
+                or not (member.isdir() or member.isreg() or member.issym())
+            ):
+                raise DebFormatError(
+                    "Debian archive contains an unsafe or duplicate member"
+                )
+            if member.issym():
+                link = posixpath.normpath(
+                    posixpath.join(posixpath.dirname(member.name), member.linkname)
+                )
+                if link == ".." or link.startswith("../"):
+                    raise DebFormatError("Debian archive contains an unsafe link")
+            names.add(member.name)
+        destination.mkdir(parents=True, exist_ok=True)
+        for member in tar_members:
+            target = destination / PurePosixPath(member.name)
+            parent = target.parent
+            parent.mkdir(parents=True, exist_ok=True)
+            current = destination
+            for component in PurePosixPath(member.name).parts[:-1]:
+                current /= component
+                if current.is_symlink() or not current.is_dir():
+                    raise DebFormatError("Debian archive escapes extraction root")
+            if member.isdir():
+                target.mkdir(exist_ok=True)
+                continue
+            if member.issym():
+                target.symlink_to(member.linkname)
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                raise DebFormatError("Debian archive member has no payload")
+            target.write_bytes(source.read())
+            target.chmod(member.mode & 0o7777)
