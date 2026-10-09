@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "completed",
+  "control_head": "28965b845bda29b5d9d825c29487d64c057fe836",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "5ad227512232426a946245e2eb9bf03a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-055/5ad227512232426a946245e2eb9bf03a.md",
+  "report_sha256": "f574eb0d9b1d36706333ff79bd97f4ceb48f9809f764a20705b708917cb0d744",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Production entrypoints remain unchanged and continue selecting the Linux cgroup provider. Static compilation, diff checks, and direct bootstrap checks passed; pytest and Ruff executables were unavailable in the workspace.",
+    "summary": "Added a test-only service bootstrap that injects DurableDeterministicContainmentProvider before running either the default foreground service or any custom Python service command. Updated LiveService to route all subprocess service commands through that bootstrap and added a regression covering custom recovery-driver composition."
+  },
+  "workspace_head": "880ff32edf25707453de6145975f0336c1c33dd1"
+}
