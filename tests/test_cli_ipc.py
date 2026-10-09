@@ -51,6 +51,21 @@ def test_direct_cli_stop_waits_for_authority_release(git_fixture, monkeypatch):
         )
         assert not service.locator.daemon_authority_present()
 
+
+def test_custom_service_command_uses_deterministic_containment(
+    git_fixture, monkeypatch
+):
+    marker = git_fixture["tmp"] / "provider.txt"
+    monkeypatch.setenv("DEVLEGATE_TEST_PROVIDER_MARKER", str(marker))
+    service = LiveService(
+        git_fixture["working"],
+        git_fixture["config"],
+        command=_recovery_driver(git_fixture["config"]),
+    )
+    with service:
+        service.wait_ready()
+        assert marker.read_text() == "DurableDeterministicContainmentProvider"
+
 def test_stop_wait_requires_matching_completion_receipt(monkeypatch):
     class Locator:
         def daemon_authority_present(self):

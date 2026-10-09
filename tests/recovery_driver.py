@@ -8,6 +8,7 @@ import os
 import signal
 from pathlib import Path
 
+import devlegate.execution_containment as containment
 from devlegate.daemon import run_service
 from devlegate.service import ServiceEngine
 
@@ -16,6 +17,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=Path, required=True)
     args = parser.parse_args()
+    provider_marker = os.environ.get("DEVLEGATE_TEST_PROVIDER_MARKER")
+    if provider_marker is not None:
+        Path(provider_marker).write_text(
+            type(containment.default_containment_provider()).__name__
+        )
     engine = ServiceEngine(args.env)
     original_ready = engine.mark_service_ready
 

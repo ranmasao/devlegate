@@ -10,7 +10,6 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from devlegate.execution_containment import DurableDeterministicContainmentProvider
 from devlegate.host_installation import HostInstallation
 from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import IPCClientError, request
@@ -65,20 +64,19 @@ class LiveService:
         }
         command = self.command or (
             sys.executable,
-            "-c",
-            (
-                "import devlegate.execution_containment as ec; "
-                "import devlegate.worker_supervisor as ws; "
-                "ec.default_containment_provider = "
-                "ws.default_containment_provider = "
-                "lambda: ec.DurableDeterministicContainmentProvider("
-                f"{str(self.registry_home / 'containment')!r}); "
-                "from devlegate.cli import main; "
-                "raise SystemExit(main())"
-            ),
+            "-m",
+            "devlegate",
             "--env",
             str(self.env_file),
             "foreground",
+        )
+        command = (
+            sys.executable,
+            str(Path(__file__).with_name("service_bootstrap.py")),
+            "--containment-root",
+            str(self.registry_home / "containment"),
+            "--",
+            *command,
         )
         self._output_dir = tempfile.TemporaryDirectory(prefix="devlegate-service-")
         self._stdout_file = open(
