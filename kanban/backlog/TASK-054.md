@@ -151,3 +151,66 @@ cross-checks against pacman/libalpm.
 This ticket does not reimplement portable package builders, add RPM or other
 formats, create an AUR entry, configure package repositories or signing,
 implement host systemd policy, or introduce compatibility/migration layers.
+
+## Build-side validation finding — 2026-10-09, checkpoint e10eea1572df
+
+An actual `./dev package arch` build on WSL2 Ubuntu 24.04 using a clean
+source checkout at `e10eea1572dfc3632de059f8cf1c39e7cf9898f4`
+failed **after** successful wheel and byte-reproducible standalone builds:
+
+```text
+Package format tool: {"name": "devlegate-arch-format", ...}
+FAILED at arch: validate arch package:
+PackageError: Arch package contains unexpected files
+```
+
+This is a **generic-build-host** failure and must be corrected before native
+pacman inspection/install tests can meaningfully begin. Do not classify it
+as a pacman defect or native-host incompatibility. The build log records
+`Version: 0.5.6.dev0`, successful duplicate standalone hashes and exact
+source identity. The actual archive file and its SHA-256 still need to be
+retained from a subsequent successful build.
+
+### Determined implementation mismatch
+
+At this checkpoint `tools/package_arch.py` copies the complete, already
+validated standalone `LICENSES/` tree into
+`usr/share/doc/devlegate/LICENSES/`.
+The standalone assembler dynamically includes several real third-party
+license files according to the authoritative compliance manifest, not just
+`standalone-compliance-manifest.json`.
+
+However, `tools/validate_arch.py` compares the archive's regular-file names
+to a static `expected` set listing **only** the standalone compliance
+manifest within the `LICENSES` subtree. Thus real, correctly included
+third-party license texts are rejected with `unexpected files`.
+The existing unit-test fixtures and mocked package adapter do not exercise
+that complete production composition.
+
+### Required focused fix and proof
+
+1. Keep the complete license payload required by the validated standalone
+   compliance manifest. Never fix this by deleting redistributable license
+   texts or by allowing an arbitrary wildcard `LICENSES/**` set.
+2. Build the package's exact authorized file set from the **validated,
+   authoritative** standalone compliance manifest/metadata and the fixed Arch
+   wrapper members. Retain strict rejection of truly unexpected members.
+   Do not trust an unverified manifest embedded in an adversarial package as
+   authority for arbitrary extra files.
+3. Add a regression executing the **real** Arch package assembly and generic
+   validator together against representative standalone input containing
+   several compliance license files (including nested categories). Verify
+   complete license retention, correct package-member identity, and rejection
+   of a genuinely extra member. The existing mocked progress-adapter test
+   does not provide this proof.
+4. Execute `./dev package arch` on the non-Arch host with a clean checkout
+   and record success, generated artifact and SHA-256, generic validator
+   result, and retained standalone/build evidence. The existing failed
+   build cannot be used for native pacman tests.
+5. Only after that, perform the same-checksum native Arch
+   `pacman -Qip/-Qlp/-U/-Qi/-Qo/-Qk/-R` and CLI smoke cycle required above.
+   Obtain green authoritative CI/Ruff for any source changes.
+
+This is a targeted completion defect in the TASK-058-derived packaging
+pipeline, owned by the already revised TASK-054 release-readiness scope.
+Do not resurrect or merge the older TASK-054 builder implementation.
