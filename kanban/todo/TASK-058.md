@@ -507,3 +507,52 @@ The second execution materially addressed the previous review's missing Arch
 format path and safer DEB extraction, but neither the full acceptance criteria
 nor the exact-checkpoint quality gate is satisfied. The specific regressions
 above must be verified before moving TASK-058 to accepted.
+
+## Review hardening — execution 2906202d662c4a85967185f352f6efce
+
+Review of checkpoint `8dce71666ea8e74834416b67d7ad5a3d015f82c8`
+against the recorded product base `6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9`:
+NOT ACCEPTED. Continue the SAME TASK-058 and preserve all implementation and
+execution history. The current execution claim was `incomplete`.
+
+Authoritative GitHub CI:
+https://github.com/ranmasao/devlegate/actions/runs/37921988442
+(commit `8dce71666ea8e74834416b67d7ad5a3d015f82c8`).
+Result: failure; 1159 passed, 1 skipped, 1 failed.
+`tests/test_licensing.py::test_devlegate_owned_source_has_exact_eupl_header`
+failed on `tools/deb_format.py` (missing EUPL/SPDX header).
+Ruff did not run because the test step failed.
+
+### Focused required corrections
+
+1. Add the repository-standard EUPL copyright/license/SPDX header to
+   `tools/deb_format.py`. Verify all Devlegate-owned newly introduced sources,
+   not only the file most recently named by the licensing assertion.
+2. `tools/package_arch.py` calls `progress_stage(emit, semantic_plan()[0])`,
+   but defines/imports no `progress_stage`. Implement or import a valid
+   context manager matching the component event protocol (start/complete/fail,
+   the exact `build` leaf identity). Avoid silently disabling progress events.
+   This is a direct runtime NameError on the Arch build path.
+3. Add executable regressions invoking actual `arch` packaging and `all`
+   through the normal distribution component/progress machinery, with controlled
+   immutable standalone fixture inputs; prove no NameError, complete ordered
+   events, generated/validated Arch artifact and checksum, and an `all` run
+   producing every declared target. Graph constants alone do not prove this.
+4. Demonstrate native Arch `pacman`/libalpm install, query, and removal
+   validation against the SAME already-built package (no native rebuild),
+   independently of generic package-format validation. Preserve relevant
+   output/artifact identity in review evidence. If integration infrastructure
+   cannot execute this, report the limitation explicitly; do not claim the
+   requirement has passed.
+5. Ensure a green authoritative GitHub CI on the next exact checkpoint,
+   including full tests, licensing checks, and Ruff. Link that run in the
+   execution claim when available. The existing offline/no-host-package-tool
+   assumptions and standalone/DEB behavior must remain intact.
+
+### Review observations
+
+This checkpoint corrected the prior Arch graph omission and moved toward
+PKGINFO v2 metadata and stronger extraction safety. Those improvements are
+valuable and must be retained. Acceptance remains blocked by the exact CI
+failure and an independent source-level Arch build defect, even before native
+package-manager validation is considered.
