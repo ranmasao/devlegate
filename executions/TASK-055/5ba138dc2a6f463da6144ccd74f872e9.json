@@ -1,0 +1,34 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "bd0d3b501017cc5f0ca0852f360b9b7a40306179",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "5ba138dc2a6f463da6144ccd74f872e9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve the load-sensitive transaction-stage topology failure where the worker reports status -1 despite no synthetic containment survivors.",
+    "Provide the missing pex dependency or complete the standalone builder integration environment, then rerun authoritative pytest and Ruff."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve the load-sensitive transaction-stage topology failure where the worker reports status -1 despite no synthetic containment survivors.",
+      "Provide the missing pex dependency or complete the standalone builder integration environment, then rerun authoritative pytest and Ruff."
+    ],
+    "report": null,
+    "summary": "Replaced the worker supervisor's unbounded compatibility wait with a bounded polling path for minimal process doubles, and added regression coverage. The production cgroup containment and durable recovery architecture were left unchanged."
+  },
+  "workspace_head": "fa34d6f2dc46186721b5f08e2c417d31bc02597c"
+}
