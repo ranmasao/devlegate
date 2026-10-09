@@ -1,0 +1,34 @@
+{
+  "code_base_head": "e7277c751eb868dc1189e09eeba8879acd7e4da2",
+  "conclusion": "incomplete",
+  "control_head": "0f8fe910cd97d86ff6cea1127a173cdce774c930",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-055",
+  "execution_id": "bf2fa0d8bca44d80a64b775cc18b543d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-055",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Identify and fix the concurrent transaction-stage worker failures that still produce worker exit status -1 in the full parallel suite.",
+    "Complete a green authoritative pytest run after resolving those failures."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-055",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Identify and fix the concurrent transaction-stage worker failures that still produce worker exit status -1 in the full parallel suite.",
+      "Complete a green authoritative pytest run after resolving those failures."
+    ],
+    "report": null,
+    "summary": "Added durable runtime-state, service-snapshot, and containment-observation diagnostics to the topology service harness timeout path. The diagnostics preserve the cgroup containment architecture and expose persisted phase, execution stage, identity, interruption, and provider state when lifecycle convergence fails."
+  },
+  "workspace_head": "8698fed664315aef88c2c530888a1cc8315aebee"
+}
