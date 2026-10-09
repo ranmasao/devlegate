@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -31,6 +30,12 @@ try:
     from build_progress import ComponentEvent, ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
     from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep
+try:
+    from deb_format import TOOL_IDENTITY
+    from deb_format import build as build_deb
+except ModuleNotFoundError:
+    from tools.deb_format import TOOL_IDENTITY
+    from tools.deb_format import build as build_deb
 
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
@@ -140,6 +145,7 @@ def package(
                         "payload_sha256": hashlib.sha256(
                             binary.read_bytes()
                         ).hexdigest(),
+                        "format_tool": TOOL_IDENTITY,
                     },
                     separators=(",", ":"),
                 )
@@ -163,25 +169,8 @@ def package(
             )
         timestamp = git_timestamp(repo, source_commit)
         set_tree_timestamp(package_root, timestamp)
-        environment = {**os.environ, "SOURCE_DATE_EPOCH": str(timestamp)}
         with progress_stage(emit, semantic_plan()[3]):
-            result = subprocess.run(
-                [
-                    "dpkg-deb",
-                    "--build",
-                    "--root-owner-group",
-                    "-Zgzip",
-                    str(package_root),
-                    str(output),
-                ],
-                env=environment,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode:
-                detail = result.stderr.strip() or result.stdout.strip() or "no output"
-                raise PackageError(f"dpkg-deb failed: {detail}")
+            build_deb(package_root, output, timestamp=timestamp)
         with progress_stage(emit, semantic_plan()[4]):
             output.with_name(f"{output.name}.sha256").write_text(
                 f"{hashlib.sha256(output.read_bytes()).hexdigest()}  {output.name}\n",
@@ -217,7 +206,6 @@ def main() -> int:
     except (
         PackageError,
         OSError,
-        subprocess.SubprocessError,
         json.JSONDecodeError,
     ) as error:
         print(f"package-deb: {error}", file=os.sys.stderr)

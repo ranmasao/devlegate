@@ -12,7 +12,6 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -20,6 +19,10 @@ try:
     from package_standalone import PackageError
 except ModuleNotFoundError:
     from tools.package_standalone import PackageError
+try:
+    from deb_format import DebFormatError, control, extract
+except ModuleNotFoundError:
+    from tools.deb_format import DebFormatError, control, extract
 
 try:
     from distribution_boundary import BoundaryError, validate_members
@@ -28,20 +31,10 @@ except ModuleNotFoundError:
 
 
 def fields(package: Path) -> dict[str, str]:
-    result = subprocess.run(
-        ["dpkg-deb", "-f", str(package)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        raise PackageError(result.stderr.strip() or "cannot read Debian control data")
-    values: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        key, separator, value = line.partition(":")
-        if separator:
-            values[key] = value.strip()
-    return values
+    try:
+        return control(package)
+    except DebFormatError as error:
+        raise PackageError(str(error)) from error
 
 
 def installed_size_kib(root: Path) -> int:
@@ -77,14 +70,10 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     if installed_size <= 0:
         raise PackageError("Debian package Installed-Size is not positive")
     with tempfile.TemporaryDirectory(prefix="devlegate-deb-control-") as control_dir:
-        result = subprocess.run(
-            ["dpkg-deb", "-e", str(package), control_dir],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode:
-            raise PackageError(result.stderr.strip() or "cannot extract Debian control")
+        try:
+            extract(package, Path(control_dir), control_only=True)
+        except DebFormatError as error:
+            raise PackageError(str(error)) from error
         forbidden = {"preinst", "postinst", "prerm", "postrm"}
         if forbidden.intersection(path.name for path in Path(control_dir).iterdir()):
             raise PackageError("Debian package contains maintainer scripts")
@@ -94,14 +83,10 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
     if extract_dir.exists():
         shutil.rmtree(extract_dir)
     extract_dir.mkdir(parents=True)
-    result = subprocess.run(
-        ["dpkg-deb", "-x", str(package), str(extract_dir)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        raise PackageError(result.stderr.strip() or "cannot extract Debian package")
+    try:
+        extract(package, extract_dir)
+    except DebFormatError as error:
+        raise PackageError(str(error)) from error
     try:
         validate_members(
             {str(path.relative_to(extract_dir)) for path in extract_dir.rglob("*")},
@@ -186,7 +171,6 @@ def main() -> int:
     except (
         PackageError,
         OSError,
-        subprocess.SubprocessError,
         json.JSONDecodeError,
     ) as error:
         print(f"validate-deb: {error}", file=os.sys.stderr)

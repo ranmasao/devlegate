@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -705,11 +706,12 @@ def build_deb(
     reporter: ProgressReporter | None = None,
     emit: Callable[[ComponentEvent], None] | None = None,
 ) -> Artifact:
-    require_tools(("dpkg-deb",))
     try:
+        from tools.package_deb import TOOL_IDENTITY
         from tools.package_deb import package as deb_package
         from tools.validate_deb import validate as validate_deb
     except ModuleNotFoundError:
+        from package_deb import TOOL_IDENTITY
         from package_deb import package as deb_package
         from validate_deb import validate as validate_deb
     package = Artifact(
@@ -723,6 +725,10 @@ def build_deb(
         ),
         "Debian package",
     )
+    if _ACTIVE_EVIDENCE is not None:
+        _ACTIVE_EVIDENCE.write(
+            "Package format tool: " + json.dumps(TOOL_IDENTITY, sort_keys=True)
+        )
     validated = work / "deb-validated"
     binary = component_step(
         emit,
@@ -1265,8 +1271,6 @@ def package(args: argparse.Namespace) -> int:
         require_tools(("git",))
         if args.target in {"standalone", "deb", "all"}:
             require_tools(("file",))
-        if args.target in {"deb", "all"}:
-            require_tools(("dpkg-deb",))
     except Exception as error:
         evidence.write(f"FAILED before semantic plan: {error}")
         evidence.close()

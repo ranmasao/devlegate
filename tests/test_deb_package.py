@@ -165,6 +165,29 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
         text=True,
     ).stdout
     VALIDATOR.validate(package, report, tmp_path / "validated")
+    marker = (
+        tmp_path / "validated/usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
+    )
+    assert json.loads(marker.read_text())[
+        "format_tool"
+    ] == BUILDER.TOOL_IDENTITY
+
+
+def test_owned_deb_builder_is_byte_reproducible_without_package_manager(tmp_path):
+    root = tmp_path / "root"
+    (root / "DEBIAN").mkdir(parents=True)
+    (root / "usr/bin").mkdir(parents=True)
+    (root / "DEBIAN/control").write_text(
+        "Package: devlegate\nVersion: 1\nArchitecture: amd64\n"
+        "Description: test\n test\n",
+        encoding="ascii",
+    )
+    (root / "usr/bin/devlegate").write_bytes(b"payload")
+    first = tmp_path / "first.deb"
+    second = tmp_path / "second.deb"
+    BUILDER.build_deb(root, first, timestamp=123)
+    BUILDER.build_deb(root, second, timestamp=123)
+    assert first.read_bytes() == second.read_bytes()
 
 
 def test_deb_validator_accepts_dependency_free_payload(tmp_path):
