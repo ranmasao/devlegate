@@ -397,3 +397,72 @@ Resume from `6d366ee1877d` with the existing shared payload layer.
 The scope remains the DEB/Arch native payload contract and real Arch
 release validation, not development of RPM or a speculative packaging
 framework.
+
+## Review decision — 2026-10-09, checkpoint 80e449e36b7d (REQUEST CHANGES)
+
+Execution `13b3f65e8b6449829fef2262ef618c5a` returned `incomplete` at
+`80e449e36b7d5bbf1e098ae1b13ecb9aaaf23128`. Preserve and resume this
+published checkpoint; do not restart the DEB/Arch shared-payload refactor.
+
+### Latest authoritative CI: run 37960817292
+
+**FAILED: 4 failed, 1159 passed, 1 skipped.** Ruff was skipped.
+Repair the four exact failures **without weakening strict validation**:
+
+1. `test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra`
+   (`tests/test_arch_format.py:126`): the validator raises
+   `package_standalone.PackageError('native package contains unexpected files')`
+   with the expected diagnostic, but `pytest.raises(validate_arch.PackageError)`
+   does not catch it. Investigate class identity across test
+   `importlib.util.spec_from_file_location` loading and
+   `package_standalone` vs `tools.package_standalone` import paths.
+   Ensure one consistent production exception identity and retain this
+   real negative test; do not catch broad `Exception` to mask the mismatch.
+2. `test_production_deb_builder_sets_maintainer_and_passes_validator`: the
+   mocked standalone fixture uses `repo=tmp_path`, which has no validated
+   `packaging/standalone-compliance/manifest.json`, so shared assembly
+   fails correctly. Supply authoritative manifest, correct snapshot
+   contents, fixed legal docs, provenance and matching report/digest,
+   while still exercising the actual DEB package builder and validator.
+3. `test_deb_validator_accepts_dependency_free_payload`: the legacy
+   fixture calls full validation without trusted `repo` or a complete
+   standalone build report. Construct a genuinely valid trusted fixture
+   and pass required authority; do not restore permissive validation.
+4. `test_deb_validator_rejects_former_private_payload_and_launcher_symlink`:
+   absence of authority fails first, so the target invalid symlink is
+   never tested. Use a valid trusted baseline, mutate only the intended
+   invalid member, and assert the actual link/file-type rejection.
+   Merely changing the expected error to the authority error is not valid.
+
+### Contract follow-through
+
+- Keep metadata-only inspection separate from complete validation. Both
+  DEB and Arch full validators must fail closed without the trusted
+  manifest and standalone build report.
+- Fix the `tools/validate_deb.py` CLI: `main()` currently calls `validate()`
+  without `repo`, although full validation now requires verified source
+  authority. Add the necessary explicit CLI input and a real CLI test.
+- Confirm format-specific checks are retained (Debian Installed-Size,
+  scripts, runtime dependencies; Arch .PKGINFO, size, format identity).
+  Do not let the shared payload layer accept extra paths or weakened modes.
+- Add paired real DEB/Arch tests against the same verified standalone
+  source/manifest, covering exact payload parity, nested license hashes,
+  unexpected files, binary+provenance tampering, and invalid file types.
+  Preserve existing reproducibility and stdlib-only runtime properties.
+- Run targeted regressions first, then authoritative complete tests,
+  coverage, licensing checks and Ruff at the exact final checkpoint.
+
+### Release proof is still mandatory
+
+- Build the real `./dev package arch` in a clean non-Arch x86_64 checkout;
+  retain the `.pkg.tar.zst`, `.sha256` sidecar, logs, report and provenance.
+- On a real Arch x86_64 host, validate that exact SHA-256 package with
+  `pacman -Qip/-Qlp/-U/-Qi/-Ql/-Qo/-Qk/-R`, CLI smoke, and safe removal;
+  retain attributable transcript and checksums. No rebuild on Arch.
+- If the worker cannot access the host, provide safe exact operator
+  commands, state the missing evidence, and return `incomplete`.
+- No RPM/third format, general plugin registry or unrelated feature work.
+
+**Disposition:** Return TASK-054 `review` -> `todo`, starting from
+`80e449e36b7d`; do not accept or integrate until CI and native evidence
+are complete.
