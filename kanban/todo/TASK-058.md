@@ -403,3 +403,51 @@ This ticket does not:
 - introduce compatibility/migration layers;
 - require all future Linux package formats to be implemented immediately;
 - make containers the only allowed native validation environment.
+
+## Review hardening — execution 17e40915b0774edfa3797217bab2c7d2
+
+Review of checkpoint `830e30ec161014ac3174730e838a45564d1b9d39` against
+base `6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9`:
+NOT ACCEPTED. Preserve the existing implementation, ticket identity, and
+execution evidence. Continue on the same ticket.
+
+### Required corrections
+
+1. Complete the distro-independent Arch package-format path. TASK-054
+   still owns the full Arch-family product package rollout; TASK-058 owns
+   removing the host `tar --zstd`/`zstd` build dependency and establishing a
+   reusable deterministic format/tool layer before TASK-054. Do not solve
+   the omission by silently weakening the existing Arch acceptance criterion.
+   If no Arch target currently exists, provide an independently exercised
+   package-format builder/validator and integration seam, with a clear boundary
+   for TASK-054 to consume.
+2. For external format tools, implement and test managed pinned acquisition
+   (identity, version, platform, source, SHA-256, verified cache and offline
+   reuse), or eliminate external dependencies with an owned deterministic
+   implementation. The absence of a future RPM implementation is not itself
+   a reason to introduce RPM in this ticket.
+3. Replace `TOOL_IDENTITY["digest"] = "owned-source-v1"` with meaningful,
+   verifiable source identity/provenance. A descriptive string must not be
+   presented as a cryptographic digest. Document how an owned format
+   implementation is bound to the exact reviewed build source.
+4. Harden `tools/deb_format.py` against unsafe archive extraction, including
+   symlink/hardlink escape from the extraction root. Add malformed archive,
+   duplicate member, and link traversal regressions as appropriate. Do not
+   accept archives based solely on direct member-path checks before invoking
+   `tarfile.extract`.
+5. Demonstrate all relevant original acceptance criteria and regressions,
+   including build and format validation without native package managers,
+   stable metadata/layout across host environments, retained payload digest,
+   and a native-validation stage which consumes—not rebuilds—the artifact.
+   Keep standalone behavior unchanged.
+6. Obtain a successful authoritative GitHub CI run (tests with coverage and
+   Ruff) for the resulting exact execution checkpoint, and identify the run
+   in the worker report. Local focused checks alone are not acceptance proof.
+
+### Review observations
+
+The current checkpoint usefully removes the Debian `dpkg-deb` dependency,
+adds an owned DEB format implementation, and includes a repeatability test.
+Those changes should be retained and hardened. The worker explicitly marked
+the result `incomplete` and listed unfinished Arch/toolchain work; the
+required cross-format portable packaging outcome is not yet delivered.
