@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import json
+import subprocess
 import threading
 
 import pytest
@@ -11,6 +12,7 @@ from devlegate.worker_egress import OpenCodeRunResult
 from devlegate.worker_supervisor import (
     WorkerAdmissionClosed,
     WorkerSupervisor,
+    _wait_process,
     worker_environment,
 )
 
@@ -32,6 +34,22 @@ def _report_event():
             },
         },
     }
+
+
+class _WaitWithoutTimeout:
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
+
+
+def test_bounded_wait_does_not_call_minimal_double_unbounded(monkeypatch):
+    process = _WaitWithoutTimeout()
+    monkeypatch.setattr("devlegate.worker_supervisor.time.sleep", lambda _delay: None)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _wait_process(process, timeout=0)
 
 
 def test_worker_environment_removes_host_control_state():

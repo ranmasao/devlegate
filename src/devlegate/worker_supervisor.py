@@ -13,6 +13,7 @@ import sys
 import tempfile
 import termios
 import threading
+import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -233,7 +234,16 @@ def _wait_process(process, timeout: float | None = None):
     try:
         return process.wait(timeout=timeout)
     except TypeError:
-        return process.wait()
+        # Preserve the requested bound for minimal test doubles that do not
+        # accept Popen's timeout keyword.
+        deadline = time.monotonic() + timeout
+        while True:
+            returncode = getattr(process, "returncode", None)
+            if returncode is not None:
+                return returncode
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(process, timeout)
+            time.sleep(min(WORKER_WAIT_INTERVAL, deadline - time.monotonic()))
 
 _HOST_CONTROL_ENVIRONMENT = frozenset(
     {
