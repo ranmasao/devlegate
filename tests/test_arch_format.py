@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -48,7 +49,20 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
             "LICENSING.md": ROOT / "LICENSING.md",
         }.get(name)
         if source is None:
-            (extracted / name).write_text(name, encoding="ascii")
+            if name == "THIRD_PARTY_NOTICES.md":
+                content = standalone.notice_text(manifest["records"])
+            else:
+                content = json.dumps(
+                    {
+                        "devlegate": {
+                            "standalone_sha256": hashlib.sha256(
+                                b"standalone payload"
+                            ).hexdigest(),
+                            "standalone_size": len(b"standalone payload"),
+                        }
+                    }
+                )
+            (extracted / name).write_text(content, encoding="ascii")
         else:
             (extracted / name).write_bytes(source.read_bytes())
     licenses = extracted / "LICENSES"
@@ -72,7 +86,13 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     ).stdout.strip()
     report.write_text(
         json.dumps(
-            {"source_commit": source_commit, "wheel": {"version": "0.5.6.dev0"}}
+            {
+                "source_commit": source_commit,
+                "wheel": {"version": "0.5.6.dev0"},
+                "scie": {
+                    "sha256": hashlib.sha256(b"standalone payload").hexdigest()
+                },
+            }
         ),
         encoding="ascii",
     )
@@ -100,7 +120,9 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     extra.write_text("unexpected", encoding="ascii")
     tampered = tmp_path / "tampered.pkg.tar.zst"
     ARCH.build(extracted_package, tampered, timestamp=0)
-    with pytest.raises(validate_arch.PackageError, match="unexpected files"):
+    with pytest.raises(
+        validate_arch.PackageError, match="native package contains unexpected files"
+    ):
         validate_arch.validate(
             tampered, report, tmp_path / "tampered-validated", ROOT, manifest_path
         )

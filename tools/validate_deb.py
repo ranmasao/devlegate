@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -105,72 +104,18 @@ def validate(
         )
     except BoundaryError as error:
         raise PackageError(str(error)) from error
-    if repo is not None:
-        return validate_payload(
-            extract_dir,
-            distribution="debian",
-            format_tool=TOOL_IDENTITY,
-            repo=repo,
-            manifest=manifest,
-        )
-    binary = extract_dir / "usr/bin/devlegate"
-    private_binary = extract_dir / "usr/lib/devlegate/devlegate"
-    try:
-        binary_mode = binary.lstat().st_mode
-    except FileNotFoundError as error:
-        raise PackageError(
-            "Debian package does not contain an executable payload"
-        ) from error
-    if not stat.S_ISREG(binary_mode) or not binary_mode & 0o111:
-        raise PackageError("Debian executable must be a regular executable file")
-    if private_binary.exists() or private_binary.is_symlink():
-        raise PackageError("Debian package contains a private executable payload")
-    systemd_root = extract_dir / "usr/lib/systemd"
-    if (extract_dir / "etc/systemd").exists() or (
-        systemd_root.exists() and any(systemd_root.glob("**/*"))
-    ):
-        raise PackageError("Debian package contains a systemd unit")
-    documentation = extract_dir / "usr/share/doc/devlegate"
-    required_documentation = {
-        "LICENSE",
-        "NOTICE",
-        "LICENSING.md",
-        "THIRD_PARTY_NOTICES.md",
-        "BUILD-PROVENANCE.json",
-    }
-    missing = sorted(
-        name for name in required_documentation if not (documentation / name).is_file()
-    )
-    if missing or not (documentation / "LICENSES").is_dir():
-        raise PackageError(
-            f"Debian package lacks compact compliance material: {missing}"
-        )
-    marker = documentation / "INSTALLATION-PROVENANCE.json"
-    try:
-        marker_value = json.loads(marker.read_text(encoding="ascii"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise PackageError(
-            "Debian package lacks installation provenance marker"
-        ) from error
-    if not isinstance(marker_value, dict) or (
-        marker_value.get("distribution") != "debian"
-        or marker_value.get("package") != "devlegate"
-    ):
-        raise PackageError("Debian installation provenance marker is invalid")
-    payload_digest = marker_value.get("payload_sha256")
-    if not isinstance(payload_digest, str) or len(payload_digest) != 64:
-        raise PackageError("Debian installation provenance marker is invalid")
-    if any(character not in "0123456789abcdef" for character in payload_digest):
-        raise PackageError("Debian installation provenance marker is invalid")
-    if hashlib.sha256(binary.read_bytes()).hexdigest() != payload_digest:
-        raise PackageError("Debian installation provenance does not match payload")
-    embedded_archives = list(documentation.rglob("*.tar.gz")) + list(
-        documentation.rglob("*.tar.gz.sha256")
-    )
-    if embedded_archives:
-        raise PackageError("Debian package embeds standalone archive payload")
     if installed_size != installed_size_kib(extract_dir):
         raise PackageError("Debian Installed-Size does not match the data payload")
+    if repo is None:
+        raise PackageError("Debian validation requires verified source authority")
+    binary = validate_payload(
+        extract_dir,
+        distribution="debian",
+        format_tool=TOOL_IDENTITY,
+        repo=repo,
+        manifest=manifest,
+        expected_binary_sha256=report["scie"]["sha256"],
+    )
     return binary
 
 

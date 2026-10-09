@@ -100,13 +100,23 @@ def validate_package(
         extract(package, extract_dir)
     except (ArchFormatError, OSError) as error:
         raise PackageError(str(error)) from error
-    return validate_payload(
+    binary = validate_payload(
         extract_dir,
         distribution="arch",
         format_tool=TOOL_IDENTITY,
         repo=repo,
         manifest=manifest_path,
+        metadata_members={".PKGINFO"},
+        expected_binary_sha256=report["scie"]["sha256"],
     )
+    actual_size = sum(
+        path.stat().st_size
+        for path in extract_dir.rglob("*")
+        if path.is_file() and path.name != ".PKGINFO"
+    )
+    if int(fields["size"]) != actual_size:
+        raise PackageError("Arch metadata size does not match the data payload")
+    return binary
 
 
 validate = validate_package
