@@ -15,18 +15,15 @@ import tempfile
 from pathlib import Path
 
 try:
-    from package_standalone import PackageError
+    from native_payload import PackageError
+    from native_payload import validate as validate_payload
 except ModuleNotFoundError:
-    from tools.package_standalone import PackageError
+    from tools.native_payload import PackageError
+    from tools.native_payload import validate as validate_payload
 try:
     from deb_format import TOOL_IDENTITY, DebFormatError, control, extract
 except ModuleNotFoundError:
     from tools.deb_format import DebFormatError, control, extract
-try:
-    from native_payload import validate as validate_payload
-except ModuleNotFoundError:
-    from tools.native_payload import validate as validate_payload
-
 try:
     from distribution_boundary import BoundaryError, validate_members
 except ModuleNotFoundError:
@@ -124,13 +121,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--build-report", type=Path, required=True)
     parser.add_argument("--extract-dir", type=Path, required=True)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        print(validate(args.package, args.build_report, args.extract_dir))
+        print(
+            validate(
+                args.package,
+                args.build_report,
+                args.extract_dir,
+                args.repo,
+                args.manifest,
+            )
+        )
     except (
         PackageError,
         OSError,

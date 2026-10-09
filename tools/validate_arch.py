@@ -11,19 +11,15 @@ from pathlib import Path
 
 try:
     from arch_format import TOOL_IDENTITY, ArchFormatError, extract, members
+    from native_payload import PackageError
     from native_payload import validate as validate_payload
-    from package_standalone import (
-        COMPLIANCE_DIR,
-        PackageError,
-    )
+    from package_standalone import COMPLIANCE_DIR
     from validate_standalone_package import validate
 except ModuleNotFoundError:
     from tools.arch_format import TOOL_IDENTITY, ArchFormatError, extract, members
+    from tools.native_payload import PackageError
     from tools.native_payload import validate as validate_payload
-    from tools.package_standalone import (
-        COMPLIANCE_DIR,
-        PackageError,
-    )
+    from tools.package_standalone import COMPLIANCE_DIR
     from tools.validate_standalone_package import validate
 
 

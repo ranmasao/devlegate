@@ -85,7 +85,9 @@ def _package(
             repo=repo,
         )
         installed_size = sum(
-            path.stat().st_size for path in root.rglob("*") if path.is_file()
+            path.stat().st_size
+            for path in root.rglob("*")
+            if path.is_file() and path.name != ".PKGINFO"
         )
         (root / ".PKGINFO").write_text(
             "pkgname = devlegate\n"

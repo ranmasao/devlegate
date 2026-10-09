@@ -116,6 +116,8 @@ def validate(
     expected_binary_sha256: str | None = None,
 ) -> Path:
     """Validate the actual extracted installed payload against source authority."""
+    if metadata_members and distribution != "arch":
+        raise PackageError("format metadata cannot be excluded from native payload")
     manifest_path = _manifest_path(repo, manifest)
     records = validate_manifest(manifest_path, repo)
     documentation = root / "usr/share/doc/devlegate"
