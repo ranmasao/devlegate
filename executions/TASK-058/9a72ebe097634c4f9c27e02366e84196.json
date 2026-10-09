@@ -1,0 +1,36 @@
+{
+  "code_base_head": "6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9",
+  "conclusion": "incomplete",
+  "control_head": "f8029bcff6e096662dfaafa0a64e1308a5c5ca7a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-058",
+  "execution_id": "9a72ebe097634c4f9c27e02366e84196",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-058",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the full pytest suite and Ruff in an environment with the project test dependencies.",
+    "Run native Arch pacman/libalpm install, query, and removal validation against the same built artifact.",
+    "Obtain a successful authoritative GitHub CI run for the exact resulting checkpoint."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-058",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the full pytest suite and Ruff in an environment with the project test dependencies.",
+      "Run native Arch pacman/libalpm install, query, and removal validation against the same built artifact.",
+      "Obtain a successful authoritative GitHub CI run for the exact resulting checkpoint."
+    ],
+    "report": null,
+    "summary": "Added the repository-standard EUPL header to tools/deb_format.py and implemented the missing Arch package progress context manager with start, complete, and fail events. Added an executable distribution-graph regression covering the real Arch adapter path and its frozen build/proof event sequence."
+  },
+  "workspace_head": "40b44f744f6439a0399d611ada4c30c43afc19fd"
+}
