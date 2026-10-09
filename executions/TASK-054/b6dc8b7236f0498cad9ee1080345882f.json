@@ -1,0 +1,42 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "7cd4c472163a769d495d02547c04075dbaccf34c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "b6dc8b7236f0498cad9ee1080345882f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [
+    "A real Arch x86_64 host and operator access are required to complete the mandatory pacman lifecycle evidence."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Migrate the three legacy Debian tests to verified standalone fixtures and add the required paired DEB/Arch contract regressions.",
+    "Run the authoritative full test, coverage, and Ruff suite on the final clean checkpoint.",
+    "Run ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, report, and build evidence.",
+    "Run the exact artifact through native Arch pacman inspection, install, ownership, integrity, smoke, and removal validation."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "A real Arch x86_64 host and operator access are required to complete the mandatory pacman lifecycle evidence."
+    ],
+    "remaining": [
+      "Migrate the three legacy Debian tests to verified standalone fixtures and add the required paired DEB/Arch contract regressions.",
+      "Run the authoritative full test, coverage, and Ruff suite on the final clean checkpoint.",
+      "Run ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, report, and build evidence.",
+      "Run the exact artifact through native Arch pacman inspection, install, ownership, integrity, smoke, and removal validation."
+    ],
+    "report": null,
+    "summary": "Tightened the shared native payload contract so format metadata cannot be silently excluded outside Arch, aligned validator exception identity, exposed trusted repository and manifest inputs in the Debian validator CLI, and corrected Arch installed-size calculation to exclude .PKGINFO. Focused Arch/DEB validation and Ruff checks pass for the current implementation path."
+  },
+  "workspace_head": "a5b3a71bf00eefe75e9c5f7d2a65e455d23ae3cf"
+}
