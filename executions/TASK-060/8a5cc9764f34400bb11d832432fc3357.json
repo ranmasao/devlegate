@@ -1,0 +1,28 @@
+{
+  "code_base_head": "013e2340aed3b9327a5660756cbe9db4d356ef10",
+  "conclusion": "completed",
+  "control_head": "f47711ffbeea7bc8c69f316eb68ec6424cee32b2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-060",
+  "execution_id": "8a5cc9764f34400bb11d832432fc3357",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-060",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-060/8a5cc9764f34400bb11d832432fc3357.md",
+  "report_sha256": "3b25a3bee3abb3fc21f248eeae2384e992a14227bed2a84ba3ede9e6606aae6b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-060",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented in tools/build_standalone.py, tests/test_standalone_builder.py, and docs/DISTRIBUTION.md. Focused standalone/distribution tests and targeted Ruff pass; repository-wide Ruff still reports pre-existing issues in vendored compliance sources, and the full pytest run exceeded the available command timeout.",
+    "summary": "Aligned the standalone PEX bootstrap inputs with PEX 2.103.2's embedded Python 3.12 policy: pip 24.1, setuptools 70.1.0, and wheel 0.43.0, with exact SHA-256 pins and explicit _PEX_PIP_VERSION selection. Materialization now verifies the pinned PEX policy before acquiring bootstrap wheels, reports remain distinct for wheel-build and PEX-bootstrap roles, and documentation/tests cover offline eager-scie behavior, cache reuse, corruption, and stale-policy failures."
+  },
+  "workspace_head": "6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9"
+}
