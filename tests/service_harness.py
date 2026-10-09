@@ -10,11 +10,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from devlegate.execution_containment import DurableDeterministicContainmentProvider
 from devlegate.host_installation import HostInstallation
 from devlegate.host_installation import write as write_installation
 from devlegate.ipc_client import IPCClientError, request
 from devlegate.project_registry import ProjectRegistry
 from devlegate.runtime_locator import RuntimeLocator, read_env
+from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 
 
 class LiveService:
@@ -182,6 +184,7 @@ class LiveService:
                     f"service exited while waiting (return code "
                     f"{self.process.returncode})\nstdout:\n{self.stdout}\n"
                     f"stderr:\n{self.stderr}"
+                    f"{self._runtime_diagnostics()}"
                     f"{self._containment_diagnostics()}"
                 )
             if predicate():
@@ -191,8 +194,50 @@ class LiveService:
         raise AssertionError(
             "service condition did not become true before timeout\n"
             f"stdout:\n{self.stdout}\nstderr:\n{self.stderr}"
+            f"{self._runtime_diagnostics()}"
             f"{self._containment_diagnostics()}"
         )
+
+    def _runtime_diagnostics(self) -> str:
+        """Include durable execution state in topology timeout failures."""
+        try:
+            state = SQLiteRuntimeStore(
+                self.locator.state_dir, self.locator.state_key
+            ).load()
+        except (OSError, ValueError, RuntimeStoreError) as error:
+            return f"\nruntime state unavailable: {error}"
+
+        fields = (
+            "phase",
+            "execution_stage",
+            "execution_id",
+            "execution_ticket_id",
+            "execution_interruption_kind",
+            "worker_identity",
+        )
+        records = [
+            f"{field}={state.get(field)!r}"
+            for field in fields
+            if field in state
+        ]
+        identity = state.get("worker_identity")
+        containment_id = (
+            identity.get("containment_id")
+            if isinstance(identity, dict)
+            else None
+        )
+        if isinstance(containment_id, str):
+            observation = DurableDeterministicContainmentProvider(
+                self.registry_home / "containment"
+            ).observe(containment_id)
+            records.append(f"containment_observation={observation!r}")
+        try:
+            snapshot = request(self.locator.socket_path, "status", timeout=0.2)
+        except IPCClientError:
+            snapshot = None
+        if isinstance(snapshot, dict):
+            records.append(f"service_snapshot={snapshot!r}")
+        return "\nruntime diagnostics:\n" + "\n".join(records)
 
     def _containment_diagnostics(self) -> str:
         """Expose synthetic boundary survivors in topology failures.
