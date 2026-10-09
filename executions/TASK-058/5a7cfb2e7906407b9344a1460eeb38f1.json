@@ -1,0 +1,38 @@
+{
+  "code_base_head": "6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9",
+  "conclusion": "incomplete",
+  "control_head": "eccbe11fe14ee99f3b352b8a1a302bad413d683c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-058",
+  "execution_id": "5a7cfb2e7906407b9344a1460eeb38f1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-058",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the focused and full pytest suites in an environment with the project dev dependencies installed.",
+    "Obtain green authoritative GitHub CI for the exact checkpoint.",
+    "Run native Arch pacman/libalpm install, query, and removal validation against the same produced artifact.",
+    "Add or execute a real end-to-end all-target build regression if not already covered by the existing suite."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-058",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the focused and full pytest suites in an environment with the project dev dependencies installed.",
+      "Obtain green authoritative GitHub CI for the exact checkpoint.",
+      "Run native Arch pacman/libalpm install, query, and removal validation against the same produced artifact.",
+      "Add or execute a real end-to-end all-target build regression if not already covered by the existing suite."
+    ],
+    "report": null,
+    "summary": "Hardened the owned Arch and DEB format layers with malformed-stream, duplicate, link-traversal, conflict, metadata, layout, provenance, and payload validation. Added Arch malformed-archive and DEB absolute-link regressions, corrected Ruff import/line-length issues, and verified the owned Arch container path plus changed-file lint and syntax checks."
+  },
+  "workspace_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4"
+}
