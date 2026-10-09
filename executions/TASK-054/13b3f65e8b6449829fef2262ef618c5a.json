@@ -1,0 +1,40 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "b46fb4619fbc3ab5011e689ffc0a7b14c32aa383",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "13b3f65e8b6449829fef2262ef618c5a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [
+    "A clean checkout and real Arch x86_64 host are required to complete the mandatory release evidence."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the real ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, build report, and logs.",
+    "Run the exact artifact through native Arch pacman Qip/Qlp/U/Qi/Qo/Qk/R lifecycle and retain checksum-matched transcript.",
+    "Update or replace legacy Debian unit fixtures that intentionally omit verified source authority, then run the complete authoritative test, coverage, Ruff, and licensing suite."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "A clean checkout and real Arch x86_64 host are required to complete the mandatory release evidence."
+    ],
+    "remaining": [
+      "Run the real ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, build report, and logs.",
+      "Run the exact artifact through native Arch pacman Qip/Qlp/U/Qi/Qo/Qk/R lifecycle and retain checksum-matched transcript.",
+      "Update or replace legacy Debian unit fixtures that intentionally omit verified source authority, then run the complete authoritative test, coverage, Ruff, and licensing suite."
+    ],
+    "report": null,
+    "summary": "Tightened the shared native payload contract: manifest authority is mandatory, Arch metadata exclusion is adapter-specific, payload files/directories/modes are exact, executable identity is bound to the standalone build report, and legal/provenance documents are checked for authoritative content. Updated Arch regression coverage and retained Debian Installed-Size validation on the strict path."
+  },
+  "workspace_head": "80e449e36b7d5bbf1e098ae1b13ecb9aaaf23128"
+}
