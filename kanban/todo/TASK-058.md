@@ -556,3 +556,47 @@ PKGINFO v2 metadata and stronger extraction safety. Those improvements are
 valuable and must be retained. Acceptance remains blocked by the exact CI
 failure and an independent source-level Arch build defect, even before native
 package-manager validation is considered.
+
+## Review hardening — execution 9a72ebe097634c4f9c27e02366e84196
+
+Review of checkpoint `40b44f744f6439a0399d611ada4c30c43afc19fd`
+against recorded product base `6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9`:
+NOT ACCEPTED. Preserve implementation history and all ExecutionReports.
+The worker claim was `incomplete`.
+
+Authoritative GitHub CI:
+https://github.com/ranmasao/devlegate/actions/runs/37924591099
+on exactly `40b44f744f6439a0399d611ada4c30c43afc19fd`.
+All tests passed (1161 passed, 1 skipped), including licensing.
+CI failed exclusively at Ruff: 6 findings, listed below.
+
+### Focused required corrections
+
+1. Fix Ruff `I001` in `tests/test_deb_package.py:5` (import block ordering).
+   Fix Ruff `E501` in `tools/arch_format.py:160,171` and
+   `tools/validate_arch.py:52,68,72` (lines longer than 88 columns).
+   Obtain a full green GitHub CI run (tests, coverage, Ruff) for the
+   new exact execution checkpoint. Do not relax lint policy to hide errors.
+2. The added `test_real_arch_adapter_emits_package_and_post_build_steps`
+   mocks `package_arch.package`, `validate_arch.validate`, and the smoke
+   subprocess. It verifies event wiring, but does NOT prove actual Arch
+   packaging, artifact contents, native validity, or the `all` build.
+   Keep the focused test and add end-to-end regressions executing the owned
+   builder/validator with controlled standalone fixture inputs, along with
+   a real `all` graph integration proof (artifact and sidecar publication).
+3. Provide the still-missing native Arch `pacman`/libalpm install/query/remove
+   validation against the SAME produced `.pkg.tar.zst` artifact, without
+   rebuilding it in the native environment. Record the package checksum and
+   results as review evidence. This is separate from the generic format
+   validator. If infrastructure prevents the validation, report the concrete
+   limitation rather than claiming acceptance.
+4. Retain the corrected package progress context manager, PKGINFO v2 fields,
+   `all` graph wiring, EUPL headers, reproducible portable DEB and Arch
+   behavior, and exact format-tool provenance.
+
+### Review observation
+
+This attempt fixed the previous actual NameError and copyright error.
+The code is progressing; the current review rejection is grounded in the
+six reproducible CI Ruff failures and outstanding acceptance proofs, not in
+the worker's inability to run local developer tools.
