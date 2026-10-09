@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -28,6 +27,10 @@ except ModuleNotFoundError:
     from tools.arch_format import TOOL_IDENTITY, build
     from tools.package_standalone import run as package_run
     from tools.validate_standalone_package import validate
+try:
+    from native_payload import assemble
+except ModuleNotFoundError:
+    from tools.native_payload import assemble
 
 
 @contextmanager
@@ -74,34 +77,13 @@ def _package(
             archive, sidecar, repo, build_report, None, Path(temporary) / "standalone"
         )
         root = Path(temporary) / "package"
-        binary = root / "usr/bin/devlegate"
-        documentation = root / "usr/share/doc/devlegate"
-        binary.parent.mkdir(parents=True)
-        documentation.mkdir(parents=True)
-        shutil.copy2(extracted / "devlegate", binary)
-        binary.chmod(0o755)
-        for name in (
-            "LICENSE",
-            "NOTICE",
-            "LICENSING.md",
-            "THIRD_PARTY_NOTICES.md",
-            "BUILD-PROVENANCE.json",
-        ):
-            shutil.copy2(extracted / name, documentation / name)
-        (documentation / "INSTALLATION-PROVENANCE.json").write_text(
-            json.dumps(
-                {
-                    "distribution": "arch",
-                    "package": "devlegate",
-                    "payload_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-                    "format_tool": TOOL_IDENTITY,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-            encoding="ascii",
+        assemble(
+            extracted,
+            root,
+            distribution="arch",
+            format_tool=TOOL_IDENTITY,
+            repo=repo,
         )
-        shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
         installed_size = sum(
             path.stat().st_size for path in root.rglob("*") if path.is_file()
         )

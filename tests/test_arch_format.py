@@ -42,7 +42,15 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
         "THIRD_PARTY_NOTICES.md",
         "BUILD-PROVENANCE.json",
     ):
-        (extracted / name).write_text(name, encoding="ascii")
+        source = {
+            "LICENSE": ROOT / "LICENSE",
+            "NOTICE": ROOT / "NOTICE",
+            "LICENSING.md": ROOT / "LICENSING.md",
+        }.get(name)
+        if source is None:
+            (extracted / name).write_text(name, encoding="ascii")
+        else:
+            (extracted / name).write_bytes(source.read_bytes())
     licenses = extracted / "LICENSES"
     licenses.mkdir()
     (licenses / "standalone-compliance-manifest.json").write_bytes(
@@ -54,7 +62,9 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
             continue
         destination = licenses / relative.removeprefix("LICENSES/")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(file_record["path"], encoding="ascii")
+        destination.write_bytes(
+            (manifest_path.parent / file_record["path"]).read_bytes()
+        )
 
     report = tmp_path / "build-report.json"
     source_commit = package_arch.package_run(

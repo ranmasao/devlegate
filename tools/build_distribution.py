@@ -744,7 +744,9 @@ def build_deb(
         emit,
         "validate-deb",
         "validate Debian package",
-        lambda: validate_deb(package.path, standalone["report"].path, validated),
+        lambda: validate_deb(
+            package.path, standalone["report"].path, validated, source.repo
+        ),
     )
 
     def prove() -> None:

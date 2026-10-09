@@ -10,7 +10,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -26,6 +25,10 @@ except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
     from tools.package_standalone import run as package_run
     from tools.validate_deb import installed_size_kib
     from tools.validate_standalone_package import validate
+try:
+    from native_payload import assemble
+except ModuleNotFoundError:
+    from tools.native_payload import assemble
 try:
     from build_progress import ComponentEvent, ComponentPlan, ComponentStep
 except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
@@ -121,38 +124,16 @@ def package(
             )
         package_root = temporary_root / "package"
         control = package_root / "DEBIAN"
-        binary = package_root / "usr/bin/devlegate"
-        documentation = package_root / "usr/share/doc/devlegate"
         with progress_stage(emit, semantic_plan()[1]):
             control.mkdir(parents=True)
-            binary.parent.mkdir(parents=True)
-            documentation.mkdir(parents=True)
-            shutil.copy2(extracted / "devlegate", binary)
-            binary.chmod(0o755)
-            for name in (
-                "LICENSE",
-                "NOTICE",
-                "LICENSING.md",
-                "THIRD_PARTY_NOTICES.md",
-                "BUILD-PROVENANCE.json",
-            ):
-                shutil.copy2(extracted / name, documentation / name)
-            (documentation / "INSTALLATION-PROVENANCE.json").write_text(
-                json.dumps(
-                    {
-                        "distribution": "debian",
-                        "package": "devlegate",
-                        "payload_sha256": hashlib.sha256(
-                            binary.read_bytes()
-                        ).hexdigest(),
-                        "format_tool": TOOL_IDENTITY,
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="ascii",
+            assemble(
+                extracted,
+                package_root,
+                distribution="debian",
+                format_tool=TOOL_IDENTITY,
+                repo=repo,
+                manifest=manifest,
             )
-            shutil.copytree(extracted / "LICENSES", documentation / "LICENSES")
         with progress_stage(emit, semantic_plan()[2]):
             installed_size = installed_size_kib(package_root)
             (control / "control").write_text(

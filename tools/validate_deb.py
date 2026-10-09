@@ -20,9 +20,13 @@ try:
 except ModuleNotFoundError:
     from tools.package_standalone import PackageError
 try:
-    from deb_format import DebFormatError, control, extract
+    from deb_format import TOOL_IDENTITY, DebFormatError, control, extract
 except ModuleNotFoundError:
     from tools.deb_format import DebFormatError, control, extract
+try:
+    from native_payload import validate as validate_payload
+except ModuleNotFoundError:
+    from tools.native_payload import validate as validate_payload
 
 try:
     from distribution_boundary import BoundaryError, validate_members
@@ -52,7 +56,13 @@ def installed_size_kib(root: Path) -> int:
     return max(1, total)
 
 
-def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
+def validate(
+    package: Path,
+    build_report: Path,
+    extract_dir: Path,
+    repo: Path | None = None,
+    manifest: Path | None = None,
+) -> Path:
     metadata = fields(package)
     required = {
         "Package": "devlegate",
@@ -95,6 +105,14 @@ def validate(package: Path, build_report: Path, extract_dir: Path) -> Path:
         )
     except BoundaryError as error:
         raise PackageError(str(error)) from error
+    if repo is not None:
+        return validate_payload(
+            extract_dir,
+            distribution="debian",
+            format_tool=TOOL_IDENTITY,
+            repo=repo,
+            manifest=manifest,
+        )
     binary = extract_dir / "usr/bin/devlegate"
     private_binary = extract_dir / "usr/lib/devlegate/devlegate"
     try:
