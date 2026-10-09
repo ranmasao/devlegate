@@ -451,3 +451,59 @@ adds an owned DEB format implementation, and includes a repeatability test.
 Those changes should be retained and hardened. The worker explicitly marked
 the result `incomplete` and listed unfinished Arch/toolchain work; the
 required cross-format portable packaging outcome is not yet delivered.
+
+## Review hardening — execution 9a21b09a8821431eb71a6615dac0bcf8
+
+Review of execution checkpoint `af97e69904a33c5e76e5c1cfec79788046140d08`
+against recorded product base `6e0d3ff8972ae0c1dba1aab0e8cb02bb18afe3a9`:
+NOT ACCEPTED. This remains the same TASK-058; preserve all prior execution
+history and the existing DEB/Arch implementation for a focused correction pass.
+
+Authoritative CI: https://github.com/ranmasao/devlegate/actions/runs/37920061056
+on the exact checkpoint. It completed with failure: 1158 passed, 1 skipped,
+1 failed in `tests/test_licensing.py::test_devlegate_owned_source_has_exact_eupl_header`,
+because the new `tests/test_arch_format.py` lacks the mandatory EUPL header.
+Ruff was skipped after the test failure.
+
+### Additional required corrections
+
+1. Apply the repository's exact EUPL copyright/license/SPDX source header to
+   every new Devlegate-owned Python file, including `tests/test_arch_format.py`,
+   `tools/arch_format.py`, `tools/package_arch.py`, and
+   `tools/validate_arch.py`. Verify licensing checks in full CI.
+2. Correct the generated Arch `.PKGINFO` against the actual ALPM package
+   metadata specification rather than against only Devlegate's own parser.
+   In particular `pkgver` in package metadata is the full package version
+   (including release, e.g. `0.5.6.dev0-1`), and current PKGINFO v2 requires
+   `pkgbase`, `size`, and `xdata = pkgtype=pkg`; do not substitute a
+   standalone `pkgrel` metadata field for the full package version.
+   Check actual native pacman/libalpm read/install/query/remove behavior in
+   a suitable isolated Arch validation environment using the SAME built
+   artifact, not a reconstructed equivalent. Keep package-format validation
+   separate and make it reject invalid/missing mandatory metadata.
+   Reference: https://man.archlinux.org/man/PKGINFO.5.en
+3. Fix the distribution graph so that selecting `all` also builds the Arch
+   target before `selected_final_files("all", ...)` accesses `values["arch"]`.
+   Add an executable regression for `all` including the expected Arch
+   artifact and checksum, not only graph-constant assertions.
+4. Fix Arch component progress reporting: the announced `package_arch`
+   `build` leaf must emit start/complete/fail events when invoked through
+   `_component_for_target`. Otherwise the frozen progress plan and subsequent
+   validator events become inconsistent. Exercise the real `arch` packaging
+   target with the normal progress reporter.
+5. Reconcile Arch-specific build preflight/report retention with the existing
+   standalone and DEB paths: a selected `arch` target must have the same
+   prerequisite checks and retain the standalone build report alongside the
+   package evidence. Avoid using a DEB-named work directory for Arch.
+6. Obtain a green authoritative GitHub CI on the exact next checkpoint with
+   the full test suite, coverage, licensing checks, and Ruff. Add focused
+   end-to-end packaging tests verifying native package metadata, payload
+   checksum, reproducibility, and `arch`/`all` command execution without
+   host Arch toolchain dependencies.
+
+### Review conclusion
+
+The second execution materially addressed the previous review's missing Arch
+format path and safer DEB extraction, but neither the full acceptance criteria
+nor the exact-checkpoint quality gate is satisfied. The specific regressions
+above must be verified before moving TASK-058 to accepted.
