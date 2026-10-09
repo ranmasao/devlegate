@@ -13,15 +13,35 @@ from pathlib import Path
 
 try:
     from arch_format import ArchFormatError, extract, members
-    from package_standalone import PackageError
+    from package_standalone import (
+        COMPLIANCE_DIR,
+        PackageError,
+        archive_license_path,
+        load_manifest,
+        manifest_file_records,
+        validate_manifest,
+    )
     from validate_standalone_package import validate
 except ModuleNotFoundError:
     from tools.arch_format import ArchFormatError, extract, members
-    from tools.package_standalone import PackageError
+    from tools.package_standalone import (
+        COMPLIANCE_DIR,
+        PackageError,
+        archive_license_path,
+        load_manifest,
+        manifest_file_records,
+        validate_manifest,
+    )
     from tools.validate_standalone_package import validate
 
 
-def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Path:
+def validate_package(
+    package: Path,
+    build_report: Path,
+    extract_dir: Path,
+    repo: Path,
+    manifest_path: Path | None = None,
+) -> Path:
     try:
         metadata = members(package)
     except (ArchFormatError, OSError) as error:
@@ -78,6 +98,9 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
             raise ValueError
     except ValueError as error:
         raise PackageError("Arch metadata has an invalid installed size") from error
+    manifest_path = (manifest_path or repo / COMPLIANCE_DIR / "manifest.json").resolve()
+    manifest = load_manifest(manifest_path)
+    validate_manifest(manifest_path, repo)
     expected = {
         ".PKGINFO",
         "usr/bin/devlegate",
@@ -89,6 +112,10 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
         "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json",
         "usr/share/doc/devlegate/LICENSES/standalone-compliance-manifest.json",
     }
+    expected.update(
+        "usr/share/doc/devlegate/" + archive_license_path(file_record["path"])
+        for _record, file_record in manifest_file_records(manifest)
+    )
     if set(metadata) != expected:
         raise PackageError("Arch package contains unexpected files")
     if any(name == "dev" or name.startswith("dev/") for name in metadata):
@@ -113,6 +140,11 @@ def validate_package(package: Path, build_report: Path, extract_dir: Path) -> Pa
         != marker_value.get("payload_sha256")
     ):
         raise PackageError("Arch installation provenance does not match payload")
+    embedded_manifest = (
+        extract_dir / "usr/share/doc/devlegate/LICENSES/standalone-compliance-manifest.json"
+    )
+    if embedded_manifest.read_bytes() != manifest_path.read_bytes():
+        raise PackageError("embedded compliance manifest differs from repository manifest")
     return binary
 
 

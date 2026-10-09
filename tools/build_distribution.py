@@ -1175,6 +1175,7 @@ def _component_for_target(
                 values[target].path,
                 values["standalone"]["report"].path,
                 work / (target + "-validated"),
+                source.repo,
             )
             return values[target + "-binary"]
 
