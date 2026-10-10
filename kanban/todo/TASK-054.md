@@ -466,3 +466,88 @@ Repair the four exact failures **without weakening strict validation**:
 **Disposition:** Return TASK-054 `review` -> `todo`, starting from
 `80e449e36b7d`; do not accept or integrate until CI and native evidence
 are complete.
+
+## Review decision — 2026-10-10, checkpoint a5b3a71bf00e (REQUEST CHANGES)
+
+Execution `b6dc8b7236f0498cad9ee1080345882f` published
+`a5b3a71bf00eefe75e9c5f7d2a65e455d23ae3cf` and correctly reported
+`incomplete`. Keep this checkpoint as the basis; do not reset or replace
+the shared native-payload work. CI run `37976339179` failed:
+**1160 passed, 3 failed, 1 skipped**; Ruff was skipped by the workflow.
+
+### Immediate CI repair (no relaxation of production checks)
+
+1. `test_production_deb_builder_sets_maintainer_and_passes_validator`:
+   fake `repo=tmp_path` lacks its authoritative compliance manifest.
+   Construct a verified manifest/snapshot fixture and matching standalone
+   binary, provenance and build report; continue exercising the real builder.
+2. `test_deb_validator_accepts_dependency_free_payload`: the legacy fake
+   package provides no trusted `repo` and incomplete source/build evidence.
+   Exercise the strict validator against a truly valid, verified fixture.
+3. `test_deb_validator_rejects_former_private_payload_and_launcher_symlink`:
+   validation currently stops on missing source authority instead of
+   reaching the bad launcher. Begin with a trusted valid fixture, mutate
+   only the launcher/layout, and prove rejection for the intended reason.
+   Do not simply change the assertion to expect the authority error.
+
+### Finish the reusable native package contract
+
+4. **Logical vs physical inventory.** Replace separately maintained
+   assembly and validation path lists in `tools/native_payload.py` with
+   a single authoritative *logical* inventory derived from a validated
+   standalone executable, build report and compliance manifest. Each
+   logical entry should describe its role, trusted content/digest, type
+   and mode. A small per-format path/layout policy must resolve it into
+   an exact *physical* inventory used for both assembly and validation.
+   Validate resolved-path collisions, unknown roles, unexpected files,
+   directory shape and modes. Do not trust package-embedded metadata
+   to authorize new paths or change the expected digest.
+5. **Distribution path policy.** `native_payload.py` currently hardcodes
+   `usr/bin/devlegate` and `usr/share/doc/devlegate` for all formats.
+   Keep the existing binary path unless a concrete target policy calls
+   for another path. Allow adapters to choose documented layout of
+   executable, documentation, legal snapshots and provenance without
+   duplicating payload copying/validation. Debian and Arch need not
+   have identical physical trees: test equality of normalized logical
+   content and compliance with each chosen native layout. Research and
+   verify any distribution-specific policy before changing existing
+   installed paths (e.g. license directories); do not invent a rule.
+6. **Arch dependency-free metadata.** `validate_arch.py` currently
+   accepts unrecognized `.PKGINFO` keys and does not explicitly reject
+   added runtime `depend` declarations. Enforce the intentional
+   dependency-free package policy in the Arch adapter, with a negative
+   test using a syntactically valid Arch package carrying `depend`.
+   Preserve legitimate format metadata; do not conflate build-only
+   metadata with required installed runtime dependencies.
+7. **Independent executable authority.** Make the verified standalone
+   digest mandatory for full native payload validation, including at
+   the common API boundary; do not permit a caller to omit it and rely
+   only on a mutable installation-provenance marker from the package.
+8. **Minimal extension seam.** A future format should provide its own
+   layout mapping, metadata, encoder/decoder and native policy checks,
+   and reuse common materialization and strict payload verification.
+   Reuse simple deterministic timestamp/checksum helpers where they
+   are actually duplicated. Avoid a speculative plugin registry, new
+   dependencies, or implementation of RPM/third format in TASK-054.
+
+### Acceptance tests and external proof
+
+9. Add paired DEB/Arch tests using the same trusted standalone inputs:
+   compare logical inventory and independently verify allowed physical
+   paths; reject injected extra files/dirs, altered nested licenses,
+   changed binary+provenance, illegal modes and incorrect native metadata.
+   Verify Debian Installed-Size, no maintainer scripts/runtime Depends,
+   Arch package size and absence of declared runtime dependencies.
+   Retain current byte reproducibility and DEB/standalone regressions.
+10. Run authoritative complete CI at the new exact checkpoint, with
+    green coverage, licensing and Ruff. Then run the *real* clean-source
+    `./dev package arch` on non-Arch x86_64 and retain artifact, hash
+    sidecar, provenance, standalone report and build transcript.
+11. Test precisely that checksum-matched artifact on a real Arch x86_64
+    host using pacman inspection/install/ownership/integrity/CLI smoke/
+    removal; retain the native transcript. If Arch access is unavailable,
+    provide concrete safe operator steps and report `incomplete`.
+
+**Disposition: REQUEST CHANGES. Move TASK-054 from review to todo.**
+Resume existing work at `a5b3a71bf00e`; preserve control and recovery
+history. No release acceptance or merge until the above is verified.
