@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -138,14 +139,126 @@ def make_standalone_payload(root: Path) -> Path:
     return extracted
 
 
+def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
+    """Build a package against a real checked-out compliance authority."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("LICENSE", "NOTICE", "LICENSING.md"):
+        shutil.copy2(ROOT / name, repo / name)
+    shutil.copytree(ROOT / "LICENSES", repo / "LICENSES")
+    shutil.copytree(ROOT / "src", repo / "src")
+    compliance = repo / "packaging/standalone-compliance"
+    shutil.copytree(ROOT / "packaging/standalone-compliance", compliance)
+    manifest_path = compliance / "manifest.json"
+    standalone = load_tool("package_standalone")
+    manifest = standalone.load_manifest(manifest_path)
+    extracted = make_standalone_payload(tmp_path)
+    for name in ("LICENSE", "NOTICE", "LICENSING.md"):
+        shutil.copy2(repo / name, extracted / name)
+    (extracted / "THIRD_PARTY_NOTICES.md").write_text(
+        standalone.notice_text(manifest["records"]), encoding="ascii"
+    )
+    binary_digest = hashlib.sha256(b"standalone").hexdigest()
+    (extracted / "BUILD-PROVENANCE.json").write_text(
+        json.dumps(
+            {"devlegate": {"standalone_sha256": binary_digest, "standalone_size": 10}}
+        ),
+        encoding="ascii",
+    )
+    licenses = extracted / "LICENSES"
+    (licenses / "standalone-compliance-manifest.json").write_bytes(
+        manifest_path.read_bytes()
+    )
+    for _record, file_record in standalone.manifest_file_records(manifest):
+        relative = standalone.archive_license_path(file_record["path"])
+        target = licenses / relative.removeprefix("LICENSES/")
+        if relative in {"LICENSE", "NOTICE", "LICENSING.md"}:
+            target = extracted / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((compliance / file_record["path"]).read_bytes())
+    root = tmp_path / "verified-root"
+    root.mkdir()
+    BUILDER.assemble(
+        extracted,
+        root,
+        distribution="debian",
+        format_tool=BUILDER.TOOL_IDENTITY,
+        repo=repo,
+        manifest=manifest_path,
+    )
+    if legacy_layout:
+        binary = root / "usr/bin/devlegate"
+        binary.unlink()
+        binary.symlink_to("../lib/devlegate/devlegate")
+    control = root / "DEBIAN"
+    control.mkdir()
+    size = VALIDATOR.installed_size_kib(root)
+    (control / "control").write_text(
+        "Package: devlegate\nVersion: 0.5.6.dev0\nArchitecture: amd64\n"
+        f"Installed-Size: {size}\nDescription: test\n test\n",
+        encoding="ascii",
+    )
+    package = tmp_path / "verified.deb"
+    DEB.build(root, package, timestamp=0)
+    report = tmp_path / "verified-report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "wheel": {"version": "0.5.6.dev0"},
+                "scie": {"sha256": binary_digest},
+            }
+        ),
+        encoding="ascii",
+    )
+    return package, report, repo, manifest_path
+
+
 def test_production_deb_builder_sets_maintainer_and_passes_validator(
     tmp_path, monkeypatch
 ):
     extracted = make_standalone_payload(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("LICENSE", "NOTICE", "LICENSING.md"):
+        shutil.copy2(ROOT / name, repo / name)
+    shutil.copytree(ROOT / "LICENSES", repo / "LICENSES")
+    shutil.copytree(ROOT / "src", repo / "src")
+    shutil.copytree(
+        ROOT / "packaging/standalone-compliance",
+        repo / "packaging/standalone-compliance",
+    )
+    standalone = load_tool("package_standalone")
+    manifest_path = repo / "packaging/standalone-compliance/manifest.json"
+    manifest = standalone.load_manifest(manifest_path)
+    for name in ("LICENSE", "NOTICE", "LICENSING.md"):
+        shutil.copy2(repo / name, extracted / name)
+    (extracted / "THIRD_PARTY_NOTICES.md").write_text(
+        standalone.notice_text(manifest["records"]), encoding="ascii"
+    )
+    digest = hashlib.sha256(b"standalone").hexdigest()
+    (extracted / "BUILD-PROVENANCE.json").write_text(
+        json.dumps({"devlegate": {"standalone_sha256": digest, "standalone_size": 10}}),
+        encoding="ascii",
+    )
+    licenses = extracted / "LICENSES"
+    (licenses / "standalone-compliance-manifest.json").write_bytes(
+        manifest_path.read_bytes()
+    )
+    for _record, file_record in standalone.manifest_file_records(manifest):
+        relative = standalone.archive_license_path(file_record["path"])
+        target = licenses / relative.removeprefix("LICENSES/")
+        if relative in {"LICENSE", "NOTICE", "LICENSING.md"}:
+            target = extracted / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((manifest_path.parent / file_record["path"]).read_bytes())
     report = tmp_path / "build-report.json"
     report.write_text(
         json.dumps(
-            {"source_commit": "a" * 40, "wheel": {"version": "0.5.6.dev0"}}
+            {
+                "source_commit": "a" * 40,
+                "wheel": {"version": "0.5.6.dev0"},
+                "scie": {"sha256": digest},
+            }
         ),
         encoding="ascii",
     )
@@ -153,7 +266,7 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     monkeypatch.setattr(BUILDER, "git_timestamp", lambda *args: 1)
 
     package = BUILDER.package(
-        repo=tmp_path,
+        repo=repo,
         archive=tmp_path / "standalone.tar.gz",
         sidecar=tmp_path / "standalone.tar.gz.sha256",
         build_report=report,
@@ -168,7 +281,13 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
         capture_output=True,
         text=True,
     ).stdout
-    VALIDATOR.validate(package, report, tmp_path / "validated")
+    VALIDATOR.validate(
+        package,
+        report,
+        tmp_path / "validated",
+        repo,
+        repo / "packaging/standalone-compliance/manifest.json",
+    )
     marker = (
         tmp_path / "validated/usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
     )
@@ -195,8 +314,8 @@ def test_owned_deb_builder_is_byte_reproducible_without_package_manager(tmp_path
 
 
 def test_deb_validator_accepts_dependency_free_payload(tmp_path):
-    package, report = make_package(tmp_path)
-    binary = VALIDATOR.validate(package, report, tmp_path / "extract")
+    package, report, repo, manifest = make_verified_package(tmp_path)
+    binary = VALIDATOR.validate(package, report, tmp_path / "extract", repo, manifest)
     assert binary.is_file()
     metadata = VALIDATOR.fields(package)
     assert int(metadata["Installed-Size"]) > 0
@@ -204,9 +323,11 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
 
 
 def test_deb_validator_rejects_former_private_payload_and_launcher_symlink(tmp_path):
-    package, report = make_package(tmp_path, legacy_layout=True)
-    with pytest.raises(VALIDATOR.PackageError, match="regular executable"):
-        VALIDATOR.validate(package, report, tmp_path / "extract")
+    package, report, repo, manifest = make_verified_package(
+        tmp_path, legacy_layout=True
+    )
+    with pytest.raises(VALIDATOR.PackageError, match="regular file"):
+        VALIDATOR.validate(package, report, tmp_path / "extract", repo, manifest)
 
 
 def test_installed_size_rounds_each_tiny_file(tmp_path):

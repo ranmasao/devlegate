@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -40,6 +41,21 @@ FIXED_DOCUMENTS = (
 )
 
 
+@dataclass(frozen=True)
+class PayloadLayout:
+    """Physical paths selected by a native format adapter."""
+
+    executable: str = "usr/bin/devlegate"
+    documentation: str = "usr/share/doc/devlegate"
+
+
+def layout_for(distribution: str) -> PayloadLayout:
+    """Return the installed layout for a supported native format."""
+    if distribution not in {"arch", "debian"}:
+        raise PackageError(f"unsupported native distribution: {distribution}")
+    return PayloadLayout()
+
+
 def _manifest_path(repo: Path, manifest: Path | None) -> Path:
     return (
         manifest or repo / "packaging/standalone-compliance/manifest.json"
@@ -53,6 +69,33 @@ def _expected_license_paths(manifest: dict[str, object]) -> set[str]:
     }
 
 
+def _inventory(manifest: dict[str, object], layout: PayloadLayout) -> dict[str, str]:
+    """Build one logical-to-physical inventory for assembly and validation."""
+    documentation = layout.documentation
+    entries = [
+        (layout.executable, "devlegate"),
+        *[(f"{documentation}/{name}", name) for name in FIXED_DOCUMENTS],
+        (
+            f"{documentation}/INSTALLATION-PROVENANCE.json",
+            "INSTALLATION-PROVENANCE.json",
+        ),
+        (
+            f"{documentation}/LICENSES/standalone-compliance-manifest.json",
+            "LICENSES/standalone-compliance-manifest.json",
+        ),
+    ]
+    entries.extend(
+        (f"{documentation}/{relative}", relative)
+        for relative in sorted(_expected_license_paths(manifest))
+    )
+    inventory: dict[str, str] = {}
+    for path, source in entries:
+        previous = inventory.setdefault(path, source)
+        if previous != source:
+            raise PackageError("native payload inventory contains path collisions")
+    return inventory
+
+
 def assemble(
     extracted: Path,
     root: Path,
@@ -61,14 +104,17 @@ def assemble(
     format_tool: dict[str, object],
     repo: Path,
     manifest: Path | None = None,
+    layout: PayloadLayout | None = None,
 ) -> None:
     """Create the normalized installed payload consumed by a format adapter."""
     manifest_path = _manifest_path(repo, manifest)
     manifest_data = load_manifest(manifest_path)
     validate_manifest(manifest_path, repo)
+    layout = layout or layout_for(distribution)
+    _inventory(manifest_data, layout)
     root.mkdir(parents=True, exist_ok=True)
-    binary = root / "usr/bin/devlegate"
-    documentation = root / "usr/share/doc/devlegate"
+    binary = root / layout.executable
+    documentation = root / layout.documentation
     binary.parent.mkdir(parents=True, exist_ok=True)
     documentation.mkdir(parents=True, exist_ok=True)
     shutil.copy2(extracted / "devlegate", binary)
@@ -114,25 +160,20 @@ def validate(
     manifest: Path | None = None,
     metadata_members: set[str] | None = None,
     expected_binary_sha256: str | None = None,
+    layout: PayloadLayout | None = None,
 ) -> Path:
     """Validate the actual extracted installed payload against source authority."""
     if metadata_members and distribution != "arch":
         raise PackageError("format metadata cannot be excluded from native payload")
     manifest_path = _manifest_path(repo, manifest)
+    manifest_data = load_manifest(manifest_path)
     records = validate_manifest(manifest_path, repo)
-    documentation = root / "usr/share/doc/devlegate"
-    expected = {"usr/bin/devlegate"}
-    expected.update(
-        f"usr/share/doc/devlegate/{name}" for name in FIXED_DOCUMENTS
-    )
-    expected.add("usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json")
-    expected.add(
-        "usr/share/doc/devlegate/LICENSES/standalone-compliance-manifest.json"
-    )
-    expected.update(
-        f"usr/share/doc/devlegate/{archive_license_path(file_record['path'])}"
-        for _record, file_record in records
-    )
+    if not expected_binary_sha256:
+        raise PackageError("native validation requires standalone executable digest")
+    layout = layout or layout_for(distribution)
+    inventory = _inventory(manifest_data, layout)
+    documentation = root / layout.documentation
+    expected = set(inventory)
     metadata_members = metadata_members or set()
     actual = {
         path.relative_to(root).as_posix()
@@ -142,7 +183,7 @@ def validate(
     actual -= metadata_members
     if actual != expected:
         raise PackageError("native package contains unexpected files")
-    expected_dirs = {"usr", "usr/bin", "usr/share", "usr/share/doc"}
+    expected_dirs: set[str] = set()
     for name in expected - metadata_members:
         parent = Path(name).parent
         while parent != Path("."):
@@ -152,7 +193,7 @@ def validate(
         path = root / name
         if not path.is_file() or path.is_symlink():
             raise PackageError(f"native payload member is not a regular file: {name}")
-        expected_mode = 0o755 if name == "usr/bin/devlegate" else 0o644
+        expected_mode = 0o755 if name == layout.executable else 0o644
         if path.stat().st_mode & 0o7777 != expected_mode:
             raise PackageError(f"native payload member has unexpected mode: {name}")
     actual_dirs = {
@@ -160,7 +201,7 @@ def validate(
     }
     if actual_dirs != expected_dirs:
         raise PackageError("native package contains unexpected directories")
-    binary = root / "usr/bin/devlegate"
+    binary = root / layout.executable
     if (
         not binary.is_file()
         or binary.is_symlink()
@@ -183,7 +224,7 @@ def validate(
     ):
         raise PackageError("native installation provenance marker is inconsistent")
     binary_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-    if expected_binary_sha256 is not None and binary_digest != expected_binary_sha256:
+    if binary_digest != expected_binary_sha256:
         raise PackageError("native executable differs from standalone build report")
     for _record, file_record in records:
         relative = archive_license_path(file_record["path"])
@@ -196,13 +237,14 @@ def validate(
             "embedded compliance manifest differs from repository manifest"
         )
     fixed_sources = {
-        "LICENSE": repo / "LICENSE",
-        "NOTICE": repo / "NOTICE",
-        "LICENSING.md": repo / "LICENSING.md",
+        f"{layout.documentation}/LICENSE": repo / "LICENSE",
+        f"{layout.documentation}/NOTICE": repo / "NOTICE",
+        f"{layout.documentation}/LICENSING.md": repo / "LICENSING.md",
     }
     for name, source in fixed_sources.items():
-        if (documentation / name).read_bytes() != source.read_bytes():
-            raise PackageError(f"native fixed document differs: {name}")
+        relative = Path(name).relative_to(layout.documentation)
+        if (root / name).read_bytes() != source.read_bytes():
+            raise PackageError(f"native fixed document differs: {relative}")
     try:
         provenance = json.loads(
             (documentation / "BUILD-PROVENANCE.json").read_text(encoding="utf-8")

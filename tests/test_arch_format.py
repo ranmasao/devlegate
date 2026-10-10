@@ -114,6 +114,24 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     )
     assert "usr/share/doc/devlegate/LICENSES/python-runtime/LICENSE.zlib.txt" in members
 
+    dependency_root = tmp_path / "dependency-root"
+    ARCH.extract(output, dependency_root)
+    (dependency_root / ".PKGINFO").write_text(
+        (dependency_root / ".PKGINFO").read_text(encoding="ascii")
+        + "depend = python\n",
+        encoding="ascii",
+    )
+    dependency_package = tmp_path / "dependency.pkg.tar.zst"
+    ARCH.build(dependency_root, dependency_package, timestamp=0)
+    with pytest.raises(validate_arch.PackageError, match="mandatory PKGINFO"):
+        validate_arch.validate(
+            dependency_package,
+            report,
+            tmp_path / "dependency-validated",
+            ROOT,
+            manifest_path,
+        )
+
     extracted_package = tmp_path / "package-root"
     ARCH.extract(output, extracted_package)
     extra = extracted_package / "usr/share/doc/devlegate/LICENSES/extra.txt"

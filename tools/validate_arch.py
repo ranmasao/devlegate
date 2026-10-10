@@ -67,7 +67,11 @@ def validate_package(
         "license",
         "xdata",
     }
-    if not required_fields <= fields.keys() or fields.get("xdata") != "pkgtype=pkg":
+    if (
+        not required_fields <= fields.keys()
+        or set(fields) != required_fields
+        or fields.get("xdata") != "pkgtype=pkg"
+    ):
         raise PackageError("Arch metadata lacks mandatory PKGINFO v2 fields")
     if (
         fields.get("pkgname") != "devlegate"
