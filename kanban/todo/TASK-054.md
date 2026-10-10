@@ -551,3 +551,75 @@ the shared native-payload work. CI run `37976339179` failed:
 **Disposition: REQUEST CHANGES. Move TASK-054 from review to todo.**
 Resume existing work at `a5b3a71bf00e`; preserve control and recovery
 history. No release acceptance or merge until the above is verified.
+
+## Review decision — 2026-10-10, checkpoint b64885f495c2 (REQUEST CHANGES)
+
+Execution `e20b057ae2254baf9bf8c0ea61fc59ca` published
+`b64885f495c2ab629c2198fe040d6046afb51d40` with `incomplete`.
+Retain and resume that checkpoint; do not restart the refactor.
+Authoritative GitHub Actions run `38035543428` at this exact SHA
+**passed**: 1163 passed, 1 skipped, 78% total coverage, Ruff passed.
+The prior DEB fixture failures are resolved. Arch now rejects extra
+`.PKGINFO` fields including declared runtime dependencies.
+
+### Finish the native packaging design before release evidence
+
+1. `tools/native_payload.py::_inventory()` currently lists destination
+   and source paths but assembly still uses separate hardcoded loops,
+   and validation independently applies file-mode/content rules.
+   Introduce one logical inventory (role, trusted source/digest,
+   regular-file type, mode), resolve it via the selected layout, then
+   drive BOTH assembly and verification from those same resolved records.
+   Keep generated installation provenance as an explicit generated entry.
+2. `PayloadLayout` only parameterizes the executable and documentation
+   root. Give future adapters a small, independently configurable path
+   policy for licenses and provenance, without duplicating copying
+   or validation. Reject absolute paths, `..`, unsafe destinations,
+   collisions and invalid layouts. Preserve current DEB/Arch installed
+   paths unless a verified distribution rule requires changing them.
+   Adapter validators must use the selected resolved physical layout.
+3. Full validation currently checks only the binary size and SHA-256
+   embedded in `BUILD-PROVENANCE.json`; ensure the complete provenance
+   document is equal to independently validated standalone evidence,
+   and add a regression changing another provenance field.
+4. Add genuinely paired DEB/Arch contract regressions built from
+   the same validated standalone input, comparing logical payloads
+   after independent decoding while respecting format-specific paths.
+   Include nested licenses, extra files/directories, path collisions,
+   wrong modes, binary/provenance tampering, native metadata and
+   dependency checks. No RPM or speculative extension registry.
+
+### Order of final verification (important clarification)
+
+**Stage A — finish code and focused regressions.** The agent finishes
+the common contract and runs targeted tests locally. Do not require
+native Arch access during iterative implementation.
+
+**Stage B — freeze candidate and produce real artifact.** Choose one
+exact implementation commit; on a clean non-Arch x86_64 checkout of
+that revision execute real `./dev package arch`. Retain the binary
+package, `.sha256` sidecar, build report, standalone/provenance evidence
+and reproducible build transcript. Successful synthetic tests do not
+replace this prerequisite.
+
+**Stage C — final checks in parallel.** For that frozen commit, run
+the authoritative complete GitHub CI (tests, coverage, Ruff, licensing)
+**in parallel with** operator-run validation of the Stage B artifact
+on native Arch x86_64 using pacman: inspect, install, verify package
+registration/ownership/integrity, CLI smoke and safely remove.
+Retain native transcript and confirm the exact artifact SHA-256 before
+and after transfer. Do NOT make Arch testing a prerequisite for starting
+the final GitHub CI, or vice versa.
+
+If CI or native testing finds a defect requiring code changes, publish
+a new checkpoint, rebuild from that revision and repeat both final
+checks on the new candidate; do not combine evidence from different
+code revisions or different package checksums.
+
+If native Arch access is unavailable to the agent, prepare exact safe
+operator commands and report missing external evidence as `incomplete`
+rather than claiming acceptance. Avoid reworking the successful CI
+baseline without cause. No acceptance until both Stage C checks pass.
+
+**Disposition:** REQUEST CHANGES; return TASK-054 `review` -> `todo`.
+Resume from `b64885f495c2`; TASK-062 remains unchanged.
