@@ -112,6 +112,7 @@ def validate(
         repo=repo,
         manifest=manifest,
         expected_binary_sha256=report["scie"]["sha256"],
+        standalone_report=report,
     )
     return binary
 

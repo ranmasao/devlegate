@@ -108,6 +108,7 @@ def validate_package(
         manifest=manifest_path,
         metadata_members={".PKGINFO"},
         expected_binary_sha256=report["scie"]["sha256"],
+        standalone_report=report,
     )
     actual_size = sum(
         path.stat().st_size
