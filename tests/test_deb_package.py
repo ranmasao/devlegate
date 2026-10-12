@@ -353,6 +353,134 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     ] == BUILDER.TOOL_IDENTITY
 
 
+def test_deb_and_arch_preserve_one_verified_payload_and_reject_tampering(
+    tmp_path, monkeypatch
+):
+    """Both native decoders enforce the same trusted standalone payload."""
+    deb_package, report_path, repo, manifest_path, extracted = make_verified_package(
+        tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="ascii"))
+
+    arch_root = tmp_path / "arch-root"
+    native = load_tool("native_payload")
+    native.assemble(
+        extracted,
+        arch_root,
+        distribution="arch",
+        format_tool=ARCH_BUILDER.TOOL_IDENTITY,
+        repo=repo,
+        manifest=manifest_path,
+    )
+    size = sum(
+        path.stat().st_size
+        for path in arch_root.rglob("*")
+        if path.is_file()
+    )
+    (arch_root / ".PKGINFO").write_text(
+        "pkgname = devlegate\n"
+        "pkgbase = devlegate\n"
+        f"pkgver = {report['wheel']['version']}-1\n"
+        f"size = {size}\n"
+        "pkgdesc = deterministic local agent orchestrator\n"
+        "url = https://github.com/ranmasao/devlegate\n"
+        "builddate = 0\n"
+        "packager = Devlegate maintainers\n"
+        "arch = x86_64\n"
+        "license = EUPL-1.2\n"
+        "xdata = pkgtype=pkg\n",
+        encoding="ascii",
+    )
+    arch_package = tmp_path / "verified.pkg.tar.zst"
+    ARCH.build(arch_root, arch_package, timestamp=0)
+
+    deb_root = tmp_path / "deb-extracted"
+    VALIDATOR.validate(
+        deb_package, report_path, deb_root, repo, manifest_path
+    )
+    arch_extracted = tmp_path / "arch-extracted"
+    ARCH_VALIDATOR.validate(
+        arch_package, report_path, arch_extracted, repo, manifest_path
+    )
+    logical = {
+        path.relative_to(deb_root).as_posix(): (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_mode & 0o7777,
+        )
+        for path in deb_root.rglob("*")
+        if path.is_file()
+        and path.name != "INSTALLATION-PROVENANCE.json"
+    }
+    arch_logical = {
+        path.relative_to(arch_extracted).as_posix(): (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_mode & 0o7777,
+        )
+        for path in arch_extracted.rglob("*")
+        if path.is_file()
+        and path.name not in {".PKGINFO", "INSTALLATION-PROVENANCE.json"}
+    }
+    assert logical == arch_logical
+    assert any(
+        path.relative_to(arch_extracted).as_posix().startswith(
+            "usr/share/doc/devlegate/LICENSES/"
+        )
+        for path in arch_extracted.rglob("*")
+        if path.is_file()
+    )
+
+    def tampered_package(name, mutate):
+        root = tmp_path / f"tampered-{name}"
+        shutil.copytree(arch_extracted, root)
+        mutate(root)
+        package = tmp_path / f"tampered-{name}.pkg.tar.zst"
+        ARCH.build(root, package, timestamp=0)
+        return package
+
+    license_package = tampered_package(
+        "license",
+        lambda root: (
+            root
+            / "usr/share/doc/devlegate/LICENSES/pex-vendored/ansicolors-1.1.8-ISC.txt"
+        ).write_text("tampered\n", encoding="ascii"),
+    )
+    with pytest.raises(ARCH_VALIDATOR.PackageError, match="snapshot differs"):
+        ARCH_VALIDATOR.validate(
+            license_package,
+            report_path,
+            tmp_path / "license-validation",
+            repo,
+            manifest_path,
+        )
+
+    def change_provenance(root):
+        path = root / "usr/share/doc/devlegate/BUILD-PROVENANCE.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["source_commit"] = "changed"
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    provenance_package = tampered_package("provenance", change_provenance)
+    with pytest.raises(ARCH_VALIDATOR.PackageError, match="build provenance"):
+        ARCH_VALIDATOR.validate(
+            provenance_package,
+            report_path,
+            tmp_path / "provenance-validation",
+            repo,
+            manifest_path,
+        )
+
+    mode_package = tampered_package(
+        "mode",
+        lambda root: (root / "usr/share/doc/devlegate/LICENSE").chmod(0o755),
+    )
+    with pytest.raises(ARCH_VALIDATOR.PackageError, match="unexpected mode"):
+        ARCH_VALIDATOR.validate(
+            mode_package,
+            report_path,
+            tmp_path / "mode-validation",
+            repo,
+            manifest_path,
+        )
 def test_owned_deb_builder_is_byte_reproducible_without_package_manager(tmp_path):
     root = tmp_path / "root"
     (root / "DEBIAN").mkdir(parents=True)
