@@ -113,17 +113,31 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     )
     monkeypatch.setattr(standalone, "split_inventory", lambda *_args: {})
     monkeypatch.setattr(package_arch, "validate", lambda *_args: extracted)
-    output = package_arch._package(
-        repo=ROOT,
-        archive=tmp_path / "standalone.tar.gz",
-        sidecar=tmp_path / "standalone.tar.gz.sha256",
-        build_report=report,
-        output_dir=tmp_path / "output",
-    )
+    outputs = []
+    for umask in (0o0002, 0o0022):
+        old_umask = os.umask(umask)
+        try:
+            outputs.append(
+                package_arch._package(
+                    repo=ROOT,
+                    archive=tmp_path / "standalone.tar.gz",
+                    sidecar=tmp_path / "standalone.tar.gz.sha256",
+                    build_report=report,
+                    output_dir=tmp_path / f"output-{umask:o}",
+                )
+            )
+        finally:
+            os.umask(old_umask)
+    output = outputs[0]
+    assert output.read_bytes() == outputs[1].read_bytes()
 
     validated = tmp_path / "validated"
     validate_arch.validate(output, report, validated, ROOT, manifest_path)
     members = ARCH.members(output)
+    extracted_package = tmp_path / "package-root"
+    ARCH.extract(output, extracted_package)
+    assert (extracted_package / ".PKGINFO").stat().st_mode & 0o7777 == 0o644
+    assert (extracted_package / ".MTREE").stat().st_mode & 0o7777 == 0o644
     assert (
         "usr/share/doc/devlegate/LICENSES/pex-vendored/ansicolors-1.1.8-ISC.txt"
         in members
@@ -173,8 +187,6 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
             manifest_path,
         )
 
-    extracted_package = tmp_path / "package-root"
-    ARCH.extract(output, extracted_package)
     extra = extracted_package / "usr/share/doc/devlegate/LICENSES/extra.txt"
     extra.write_text("unexpected", encoding="ascii")
     tampered = tmp_path / "tampered.pkg.tar.zst"

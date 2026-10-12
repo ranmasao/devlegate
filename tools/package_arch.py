@@ -103,6 +103,7 @@ def _package(
             "xdata = pkgtype=pkg\n",
             encoding="ascii",
         )
+        (root / ".PKGINFO").chmod(0o644)
         set_tree_timestamp(root, git_timestamp(repo, source_commit))
         timestamp = git_timestamp(repo, source_commit)
         (root / ".MTREE").write_bytes(mtree_bytes(root, timestamp))
