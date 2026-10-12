@@ -1127,3 +1127,60 @@ the previously agreed isolated Arch Docker/pacman proof is valid.
 to `todo` atomically, preserve checkpoint `55040cc8eab0`,
 leave TASK-062 and TASK-063 untouched. Do not edit the ticket
 after a worker has been newly admitted; avoid unrelated changes.
+
+## Review decision — 2026-10-12, checkpoint 3cfb40886edb (REQUEST CHANGES: release evidence only)
+
+Execution `945a48a1bfca484696d1c1386b229976` published
+`3cfb40886edbe752b3e040764b02bea84df95db3` as `incomplete`.
+Preserve this checkpoint.
+
+### Code correction accepted
+
+The last issue from review `ea3bb72fd0ea` is closed:
+
+- `tools/package_arch.py::_package()` explicitly chmods the actual
+  `.PKGINFO` to `0644` after writing it and before generating
+  `.MTREE`/tar bytes. `.MTREE` is already explicitly `0644`.
+- `tests/test_arch_format.py` now runs the real production Arch
+  packaging adapter under umasks `0002` and `0022`, including
+  construction of staging files in that scope, compares both
+  generated package byte streams, and checks extracted
+  `.PKGINFO`/`.MTREE` mode `0644`.
+- The fix changes only the Arch builder and associated tests. Prior
+  directory-mode normalization and deterministic mtree validation
+  are preserved. No more architecture changes requested.
+
+The exact-SHA GitHub Actions run `38297334137` was
+**in progress at review time**; do not infer success until it completes.
+
+### Final acceptance proof only
+
+1. On a clean non-Arch Linux x86_64 checkout of this exact candidate,
+   run the real `./dev package arch` production pipeline. Preserve
+   the generated `.pkg.tar.zst`, its `.sha256` sidecar,
+   `devlegate-arch-standalone-build.json`, and build log. The
+   standalone build report's `source_commit` must equal the
+   finalized work checkpoint. Do not substitute the earlier
+   `35f8d83986e8` artifact and checksum.
+2. Confirm GitHub Actions `38297334137` passes all authoritative
+   tests, coverage and Ruff on this exact checkpoint. If it fails,
+   fix the actual regression, re-freeze and rerun CI.
+3. Repeat the disposable Arch Linux Docker/pacman smoke test against
+   the newly built, checksum-matched artifact: verify sidecar;
+   `pacman -Qip/-Qlp/-U/-Qi/-Qo/-Qkk/-R`, nonmutating
+   `devlegate --help`, and removal check. Preserve a transcript.
+   The native result must NOT report
+   `directory permissions differ` or `no mtree file`;
+   `pacman -Qkk devlegate` must provide a substantive integrity
+   check. The operator has temporarily no physical Arch host;
+   validated disposable Arch Docker is the agreed provisional
+   package-manager evidence.
+4. If host-dependent build or Docker execution is unavailable to
+   the worker, give the operator *precise build/output commands*
+   and report `incomplete`, not fictitious evidence. Do not change
+   code just to satisfy absent external evidence.
+
+**Disposition: REQUEST CHANGES / release evidence pending.**
+Move TASK-054 `review` -> `todo` atomically and continue from
+`3cfb40886edb`. Leave TASK-062 and TASK-063 untouched. Do not
+edit an active ticket while a worker is running.
