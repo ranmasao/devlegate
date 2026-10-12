@@ -1,0 +1,36 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "47d87717af9cadd7a7812edb2a469d2961c74c86",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "5e36baeee5dd46bba87055d384584e27",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the clean-source ./dev package arch build and retain the artifact, sidecar, report, and transcript.",
+    "Run checksum-matched disposable Arch pacman validation including pacman -Qkk with .MTREE, CLI smoke, and removal.",
+    "Run authoritative full CI for the final candidate; the local full suite exceeded the worker timeout after progressing through approximately 24% without reported failures."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the clean-source ./dev package arch build and retain the artifact, sidecar, report, and transcript.",
+      "Run checksum-matched disposable Arch pacman validation including pacman -Qkk with .MTREE, CLI smoke, and removal.",
+      "Run authoritative full CI for the final candidate; the local full suite exceeded the worker timeout after progressing through approximately 24% without reported failures."
+    ],
+    "report": null,
+    "summary": "Implemented deterministic 0755 directory modes across Arch and shared native payload handling, added deterministic gzip .MTREE generation and strict extracted-payload validation, and updated Arch metadata size/accounting. Added regressions for mtree tampering, directory modes under umask variants, reproducibility, and DEB/Arch logical payload comparisons; focused tests and Ruff pass."
+  },
+  "workspace_head": "55040cc8eab03d818d7ee0a1fb74a940ac4f16bd"
+}
