@@ -222,6 +222,9 @@ def assemble(
                 raise PackageError(f"native payload entry has no source: {entry.role}")
             shutil.copy2(extracted / entry.source, destination)
         destination.chmod(entry.mode)
+    for directory in sorted(root.rglob("*")):
+        if directory.is_dir():
+            directory.chmod(0o755)
 
 
 def validate(
@@ -297,6 +300,9 @@ def validate(
     }
     if actual_dirs != expected_dirs:
         raise PackageError("native package contains unexpected directories")
+    for name in expected_dirs:
+        if (root / name).stat().st_mode & 0o7777 != 0o755:
+            raise PackageError(f"native payload directory has unexpected mode: {name}")
     executable_entry = next(entry for entry in entries if entry.role == "executable")
     binary = root / executable_entry.destination
     if (

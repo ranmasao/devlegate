@@ -418,7 +418,8 @@ def test_deb_and_arch_preserve_one_verified_payload_and_reject_tampering(
         )
         for path in arch_extracted.rglob("*")
         if path.is_file()
-        and path.name not in {".PKGINFO", "INSTALLATION-PROVENANCE.json"}
+        and path.name
+        not in {".PKGINFO", ".MTREE", "INSTALLATION-PROVENANCE.json"}
     }
     assert logical == arch_logical
     assert any(
@@ -547,7 +548,7 @@ def test_deb_and_arch_adapters_preserve_one_verified_logical_payload(
     arch_files = {
         name: value
         for name, value in logical_files(arch_root).items()
-        if name != ".PKGINFO"
+        if name not in {".PKGINFO", ".MTREE"}
     }
     provenance = "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
     assert deb_files.keys() - {provenance} == arch_files.keys() - {provenance}

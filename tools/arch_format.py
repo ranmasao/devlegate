@@ -11,6 +11,8 @@ pacman, tar, or a zstd executable.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import io
 import re
 import tarfile
@@ -100,6 +102,8 @@ def _tar_bytes(root: Path, timestamp: int) -> bytes:
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             info.mtime = timestamp
+            if info.isdir():
+                info.mode = 0o755
             if info.isreg():
                 with path.open("rb") as source:
                     archive.addfile(info, source)
@@ -108,9 +112,69 @@ def _tar_bytes(root: Path, timestamp: int) -> bytes:
     return output.getvalue()
 
 
+def mtree_bytes(root: Path, timestamp: int) -> bytes:
+    """Return deterministic gzip-compressed mtree metadata for package files."""
+    lines = [
+        "#mtree",
+        "/set uid=0 gid=0",
+        ". type=dir mode=755",
+    ]
+    paths = sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    )
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if relative == ".MTREE":
+            continue
+        if path.is_dir():
+            lines.append(f"./{relative} type=dir mode=755")
+            continue
+        if not path.is_file():
+            raise ArchFormatError("Arch mtree cannot describe this member type")
+        data = path.read_bytes()
+        mode = path.stat().st_mode & 0o7777
+        lines.append(
+            f"./{relative} type=file mode={mode:o} time={timestamp} "
+            f"size={len(data)} sha256digest={hashlib.sha256(data).hexdigest()}"
+        )
+    payload = ("\n".join(lines) + "\n").encode("ascii")
+    return gzip.compress(payload, compresslevel=9, mtime=0)
+
+
+def validate_mtree(root: Path, timestamp: int | None = None) -> None:
+    """Validate the package's Arch mtree against its extracted payload."""
+    path = root / ".MTREE"
+    if not path.is_file() or path.stat().st_mode & 0o7777 != 0o644:
+        raise ArchFormatError("Arch package has invalid .MTREE mode")
+    try:
+        content = gzip.decompress(path.read_bytes()).decode("ascii")
+    except (OSError, UnicodeError) as error:
+        raise ArchFormatError("Arch package has invalid .MTREE metadata") from error
+    expected = mtree_bytes(root, timestamp or 0)
+    if timestamp is None:
+        # Package timestamps are not part of the installed-file contract.
+        content_lines = content.splitlines()
+        expected_lines = gzip.decompress(expected).decode("ascii").splitlines()
+        content_lines = [
+            " ".join(token for token in line.split() if not token.startswith("time="))
+            for line in content_lines
+        ]
+        expected_lines = [
+            " ".join(token for token in line.split() if not token.startswith("time="))
+            for line in expected_lines
+        ]
+        if content_lines != expected_lines:
+            raise ArchFormatError("Arch .MTREE does not match package payload")
+    elif content.encode("ascii") != gzip.decompress(expected):
+        raise ArchFormatError("Arch .MTREE does not match package payload")
+
+
 def build(root: Path, output: Path, *, timestamp: int) -> None:
     if not (root / ".PKGINFO").is_file():
         raise ArchFormatError("Arch package lacks .PKGINFO")
+    if not (root / ".MTREE").is_file():
+        (root / ".MTREE").write_bytes(mtree_bytes(root, timestamp))
+        (root / ".MTREE").chmod(0o644)
     output.write_bytes(_zstd_encode(_tar_bytes(root, timestamp)))
 
 

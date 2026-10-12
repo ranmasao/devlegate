@@ -2,10 +2,12 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -198,6 +200,77 @@ def test_arch_owned_builder_is_reproducible_and_has_real_source_digest(tmp_path)
     assert first.read_bytes() == second.read_bytes()
     assert len(ARCH.TOOL_IDENTITY["digest"]) == 64
     assert ARCH.members(first)["usr/devlegate"] == b"payload"
+    extracted = tmp_path / "extracted"
+    ARCH.extract(first, extracted)
+    assert (extracted / ".MTREE").is_file()
+    assert (extracted / "usr").stat().st_mode & 0o7777 == 0o755
+    assert (extracted / "usr").is_dir()
+    ARCH.validate_mtree(extracted)
+
+
+@pytest.mark.parametrize("umask", (0o0002, 0o0022))
+def test_arch_directory_modes_and_mtree_are_umask_independent(tmp_path, umask):
+    root = tmp_path / f"root-{umask:o}"
+    root.mkdir()
+    (root / ".PKGINFO").write_text("pkgname = devlegate\n", encoding="ascii")
+    nested = root / "usr/share/doc/devlegate/LICENSES/nested"
+    nested.mkdir(parents=True)
+    (nested / "NOTICE.txt").write_text("notice\n", encoding="ascii")
+    old_umask = os.umask(umask)
+    try:
+        output = tmp_path / f"package-{umask:o}.pkg.tar.zst"
+        ARCH.build(root, output, timestamp=123)
+    finally:
+        os.umask(old_umask)
+    extracted = tmp_path / f"extracted-{umask:o}"
+    ARCH.extract(output, extracted)
+    for directory in extracted.rglob("*"):
+        if directory.is_dir():
+            assert directory.stat().st_mode & 0o7777 == 0o755
+    ARCH.validate_mtree(extracted)
+
+
+def test_arch_rejects_tampered_mtree(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".PKGINFO").write_text("pkgname = devlegate\n", encoding="ascii")
+    (root / "usr").mkdir()
+    (root / "usr/devlegate").write_bytes(b"payload")
+    package = tmp_path / "package.pkg.tar.zst"
+    ARCH.build(root, package, timestamp=123)
+    extracted = tmp_path / "extracted"
+    ARCH.extract(package, extracted)
+    mtree = extracted / ".MTREE"
+    mtree.write_bytes(
+        gzip.compress(
+            gzip.decompress(mtree.read_bytes()).replace(
+                b"sha256digest=", b"sha256digest=0"
+            ),
+            mtime=0,
+        )
+    )
+    tampered = tmp_path / "tampered.pkg.tar.zst"
+    ARCH.build(extracted, tampered, timestamp=123)
+    with pytest.raises(ARCH.ArchFormatError, match="MTREE"):
+        ARCH.validate_mtree(extracted)
+
+
+def test_arch_archive_is_reproducible_across_umask(tmp_path):
+    outputs = []
+    for umask in (0o0002, 0o0022):
+        root = tmp_path / f"root-{umask:o}"
+        root.mkdir()
+        (root / ".PKGINFO").write_text("pkgname = devlegate\n", encoding="ascii")
+        (root / "usr").mkdir()
+        (root / "usr/devlegate").write_bytes(b"payload")
+        output = tmp_path / f"package-{umask:o}.pkg.tar.zst"
+        old_umask = os.umask(umask)
+        try:
+            ARCH.build(root, output, timestamp=123)
+        finally:
+            os.umask(old_umask)
+        outputs.append(output.read_bytes())
+    assert outputs[0] == outputs[1]
 
 
 def test_arch_rejects_duplicate_and_traversal_members(tmp_path):

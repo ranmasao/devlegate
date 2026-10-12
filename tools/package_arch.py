@@ -20,11 +20,11 @@ except ModuleNotFoundError:
     from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep
 
 try:
-    from arch_format import TOOL_IDENTITY, build
+    from arch_format import TOOL_IDENTITY, build, mtree_bytes
     from package_standalone import run as package_run
     from validate_standalone_package import validate
 except ModuleNotFoundError:
-    from tools.arch_format import TOOL_IDENTITY, build
+    from tools.arch_format import TOOL_IDENTITY, build, mtree_bytes
     from tools.package_standalone import run as package_run
     from tools.validate_standalone_package import validate
 try:
@@ -87,7 +87,7 @@ def _package(
         installed_size = sum(
             path.stat().st_size
             for path in root.rglob("*")
-            if path.is_file() and path.name != ".PKGINFO"
+            if path.is_file() and path.name not in {".PKGINFO", ".MTREE"}
         )
         (root / ".PKGINFO").write_text(
             "pkgname = devlegate\n"
@@ -104,7 +104,10 @@ def _package(
             encoding="ascii",
         )
         set_tree_timestamp(root, git_timestamp(repo, source_commit))
-        build(root, output, timestamp=git_timestamp(repo, source_commit))
+        timestamp = git_timestamp(repo, source_commit)
+        (root / ".MTREE").write_bytes(mtree_bytes(root, timestamp))
+        (root / ".MTREE").chmod(0o644)
+        build(root, output, timestamp=timestamp)
     output.with_name(f"{output.name}.sha256").write_text(
         f"{hashlib.sha256(output.read_bytes()).hexdigest()}  {output.name}\n",
         encoding="ascii",

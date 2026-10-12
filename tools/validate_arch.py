@@ -10,13 +10,25 @@ import json
 from pathlib import Path
 
 try:
-    from arch_format import TOOL_IDENTITY, ArchFormatError, extract, members
+    from arch_format import (
+        TOOL_IDENTITY,
+        ArchFormatError,
+        extract,
+        members,
+        validate_mtree,
+    )
     from native_payload import PackageError
     from native_payload import validate as validate_payload
     from package_standalone import COMPLIANCE_DIR
     from validate_standalone_package import validate
 except ModuleNotFoundError:
-    from tools.arch_format import TOOL_IDENTITY, ArchFormatError, extract, members
+    from tools.arch_format import (
+        TOOL_IDENTITY,
+        ArchFormatError,
+        extract,
+        members,
+        validate_mtree,
+    )
     from tools.native_payload import PackageError
     from tools.native_payload import validate as validate_payload
     from tools.package_standalone import COMPLIANCE_DIR
@@ -36,6 +48,7 @@ def validate_package(
         raise PackageError(str(error)) from error
     required = {
         ".PKGINFO",
+        ".MTREE",
         "usr/bin/devlegate",
         "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json",
     }
@@ -106,17 +119,21 @@ def validate_package(
         format_tool=TOOL_IDENTITY,
         repo=repo,
         manifest=manifest_path,
-        metadata_members={".PKGINFO"},
+        metadata_members={".PKGINFO", ".MTREE"},
         expected_binary_sha256=report["scie"]["sha256"],
         standalone_report=report,
     )
     actual_size = sum(
         path.stat().st_size
         for path in extract_dir.rglob("*")
-        if path.is_file() and path.name != ".PKGINFO"
+        if path.is_file() and path.name not in {".PKGINFO", ".MTREE"}
     )
     if int(fields["size"]) != actual_size:
         raise PackageError("Arch metadata size does not match the data payload")
+    try:
+        validate_mtree(extract_dir)
+    except ArchFormatError as error:
+        raise PackageError(str(error)) from error
     return binary
 
 

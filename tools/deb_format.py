@@ -57,6 +57,8 @@ def _tar_bytes(root: Path, *, timestamp: int, include_control: bool = False) -> 
             info.uname = ""
             info.gname = ""
             info.mtime = timestamp
+            if info.isdir():
+                info.mode = 0o755
             if info.isreg():
                 with path.open("rb") as source:
                     archive.addfile(info, source)
@@ -246,6 +248,7 @@ def extract(package: Path, destination: Path, *, control_only: bool = False) -> 
                 if target.is_symlink() or (target.exists() and not target.is_dir()):
                     raise DebFormatError("Debian archive has a directory conflict")
                 target.mkdir(exist_ok=True)
+                target.chmod(member.mode & 0o7777)
                 continue
             if member.issym():
                 if target.exists() or target.is_symlink():
