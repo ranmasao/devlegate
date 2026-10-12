@@ -986,3 +986,77 @@ Preserve this successful checkpoint and the existing worker branch.
 validators. Leave TASK-062 unchanged. The ticket and transition
 must be committed atomically; do not modify the active ticket
 after the next worker starts until the lifecycle concludes.
+
+## Review decision — 2026-10-12, real Arch Docker/pacman smoke (REQUEST CHANGES)
+
+Operator supplied a genuine Arch pacman smoke transcript, an Arch package
+SHA-256 sidecar and the complete standalone-build report for exact source
+checkpoint `35f8d83986e8b4d38528384f93a0894db2b5a543`.
+The SHA-256 sidecar states:
+
+    6568bae94acb9c7fe71cfe6642a0a8c361ee58ec9ff618e57da20873456f491a  devlegate-0.5.6.dev0-1-x86_64.pkg.tar.zst
+
+Report scie SHA-256 is
+`72b99ba24e54e64e243e936798f0ef1839232505abd62bc192b61e7eba8d58ba`;
+its `source_commit` matches the work checkpoint. `sha256sum -c` in the
+Arch-container log prints `OK`; metadata shows 0.5.6.dev0-1 x86_64,
+no runtime dependencies or install scripts. `pacman -U` installed,
+`pacman -Qo /usr/bin/devlegate` succeeded, `devlegate --help` ran,
+and `pacman -R` removed it. Missing core/extra sync databases are expected
+in the network-isolated disposable container. GitHub Actions
+run `38253246179` for that same checkpoint passed: 1175 tests,
+1 skip, 78% coverage and Ruff.
+
+**Do not yet accept the Arch package. Two defects are proven by the
+native pacman log and independently visible in current source:**
+
+1. **Package directory permissions are wrong / umask-dependent.**
+   `pacman -U` warned that archive entries `/usr`, `/usr/bin` and
+   `/usr/share` advertise mode `0775` while existing system directories
+   are `0755`. `tools/arch_format.py::_tar_bytes()` exports
+   `TarInfo.mode` directly from the temporary directory tree, while
+   shared native assembly uses `mkdir(..., parents=True)` without
+   a deterministic directory mode policy. Set canonical explicit
+   directory modes (normally `0755`) for ALL package-owned directories,
+   including top-level system paths and nested license directories,
+   independent of build umask; retain defined file modes.
+   Add a regression that builds under umask `0002` and `0022`,
+   checks exact directory modes and archive reproducibility,
+   and rejects unexpected modes during native validation.
+2. **Missing `.MTREE` prevents the promised full pacman integrity check.**
+   Despite a zero command exit status, `pacman -Qkk devlegate` printed
+   `devlegate: no mtree file`. The current `tools/package_arch.py`
+   writes `.PKGINFO` but no `.MTREE`, and `arch_format` archives
+   only the existing staging tree. Generate deterministic Arch-compatible
+   `.MTREE` integrity metadata from the finalized payload, include it
+   in the package, and update `tools/validate_arch.py`, native format
+   tests and metadata membership policy accordingly. Validate its
+   contents/hash/ownership/mode assertions rather than merely
+   permitting a new unchecked metadata member. Re-run an actual
+   `pacman -Qkk devlegate` proving mtree verification works; update
+   smoke validation to fail if `no mtree file` appears.
+
+Minor informational observations: the package is currently unsigned
+and `builddate = 0` displays Jan 1 1970; signatures are not part
+of this prerelease local smoke gate. Do not expand the task into
+repository signing, unrelated system integration or packaging redesign.
+
+**Evidence limitation:** the user supplied the sidecar, build report
+and transcript, but not the actual `.pkg.tar.zst` bytes. Thus
+we independently checked their internal identities and results, not
+the package digest by hashing the archive ourselves. Preserve the
+actual artifact and rebuild/publish a new sidecar after corrections.
+
+**Next gate:** Resume from checkpoint `35f8d83986e8`. Fix only the
+two identified packaging defects. Freeze the new candidate commit,
+run authoritative CI on that SHA and repeat the disposable Arch
+container install/ownership/`pacman -Qkk`/CLI/removal smoke for the
+checksum-matched NEW artifact. Operator does not currently have
+access to a physical Arch PC, so Docker native pacman testing is
+the accepted provisional host validation. Keep any physical host
+service/systemd test separate from this packaging smoke gate.
+
+**Disposition: REQUEST CHANGES. Move `review` -> `todo` atomically.**
+Leave TASK-062 unchanged and preserve all prior review history.
+Do not edit this ticket after the next worker admission until
+Devlegate completes its lifecycle.
