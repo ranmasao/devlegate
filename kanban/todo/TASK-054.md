@@ -693,3 +693,13 @@ do not implement RPM or a packaging plugin framework.
 
 **Disposition:** REQUEST CHANGES. Keep in `review` until an explicit
 Kanban transition; this commit records the review, not acceptance.
+
+## Kanban transition — 2026-10-12
+
+Following the published `REQUEST CHANGES` review of checkpoint
+`dbc835f4efc29187512890c3c83437f5268a4d5d`, explicitly return
+TASK-054 from `review` to `todo`. Continue the existing worker branch
+without losing the checkpoint. Address the four recorded review findings
+before freezing the release candidate; then build the real Arch artifact
+and perform native Arch validation in parallel with final GitHub CI
+as specified above. Do not mark the ticket accepted without both checks.
