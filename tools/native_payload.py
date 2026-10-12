@@ -44,7 +44,12 @@ FIXED_DOCUMENTS = (
 
 @dataclass(frozen=True)
 class PayloadLayout:
-    """Physical paths selected by a native format adapter."""
+    """Physical paths selected by a native format adapter.
+
+    ``licenses`` is a directory relative to ``documentation``.  The other
+    fields are install-relative paths.  Keeping this distinction explicit
+    lets adapters change layout without duplicating payload policy.
+    """
 
     executable: str = "usr/bin/devlegate"
     documentation: str = "usr/share/doc/devlegate"
@@ -71,6 +76,9 @@ def _safe_destination(value: str, *, allow_file: bool) -> str:
     path = PurePosixPath(value)
     if (
         not value
+        or value != path.as_posix()
+        or value.endswith("/")
+        or "" in value.split("/")
         or path.is_absolute()
         or ".." in path.parts
         or "." in path.parts
@@ -151,7 +159,7 @@ def _inventory(
         entries.append(
             PayloadEntry(
                 "license",
-                f"{documentation}/{relative}",
+                f"{licenses}/{relative.removeprefix('LICENSES/')}",
                 source,
                 0o644,
                 next(
@@ -238,6 +246,27 @@ def validate(
     validate_manifest(manifest_path, repo)
     if not expected_binary_sha256:
         raise PackageError("native validation requires standalone executable digest")
+    if not isinstance(standalone_report, dict):
+        raise PackageError("native validation requires complete standalone evidence")
+    required_report_keys = {
+        "inputs",
+        "target_libc",
+        "pex",
+        "science",
+        "scie_jump",
+        "wheel_build_toolchain",
+        "wheel_reproducible",
+        "scie_reproducible",
+        "independent_build_roots",
+        "independent_pex_roots",
+        "temporary_build_path_embedded",
+        "reproducibility_scope",
+        "source_commit",
+        "wheel",
+        "scie",
+    }
+    if not required_report_keys <= standalone_report.keys():
+        raise PackageError("native validation requires complete standalone evidence")
     layout = layout or layout_for(distribution)
     entries = _inventory(manifest_data, layout, repo)
     expected = {entry.destination for entry in entries}
@@ -333,31 +362,23 @@ def validate(
             or provenance["devlegate"]["standalone_size"] != binary.stat().st_size
         ):
             raise PackageError("native build provenance differs from payload")
-        if standalone_report is not None and {
-            "inputs",
-            "target_libc",
-            "pex",
-            "science",
-            "scie_jump",
-            "wheel_build_toolchain",
-        } <= standalone_report.keys():
-            try:
-                from package_standalone import split_inventory, stable_provenance
-            except ModuleNotFoundError:
-                from tools.package_standalone import split_inventory, stable_provenance
-            with tempfile.TemporaryDirectory(
-                prefix="devlegate-native-report-"
-            ) as split_dir:
-                expected_provenance = stable_provenance(
-                    standalone_report,
-                    manifest_path,
-                    split_inventory(binary, Path(split_dir)),
-                    repo,
-                )
-            if provenance != expected_provenance:
-                raise PackageError(
-                    "native build provenance differs from standalone evidence"
-                )
+        try:
+            from package_standalone import split_inventory, stable_provenance
+        except ModuleNotFoundError:
+            from tools.package_standalone import split_inventory, stable_provenance
+        with tempfile.TemporaryDirectory(
+            prefix="devlegate-native-report-"
+        ) as split_dir:
+            expected_provenance = stable_provenance(
+                standalone_report,
+                manifest_path,
+                split_inventory(binary, Path(split_dir)),
+                repo,
+            )
+        if provenance != expected_provenance:
+            raise PackageError(
+                "native build provenance differs from standalone evidence"
+            )
         notices = (root / next(
             entry.destination
             for entry in entries

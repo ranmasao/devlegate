@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import sys
 import tarfile
 from pathlib import Path
 
@@ -18,6 +19,7 @@ def load(name):
     spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -84,18 +86,30 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     source_commit = package_arch.package_run(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"]
     ).stdout.strip()
-    report.write_text(
-        json.dumps(
-            {
-                "source_commit": source_commit,
-                "wheel": {"version": "0.5.6.dev0"},
-                "scie": {
-                    "sha256": hashlib.sha256(b"standalone payload").hexdigest()
-                },
-            }
-        ),
-        encoding="ascii",
+    report_data = {
+        "source_commit": source_commit,
+        "wheel": {"version": "0.5.6.dev0"},
+        "scie": {"sha256": hashlib.sha256(b"standalone payload").hexdigest()},
+        "inputs": {},
+        "target_libc": "synthetic",
+        "pex": {},
+        "science": {},
+        "scie_jump": {},
+        "wheel_build_toolchain": {},
+        "wheel_reproducible": True,
+        "scie_reproducible": True,
+        "independent_build_roots": True,
+        "independent_pex_roots": True,
+        "temporary_build_path_embedded": False,
+        "reproducibility_scope": "synthetic",
+    }
+    report.write_text(json.dumps(report_data), encoding="ascii")
+    monkeypatch.setattr(
+        standalone,
+        "stable_provenance",
+        lambda *_args: json.loads((extracted / "BUILD-PROVENANCE.json").read_text()),
     )
+    monkeypatch.setattr(standalone, "split_inventory", lambda *_args: {})
     monkeypatch.setattr(package_arch, "validate", lambda *_args: extracted)
     output = package_arch._package(
         repo=ROOT,
@@ -204,3 +218,35 @@ def test_arch_rejects_malformed_tar_stream(tmp_path):
     package.write_bytes(ARCH._zstd_encode(b"not a tar stream"))
     with pytest.raises(ARCH.ArchFormatError, match="invalid Arch tar stream"):
         ARCH.members(package)
+
+
+def test_native_payload_custom_license_root_is_used_for_every_license_member():
+    native = load("native_payload")
+    standalone = load("package_standalone")
+    manifest_path = ROOT / "packaging/standalone-compliance/manifest.json"
+    manifest = standalone.load_manifest(manifest_path)
+    layout = native.PayloadLayout(licenses="legal/snapshots")
+
+    entries = native._inventory(manifest, layout, ROOT)
+    license_destinations = {
+        entry.destination
+        for entry in entries
+        if entry.role in {"manifest", "license"}
+    }
+    assert license_destinations
+    assert all(
+        path.startswith("usr/share/doc/devlegate/legal/snapshots/")
+        for path in license_destinations
+    )
+    assert not any("/LICENSES/" in path for path in license_destinations)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("executable", "documentation", "licenses", "provenance"),
+)
+@pytest.mark.parametrize("value", ("usr//bin/devlegate", "usr/bin/./devlegate"))
+def test_native_payload_rejects_noncanonical_layout_destinations(field, value):
+    native = load("native_payload")
+    with pytest.raises(native.PackageError, match="layout path is unsafe"):
+        native.PayloadLayout(**{field: value})
