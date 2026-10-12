@@ -139,12 +139,86 @@ def make_standalone_payload(root: Path) -> Path:
     return extracted
 
 
+def complete_report(standalone, repo, manifest_path, extracted):
+    """Build complete standalone authority for strict native validation."""
+    builder = load_tool("build_standalone")
+    binary = extracted / "devlegate"
+    report = {
+        "source_commit": "a" * 40,
+        "inputs": {
+            "target": "linux-x86_64",
+            "pex_version": "2.103.2",
+            "pex_wheel": builder.PEX_WHEEL,
+            "pex_sha256": builder.PEX_SHA256,
+            "pbs_archive": standalone.PBS_ARCHIVE,
+            "pbs_sha256": standalone.PBS_SHA256,
+            "science_version": "0.21.0",
+            "science_asset": standalone.SCIENCE_ASSET,
+            "science_sha256": standalone.SCIENCE_SHA256,
+            "pbs_provider": standalone.PBS_PROVIDER,
+            "pbs_release": "20260901",
+            "pbs_python_version": "3.12.14",
+            "scie_jump_version": standalone.SCIE_JUMP_VERSION,
+        },
+        "target_libc": "glibc",
+        "pex": {
+            "version": "2.103.2",
+            "wheel_filename": builder.PEX_WHEEL,
+            "wheel_sha256": builder.PEX_SHA256,
+            "bootstrap_tools": standalone.pinned_tools(
+                builder.PEX_BOOTSTRAP_TOOLS
+            )["artifacts"],
+        },
+        "science": {
+            "version": "0.21.0",
+            "asset": standalone.SCIENCE_ASSET,
+            "sha256": standalone.SCIENCE_SHA256,
+        },
+        "scie_jump": {
+            "asset": standalone.SCIE_JUMP_ASSET,
+            "version": standalone.SCIE_JUMP_VERSION,
+            "sha256": standalone.SCIE_JUMP_SHA256,
+        },
+        "wheel": {"version": "0.5.6.dev0", "sha256": "b" * 64},
+        "scie": {
+            "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "size": binary.stat().st_size,
+        },
+        "wheel_build_toolchain": standalone.pinned_tools(builder.WHEEL_BUILD_TOOLS),
+        "wheel_reproducible": True,
+        "scie_reproducible": True,
+        "independent_build_roots": True,
+        "independent_pex_roots": True,
+        "temporary_build_path_embedded": False,
+        "reproducibility_scope": standalone.EXPECTED_REPRODUCIBILITY_SCOPE,
+    }
+    inventory = {
+        standalone.SCIE_JUMP_SPLIT_NAME: {
+            "size": 1,
+            "sha256": standalone.SCIE_JUMP_SHA256,
+        },
+        standalone.PBS_ARCHIVE: {"size": 1, "sha256": standalone.PBS_SHA256},
+        "pex": {"size": 1, "sha256": "d" * 64},
+        "configure-binding.py": {"size": 1, "sha256": "e" * 64},
+        "lift.json": {"size": 1, "sha256": "f" * 64},
+    }
+    (extracted / "BUILD-PROVENANCE.json").write_text(
+        json.dumps(
+            standalone.stable_provenance(report, manifest_path, inventory, repo)
+        ),
+        encoding="ascii",
+    )
+    standalone.split_inventory = lambda *_args: inventory
+    return report
+
+
 def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
     """Build a package against a real checked-out compliance authority."""
     repo = tmp_path / "repo"
     repo.mkdir()
     for name in ("LICENSE", "NOTICE", "LICENSING.md"):
         shutil.copy2(ROOT / name, repo / name)
+    shutil.copy2(ROOT / "pyproject.toml", repo / "pyproject.toml")
     shutil.copytree(ROOT / "LICENSES", repo / "LICENSES")
     shutil.copytree(ROOT / "src", repo / "src")
     compliance = repo / "packaging/standalone-compliance"
@@ -158,13 +232,6 @@ def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
     (extracted / "THIRD_PARTY_NOTICES.md").write_text(
         standalone.notice_text(manifest["records"]), encoding="ascii"
     )
-    binary_digest = hashlib.sha256(b"standalone").hexdigest()
-    (extracted / "BUILD-PROVENANCE.json").write_text(
-        json.dumps(
-            {"devlegate": {"standalone_sha256": binary_digest, "standalone_size": 10}}
-        ),
-        encoding="ascii",
-    )
     licenses = extracted / "LICENSES"
     (licenses / "standalone-compliance-manifest.json").write_bytes(
         manifest_path.read_bytes()
@@ -176,6 +243,7 @@ def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
             target = extracted / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((compliance / file_record["path"]).read_bytes())
+    report_data = complete_report(standalone, repo, manifest_path, extracted)
     root = tmp_path / "verified-root"
     root.mkdir()
     BUILDER.assemble(
@@ -201,15 +269,7 @@ def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
     package = tmp_path / "verified.deb"
     DEB.build(root, package, timestamp=0)
     report = tmp_path / "verified-report.json"
-    report.write_text(
-        json.dumps(
-            {
-                "wheel": {"version": "0.5.6.dev0"},
-                "scie": {"sha256": binary_digest},
-            }
-        ),
-        encoding="ascii",
-    )
+    report.write_text(json.dumps(report_data), encoding="ascii")
     return package, report, repo, manifest_path
 
 
@@ -221,6 +281,7 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     repo.mkdir()
     for name in ("LICENSE", "NOTICE", "LICENSING.md"):
         shutil.copy2(ROOT / name, repo / name)
+    shutil.copy2(ROOT / "pyproject.toml", repo / "pyproject.toml")
     shutil.copytree(ROOT / "LICENSES", repo / "LICENSES")
     shutil.copytree(ROOT / "src", repo / "src")
     shutil.copytree(
@@ -235,11 +296,6 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     (extracted / "THIRD_PARTY_NOTICES.md").write_text(
         standalone.notice_text(manifest["records"]), encoding="ascii"
     )
-    digest = hashlib.sha256(b"standalone").hexdigest()
-    (extracted / "BUILD-PROVENANCE.json").write_text(
-        json.dumps({"devlegate": {"standalone_sha256": digest, "standalone_size": 10}}),
-        encoding="ascii",
-    )
     licenses = extracted / "LICENSES"
     (licenses / "standalone-compliance-manifest.json").write_bytes(
         manifest_path.read_bytes()
@@ -251,17 +307,9 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
             target = extracted / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((manifest_path.parent / file_record["path"]).read_bytes())
+    report_data = complete_report(standalone, repo, manifest_path, extracted)
     report = tmp_path / "build-report.json"
-    report.write_text(
-        json.dumps(
-            {
-                "source_commit": "a" * 40,
-                "wheel": {"version": "0.5.6.dev0"},
-                "scie": {"sha256": digest},
-            }
-        ),
-        encoding="ascii",
-    )
+    report.write_text(json.dumps(report_data), encoding="ascii")
     monkeypatch.setattr(BUILDER, "validate", lambda *args: extracted)
     monkeypatch.setattr(BUILDER, "git_timestamp", lambda *args: 1)
 
@@ -320,6 +368,19 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
     metadata = VALIDATOR.fields(package)
     assert int(metadata["Installed-Size"]) > 0
     assert not list((tmp_path / "extract/usr/share/doc/devlegate").glob("*.tar.gz*"))
+
+
+def test_deb_validator_rejects_reduced_standalone_report(tmp_path):
+    package, report, repo, manifest = make_verified_package(tmp_path)
+    reduced = tmp_path / "reduced-report.json"
+    reduced.write_text(
+        json.dumps({"wheel": {"version": "0.5.6.dev0"}, "scie": {"sha256": "x"}}),
+        encoding="ascii",
+    )
+    with pytest.raises(VALIDATOR.PackageError, match="complete standalone evidence"):
+        VALIDATOR.validate(
+            package, reduced, tmp_path / "reduced-extract", repo, manifest
+        )
 
 
 def test_deb_validator_rejects_former_private_payload_and_launcher_symlink(tmp_path):
