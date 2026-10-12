@@ -1,0 +1,36 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "793061912db6e1e7efffc6da19464f2aa1a433d4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "58a54e871f65405794c48dc22ff0d062",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run authoritative CI with coverage, licensing, and Ruff for this changed checkpoint.",
+    "Build the real Arch package from a clean non-Arch x86_64 checkout and retain the artifact, sidecar, report, and transcript.",
+    "Run the exact artifact through native Arch pacman inspection, install, ownership/integrity, CLI smoke, and removal validation."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run authoritative CI with coverage, licensing, and Ruff for this changed checkpoint.",
+      "Build the real Arch package from a clean non-Arch x86_64 checkout and retain the artifact, sidecar, report, and transcript.",
+      "Run the exact artifact through native Arch pacman inspection, install, ownership/integrity, CLI smoke, and removal validation."
+    ],
+    "report": null,
+    "summary": "Scoped synthetic standalone inventory patching to pytest teardown and added a paired DEB/Arch integration regression using the same verified payload. The regression compares decoded logical file hashes and modes and verifies Arch rejects an injected extra member."
+  },
+  "workspace_head": "4ac0475eb937c2474a28cc031fd81d21bad4d25c"
+}
