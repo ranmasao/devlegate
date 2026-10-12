@@ -1,0 +1,42 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "5f04976e6f26f1831368f4cd9ced22bdcb1202ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "5b12060d75794173ab975ae2c57313f8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [
+    "Native Arch x86_64 host access and operator-run release evidence are required to complete this task."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the full test suite to completion on the final clean checkpoint.",
+    "Build ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, report, and transcript.",
+    "Run the exact artifact through native Arch pacman inspection, install, ownership/integrity, CLI smoke, and removal, retaining the checksum-matched transcript.",
+    "Add the required paired real DEB/Arch logical-payload integration regression if not already supplied by the next implementation pass."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Native Arch x86_64 host access and operator-run release evidence are required to complete this task."
+    ],
+    "remaining": [
+      "Run the full test suite to completion on the final clean checkpoint.",
+      "Build ./dev package arch from a clean non-Arch x86_64 checkout and retain artifact, sidecar, report, and transcript.",
+      "Run the exact artifact through native Arch pacman inspection, install, ownership/integrity, CLI smoke, and removal, retaining the checksum-matched transcript.",
+      "Add the required paired real DEB/Arch logical-payload integration regression if not already supplied by the next implementation pass."
+    ],
+    "report": null,
+    "summary": "Updated DEB integration fixtures to provide complete verified standalone authority and reconstruct BUILD-PROVENANCE through the real stable provenance path. Added fail-closed reduced-report coverage; focused DEB/Arch tests and Ruff pass."
+  },
+  "workspace_head": "c6edbb56189d4072de0135f55af8098bb3bcfaad"
+}
