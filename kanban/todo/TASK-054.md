@@ -916,3 +916,73 @@ Preserve and resume that work branch/checkpoint.
 Resume `c6edbb56189d`; keep TASK-062 untouched. Commit this review
 and Kanban transition atomically; do not edit the active ticket
 again after a new worker is admitted until its lifecycle completes.
+
+## Review decision — 2026-10-12, checkpoint 4ac0475eb937 (REQUEST CHANGES: release proof pending)
+
+Execution `58a54e871f65405794c48dc22ff0d062` published
+`4ac0475eb937c2474a28cc031fd81d21bad4d25c` with `incomplete`.
+Preserve this successful checkpoint and the existing worker branch.
+
+### Confirmed complete
+
+- GitHub Actions run `38244474915` on the exact SHA **succeeded**:
+  1174 passed, 1 skipped, 78% coverage; Ruff passed.
+- The DEB test fixture now scopes its `split_inventory` override
+  through pytest `monkeypatch` instead of mutating a shared module
+  permanently. The previous isolation issue is fixed.
+- The new `test_deb_and_arch_adapters_preserve_one_verified_logical_payload`
+  builds native DEB and Arch format archives from the same prepared
+  synthetic payload; both native validators decode/check the results,
+  compare file contents/digests/modes while excluding their distinct
+  native metadata and installation-provenance fields, and reject an
+  unexpected Arch payload member. The shared packaging contract
+  now has useful paired regression coverage.
+
+### Remaining acceptance gap: real source-to-native proof
+
+1. **Do not overstate synthetic integration evidence.**
+   The new paired test's input is a synthetic `b'standalone'`
+   executable; `complete_report()` replaces `split_inventory` with
+   synthetic split data, and the Arch builder's input
+   `validate()` is monkeypatched to return the prepared tree.
+   Thus the test verifies native adapter parity, NOT real
+   standalone input authentication or true self-contained runtime.
+   Keep this fast regression rather than trying to make every CI
+   run build an expensive production scie. Satisfy the remaining
+   real-input parity requirement with an attributable end-to-end
+   release proof using the same actual independently validated
+   standalone archive for the DEB/Arch payload comparison, without
+   adding another generic framework. Document precisely what is
+   tested with real input and what remains synthetic.
+2. **Targeted negative gaps.** The paired test exercises an
+   unexpected Arch member but does not mutate a nested license
+   snapshot, an unrelated BUILD-PROVENANCE field or a file mode.
+   Add focused fail-closed regressions for these material cases
+   unless already explicitly covered by another existing test.
+   Verify failures occur for the intended validation reason.
+   Preserve the currently green DEB/Arch suites.
+
+### Next execution / final-stage sequence
+
+3. On a clean non-Arch Linux x86_64 checkout at the frozen candidate
+   SHA, run the genuine `./dev package arch` build. Preserve the
+   built `.pkg.tar.zst`, SHA-256 sidecar, standalone build report,
+   exact source SHA and build transcript. Verify the package by
+   the independent Arch decoder and validator before transfer.
+   Preserve or create corresponding real DEB evidence from the
+   SAME standalone input to close the source-to-native parity gap.
+4. On that same candidate, perform final GitHub CI and **native Arch
+   pacman validation in parallel** after the artifact has been built.
+   The operator on Arch must verify the exact sidecar SHA-256, inspect
+   metadata/files, install, inspect ownership and integrity, smoke
+   test CLI and remove safely; retain transcript. If operator-only
+   host access is unavailable, prepare executable safe instructions
+   and report `incomplete` until native evidence is received.
+   Repeat affected final evidence if source or artifact changes.
+
+**Disposition: REQUEST CHANGES / evidence incomplete.** Move
+`TASK-054` from `review` to `todo` now and resume at
+`4ac0475eb937`. Do not revisit solved design questions or weaken
+validators. Leave TASK-062 unchanged. The ticket and transition
+must be committed atomically; do not modify the active ticket
+after the next worker starts until the lifecycle concludes.
