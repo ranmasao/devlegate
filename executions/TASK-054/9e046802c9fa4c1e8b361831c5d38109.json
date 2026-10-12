@@ -1,0 +1,28 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "completed",
+  "control_head": "89da299eca411d2dead7396e6679151d38b7db48",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "9e046802c9fa4c1e8b361831c5d38109",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-054/9e046802c9fa4c1e8b361831c5d38109.md",
+  "report_sha256": "72c9ddc2e7921f3803e6a7bfa52d3119140eaad73ded03b74cb44e27fa4f647a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Artifact SHA-256: 546929e7aa3b725802515fd031ec04d00c71d2be04b6ce0dd157d1efd41d4888. Build evidence is in dist/devlegate-arch-build.log and dist/devlegate-arch-standalone-build.json; native transcript is dist/devlegate-arch-native-pacman.log. Focused Arch tests and Ruff passed; exact GitHub Actions run 38297334137 passed.",
+    "summary": "Validated the existing Arch packaging implementation at source checkpoint 3cfb408. Built a fresh package with deterministic directory/.PKGINFO modes and .MTREE, then completed exact-checksum disposable Arch pacman inspection, install, ownership, integrity, CLI smoke, and removal validation; exact-SHA CI is green."
+  },
+  "workspace_head": "3cfb40886edbe752b3e040764b02bea84df95db3"
+}
