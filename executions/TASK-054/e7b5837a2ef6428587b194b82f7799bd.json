@@ -1,0 +1,40 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "e693148447aae93b576ceff6a1c236153f45ef92",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "e7b5837a2ef6428587b194b82f7799bd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [
+    "Native Arch host access and operator-run validation transcript are still required for release acceptance."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Update the three strict DEB synthetic fixtures with complete trusted standalone reports and valid provenance so the DEB suite is green without weakening validation.",
+    "Add the required paired real DEB/Arch normalized-payload regression and remaining tamper cases.",
+    "Run the clean-source Arch package build and native pacman lifecycle validation, then retain the final artifact and checksum evidence."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Native Arch host access and operator-run validation transcript are still required for release acceptance."
+    ],
+    "remaining": [
+      "Update the three strict DEB synthetic fixtures with complete trusted standalone reports and valid provenance so the DEB suite is green without weakening validation.",
+      "Add the required paired real DEB/Arch normalized-payload regression and remaining tamper cases.",
+      "Run the clean-source Arch package build and native pacman lifecycle validation, then retain the final artifact and checksum evidence."
+    ],
+    "report": null,
+    "summary": "Changed PayloadLayout so license and provenance roots are independent install-relative paths, while preserving the existing default installed locations. Added a real custom-license-root assembly and validation regression covering nested license placement and legacy-tree absence."
+  },
+  "workspace_head": "fe94f1131b51711f8efe7155612f2bb271ea5150"
+}
