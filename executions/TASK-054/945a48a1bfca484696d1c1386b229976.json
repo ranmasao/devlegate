@@ -1,0 +1,36 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "ea3bb72fd0ea7ce0ee47381632c275347982c431",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "945a48a1bfca484696d1c1386b229976",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the final clean-source ./dev package arch build and retain its artifact, sidecar, report, and transcript.",
+    "Run authoritative CI for the final candidate.",
+    "Repeat disposable/native Arch pacman validation against the new checksum-matched artifact, including pacman -Qkk without mode or mtree warnings."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the final clean-source ./dev package arch build and retain its artifact, sidecar, report, and transcript.",
+      "Run authoritative CI for the final candidate.",
+      "Repeat disposable/native Arch pacman validation against the new checksum-matched artifact, including pacman -Qkk without mode or mtree warnings."
+    ],
+    "report": null,
+    "summary": "Normalized production Arch package assembly to force `.PKGINFO` to mode 0644, eliminating umask-dependent package bytes. Strengthened the real Arch adapter regression to assemble under umasks 0002 and 0022, compare identical archives, and verify `.PKGINFO` and `.MTREE` modes."
+  },
+  "workspace_head": "3cfb40886edbe752b3e040764b02bea84df95db3"
+}
