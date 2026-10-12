@@ -1060,3 +1060,70 @@ service/systemd test separate from this packaging smoke gate.
 Leave TASK-062 unchanged and preserve all prior review history.
 Do not edit this ticket after the next worker admission until
 Devlegate completes its lifecycle.
+
+## Review decision — 2026-10-12, checkpoint 55040cc8eab0 (REQUEST CHANGES: final umask regression)
+
+Execution `5e36baeee5dd46bba87055d384584e27` produced
+`55040cc8eab03d818d7ee0a1fb74a940ac4f16bd` with outcome
+`incomplete`. Preserve and resume this checkpoint.
+
+### Fixed and confirmed
+
+- Directory modes are now normalized to 0755 in shared native assembly
+  and Arch tar serialization. All package payload directories are
+  checked during validation.
+- `tools/arch_format.py` now creates deterministic gzip `.MTREE`
+  payload metadata; `tools/validate_arch.py` requires and validates
+  it. Regression tests cover mtree tampering, directory modes and
+  DEB/Arch payload parity.
+- CI run `38287502818` passed on this exact work SHA: **1179 passed,
+  1 skipped, coverage 78%, Ruff green**.
+
+### One remaining concrete code correction
+
+**`.PKGINFO` file mode still depends on the host umask.**
+In `tools/package_arch.py::_package()`, the `.PKGINFO` file is
+created using `.write_text()` and is not chmod'd. In
+`tools/arch_format.py::_tar_bytes()`, regular-file modes are copied
+from `tarfile.gettarinfo()` without normalization, so identical
+native builds can emit mode `0664` under umask `0002` and mode `0644`
+under umask `0022`. This breaks claimed byte reproducibility across
+supported build umasks, even though it does not change installed
+payload file permissions. A minimal Python/tarfile reproduction
+confirmed the mode difference.
+
+**Required small fix:** Normalize the `.PKGINFO` mode explicitly to
+`0644` in the production Arch assembly path before constructing
+`.MTREE` and the package. Keep `.MTREE` at `0644`. Do not silently
+change the modes of actual installed executable or legal files.
+
+**Test correction:** Existing
+`test_arch_archive_is_reproducible_across_umask` and
+`test_arch_directory_modes_and_mtree_are_umask_independent` set
+`os.umask()` *after* creating their staging files and directories.
+They therefore do not actually exercise file creation under differing
+umasks. Add/adjust a production-level regression where staging
+metadata and directories are created under each of `0002` and
+`0022`, and prove identical archive bytes and `.PKGINFO` mode `0644`
+(with full restoration of the process umask). Ideally exercise
+the actual Arch adapter, not just a hand-populated normalized tree.
+
+### Final external evidence (no further redesign)
+
+After this single targeted correction freeze the NEW candidate SHA.
+Run the authoritative CI again if code changes; retain the real
+`./dev package arch` artifact, `.sha256`, standalone report and
+build log from a clean non-Arch x86_64 source checkout. Repeat
+the disposable Arch Linux pacman Qip/Qlp/U/Qi/Qo/Qkk/CLI/R test
+against that exact checksum-matched package. Specifically assert
+there are **no** `directory permissions differ` warnings and
+**no** `no mtree file` warning, and that `pacman -Qkk devlegate`
+actually checks installed integrity. Do not reuse the operator's
+older package SHA or transcript from checkpoint `35f8d83986e8`.
+No physical Arch PC is required for this provisional smoke gate;
+the previously agreed isolated Arch Docker/pacman proof is valid.
+
+**Disposition: REQUEST CHANGES.** Move `TASK-054` from `review`
+to `todo` atomically, preserve checkpoint `55040cc8eab0`,
+leave TASK-062 and TASK-063 untouched. Do not edit the ticket
+after a worker has been newly admitted; avoid unrelated changes.
