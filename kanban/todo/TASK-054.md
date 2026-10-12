@@ -703,3 +703,76 @@ without losing the checkpoint. Address the four recorded review findings
 before freezing the release candidate; then build the real Arch artifact
 and perform native Arch validation in parallel with final GitHub CI
 as specified above. Do not mark the ticket accepted without both checks.
+
+## Review decision — 2026-10-12, checkpoint aa1088c55b21 (REQUEST CHANGES)
+
+Execution `d55e50b4814943a0a5fce7b71ab56044` published
+`aa1088c55b2189ab25326e5dd254d1aa75cc4bd9` and reported
+`incomplete`. Keep this work branch/checkpoint, do not restart.
+
+Confirmed progress: `_inventory()` consistently places the manifest
+and ordinary license snapshots under `PayloadLayout.licenses`; path
+canonicalization rejects normalized aliases; full provenance validation
+now requires a comprehensive standalone report and always recomputes
+`stable_provenance()` instead of silently skipping it.
+
+### Remaining corrections before freezing a release candidate
+
+1. **Fix the now-obsolete DEB synthetic fixtures against the strict
+   provenance contract.** `tests/test_deb_package.py::make_verified_package()`
+   still writes a report containing only `wheel.version` and
+   `scie.sha256`; `test_production_deb_builder_sets_maintainer_and_passes_validator`
+   also supplies a reduced report. Both positive full-validator tests
+   now conflict with `native_payload.validate()` mandatory report keys.
+   Build a complete trusted standalone-report fixture and real expected
+   BUILD-PROVENANCE values. Preserve strict fail-closed behavior,
+   especially for the negative launcher/symlink test. Provide a
+   separate focused regression asserting reduced reports are rejected.
+   Do not patch the full validator or mock `stable_provenance()` to
+   make these integration tests pass.
+2. **License path policy must support an independent install-root.**
+   `PayloadLayout.licenses` is currently defined/documented as a
+   directory *relative to documentation*; a format needing
+   `usr/share/licenses/devlegate` cannot specify it independently
+   of `usr/share/doc/devlegate`. Define a minimal explicit
+   install-relative license root (while preserving the existing
+   DEB/Arch defaults) and use it for all snapshots and the manifest.
+   Confirm format adapters and validators consume that layout.
+   Avoid an RPM implementation or generic plugin mechanism.
+3. **Exercise actual nondefault layouts.** The new
+   `test_native_payload_custom_license_root_is_used_for_every_license_member`
+   examines `_inventory()` only. Add at least one real shared
+   `assemble()` plus `validate()` round-trip for a custom
+   independent license root; reject a leftover old LICENSES tree,
+   path aliasing, `..`, slash variants, file/directory collisions
+   and unauthorized extras. Keep the authority/report checks enabled.
+4. **Paired cross-format proof is still missing.** Assemble real DEB
+   and Arch packages from the SAME independently verified standalone
+   input, decode each with its own format reader, map physical paths
+   back to canonical logical roles and compare content, SHA-256 and
+   executable/document modes. Include nested licenses, provenance
+   tampering (non-hash field), unexpected members, native metadata
+   and wrong modes. The existing isolated Arch tests use mocked
+   `split_inventory`/`stable_provenance` and cannot substitute.
+
+### CI and final release evidence
+
+At review time, GitHub Actions run `38223077104` for exactly
+`aa1088c55b21` was still **in progress**; do not claim it green
+without its completed conclusion. The prior checkpoint's run
+`38038532534` succeeded, but does not establish this SHA's status.
+Run full coverage/tests, Ruff and licensing successfully for final SHA.
+
+After the corrections above, freeze the final implementation SHA and
+perform the REAL `./dev package arch` from a clean non-Arch x86_64
+checkout. Retain `.pkg.tar.zst`, SHA-256 sidecar, full standalone
+build report and build transcript. Then perform authoritative GitHub
+CI and actual Arch pacman inspection/install/ownership/integrity/CLI
+smoke/removal IN PARALLEL for that candidate and the exact transferred
+artifact hash. If access to native Arch is limited to the operator,
+provide precise safe commands and keep the ticket `incomplete` until
+the evidence exists. Any change to final code or artifact demands
+new candidate and corresponding evidence.
+
+**Disposition:** REQUEST CHANGES. Move `review` -> `todo` and
+resume from checkpoint `aa1088c55b21`; leave TASK-062 untouched.
