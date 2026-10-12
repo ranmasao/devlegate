@@ -850,3 +850,69 @@ both final checks on a changed source revision or rebuilt package.
 and resume from `fe94f1131b51`. Leave TASK-062 unchanged. After
 admission of the next worker execution, do not edit this active
 ticket again until its lifecycle completes.
+
+## Review decision — 2026-10-12, checkpoint c6edbb56189d (REQUEST CHANGES)
+
+Execution `5b12060d75794173ab975ae2c57313f8` published
+`c6edbb56189d4072de0135f55af8098bb3bcfaad` with `incomplete`.
+Preserve and resume that work branch/checkpoint.
+
+### Confirmed finished work
+
+- The previous three DEB failures are resolved. GitHub Actions run
+  `38240582856` for this EXACT SHA succeeded: 1173 tests passed,
+  1 skipped, 78% overall coverage; Ruff passed.
+- The strict full standalone provenance validation remains enabled.
+  The DEB integration fixtures now create complete build-report fields,
+  reconstruct `BUILD-PROVENANCE.json` using the real
+  `stable_provenance()` function, and explicitly test that reduced
+  reports are rejected. Keep this improvement; no return to weaker
+  verification or another architectural rewrite.
+- The common native payload inventory and independent install-relative
+  legal/provenance layout from earlier checkpoints remain in place.
+
+### Remaining changes before freezing a release candidate
+
+1. **Restore test isolation.** At `tests/test_deb_package.py:211`,
+   `complete_report()` assigns `standalone.split_inventory = lambda ...`
+   directly to a loaded module. This fake split implementation persists
+   beyond the fixture and can affect other tests sharing that Python
+   process, making results depend on test order. Use a scoped pytest
+   `monkeypatch` or an isolated explicit dependency for the synthetic
+   inventory, and restore state on teardown. Keep the synthetic
+   fixture clearly identified as such; do not claim that fake scie
+   bytes were really split/verified. Add a focused assertion that
+   mutation is scoped if necessary.
+2. **Add the missing paired DEB/Arch contract regression.** No changes
+   to the common packaging code are needed unless the test exposes
+   a defect. Build both native formats from one identical independently
+   verified standalone input, extract with each format reader,
+   normalize physical layout to logical roles and compare expected
+   files, SHA-256 and modes, including nested license snapshots.
+   Keep native metadata checks separate. Cover representative
+   rejections (unexpected file/path, altered legal snapshot,
+   non-hash-field provenance tamper, bad mode). Unit tests using
+   artificial standalone bytes and split-inventory stubs are useful
+   for focused validation, but must not replace the requested paired
+   verification of real inputs. Avoid duplicating all format tests.
+
+### Final package evidence (as previously agreed)
+
+3. After items 1-2, freeze a candidate SHA and perform a clean-source
+   non-Arch Linux x86_64 `./dev package arch`; retain the actual
+   `.pkg.tar.zst`, SHA-256 sidecar, standalone build report and
+   reproducible build transcript. Do not substitute a synthetic
+   Arch archive for this proof.
+4. For that same candidate run complete GitHub CI and native Arch
+   pacman inspect/install/ownership/integrity/CLI smoke/removal in
+   PARALLEL, preserving the exact package checksum on transfer.
+   A previously green CI (38240582856) proves this checkpoint, not
+   the future changed candidate. If native Arch access is external,
+   provide safe precise operator commands and retain `incomplete`
+   until attributable results exist. Any later code or artifact
+   change requires corresponding fresh final evidence.
+
+**Disposition: REQUEST CHANGES. Move TASK-054 `review` -> `todo`.**
+Resume `c6edbb56189d`; keep TASK-062 untouched. Commit this review
+and Kanban transition atomically; do not edit the active ticket
+again after a new worker is admitted until its lifecycle completes.
