@@ -1,0 +1,34 @@
+{
+  "code_base_head": "e10eea1572dfc3632de059f8cf1c39e7cf9898f4",
+  "conclusion": "incomplete",
+  "control_head": "f255949ed5a12dca25bed1610da61f0bf280f060",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-054",
+  "execution_id": "78cee92c524a47b1822b27321acc377a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-054",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain or confirm authoritative complete CI for the exact release candidate, because the local full pytest run exceeded the worker timeout; focused packaging tests and Ruff completed successfully.",
+    "Retain the build and native pacman transcripts, artifact, sidecar, standalone report, and checksum as durable ticket evidence."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-054",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Obtain or confirm authoritative complete CI for the exact release candidate, because the local full pytest run exceeded the worker timeout; focused packaging tests and Ruff completed successfully.",
+      "Retain the build and native pacman transcripts, artifact, sidecar, standalone report, and checksum as durable ticket evidence."
+    ],
+    "report": null,
+    "summary": "Validated the existing shared DEB/Arch native payload implementation and produced the real x86_64 Arch artifact at the current checkout. The exact artifact checksum was verified in a disposable Arch Linux container through pacman inspection, installation, ownership/integrity checks, CLI smoke tests, dependency checks, and removal."
+  },
+  "workspace_head": "35f8d83986e8b4d38528384f93a0894db2b5a543"
+}
