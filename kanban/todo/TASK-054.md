@@ -776,3 +776,77 @@ new candidate and corresponding evidence.
 
 **Disposition:** REQUEST CHANGES. Move `review` -> `todo` and
 resume from checkpoint `aa1088c55b21`; leave TASK-062 untouched.
+
+## Review decision — 2026-10-12, checkpoint fe94f1131b51 (REQUEST CHANGES)
+
+Execution `e7b5837a2ef6428587b194b82f7799bd` was successfully
+replayed by the control lifecycle at `c747089515e0` and published
+checkpoint `fe94f1131b51711f8efe7155612f2bb271ea5150`.
+The earlier concurrent-edit lifecycle block is resolved. Preserve
+this published checkpoint and execution branch; do not reset history.
+
+### Accepted implementation progress
+
+- `PayloadLayout` now defines independently install-relative executable,
+  documentation, license, and installation-provenance destinations,
+  preserving the current Debian/Arch on-disk defaults.
+- A custom `usr/share/licenses/devlegate` root now exercises actual
+  shared `assemble()` and `validate()` and checks absence of the old
+  license path. The shared resolved inventory is retained.
+- Keep strict full provenance authority; do not revert to permissive
+  or partial validation to make tests pass.
+
+### Remaining work — before the final package candidate
+
+1. **Repair exact CI regressions.** GitHub Actions run `38223888098`
+   on `fe94f1131b51` finished FAILURE: 1169 passed, 3 failed,
+   1 skipped; Ruff was skipped. Repair without weakening validation:
+   - `test_production_deb_builder_sets_maintainer_and_passes_validator`
+     fails `native validation requires complete standalone evidence`.
+   - `test_deb_validator_accepts_dependency_free_payload` fails the
+     same strict-report requirement.
+   - `test_deb_validator_rejects_former_private_payload_and_launcher_symlink`
+     checks for `regular file`, but encounters incomplete report first.
+   Create a reusable, complete, verified source/build-report fixture
+   whose `BUILD-PROVENANCE.json` corresponds to the independently
+   computed expected data. For the invalid-launcher test, start from
+   a fully valid package and mutate only the launcher, then prove
+   rejection for the intended reason. Add a separate negative test
+   that a reduced report fails closed. Do not merely mock out
+   `stable_provenance()` in the strict integration tests.
+2. **Finish one paired DEB/Arch integration regression.** Assemble
+   genuine DEB and Arch format archives using one and the same
+   verified standalone input, decode with the appropriate readers,
+   normalize each layout back to logical file roles, and compare
+   content digests and modes. Verify nested license snapshots;
+   ensure format-specific metadata is checked independently.
+   Include meaningful tamper cases (an unexpected path, changed
+   license or non-hash field of build provenance, bad mode).
+   Existing single-format tests are useful but insufficient.
+3. **Keep layout policy contract consistent through adapters.**
+   The shared module supports custom install-relative roots; its
+   format-specific validators currently assume default installed
+   paths and expose no custom layout parameter. For the current
+   Debian/Arch defaults this is fine. Ensure the paired tests prove
+   the current default policies; if an adapter needs a nondefault
+   layout, pass its selected layout through both assembly and
+   validation rather than introducing a third path mapping.
+   No RPM builder or speculative plugin framework in this task.
+
+### Final-stage sequencing (unchanged)
+
+After focused regressions pass, choose one exact final source SHA
+and build the real Arch package by `./dev package arch` from a clean
+non-Arch x86_64 checkout. Retain `.pkg.tar.zst`, `.sha256`, build
+report and transcript. For that frozen candidate perform GitHub CI
+(tests/coverage/Ruff/licensing) and native Arch pacman inspection,
+install, ownership/integrity, CLI smoke and removal **in parallel**.
+Ensure the Arch host validates the identical checksum-matched
+artifact. If external operator host access is unavailable, publish
+safe exact commands and report `incomplete`, not acceptance. Repeat
+both final checks on a changed source revision or rebuilt package.
+
+**Disposition: REQUEST CHANGES. Move TASK-054 from `review` to `todo`**
+and resume from `fe94f1131b51`. Leave TASK-062 unchanged. After
+admission of the next worker execution, do not edit this active
+ticket again until its lifecycle completes.
