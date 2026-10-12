@@ -623,3 +623,73 @@ baseline without cause. No acceptance until both Stage C checks pass.
 
 **Disposition:** REQUEST CHANGES; return TASK-054 `review` -> `todo`.
 Resume from `b64885f495c2`; TASK-062 remains unchanged.
+
+## Review decision — 2026-10-12, checkpoint dbc835f4efc2 (REQUEST CHANGES)
+
+Execution `ea3708414f944c2e96fb5e34ecaa5fd6` published
+`dbc835f4efc29187512890c3c83437f5268a4d5d` with `incomplete`.
+Keep and reuse this checkpoint. GitHub Actions run `38038532534` at
+the exact SHA passed (1163 tests passed, 1 skipped; coverage 78%; Ruff
+passed). No need to repeat CI solely to establish that this SHA passed.
+
+Positive changes: `PayloadEntry` and `_inventory()` now drive both
+native assembly and verification; the layout includes legal/provenance
+configuration; executable SHA-256 is required; full standalone provenance
+can be reconstructed from a complete build report.
+
+### Focused blockers before the final artifact
+
+1. **License layout is inconsistent.** `_inventory()` resolves the
+   compliance-manifest destination using `layout.licenses`, but all
+   ordinary third-party license entries still use
+   `f'{layout.documentation}/{relative}'` where `relative` starts with
+   `LICENSES/`. Therefore changing `PayloadLayout.licenses` relocates
+   the manifest only, not license snapshots. Define and document whether
+   license destination is a full install-relative directory or a
+   subdirectory of documentation, then consistently use that one root
+   for BOTH manifest and every license snapshot in the same resolved
+   inventory. Cover a custom non-default license path with real assembly
+   and validation and verify that no old license directory remains.
+2. **Noncanonical layout destinations.** `_safe_destination()` uses
+   `PurePosixPath.parts` (which normalizes `.` and repeated separators)
+   but returns a normalized path without checking it equals the original
+   input. `_inventory()` stores raw destination strings, while the
+   filesystem normalizes them; layouts such as doubled separators can
+   produce physical aliasing or packages that fail their own validator.
+   Reject noncanonical paths, empty components, trailing separators,
+   unsafe roots and physical destination collisions in all layout roles.
+   Include targeted tests for bad layouts and file-vs-directory clashes.
+3. **Strict provenance must not be optional in the full validator.**
+   `native_payload.validate()` performs exact `stable_provenance()`
+   comparison only if `standalone_report` contains six selected keys.
+   A reduced report can therefore bypass the full document check while
+   still supplying `scie.sha256`. The release validation route should
+   fail closed without the complete verified standalone authority;
+   if limited synthetic fixtures are needed, separate that helper
+   clearly from the independent full package validator. Add a negative
+   test mutating a different field of `BUILD-PROVENANCE.json` and a
+   test where full validation is given a reduced report.
+4. **Cross-format proof missing.** This checkpoint modified three
+   production modules and no test file. No paired DEB/Arch test yet
+   builds packages from the identical validated standalone artifact
+   and compares normalized logical members after separate decoding.
+   Add this mandatory regression with distinct license/provenance
+   paths and legal hashes, including tamper cases. Avoid broad
+   duplication of all existing single-format tests.
+
+### Final release gate and execution order
+
+After fixing items 1-4 and targeted regressions, freeze the next exact
+source SHA; build real `./dev package arch` from a clean non-Arch x86_64
+checkout and preserve archive, hash sidecar, standalone report and build
+transcript. Then run full authoritative GitHub CI and native Arch pacman
+inspection/install/ownership/integrity/CLI-smoke/removal **in parallel**
+for that candidate. Use precisely the same package checksum on Arch;
+if code changes, rebuild and repeat both final checks for the new SHA.
+Native operator access is external; provide safe exact operator commands
+if unavailable and keep result `incomplete` rather than claiming native
+compatibility. Preserve existing standalone, DEB and Arch functionality;
+do not implement RPM or a packaging plugin framework.
+
+**Disposition:** REQUEST CHANGES. Keep in `review` until an explicit
+Kanban transition; this commit records the review, not acceptance.
