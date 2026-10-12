@@ -776,26 +776,3 @@ new candidate and corresponding evidence.
 
 **Disposition:** REQUEST CHANGES. Move `review` -> `todo` and
 resume from checkpoint `aa1088c55b21`; leave TASK-062 untouched.
-
-### CI outcome addendum — 2026-10-12, run 38223077104
-
-The authoritative workflow for checkpoint
-`aa1088c55b2189ab25326e5dd254d1aa75cc4bd9` has now completed
-with **failure: 3 failed, 1169 passed, 1 skipped**. The test step
-failed; Ruff and coverage publication were skipped. This supersedes
-the in-progress CI observation made earlier in this review.
-
-Exactly these tests failed:
-
-- `tests/test_deb_package.py::test_production_deb_builder_sets_maintainer_and_passes_validator`:
-  `PackageError: native validation requires complete standalone evidence`.
-- `tests/test_deb_package.py::test_deb_validator_accepts_dependency_free_payload`:
-  the same missing complete standalone evidence.
-- `tests/test_deb_package.py::test_deb_validator_rejects_former_private_payload_and_launcher_symlink`:
-  expected `regular file`, but validation rejects the incomplete report
-  first, so the intended invalid launcher case is never exercised.
-
-Required: finish the legitimate complete-report fixture migration
-described in item 1 above, retain strict fail-closed validation,
-rerun targeted tests and full authoritative CI at the next checkpoint.
-Do not claim this CI run passed.
