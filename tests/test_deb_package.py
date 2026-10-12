@@ -34,6 +34,9 @@ def load_tool(name):
 VALIDATOR = load_tool("validate_deb")
 BUILDER = load_tool("package_deb")
 DEB = load_tool("deb_format")
+ARCH_BUILDER = load_tool("package_arch")
+ARCH = load_tool("arch_format")
+ARCH_VALIDATOR = load_tool("validate_arch")
 
 
 def make_package(
@@ -139,7 +142,7 @@ def make_standalone_payload(root: Path) -> Path:
     return extracted
 
 
-def complete_report(standalone, repo, manifest_path, extracted):
+def complete_report(standalone, repo, manifest_path, extracted, monkeypatch):
     """Build complete standalone authority for strict native validation."""
     builder = load_tool("build_standalone")
     binary = extracted / "devlegate"
@@ -208,11 +211,13 @@ def complete_report(standalone, repo, manifest_path, extracted):
         ),
         encoding="ascii",
     )
-    standalone.split_inventory = lambda *_args: inventory
+    monkeypatch.setattr(standalone, "split_inventory", lambda *_args: inventory)
     return report
 
 
-def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
+def make_verified_package(
+    tmp_path: Path, monkeypatch, *, legacy_layout: bool = False
+):
     """Build a package against a real checked-out compliance authority."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -243,7 +248,9 @@ def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
             target = extracted / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((compliance / file_record["path"]).read_bytes())
-    report_data = complete_report(standalone, repo, manifest_path, extracted)
+    report_data = complete_report(
+        standalone, repo, manifest_path, extracted, monkeypatch
+    )
     root = tmp_path / "verified-root"
     root.mkdir()
     BUILDER.assemble(
@@ -270,7 +277,7 @@ def make_verified_package(tmp_path: Path, *, legacy_layout: bool = False):
     DEB.build(root, package, timestamp=0)
     report = tmp_path / "verified-report.json"
     report.write_text(json.dumps(report_data), encoding="ascii")
-    return package, report, repo, manifest_path
+    return package, report, repo, manifest_path, extracted
 
 
 def test_production_deb_builder_sets_maintainer_and_passes_validator(
@@ -307,7 +314,9 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
             target = extracted / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((manifest_path.parent / file_record["path"]).read_bytes())
-    report_data = complete_report(standalone, repo, manifest_path, extracted)
+    report_data = complete_report(
+        standalone, repo, manifest_path, extracted, monkeypatch
+    )
     report = tmp_path / "build-report.json"
     report.write_text(json.dumps(report_data), encoding="ascii")
     monkeypatch.setattr(BUILDER, "validate", lambda *args: extracted)
@@ -361,8 +370,10 @@ def test_owned_deb_builder_is_byte_reproducible_without_package_manager(tmp_path
     assert first.read_bytes() == second.read_bytes()
 
 
-def test_deb_validator_accepts_dependency_free_payload(tmp_path):
-    package, report, repo, manifest = make_verified_package(tmp_path)
+def test_deb_validator_accepts_dependency_free_payload(tmp_path, monkeypatch):
+    package, report, repo, manifest, _extracted = make_verified_package(
+        tmp_path, monkeypatch
+    )
     binary = VALIDATOR.validate(package, report, tmp_path / "extract", repo, manifest)
     assert binary.is_file()
     metadata = VALIDATOR.fields(package)
@@ -370,8 +381,77 @@ def test_deb_validator_accepts_dependency_free_payload(tmp_path):
     assert not list((tmp_path / "extract/usr/share/doc/devlegate").glob("*.tar.gz*"))
 
 
-def test_deb_validator_rejects_reduced_standalone_report(tmp_path):
-    package, report, repo, manifest = make_verified_package(tmp_path)
+def test_deb_and_arch_adapters_preserve_one_verified_logical_payload(
+    tmp_path, monkeypatch
+):
+    deb_package, report, repo, manifest, extracted = make_verified_package(
+        tmp_path, monkeypatch
+    )
+    arch_builder = ARCH_BUILDER
+    monkeypatch.setattr(arch_builder, "validate", lambda *args: extracted)
+    monkeypatch.setattr(arch_builder, "git_timestamp", lambda *_args: 0)
+    arch_package = arch_builder._package(
+        repo=repo,
+        archive=tmp_path / "standalone.tar.gz",
+        sidecar=tmp_path / "standalone.tar.gz.sha256",
+        build_report=report,
+        output_dir=tmp_path / "arch-output",
+    )
+
+    deb_root = tmp_path / "deb-extracted"
+    deb_binary = VALIDATOR.validate(deb_package, report, deb_root, repo, manifest)
+    arch_root = tmp_path / "arch-extracted"
+    arch_binary = ARCH_VALIDATOR.validate(
+        arch_package, report, arch_root, repo, manifest
+    )
+
+    def logical_files(root: Path) -> dict[str, tuple[str, int]]:
+        return {
+            path.relative_to(root).as_posix(): (
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                path.stat().st_mode & 0o7777,
+            )
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    deb_files = logical_files(deb_root)
+    arch_files = {
+        name: value
+        for name, value in logical_files(arch_root).items()
+        if name != ".PKGINFO"
+    }
+    provenance = "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
+    assert deb_files.keys() - {provenance} == arch_files.keys() - {provenance}
+    assert {
+        name: value for name, value in deb_files.items() if name != provenance
+    } == {
+        name: value for name, value in arch_files.items() if name != provenance
+    }
+    assert deb_binary.read_bytes() == arch_binary.read_bytes()
+    assert deb_binary.stat().st_mode & 0o7777 == arch_binary.stat().st_mode & 0o7777
+
+    tampered_root = tmp_path / "arch-tampered"
+    ARCH.extract(arch_package, tampered_root)
+    (tampered_root / "usr/share/doc/devlegate/LICENSES/extra.txt").write_text(
+        "unexpected", encoding="ascii"
+    )
+    tampered_package = tmp_path / "arch-tampered.pkg.tar.zst"
+    ARCH.build(tampered_root, tampered_package, timestamp=0)
+    with pytest.raises(ARCH_VALIDATOR.PackageError, match="unexpected files"):
+        ARCH_VALIDATOR.validate(
+            tampered_package,
+            report,
+            tmp_path / "arch-tampered-extracted",
+            repo,
+            manifest,
+        )
+
+
+def test_deb_validator_rejects_reduced_standalone_report(tmp_path, monkeypatch):
+    package, report, repo, manifest, _extracted = make_verified_package(
+        tmp_path, monkeypatch
+    )
     reduced = tmp_path / "reduced-report.json"
     reduced.write_text(
         json.dumps({"wheel": {"version": "0.5.6.dev0"}, "scie": {"sha256": "x"}}),
@@ -383,9 +463,11 @@ def test_deb_validator_rejects_reduced_standalone_report(tmp_path):
         )
 
 
-def test_deb_validator_rejects_former_private_payload_and_launcher_symlink(tmp_path):
-    package, report, repo, manifest = make_verified_package(
-        tmp_path, legacy_layout=True
+def test_deb_validator_rejects_former_private_payload_and_launcher_symlink(
+    tmp_path, monkeypatch
+):
+    package, report, repo, manifest, _extracted = make_verified_package(
+        tmp_path, monkeypatch, legacy_layout=True
     )
     with pytest.raises(VALIDATOR.PackageError, match="regular file"):
         VALIDATOR.validate(package, report, tmp_path / "extract", repo, manifest)
