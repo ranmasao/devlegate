@@ -128,6 +128,31 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     )
     assert "usr/share/doc/devlegate/LICENSES/python-runtime/LICENSE.zlib.txt" in members
 
+    native = load("native_payload")
+    custom_root = tmp_path / "custom-root"
+    custom_layout = native.PayloadLayout(licenses="usr/share/licenses/devlegate")
+    native.assemble(
+        extracted,
+        custom_root,
+        distribution="arch",
+        format_tool=package_arch.TOOL_IDENTITY,
+        repo=ROOT,
+        manifest=manifest_path,
+        layout=custom_layout,
+    )
+    native.validate(
+        custom_root,
+        distribution="arch",
+        format_tool=package_arch.TOOL_IDENTITY,
+        repo=ROOT,
+        manifest=manifest_path,
+        expected_binary_sha256=report_data["scie"]["sha256"],
+        standalone_report=report_data,
+        layout=custom_layout,
+    )
+    assert (custom_root / "usr/share/licenses/devlegate").is_dir()
+    assert not (custom_root / "usr/share/doc/devlegate/LICENSES").exists()
+
     dependency_root = tmp_path / "dependency-root"
     ARCH.extract(output, dependency_root)
     (dependency_root / ".PKGINFO").write_text(
@@ -235,10 +260,9 @@ def test_native_payload_custom_license_root_is_used_for_every_license_member():
     }
     assert license_destinations
     assert all(
-        path.startswith("usr/share/doc/devlegate/legal/snapshots/")
-        for path in license_destinations
+        path.startswith("legal/snapshots/") for path in license_destinations
     )
-    assert not any("/LICENSES/" in path for path in license_destinations)
+    assert not any("/usr/share/doc/devlegate/" in path for path in license_destinations)
 
 
 @pytest.mark.parametrize(

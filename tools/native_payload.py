@@ -46,15 +46,15 @@ FIXED_DOCUMENTS = (
 class PayloadLayout:
     """Physical paths selected by a native format adapter.
 
-    ``licenses`` is a directory relative to ``documentation``.  The other
-    fields are install-relative paths.  Keeping this distinction explicit
-    lets adapters change layout without duplicating payload policy.
+    All fields are install-relative paths.  The license root is independent
+    from the documentation root so a format can use its native legal-file
+    location without changing ordinary documentation paths.
     """
 
     executable: str = "usr/bin/devlegate"
     documentation: str = "usr/share/doc/devlegate"
-    licenses: str = "LICENSES"
-    provenance: str = "INSTALLATION-PROVENANCE.json"
+    licenses: str = "usr/share/doc/devlegate/LICENSES"
+    provenance: str = "usr/share/doc/devlegate/INSTALLATION-PROVENANCE.json"
 
     def __post_init__(self) -> None:
         for name in ("executable", "documentation", "licenses", "provenance"):
@@ -114,9 +114,7 @@ def _inventory(
 ) -> tuple[PayloadEntry, ...]:
     """Build the single logical inventory used by assembly and validation."""
     documentation = _safe_destination(layout.documentation, allow_file=False)
-    licenses = _safe_destination(
-        f"{documentation}/{layout.licenses}", allow_file=False
-    )
+    licenses = _safe_destination(layout.licenses, allow_file=False)
     digests = {
         archive_license_path(file_record["path"]): file_record["sha256"]
         for _record, file_record in manifest_file_records(manifest)
@@ -140,7 +138,7 @@ def _inventory(
         ),
         PayloadEntry(
             "provenance",
-            f"{documentation}/{layout.provenance}",
+            _safe_destination(layout.provenance, allow_file=True),
             None,
             0o644,
         ),
