@@ -1,0 +1,28 @@
+{
+  "code_base_head": "f150168733bbe0c30873394ab9016732144b17ce",
+  "conclusion": "completed",
+  "control_head": "15f743339b31dddc496265413e9dfe5f2c7ba5c0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-057",
+  "execution_id": "b6871f2ff5ca4601bacd66b02f610be1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-057",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-057",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated interrupted-execution recovery to distinguish an admitted exact stop marker from stale generations and unsupported interruption kinds. Persisted failure metadata now includes execution generation, manual marker consumption is generation-scoped, and raw operator interruption regression coverage verifies automatic continuation without a stop marker."
+  },
+  "workspace_head": "8a07a8d880b1a25be1f77235f09639dc49243a9f"
+}
