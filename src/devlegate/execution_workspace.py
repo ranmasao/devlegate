@@ -18,6 +18,10 @@ class ExecutionWorkspaceError(Exception):
     """Raised when execution workspace topology is unsafe or invalid."""
 
 
+class ExecutionWorkspaceConflict(ExecutionWorkspaceError):
+    """Raised when operator action is required to resolve workspace topology."""
+
+
 @dataclasses.dataclass(frozen=True)
 class ExecutionWorkspace:
     ticket_id: str
@@ -90,7 +94,7 @@ class ExecutionWorkspaceManager:
         )
         expected_path = self.path.resolve()
         if branch_path is not None and branch_path != expected_path:
-            raise ExecutionWorkspaceError(
+            raise ExecutionWorkspaceConflict(
                 f"execution branch {self.branch} is already attached to unexpected "
                 f"worktree {branch_path}"
             )
@@ -499,7 +503,7 @@ class ExecutionWorkspaceManager:
             check=False,
         )
         if ancestor.returncode:
-            raise ExecutionWorkspaceError(
+            raise ExecutionWorkspaceConflict(
                 f"execution branch {self.branch} is unrelated to planned code "
                 f"revision {base_head}"
             )
@@ -636,8 +640,8 @@ class ExecutionWorkspaceManager:
                 f"{removed.stderr.strip() or 'unknown git error'}"
             )
 
-    def _path_conflict(self, observed: str) -> ExecutionWorkspaceError:
-        return ExecutionWorkspaceError(
+    def _path_conflict(self, observed: str) -> ExecutionWorkspaceConflict:
+        return ExecutionWorkspaceConflict(
             f"expected execution worktree {self.path} for ticket {self.ticket_id} "
             f"and branch {self.branch} {observed}"
         )
@@ -645,6 +649,7 @@ class ExecutionWorkspaceManager:
 
 __all__ = [
     "ExecutionCheckpoint",
+    "ExecutionWorkspaceConflict",
     "ExecutionWorkspace",
     "ExecutionWorkspaceError",
     "ExecutionWorkspaceManager",

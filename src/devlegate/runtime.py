@@ -34,6 +34,7 @@ from devlegate.execution_result import (
 )
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
+    ExecutionWorkspaceConflict,
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
     WorkspaceInspection,
@@ -4359,7 +4360,7 @@ class ServiceEngine:
 
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
-        except ExecutionWorkspaceError as error:
+        except ExecutionWorkspaceConflict as error:
             raise WorkspacePreparationBlockedError(str(error)) from error
         _log(
             "execution workspace "
@@ -7106,6 +7107,10 @@ class ServiceEngine:
                         status = 1
                     elif once:
                         self._iteration_diagnostic = f"execution failed: {error}"
+                        print(
+                            f"devlegate: {self._iteration_diagnostic}",
+                            file=sys.stderr,
+                        )
                         status = 1
                     else:
                         workflow_blocked = True

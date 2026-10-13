@@ -122,6 +122,60 @@ def test_workspace_preparation_conflict_preserves_foreground_failure_status(
 
     assert daemon.run_service(engine, once=True) == 1
 
+
+def test_actual_unrelated_execution_branch_keeps_hosted_service_available(
+    tmp_path, monkeypatch
+):
+    engine, _config, state = make_engine(tmp_path, monkeypatch)
+    base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    git(engine.repo, "worktree", "remove", workspace.path)
+    orphan = tmp_path / "orphan"
+    git(engine.repo, "worktree", "add", "--detach", orphan, base)
+    git(orphan, "switch", "--orphan", "unrelated")
+    (orphan / "unrelated.txt").write_text("unrelated\n")
+    git(orphan, "add", ".")
+    git(orphan, "commit", "-m", "unrelated")
+    unrelated = git(orphan, "rev-parse", "HEAD").stdout.strip()
+    git(engine.repo, "worktree", "remove", orphan)
+    git(engine.repo, "branch", "-f", workspace.branch, unrelated)
+    _persist_pending_execution(engine, state, workspace, base, "old-lineage")
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 3
+    while engine.service_snapshot().lifecycle != "blocked":
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    snapshot = engine.service_snapshot()
+    assert "operator recovery required" in snapshot.blocked_reason
+    assert thread.is_alive()
+    assert not (workspace.path / "unrelated.txt").exists()
+    stop_event.set()
+    engine.wake()
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+
+
+def test_fatal_workspace_failure_is_not_reclassified_as_blocked(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        engine,
+        "_prepare_execution_workspace",
+        lambda _plan: (_ for _ in ()).throw(
+            ExecutionWorkspaceError("submodule materialization failed")
+        ),
+    )
+
+    with pytest.raises(ExecutionWorkspaceError, match="submodule materialization"):
+        engine.serve(threading.Event())
+
 @pytest.mark.parametrize("kind", ["operator_abort"])
 def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     tmp_path, monkeypatch, kind, capsys

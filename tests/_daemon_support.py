@@ -34,7 +34,13 @@ from git_support import control_publisher
 
 from runtime_helpers import run_test_iteration
 
-from _control_support import control_fixture, git, invoke, persist_agent_running
+from _control_support import (
+    _persist_pending_execution,
+    control_fixture,
+    git,
+    invoke,
+    persist_agent_running,
+)
 
 import devlegate.cli as cli
 
