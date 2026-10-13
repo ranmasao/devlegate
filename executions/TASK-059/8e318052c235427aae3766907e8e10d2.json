@@ -1,0 +1,28 @@
+{
+  "code_base_head": "8a07a8d880b1a25be1f77235f09639dc49243a9f",
+  "conclusion": "completed",
+  "control_head": "3456f24628fb3e2594f155c44bcf4090b3941ebb",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-059",
+  "execution_id": "8e318052c235427aae3766907e8e10d2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-059",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-059/8e318052c235427aae3766907e8e10d2.md",
+  "report_sha256": "6e22ae6173b508ed78b1187675d740e15e0d1a9f36c152f1eb8ad90ff02e3aba",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-059",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused distribution, source-preflight, and standalone tests pass; Ruff passes for the changed files and the full source/tests/tools scope. The full pytest suite was started twice but exceeded the available command timeout during existing control cross-layer tests.",
+    "summary": "Added the shared recursive Git submodule preflight to the independently callable standalone builder before any builder or wheel work. Added regressions proving direct standalone and Arch distribution entry points stop on an uninitialized NanoYAML submodule with the expected path and identity diagnostic."
+  },
+  "workspace_head": "786fdd02a12371db9d900371f240acb7937acdac"
+}
