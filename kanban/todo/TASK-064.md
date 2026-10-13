@@ -82,3 +82,38 @@ maintainer-only tooling, future roadmap items, and historical release notes.
 
 Do not perform the release, rearchitect recovery/packaging, implement new
 installation methods, or pull 0.5.7 work into 0.5.6.
+
+## Review decision — 2026-10-13, checkpoint 5bde69a642be (REQUEST CHANGES)
+
+Execution `356b151ebfbe4bc794f244fa716ac847` completed at
+`5bde69a642be6bb1818f4cdbd8bfcdeaa1235ec2`. The documentation
+audit updates CHANGELOG, README, roadmap, architecture, operations and
+packaging/distribution documentation, with no product-code changes.
+
+### Blockers
+
+1. Authoritative [GitHub Actions run 38439395741](https://github.com/ranmasao/devlegate/actions/runs/38439395741)
+   on the exact checkpoint **failed**: 1190 passed, 1 failed, 1 skipped;
+   Ruff was not reached. The failing test is
+   `tests/test_cli_topology.py::test_real_service_auto_resume_survives_review_barrier_and_reschedules`.
+   Diagnostics show `worker identity persistence failed: [Errno 3] No such process`
+   and a service-condition timeout. Similar real-service races have been
+   seen in previous CI runs; nondeterminism is plausible but not yet proven.
+   Investigate or rerun CI on this same SHA, documenting the outcome;
+   require successful coverage and Ruff before acceptance.
+2. `docs/DEVELOPMENT.md` says `all` selects wheel, sdist, standalone,
+   Debian and full-source artifacts, accidentally omitting **Arch**, although
+   `tools/build_distribution.py` explicitly includes `arch` in
+   `ALL_TARGETS` and handles `all` for the Arch package. Correct the list
+   and ensure the surrounding artifact/installed-runtime list reflects Arch.
+
+### Required follow-up
+
+Fix the small concrete documentation omission, verify docs examples and
+internal links, and rerun authoritative full CI on the **new exact SHA**.
+Keep changes documentation-only. Preserve the accurate 0.5.6 changelog,
+manual-retry semantics, and packaging publication policy; do not create a
+release tag, publish assets, or expand product scope.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume from
+`5bde69a642be6bb1818f4cdbd8bfcdeaa1235ec2`.
