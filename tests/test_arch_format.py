@@ -90,7 +90,7 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     ).stdout.strip()
     report_data = {
         "source_commit": source_commit,
-        "wheel": {"version": "0.5.6.dev0"},
+        "wheel": {"version": "0.5.6"},
         "scie": {"sha256": hashlib.sha256(b"standalone payload").hexdigest()},
         "inputs": {},
         "target_libc": "synthetic",
