@@ -117,3 +117,79 @@ Do not repair TASK-054's old Git lineage, infer a historical checkpoint
 retirement policy, move all recovery code out of runtime.py, introduce a
 watchdog, or alter systemd restart policy. TASK-061 owns the larger
 decomposition in 0.5.7.
+
+## Review decision — 2026-10-13, checkpoint b89d69e08a78 (REQUEST CHANGES)
+
+Execution `95163d3a384a4e29b1100e03dcc6658f` reported
+`completed` at `b89d69e08a7836dd3625d6ba71a9eba32fefe9f0`.
+The implementation is small (only `runtime.py`,
+`tests/_daemon_support.py` and `tests/test_daemon_recovery.py`).
+The typed `WorkspacePreparationBlockedError` addresses the intended
+hosted-availability boundary in principle, but it is **not ready for
+acceptance**.
+
+### Blocking CI evidence
+
+Authoritative GitHub Actions run
+[38363218632](https://github.com/ranmasao/devlegate/actions/runs/38363218632)
+on the exact checkpoint **failed**: 1179 passed, 2 failed, 1 skipped.
+Ruff was skipped because the test stage failed.
+
+Both failures are real foreground diagnostic compatibility regressions,
+not flaky tests:
+
+1. `tests/test_control_workspace.py::test_execution_path_conflict_fails_closed`
+   checks that an unregistered execution checkout is rejected with
+   exit status 1 and the actionable reason in `stderr`.
+   Exit code is still 1, but `stderr` is now empty and the reason
+   appears only in `stdout`.
+2. `tests/test_control_scheduler.py::test_bound_pending_generation_preserves_authority_and_rejects_stale_control`
+   likewise checks that a stale control/execution generation fails
+   with status 1 and `stale execution` on `stderr`.
+   Exit code is still 1, `stderr` empty, reason logged to `stdout`.
+
+The new `_run_polling(once=True)` handler captures
+`WorkspacePreparationBlockedError` as an ordinary status/diagnostic
+rather than letting the existing CLI error boundary emit the error
+to `stderr`. **Fix the foreground behavior, not the assertions**:
+preserve nonzero status *and* the existing operator-facing `stderr`
+diagnostics. Keep hosted service behavior different: it should remain
+alive, observable and honestly blocked.
+
+### Required focused regressions
+
+The new hosted test monkeypatches `run_iteration()` to directly raise
+`WorkspacePreparationBlockedError`; this tests the handler but not the
+original TASK-054-style Git ancestry failure entering through
+`_prepare_execution_workspace()` / `ExecutionWorkspaceManager.prepare()`.
+Add at least one fixture exercising the *actual* old execution branch
+versus new product base conflict and prove hosted service remains alive,
+with reason exposed through status/plan (and IPC if using the service
+fixture), no worker spawned, no mutation of foreign/unsafe refs, and
+normal operator/lifecycle command admission. Also cover `UNSAFE`
+worktree path/registration conflict remaining fail-closed. The existing
+once-mode tests above must continue to pass unchanged.
+
+Review the scope of the blanket `except ExecutionWorkspaceError`
+in `_run_iteration_body`: `ExecutionWorkspaceError` can also arise
+from submodule I/O/materialization and Git metadata failures, not only
+an operator-actionable branch/base conflict. Preserve the existing
+distinction between expected workspace conflicts and truly fatal
+infrastructure/state/authority failures, without inferring safety
+from error text or indiscriminately treating all such failures as
+recoverable. Add a targeted fatal-path regression to show a genuine
+infrastructure failure does not become an indefinitely ignored
+workflow blocker. Do not weaken ownership/provenance checks or
+force branch resets.
+
+### Next gate and disposition
+
+Make the **smallest** correction at the current work checkpoint; rerun
+focused tests, then authoritative full CI (tests, coverage, licensing
+and Ruff) on the new exact SHA. Preserve existing ticket/history
+and other task state.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo` atomically.**
+Resume TASK-062 from `b89d69e08a78`. Do not edit this
+ticket after the next worker is admitted; do not touch TASK-054,
+TASK-063 or release/product refs as part of the review.
