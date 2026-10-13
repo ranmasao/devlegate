@@ -5,6 +5,29 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
+## 0.5.6
+
+Release preparation for safer lifecycle recovery and complete distribution
+proofs. Publication date is intentionally omitted until release publication.
+
+### Added
+
+- Added an execution-scoped manual-retry barrier for explicitly forced service
+  stops, while keeping ordinary shutdown and process loss distinct from operator
+  abort.
+- Added deterministic Arch-family x86_64 package assembly and validation from
+  the validated standalone payload.
+- Added source/submodule preflight before distribution builds and direct
+  standalone build and proof paths with deterministic package validation.
+
+### Fixed
+
+- Preserved safe continuation intent across forced service interruption and kept
+  recovery fail-closed when ownership, provenance, generation, or workspace
+  identity cannot be proven.
+- Kept recoverable workspace-preparation failures visible to the service instead
+  of terminating the hosted runtime.
+
 ## 0.5.5 -- 2026-09-28
 
 Operationally hardened self-hosting, recovery, observability, and distribution
@@ -42,7 +65,10 @@ Operational project hosting, durable lifecycle compatibility, and release-proof 
 ### Added
 
 - Added explicit service and execution log access, registered project addressing, and per-user host installation.
-- Added systemd user supervision with automatic project hosting and standalone/Debian distribution proof tooling; binary publication remains deferred to 0.6.0.
+- Added systemd user supervision with automatic project hosting and
+  standalone/Debian distribution proof tooling. Binary asset publication was a
+  release-policy decision for the 0.5.4 release line, not a claim that the
+  proof tooling was unavailable.
 
 ### Changed
 

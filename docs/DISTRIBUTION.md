@@ -53,6 +53,17 @@ devlegate_<version>_amd64.deb
 The package targets x86_64 / amd64 Debian-family Linux. It has no Python or
 systemd package dependencies, no maintainer scripts, and no systemd unit.
 
+The same validated standalone payload can also produce the native Arch package:
+
+```text
+devlegate-<version>-1-x86_64.pkg.tar.zst
+```
+
+It targets Arch-family Linux on x86_64, has no Python or systemd package
+dependencies, and does not install a systemd unit. Its package metadata and
+mtree are validated without requiring `pacman`; the extracted executable is
+then smoke-tested.
+
 The full-source pair remains separate:
 
 ```text
@@ -102,6 +113,12 @@ bare startup automatically chooses usable systemd supervision or direct
 attachment, while explicit host-policy commands remain available when needed.
 
 The host installation record does not identify a package manager or artifact.
+
+The release workflow currently publishes standalone and Debian assets only
+when the selected release version is at least `0.6.0`; the current workflow
+does not upload the Arch package. This is release publication policy, not a
+statement that the 0.5.6 builders or package proofs are absent. Full-source
+publication remains conditional on gitlinks in the selected source tree.
 
 Runtime identity uses only evidence owned by the relevant distribution boundary:
 

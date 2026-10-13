@@ -159,6 +159,14 @@ commit prefix of at least 4 characters; Devlegate records the resolved full ID.
 `--rewrite-published` is a compatibility option, not required for the canonical
 service-proven published-lineage path.
 
+`devlegate stop --force` is the only lifecycle command that persists an
+execution-scoped manual-retry barrier. It records explicit operator intent for
+the active execution before interrupting its worker. Ordinary `stop`,
+`restart`, service shutdown, external systemd or WSL shutdown, and process loss
+do not create that barrier. Safe automatic continuation remains conditional on
+proven ownership, provenance, generation, and workspace identity; a normal
+worker failure is not automatically retried.
+
 Tickets normally move through:
 
 ```text

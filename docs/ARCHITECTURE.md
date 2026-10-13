@@ -113,8 +113,8 @@ Python-based Devlegate distributions require a compatible Python 3.12 or newer;
 a virtual environment is not a Devlegate runtime requirement. An installer may
 choose an isolated Python environment, but that environment belongs to the
 installer. `./dev` is a source-tree development interface, not an installed
-product runtime interface. A future self-contained distribution may bundle its
-own Python runtime and need no host Python or virtual environment.
+product runtime interface. The standalone distribution bundles its own Python
+runtime and needs no host Python or virtual environment.
 
 Host installation remains separate from software or package installation.
 Supervisors consume the centralized product launch identity rather than
@@ -364,6 +364,13 @@ not receive unconditional recovery.
 The service records shutdown, process loss, and operator abort as different
 runtime facts. Restart and retry logic must prove the prior result before
 continuing; it must not invent a result or launch a duplicate worker.
+
+Only an explicitly admitted `devlegate stop --force` persists a manual-retry
+barrier scoped to the active execution. Restart, orderly service shutdown,
+external systemd or WSL shutdown, and process loss are not equivalent to that
+command. Automatic continuation still requires proofs of ownership, provenance,
+generation, and workspace identity. Normal worker failure remains an explicit
+retry case, not an automatic retry.
 
 ## Bootstrap Boundary
 

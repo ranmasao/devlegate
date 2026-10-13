@@ -13,7 +13,8 @@ over Unix IPC, while SQLite stores operational runtime state outside product
 and workflow Git history. Explicit retry and reconciliation operations,
 execution-record validation, process-loss and shutdown handling, and fail-closed recovery form
 the current safety model. Restricted NanoYAML flow sequences support applicable
-configuration and control data. CI, deterministic source and binary packaging,
+configuration and control data. CI, deterministic source, standalone, Debian,
+and Arch packaging,
 and current dogfooding support provide the development and distribution baseline.
 The licensing baseline is EUPL-1.2 for Devlegate core, CC0-1.0 for copyable
 default templates, and the separate upstream MIT license for NanoYAML.

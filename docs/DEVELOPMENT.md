@@ -76,6 +76,7 @@ project version before building.
 ./dev package python
 ./dev package standalone
 ./dev package deb
+./dev package arch
 ./dev package full-source
 ./dev package all
 ```
@@ -125,11 +126,13 @@ The targets have distinct meanings:
   canonical wheel, then packaged, validated, and smoke-tested.
 - `deb`: a Debian-family package built from the already validated standalone
   package. It is extracted and smoke-tested; it is never installed.
+- `arch`: an Arch-family x86_64 package built from the already validated
+  standalone package. It is extracted and smoke-tested; it is never installed.
 - `full-source`: a complete materialized repository-source archive with pinned
   source dependencies. This is different from the Python sdist.
 - `all`: every distribution form above, with dependencies built only once.
 
-The canonical dependency flow is `wheel -> standalone -> deb`. The Python
+The canonical dependency flow is `wheel -> standalone -> deb` or `arch`. The Python
 aggregate selects `wheel + sdist + pip proofs`; `all` selects wheel, sdist,
 standalone, Debian, and full-source artifacts.
 

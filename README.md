@@ -69,6 +69,18 @@ The package filename is `devlegate_<version>_amd64.deb`:
 sudo apt install ./devlegate_*.deb
 ```
 
+### Arch Linux
+
+The native package targets Arch-family Linux on x86_64. Install a locally built
+or downloaded package with `pacman`:
+
+```sh
+sudo pacman -U ./devlegate-<version>-1-x86_64.pkg.tar.zst
+```
+
+The package has no Python or systemd package dependency. It installs the
+standalone executable and does not install a systemd unit.
+
 ### Standalone Linux archive
 
 The self-contained archive targets Linux x86_64 with glibc. It bundles its own
@@ -80,6 +92,10 @@ tar -xzf devlegate-<version>-linux-x86_64.tar.gz
 sudo install -m 755 \
   devlegate-<version>-linux-x86_64/devlegate /usr/local/bin/devlegate
 ```
+
+Release asset publication is controlled separately by the release workflow;
+the validated builders and package formats are available before publication is
+enabled for a release line.
 
 ### Python wheel
 
@@ -143,7 +159,7 @@ Current limits:
 - [Project Setup](docs/PROJECT_SETUP.md): attach Devlegate to an existing project.
 - [Operations](docs/OPERATIONS.md): addressing, services, status, logs, and recovery.
 - [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
-- [Distribution](docs/DISTRIBUTION.md): wheel, standalone, and Debian details.
+- [Distribution](docs/DISTRIBUTION.md): wheel, standalone, Debian, and Arch details.
 - [Development](docs/DEVELOPMENT.md): source-tree setup and development commands.
 - [Release Packaging](docs/RELEASE_PACKAGING.md): maintainer artifact mechanics.
 - [Roadmap](ROADMAP.md): future Devlegate work.

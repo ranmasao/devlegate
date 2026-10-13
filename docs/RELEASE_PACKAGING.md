@@ -52,6 +52,14 @@ It declares no runtime dependencies, has no maintainer scripts, and does not
 install a systemd unit. The Debian package is built twice and byte-compared
 before either copy can reach the release upload job.
 
+The standalone payload can also be assembled as the native Arch package
+`devlegate-X.Y.Z-1-x86_64.pkg.tar.zst`. Its metadata and mtree are deterministic
+and validated without `pacman`, and its extracted executable is smoke-tested.
+The current release workflow does not upload this package. It publishes
+standalone and Debian assets only for selected release versions at or above
+`0.6.0`; having a validated 0.5.6 builder does not itself publish a 0.5.6
+binary asset.
+
 ## Builder
 
 `tools/build_full_source.py` (also exposed as `tools/build-full-source`)
