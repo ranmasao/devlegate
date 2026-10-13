@@ -191,3 +191,66 @@ This ticket does not:
 - change ordinary retry policy for unrelated failures;
 - add prompt-recovery context;
 - add compatibility/version migration layers.
+
+## Review decision — 2026-10-13 (REQUEST CHANGES: policy simplification)
+
+Execution `45079153cb024185b44bd756b7c442b7` completed at
+`0c9f9ee1fd8e79e05a103698bb6b90a23f0b2620`.
+The original implementation provides `resume-after-restart` continuation
+intent for forced restart and retains explicit retry for `stop --force`.
+Its CI passed, but the operator has revised the continuation policy before
+acceptance. This is a requirements change, not a claim that the worker's
+previous implementation failed its original specification.
+
+### Revised authoritative policy
+
+**Automatic safe interruption recovery is the default.** Only an explicit,
+Devlegate-admitted `stop --force` sets a durable, execution-scoped
+`manual_retry_required` marker (name is illustrative), which prevents
+automatic continuation until an explicit authorized retry. A deliberate
+`restart --force` does not set the marker, nor do normal service stop,
+Linux/Windows shutdown or reboot, WSL shutdown/restart, service process loss,
+or a future watchdog interruption. Do not infer operator-abort policy solely
+from SIGTERM, SIGKILL, systemd shutdown or the low-level interruption kind.
+
+- Persist the explicit stop marker **before** signalling/retiring the worker,
+  subject to existing durable owner/command admission and crash consistency.
+- Scope the marker to the exact execution identity and generation; a stale
+  marker must not affect another ticket or a superseding execution.
+- A manual retry clears/consumes that marker only through a durable,
+  authorized transition; restart must not accidentally clear an explicit stop.
+- On recovery, absent that marker, attempt **safe automatic continuation**
+  only for genuinely interrupted work, using existing worker-retirement,
+  provenance, Git/workspace, generation and single-owner proofs. Ambiguous
+  state stays blocked/recovery-required. Normal worker failure remains manual
+  retry; do not create unbounded retries or blanket `DevlegateError` catches.
+- Preserve diagnostics for interruption mechanism and the explicit stop marker
+  without a matrix of durable `resume-after-restart` and
+  `resume-after-stall-recovery` intents. Remove/refactor the just-added
+  restart-specific continuation machinery instead of stacking a second policy
+  on top of it.
+- A possible future machine-local override permitting auto-retry even after
+  `stop --force` is **not implemented in this ticket**; keep the policy
+  boundary capable of supporting it later.
+
+### Required regressions
+
+1. `stop --force` durably marks the exact execution before terminating its
+   worker, survives service/WSL restart, and suppresses automatic retry.
+2. Explicit manual retry consumes the marker without leaking to another
+   generation/ticket; repeated recovery cannot revive stale work.
+3. `restart --force` resumes safely after ownership retirement without a
+   special resume-after-restart intent; no overlapping workers.
+4. Normal stop followed by later start, external shutdown/reboot/WSL shutdown,
+   and unexpected process loss use the same safe interrupted-work recovery
+   policy when supported, without interpreting them as explicit forced stop.
+5. Ordinary completed/failed workers are not retried automatically; ambiguous
+   ownership or workspace provenance stays fail-closed.
+6. Existing foreground, graceful lifecycle and recovery regressions remain
+   green. Run authoritative full CI and Ruff on the **new exact checkpoint**.
+
+Keep changes within TASK-057 scope; do not implement TASK-056 or modify
+release/product refs or historical execution worktrees during review.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.**
+Resume from `0c9f9ee1fd8e79e05a103698bb6b90a23f0b2620`.
