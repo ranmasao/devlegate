@@ -117,3 +117,39 @@ release tag, publish assets, or expand product scope.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume from
 `5bde69a642be6bb1818f4cdbd8bfcdeaa1235ec2`.
+
+## Review decision — 2026-10-13, checkpoint 2de5ddda8ecf (REQUEST CHANGES)
+
+Execution `f8cdbf2c0a45452f87e6be87b68ea49e` concluded
+`incomplete` at `2de5ddda8ecfd93bb2355d23dec4ff9c2568ba86`.
+The prior documentation error in `docs/DEVELOPMENT.md` was corrected:
+`./dev package all` now explicitly includes Arch. No product code changes
+are needed for that issue.
+
+### Remaining acceptance blockers
+
+1. **No authoritative full CI result exists for the exact new checkpoint.**
+   The previous failed workflow targeted `5bde69a642be`, not
+   `2de5ddda8ecf`. Obtain a completed green full test/coverage and Ruff
+   run on this exact source SHA. Do not claim that an older successful run
+   validates the new checkpoint; do not create a release tag or publish assets.
+   If no automatic CI triggers for this checkpoint, arrange a suitable
+   non-release CI trigger or document the execution limitation explicitly.
+2. **Documentation and relative-link validation remains unperformed.**
+   Validate Markdown relative targets/anchors and relevant documented CLI
+   examples against the repository and current parsers. Report concrete
+   commands, results, and any remaining exceptions. If shell execution is
+   restricted, use available read-only source inspection or report the precise
+   blocked checks rather than asserting validation passed.
+3. Audit the nearby `docs/DEVELOPMENT.md` distribution text for consistency:
+   the corrected `all` list includes Arch, but the following sentence still
+   says `./dev` is not installed in wheel/standalone/Debian runtime packages
+   without naming Arch. Make its scope unambiguous if needed.
+
+Keep the current documentary corrections; do not rework unrelated product
+runtime or packaging code. If the two recurring real-service CI failures
+reappear, report the exact evidence and separate suspected test instability
+from an implementation defect rather than weakening safety assertions.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.**
+Resume from `2de5ddda8ecfd93bb2355d23dec4ff9c2568ba86`.
