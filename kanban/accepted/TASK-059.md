@@ -254,3 +254,24 @@ flaky without evidence.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume from
 `786fdd02a12371db9d900371f240acb7937acdac`.
+
+## Review decision — 2026-10-13, checkpoint 786fdd02a123 (ACCEPT)
+
+Execution `8e318052c235427aae3766907e8e10d2` delivered
+`786fdd02a12371db9d900371f240acb7937acdac`. Follow-up execution
+`6f41bb71bd354109ba71311770a44134` made no source changes and
+could not reproduce the two unrelated real-service timing failures in
+isolated, combined, repeated or concurrent tests.
+
+Authoritative [GitHub Actions run 38422404035](https://github.com/ranmasao/devlegate/actions/runs/38422404035), **attempt 2**, on the same exact source SHA
+is green: **1191 passed, 1 skipped**; coverage and Ruff both passed.
+The first attempt's service integration timeouts did not recur. This
+supports nondeterminism but is not proof of its underlying cause.
+
+Implementation covers the common recursive `validate_source_submodules`
+used by distribution and direct standalone entrypoints, and has explicit
+Arch/direct standalone early-rejection regressions without duplicated
+preflight logic or implicit mutation.
+
+**Disposition: ACCEPT; move `review` -> `accepted`.** Devlegate owns
+subsequent product integration and transition to `done`.
