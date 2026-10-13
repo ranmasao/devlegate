@@ -1,0 +1,32 @@
+{
+  "code_base_head": "f150168733bbe0c30873394ab9016732144b17ce",
+  "conclusion": "incomplete",
+  "control_head": "11561141cf3584cd0a062facea6a671dd2da03aa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-057",
+  "execution_id": "4f4bf9ee1ede45d1a3c6c30fb962ecb2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-057",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the focused and authoritative pytest suites in an environment with pytest installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-057",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the focused and authoritative pytest suites in an environment with pytest installed."
+    ],
+    "report": null,
+    "summary": "Replaced restart-specific continuation intent with an execution-scoped manual_retry_required marker set only by an admitted stop --force. Proven interrupted executions now recover automatically by default, while exact marked executions require explicit retry; marker provenance is exposed and stale markers are cleared safely."
+  },
+  "workspace_head": "761dc1eaaebcc13d82f60f1207f13819384519ed"
+}
