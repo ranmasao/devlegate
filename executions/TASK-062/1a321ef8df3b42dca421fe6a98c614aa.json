@@ -1,0 +1,28 @@
+{
+  "code_base_head": "3cfb40886edbe752b3e040764b02bea84df95db3",
+  "conclusion": "completed",
+  "control_head": "f3e4442de345699034966fbd65d851a9234815c2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-062",
+  "execution_id": "1a321ef8df3b42dca421fe6a98c614aa",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-062",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-062/1a321ef8df3b42dca421fe6a98c614aa.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-062",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Added an explicit execution-workspace conflict subtype so only operator-actionable topology conflicts become hosted workflow blockers; infrastructure and materialization errors still fail through the existing fatal boundary. Foreground one-shot handling now preserves the operator diagnostic on stderr, and regressions cover real unrelated-branch lineage, hosted blocked availability, and fatal workspace failures."
+  },
+  "workspace_head": "9fc8081f5a141d39e736ea881b6312734adf2dc4"
+}
