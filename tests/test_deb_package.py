@@ -99,7 +99,7 @@ def make_package(
     )
     installed_size_field = f"Installed-Size: {size}\n" if include_installed_size else ""
     (control / "control").write_text(
-        "Package: devlegate\nVersion: 0.5.6.dev0\nArchitecture: amd64\n"
+        "Package: devlegate\nVersion: 0.5.6\nArchitecture: amd64\n"
         f"{installed_size_field}"
         f"{dependency}Description: test\n test\n",
         encoding="ascii",
@@ -116,7 +116,7 @@ def make_package(
         text=True,
     )
     report = tmp_path / "report.json"
-    report.write_text(json.dumps({"wheel": {"version": "0.5.6.dev0"}}))
+    report.write_text(json.dumps({"wheel": {"version": "0.5.6"}}))
     return package, report
 
 
@@ -182,7 +182,7 @@ def complete_report(standalone, repo, manifest_path, extracted, monkeypatch):
             "version": standalone.SCIE_JUMP_VERSION,
             "sha256": standalone.SCIE_JUMP_SHA256,
         },
-        "wheel": {"version": "0.5.6.dev0", "sha256": "b" * 64},
+        "wheel": {"version": "0.5.6", "sha256": "b" * 64},
         "scie": {
             "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
             "size": binary.stat().st_size,
@@ -269,7 +269,7 @@ def make_verified_package(
     control.mkdir()
     size = VALIDATOR.installed_size_kib(root)
     (control / "control").write_text(
-        "Package: devlegate\nVersion: 0.5.6.dev0\nArchitecture: amd64\n"
+        "Package: devlegate\nVersion: 0.5.6\nArchitecture: amd64\n"
         f"Installed-Size: {size}\nDescription: test\n test\n",
         encoding="ascii",
     )
@@ -583,7 +583,7 @@ def test_deb_validator_rejects_reduced_standalone_report(tmp_path, monkeypatch):
     )
     reduced = tmp_path / "reduced-report.json"
     reduced.write_text(
-        json.dumps({"wheel": {"version": "0.5.6.dev0"}, "scie": {"sha256": "x"}}),
+        json.dumps({"wheel": {"version": "0.5.6"}, "scie": {"sha256": "x"}}),
         encoding="ascii",
     )
     with pytest.raises(VALIDATOR.PackageError, match="complete standalone evidence"):
