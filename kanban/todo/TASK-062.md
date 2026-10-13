@@ -193,3 +193,66 @@ and other task state.
 Resume TASK-062 from `b89d69e08a78`. Do not edit this
 ticket after the next worker is admitted; do not touch TASK-054,
 TASK-063 or release/product refs as part of the review.
+
+## Review decision — 2026-10-13, checkpoint 9fc8081f5a14 (REQUEST CHANGES)
+
+Execution `1a321ef8df3b42dca421fe6a98c614aa` reported
+`completed` at `9fc8081f5a141d39e736ea881b6312734adf2dc4`.
+The revised implementation introduces `ExecutionWorkspaceConflict` for
+operator-actionable topology conflicts, preserves the foreground `stderr`
+diagnostic, and adds a real unrelated-branch regression plus a fatal
+workspace-error regression. These changes address the previous review's
+primary concerns, but **the checkpoint is not acceptable yet**.
+
+### Blocking CI evidence
+
+Authoritative [GitHub Actions run 38364953978](https://github.com/ranmasao/devlegate/actions/runs/38364953978)
+on exact checkpoint `9fc8081f5a14` **failed**:
+**1182 passed, 1 failed, 1 skipped**. Ruff did not run because the
+test stage failed.
+
+The remaining failure is
+`tests/test_control_recovery.py::test_active_retry_projection_hides_superseded_failure`.
+That test exercises explicit `devlegate.retry("T-1")`, injects an
+`ExecutionWorkspaceError("test stops the resumed attempt")` while
+preparing the resumed workspace, and expects a public `DevlegateError`.
+After the changed exception handling in
+`ServiceEngine._run_iteration_body()`, the raw
+`ExecutionWorkspaceError` escapes via `retry() -> run_iteration()`.
+Thus the retry error boundary differs from the existing regression
+contract. This is deterministic, not a flaky CI failure.
+
+### Required correction
+
+1. Inspect the retry/one-shot/hosted exception boundaries together.
+   Preserve the narrow `ExecutionWorkspaceConflict` classification as
+   an operator-actionable hosted workflow blocker. Other workspace
+   failures must **not** be classified as recoverable merely to satisfy
+   this test.
+2. Preserve explicit retry's existing public diagnostic/error contract
+   (including expected `DevlegateError` behavior) without masking
+   truly fatal failures in the hosted service. Distinguish exception
+   propagation and public API translation from recoverability; they
+   are separate concerns.
+3. Preserve the tested active-retry status projection: the superseded
+   `T-1` failure should not reappear as the active failure, while the
+   unrelated `T-99` failure remains visible.
+4. Keep previously passing foreground `stderr` regressions unchanged.
+   Preserve real unrelated-branch blocked hosting, no unauthorized Git
+   mutation, and fatal infrastructure/state/authority fail-closed
+   behavior. Add or adjust a narrowly targeted regression if needed
+   to demonstrate the public retry boundary and fatal hosted behavior.
+5. Make the smallest correction at the retained work checkpoint.
+   Run focused tests, then authoritative full CI (including Ruff and
+   other configured checks) on the **new exact SHA** before proposing
+   acceptance.
+
+Do not paper over the regression by changing the test expectation
+without a separately justified, reviewed API-contract decision.
+Do not expand this ticket into TASK-054 historical lineage recovery,
+TASK-061 recovery-domain refactoring, or release/product ref changes.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo` atomically.**
+Resume TASK-062 from checkpoint `9fc8081f5a14`. Preserve execution
+records and existing history. Do not change this ticket after a new
+worker admission.
