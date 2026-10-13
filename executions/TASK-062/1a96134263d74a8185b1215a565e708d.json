@@ -1,0 +1,28 @@
+{
+  "code_base_head": "3cfb40886edbe752b3e040764b02bea84df95db3",
+  "conclusion": "completed",
+  "control_head": "fd75c0ebcc1b070a41ee82770a2ac8a2d1fb6317",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-062",
+  "execution_id": "1a96134263d74a8185b1215a565e708d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-062",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-062",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Preserved the explicit retry API's existing DevlegateError diagnostic contract by translating direct retry workspace failures at the retry boundary. Hosted polling remains narrowly classified: workspace topology conflicts become blocked workflow state, while fatal workspace infrastructure errors still escape instead of being treated as recoverable."
+  },
+  "workspace_head": "f150168733bbe0c30873394ab9016732144b17ce"
+}
