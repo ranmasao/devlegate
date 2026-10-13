@@ -153,3 +153,44 @@ from an implementation defect rather than weakening safety assertions.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.**
 Resume from `2de5ddda8ecfd93bb2355d23dec4ff9c2568ba86`.
+
+## Review decision — 2026-10-13, checkpoint 0601d8564def (REQUEST CHANGES)
+
+Execution `e86253f2d12f4e09aa1bb3a97943a6eb` was marked
+`incomplete` at `0601d8564defb8a5c54b7c1c10a4b2cdba536ea1`.
+The Arch description, package output/log/workspace descriptions and repository
+relative-link review were improved. But this checkpoint is **not releasable**.
+
+Authoritative [GitHub Actions run 38451760826](https://github.com/ranmasao/devlegate/actions/runs/38451760826)
+failed with **8 failed, 1183 passed, 1 skipped**. The failures affect
+standalone, Debian and Arch package validation. They are deterministic
+compliance-integrity failures, not the previously seen service timeouts:
+
+- `Devlegate legal snapshot is out of sync: DEVLEGATE-LICENSING.md != LICENSING.md`
+- `compliance snapshot hash mismatch for DEVLEGATE-LICENSING.md`
+
+The latest diff changed repository-relative links in
+`packaging/standalone-compliance/DEVLEGATE-LICENSING.md` without changing
+the canonical `LICENSING.md`, breaking the strict byte-identity and pinned-hash
+contract of the distribution compliance payload.
+
+### Required fixes
+
+1. Restore the byte-identical, expected compliance snapshot and its pinned
+   integrity checks. Prefer reverting the changes to
+   `packaging/standalone-compliance/DEVLEGATE-LICENSING.md` unless a separately
+   justified legal-distribution update calls for deliberate coordinated changes.
+   Do **not** merely rewrite expected hashes to make tests pass or weaken legal
+   validation.
+2. Document that the packaged compliance snapshot is not an ordinary
+   repository-relative Markdown document for link validation. Restrict the
+   generic relative-link audit accordingly, while continuing to check normal
+   repository documentation.
+3. Preserve valid `docs/DEVELOPMENT.md` fixes. Run focused standalone,
+   Debian, Arch and documentation checks, then require completed green full
+   authoritative CI with coverage and Ruff on the **new exact SHA**.
+4. Report findings and remaining limitations factually. Keep scope to docs
+   and compliance snapshot restoration; no release/publication actions.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.**
+Resume from `0601d8564defb8a5c54b7c1c10a4b2cdba536ea1`.
