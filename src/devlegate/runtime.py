@@ -354,6 +354,7 @@ class FailedExecution:
     retryable: bool
     nonretryable_reason: str | None = None
     interruption_kind: str | None = None
+    continuation_intent: str | None = None
 
     @property
     def display_reason(self) -> str:
@@ -369,6 +370,7 @@ class FailedExecution:
             "retryable": self.retryable,
             "nonretryable_reason": self.nonretryable_reason,
             "interruption_kind": self.interruption_kind,
+            "continuation_intent": self.continuation_intent,
         }
 
 
@@ -825,6 +827,21 @@ class ServiceEngine:
                 self._lifecycle_phase = "draining"
                 self._lifecycle_request_id = request_id
                 self._lifecycle_force = force
+                if (
+                    intent == "restart"
+                    and force
+                    and self._state.get("phase") == "agent_running"
+                ):
+                    self._save_state(
+                        "agent_running",
+                        continuation_intent={
+                            "policy": "resume-after-restart",
+                            "request_id": request_id,
+                            "ticket_id": self._state.get("execution_ticket_id"),
+                            "execution_id": self._state.get("execution_id"),
+                            "status": "pending",
+                        },
+                    )
                 stop_event = self._stop_event
                 if force and stop_event is not None:
                     request_abort = getattr(stop_event, "request", None)
@@ -3168,6 +3185,19 @@ class ServiceEngine:
             }
         ):
             raise DevlegateError("invalid execution interruption kind")
+        continuation_intent = state.get("continuation_intent")
+        if continuation_intent is not None and (
+            not isinstance(continuation_intent, dict)
+            or continuation_intent.get("policy") != "resume-after-restart"
+            or continuation_intent.get("status") != "pending"
+            or not isinstance(continuation_intent.get("request_id"), str)
+            or not continuation_intent["request_id"]
+            or not isinstance(continuation_intent.get("ticket_id"), str)
+            or not continuation_intent["ticket_id"]
+            or not isinstance(continuation_intent.get("execution_id"), str)
+            or not continuation_intent["execution_id"]
+        ):
+            raise DevlegateError("invalid continuation intent")
         if phase == "idle" and identity is not None:
             raise DevlegateError("invalid idle state: worker identity is still active")
         accepted_integration = state.get("accepted_integration")
@@ -4172,6 +4202,24 @@ class ServiceEngine:
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
             )
+            pending_continuation = self._state.get("continuation_intent")
+            if (
+                isinstance(pending_continuation, dict)
+                and (
+                    pending_continuation.get("ticket_id") != selected_ticket.id
+                    or not isinstance(failed_for_ticket, dict)
+                    or failed_for_ticket.get("execution_id")
+                    != pending_continuation.get("execution_id")
+                )
+            ):
+                self._save_state(
+                    "idle",
+                    continuation_intent=None,
+                    last_continuation_intent={
+                        **pending_continuation,
+                        "status": "not_admitted",
+                    },
+                )
             resume_required = (
                 isinstance(self._state.get("resume_required"), dict)
                 and self._state["resume_required"].get("status") == "required"
@@ -4189,8 +4237,12 @@ class ServiceEngine:
                 and interrupted_failure
             ):
                 if (
-                    failed_for_ticket.get("interruption_kind")
-                    in {"service_shutdown", "process_loss"}
+                    (
+                        failed_for_ticket.get("interruption_kind")
+                        in {"service_shutdown", "process_loss"}
+                        or failed_for_ticket.get("continuation_intent")
+                        == "resume-after-restart"
+                    )
                     and generation_is_same
                 ):
                     authorization = ExecutionAuthorization(
@@ -4224,7 +4276,7 @@ class ServiceEngine:
                     if authorization.is_automatic_resume and (
                         failed_for_ticket.get("interrupted") is not True
                         or failed_for_ticket.get("interruption_kind")
-                        not in {"service_shutdown", "process_loss"}
+                        not in {"operator_abort", "service_shutdown", "process_loss"}
                     ):
                         raise DevlegateError(
                             "automatic resume requires a safely interrupted execution"
@@ -4341,6 +4393,15 @@ class ServiceEngine:
                 worker_identity=None,
                 resume_required=None,
                 force_retry_authorization=None,
+                continuation_intent=None,
+                last_continuation_intent=(
+                    {
+                        **self._state["continuation_intent"],
+                        "status": "admitted",
+                    }
+                    if isinstance(self._state.get("continuation_intent"), dict)
+                    else self._state.get("last_continuation_intent")
+                ),
                 automatic_retry=(
                     {
                         **automatic_retry,
@@ -9083,6 +9144,7 @@ class ServiceEngine:
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         state = self._state
+        continuation_intent = state.get("continuation_intent")
         kind = state.get("execution_interruption_kind")
         if kind is None:
             kind = "process_loss"
@@ -9111,6 +9173,11 @@ class ServiceEngine:
                 return (
                     str(state["execution_ticket_id"])
                     if kind in {"service_shutdown", "process_loss"}
+                    or (
+                        isinstance(continuation_intent, dict)
+                        and continuation_intent.get("policy")
+                        == "resume-after-restart"
+                    )
                     else None
                 )
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
@@ -9120,6 +9187,10 @@ class ServiceEngine:
             return (
                 str(state["execution_ticket_id"])
                 if kind in {"service_shutdown", "process_loss"}
+                or (
+                    isinstance(continuation_intent, dict)
+                    and continuation_intent.get("policy") == "resume-after-restart"
+                )
                 else None
             )
         reason = (
@@ -9131,6 +9202,7 @@ class ServiceEngine:
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
+        continuation_intent = state.get("continuation_intent")
         required = (
             "local_head",
             "remote_head",
@@ -9268,6 +9340,11 @@ class ServiceEngine:
                 "reason": f"interrupted: {interruption_kind.replace('_', ' ')}",
                 "interrupted": True,
                 "interruption_kind": interruption_kind,
+                **(
+                    {"continuation_intent": continuation_intent["policy"]}
+                    if isinstance(continuation_intent, dict)
+                    else {}
+                ),
             },
         }
         self._save_state(
@@ -9280,6 +9357,7 @@ class ServiceEngine:
             execution_control_head=state["execution_control_head"],
             interrupted_execution_id=state["execution_id"],
             failed_executions=failures,
+            continuation_intent=continuation_intent,
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
