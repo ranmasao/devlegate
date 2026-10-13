@@ -1,0 +1,36 @@
+{
+  "code_base_head": "40576d6c2a3b92930b6f4b6373475a5d5f43a6f2",
+  "conclusion": "completed",
+  "control_head": "29065c3c26fa26b6eb3ac190f0b0dc1f6ef9e2cb",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-065",
+  "execution_id": "14a938f42ba1489292c55d8c6794af80",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-065",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run authoritative CI, coverage, and Ruff on the exact integrated checkpoint.",
+    "Repeat wheel, sdist, standalone, Debian, Arch, and full-source artifact proofs in an environment with the required build tooling; standalone and Debian publication remains policy-disabled below 0.6.0.",
+    "Create the eventual v0.5.6 tag only after external review accepts the exact checkpoint; no tag or publication was performed here."
+  ],
+  "report_artifact": "executions/TASK-065/14a938f42ba1489292c55d8c6794af80.md",
+  "report_sha256": "fa9f53af780f7b8fa12013cd75f107cd3a8686fa482180eaa5e6afda078e6d95",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-065",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Run authoritative CI, coverage, and Ruff on the exact integrated checkpoint.",
+      "Repeat wheel, sdist, standalone, Debian, Arch, and full-source artifact proofs in an environment with the required build tooling; standalone and Debian publication remains policy-disabled below 0.6.0.",
+      "Create the eventual v0.5.6 tag only after external review accepts the exact checkpoint; no tag or publication was performed here."
+    ],
+    "report": "Release-candidate verification: current source commit HEAD is 40576d6c2a3b92930b6f4b6373475a5d5f43a6f2, with NanoYAML at 31e946ff0af442d333b80ace6d8344a383a3920a. pyproject.toml, src/devlegate/__init__.py, and the runtime CLI agree on 0.5.6. The focused release suite passed (89 tests), Ruff passed, git diff --check passed, source/submodule preflight passed, and LICENSING.md is byte-identical to packaging/standalone-compliance/DEVLEGATE-LICENSING.md. The full suite was attempted twice but exceeded the 120-second and 300-second local command limits while progressing through the test suite. Wheel proof was blocked before build by the environment's legacy setuptools rejecting the existing PEP 639 license declaration; the build module is also unavailable. No code, workflow, license, changelog, publication-policy, tag, release, or dispatch changes were made beyond stable-version synchronization and dependent test fixture updates.",
+    "summary": "Finalized the product identity as stable 0.5.6 in project metadata and runtime reporting, and aligned release-oriented packaging and licensing test fixtures. Preserved the undated changelog entry, release publication policy, licensing snapshot, and NanoYAML submodule provenance."
+  },
+  "workspace_head": "4ed3cf4adcc513f4190da51f1c0a470cb7f9523b"
+}
