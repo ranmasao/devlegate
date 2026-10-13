@@ -1,0 +1,32 @@
+{
+  "code_base_head": "786fdd02a12371db9d900371f240acb7937acdac",
+  "conclusion": "incomplete",
+  "control_head": "3d411857aa7be4da7617931129b38c11b958735a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-064",
+  "execution_id": "e86253f2d12f4e09aa1bb3a97943a6eb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-064",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run and record authoritative full tests with coverage and Ruff on the exact new checkpoint SHA before acceptance."
+  ],
+  "report_artifact": "executions/TASK-064/e86253f2d12f4e09aa1bb3a97943a6eb.md",
+  "report_sha256": "e4990de1604adc4567956998f4b15abe059dd6bffddbc9268e11a97786f237c5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-064",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run and record authoritative full tests with coverage and Ruff on the exact new checkpoint SHA before acceptance."
+    ],
+    "report": "Read-only documentation validation confirmed all tracked Markdown relative links resolve, documented package targets and options match dev and tools/build_distribution.py, and the updated claims match implementation. Full packaging execution and ./dev help were unavailable locally because .venv is absent; direct parser/help inspection was performed. No product code, release tags, publication assets, or workflow files were changed.",
+    "summary": "Corrected the Arch runtime-package scope in docs/DEVELOPMENT.md, fixed broken repository-relative licensing links in the standalone compliance guide, and aligned output-directory and retained-workspace descriptions with the distribution implementation. The scoped documentation now consistently describes Arch packaging, release policy, lifecycle semantics, and documented package commands."
+  },
+  "workspace_head": "0601d8564defb8a5c54b7c1c10a4b2cdba536ea1"
+}
