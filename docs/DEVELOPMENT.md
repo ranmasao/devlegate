@@ -2,8 +2,9 @@
 
 This guide covers work from a Devlegate source checkout. `./dev` is a
 source-tree development helper, not part of the installed product interface.
-It is not installed by a Debian package, standalone binary archive, or Python
-wheel. A full source checkout or source archive naturally contains it.
+It is not installed by a Debian package, Arch package, standalone binary
+archive, or Python wheel. A full source checkout or source archive naturally
+contains it.
 
 ## Setup
 

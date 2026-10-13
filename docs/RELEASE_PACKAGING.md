@@ -36,6 +36,12 @@ the glibc target and records the GNU scie-jump asset identity.
 safe extraction, executable modes, artifact identity, manifest hashes, notice
 references, and absence of transient build paths.
 
+The packaged `DEVLEGATE-LICENSING.md` is a byte-identical compliance snapshot of
+the repository-root `LICENSING.md`, required by the package integrity checks. It
+is distribution payload, not an ordinary repository-relative Markdown document;
+generic repository link audits must exclude this snapshot. Validate its content
+through the snapshot identity and package compliance checks instead.
+
 ## Debian Proof Package
 
 When standalone publication is enabled by release policy, the workflow also
