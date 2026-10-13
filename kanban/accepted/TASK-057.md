@@ -305,3 +305,25 @@ validation; authoritative CI must be green before acceptance.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume
 from `761dc1eaaebcc13d82f60f1207f13819384519ed`.
+
+## Review decision — 2026-10-13, checkpoint 8a07a8d880b1 (ACCEPT)
+
+Execution `b6871f2ff5ca4601bacd66b02f610be1` completed at
+`8a07a8d880b1a25be1f77235f09639dc49243a9f`.
+The implementation now uses a durable, execution-scoped
+`manual_retry_required` marker only for an explicitly admitted
+`stop --force`. Other service/process interruptions retain safe
+automatic recovery subject to existing ownership, generation, provenance
+and worker-retirement checks. The latest correction binds marker clearing
+to the base generation, records failed-execution generations, removes
+misleading stop-specific diagnostics for other recovery refusals and
+updates the obsolete low-level operator-abort test to the new policy.
+
+Authoritative [GitHub Actions run 38416880313](https://github.com/ranmasao/devlegate/actions/runs/38416880313)
+on this exact checkpoint is green: **1183 passed, 1 skipped**; coverage
+completed; Ruff reports `All checks passed!`. Prior review blockers
+are resolved. Future configuration override remains deferred.
+
+**Disposition: ACCEPT; move `review` -> `accepted`.** Devlegate owns
+product integration and later transition to `done`; do not change the
+release branch or execution worktrees in review.
