@@ -1229,3 +1229,68 @@ logs/sidecar/report against the claimed checksum and exact
 or initiate another expensive standalone build solely because
 these already generated logs were not attached to the report.
 Leave TASK-062 and TASK-063 untouched.
+
+## Final review decision — 2026-10-13 (ACCEPTED)
+
+**Decision: ACCEPT TASK-054 for normal product integration.** Exact
+candidate checkpoint: `3cfb40886edbe752b3e040764b02bea84df95db3`.
+Worker execution `9e046802c9fa4c1e8b361831c5d38109` reports
+`completed` with no remaining actions. Reviewed production Arch
+adapter fixes and tests in the preceding review.
+
+**Independent review of operator-supplied build-side evidence and native
+Arch Docker/pacman transcript (received 2026-10-13):**
+
+- Build-side log reports clean source checkout and source identity
+  `3cfb40886edbe752b3e040764b02bea84df95db3`; standalone
+  build report's `source_commit` exactly matches.
+- Two independent wheel/scie builds yielded identical respective
+  digests (wheel `2aaf6c81fc1326792fe167c88f8b59b8505b86c0b577f502406cb100f70cb037`;
+  standalone scie `c30533f6ee845b354876a7c3b52a0f6e0ccd4eaca6d5b44208978d789ffbf3b1`).
+- Arch `devlegate-0.5.6.dev0-1-x86_64.pkg.tar.zst` is documented
+  at 37,899,119 bytes with SHA-256:
+  `546929e7aa3b725802515fd031ec04d00c71d2be04b6ce0dd157d1efd41d4888`.
+  That exact digest agrees across build log, sidecar and native transcript;
+  native transcript begins with `sha256sum -c` printing `OK`.
+- `pacman -Qip/-Qlp` recognizes Arch x86_64 version
+  `0.5.6.dev0-1`, no declared dependencies/install scripts and the
+  intended executable/legal documents. `pacman -U` successfully
+  installed, `pacman -Qi/-Ql` registered files, `pacman -Qo`
+  proved `/usr/bin/devlegate` ownership.
+- **`pacman -Qkk devlegate` reports `66 total files, 0 altered
+  files`**, proving the previously missing `.MTREE` is usable.
+  No `directory permissions differ` or `no mtree file` warning.
+  Warnings about missing network-disabled container sync databases
+  (`core`/`extra`) are nonblocking environmental diagnostics.
+- Installed `/usr/bin/devlegate version` output was
+  `devlegate 0.5.6.dev0`. `pacman -R` successfully removed it.
+  The transcript does not show a separate post-remove file-absence
+  assertion; this small verification limit is recorded, not
+  represented as a completed explicit check.
+- GitHub Actions run `38297334137` succeeded on **this exact
+  candidate SHA**: 1179 passed, 1 skipped, coverage 78%, Ruff passed.
+
+**Artifact fingerprints for future traceability** (user-supplied
+original evidence; full build and native logs also held under the
+executor's Git-ignored worktree `dist/`):
+
+    devlegate-0.5.6.dev0-1-x86_64.pkg.tar.zst.sha256
+      sha256 8ce94d67e97fd95cfcdb762ec934cfd308f49079dd45a7a7890b68c50d2de862
+    devlegate-arch-build.log
+      sha256 20168f6e2e08e47b6c1e367c42e99ee564fa4d364ed2c96acc2e16ae2dce1c69
+    devlegate-arch-native-pacman.log
+      sha256 254d87b0c79f64ba0d8145c7d2a62f392a2161a929ee76ca4fdc8968c139feb6
+    devlegate-arch-standalone-build.json
+      sha256 8b1c89c567869a75b9f767cacbd087607f48d748c27208dcf385202162b4ec0b
+
+The package bytes themselves were not transferred to the reviewer, so
+reviewed package SHA evidence is matched **across independent logs/
+sidecar**, not recomputed from the 36-MiB archive. This is adequate for
+the agreed disposable Arch Docker/pacman release-readiness gate;
+physical-host/systemd behavior remains outside this package smoke
+test. No additional code changes, agent execution or rebuild required
+for TASK-054.
+
+**Move `review` -> `accepted` atomically.** Product integration
+remains Devlegate's own subsequent lifecycle step. Do not edit
+TASK-062, TASK-063 or product history as part of this approval.
