@@ -1,0 +1,28 @@
+{
+  "code_base_head": "8a07a8d880b1a25be1f77235f09639dc49243a9f",
+  "conclusion": "completed",
+  "control_head": "3b66cf3a9d3b0438f6d7d7abc69c7a06a99d04ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-059",
+  "execution_id": "2f472847658d44118f2317f4d3356585",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-059",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-059/2f472847658d44118f2317f4d3356585.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-059",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Added a read-only recursive Git submodule source preflight and wired it into distribution packaging before semantic plan execution. The preflight rejects unsafe, missing, non-worktree, and mismatched gitlinks with direct repair guidance, and focused regressions cover validation and build ordering."
+  },
+  "workspace_head": "9a8ee8ebc745dd4a3db12880cdc8e08ff2a18670"
+}
