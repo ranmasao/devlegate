@@ -205,6 +205,7 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     fresh = ServiceEngine(config)
     failure = fresh.status_view().failed_executions[0]
     assert failure.interruption_kind == kind
+    assert fresh._state.get("manual_retry_required") is None
     calls = []
     monkeypatch.setattr(
         fresh._workers,
@@ -214,8 +215,9 @@ def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
             WorkerRunResult(1, None, None, None),
         )[1],
     )
-    assert run_test_iteration(fresh) == (0 if kind == "operator_abort" else 1)
-    assert calls == ([] if kind == "operator_abort" else [True])
+    assert run_test_iteration(fresh) == 1
+    assert calls == [True]
+    assert "stop --force was admitted" not in capsys.readouterr().out
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_sigkill_parent_and_retry_refuses_duplicate_worker(

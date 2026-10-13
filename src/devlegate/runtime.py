@@ -2215,6 +2215,11 @@ class ServiceEngine:
                     self._state.get("execution_id") == manual_retry.get("execution_id")
                     or not self._state.get("execution_id")
                 )
+                and (
+                    self._state.get("execution_base_head")
+                    == manual_retry.get("generation")
+                    or not self._state.get("execution_base_head")
+                )
             )
             self._save_state(
                 str(self._state["phase"]),
@@ -4232,6 +4237,8 @@ class ServiceEngine:
                 or not isinstance(failed_for_ticket, dict)
                 or failed_for_ticket.get("execution_id")
                 != manual_retry.get("execution_id")
+                or failed_for_ticket.get("generation")
+                != manual_retry.get("generation")
             ):
                 self._save_state("idle", manual_retry_required=None)
                 manual_retry = None
@@ -4261,9 +4268,18 @@ class ServiceEngine:
                         selected_ticket.id, "automatic_resume"
                     )
                 else:
+                    if isinstance(manual_retry, dict):
+                        reason = "stop --force was admitted"
+                    elif not generation_is_same:
+                        reason = "the interrupted execution is stale"
+                    else:
+                        reason = (
+                            "the interruption kind is not eligible for automatic "
+                            "recovery"
+                        )
                     _log(
                         f"interrupted execution for {selected_ticket.id} requires "
-                        "explicit retry because stop --force was admitted"
+                        f"explicit retry because {reason}"
                     )
                     return 0
             if authorization is not None:
@@ -5020,6 +5036,7 @@ class ServiceEngine:
         if apply_conclusion and report.result.conclusion == "failed":
             failure = {
                 "execution_id": report.execution_id,
+                "generation": self._state.get("execution_base_head"),
                 "product_head": product_head,
                 "remote_head": product_remote_head,
                 "control_head": control_head,
@@ -9327,6 +9344,7 @@ class ServiceEngine:
             **failures,
             str(state["execution_ticket_id"]): {
                 "execution_id": state["execution_id"],
+                "generation": state["execution_base_head"],
                 "product_head": state["local_head"],
                 "remote_head": state["remote_head"],
                 "control_head": control_head,
