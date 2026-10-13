@@ -475,8 +475,9 @@ def _failures(value: object) -> tuple[FailedExecution, ...]:
                 interruption_kind=_optional_text(
                     mapping["interruption_kind"], "interruption kind"
                 ),
-                continuation_intent=_optional_text(
-                    mapping.get("continuation_intent"), "continuation intent"
+                manual_retry_required=_bool(
+                    mapping.get("manual_retry_required", False),
+                    "manual retry required",
                 ),
             )
         )
