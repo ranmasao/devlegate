@@ -130,11 +130,12 @@ The targets have distinct meanings:
   standalone package. It is extracted and smoke-tested; it is never installed.
 - `full-source`: a complete materialized repository-source archive with pinned
   source dependencies. This is different from the Python sdist.
-- `all`: every distribution form above, with dependencies built only once.
+- `all`: every distribution form above, including the Arch package, with
+  dependencies built only once.
 
 The canonical dependency flow is `wheel -> standalone -> deb` or `arch`. The Python
 aggregate selects `wheel + sdist + pip proofs`; `all` selects wheel, sdist,
-standalone, Debian, and full-source artifacts.
+standalone, Debian, Arch, and full-source artifacts.
 
 `./dev` exists only in the source tree and full-source material. It is not
 installed as part of the normal wheel, standalone, or Debian runtime packages.
