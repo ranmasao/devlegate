@@ -531,6 +531,35 @@ def test_package_preflight_failure_precedes_wheel_builder(monkeypatch, tmp_path)
         GRAPH.package(args)
 
 
+def test_arch_package_preflight_failure_precedes_all_packaging_components(
+    monkeypatch, tmp_path
+):
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(
+        GRAPH,
+        "validate_source_submodules",
+        lambda *_args: (_ for _ in ()).throw(
+            GRAPH.SourcePreflightError(
+                "packaging source is incomplete: submodule "
+                "src/devlegate/_vendor/nanoyaml is not initialized"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        GRAPH,
+        "_component_for_target",
+        lambda *_args, **_kwargs: pytest.fail("Arch packaging component was invoked"),
+    )
+    args = GRAPH.parser().parse_args(
+        ["arch", "--repo", str(tmp_path), "--output-dir", str(tmp_path / "dist")]
+    )
+
+    with pytest.raises(GRAPH.DistributionError, match="nanoyaml"):
+        GRAPH.package(args)
+
+
 def test_package_tty_success_keeps_progress_transient_and_log_durable(
     monkeypatch, tmp_path
 ):

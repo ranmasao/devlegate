@@ -36,6 +36,36 @@ def test_builder_python_version_floor(major, minor, accepted):
             BUILDER.validate_builder_version("CPython", major, minor)
 
 
+def test_direct_standalone_build_preflights_source_before_builder_work(
+    monkeypatch, tmp_path
+):
+    commit = "a" * 40
+    args = BUILDER.parser().parse_args(
+        ["build", "--repo", str(tmp_path), "--output", str(tmp_path / "output")]
+    )
+    monkeypatch.setattr(BUILDER, "source_commit", lambda _repo: commit)
+    monkeypatch.setattr(
+        BUILDER,
+        "validate_source_submodules",
+        lambda *_args: (_ for _ in ()).throw(
+            BUILDER.SourcePreflightError(
+                "packaging source is incomplete: submodule "
+                "src/devlegate/_vendor/nanoyaml is not initialized\n"
+                f"expected {commit}"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        BUILDER,
+        "builder_python_info",
+        lambda _python: pytest.fail("standalone builder work was invoked"),
+    )
+
+    with pytest.raises(BUILDER.BuildError, match="nanoyaml") as error:
+        BUILDER.build(args)
+    assert commit in str(error.value)
+
+
 def test_verified_artifact_rejects_wrong_hash(tmp_path):
     artifact = tmp_path / "artifact"
     artifact.write_bytes(b"actual")

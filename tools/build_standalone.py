@@ -32,6 +32,11 @@ try:
 except ModuleNotFoundError:  # Imported as tools.build_standalone by test clients.
     from tools.build_progress import ComponentEvent, ComponentPlan, ComponentStep
 
+try:
+    from source_preflight import SourcePreflightError, validate_source_submodules
+except ModuleNotFoundError:
+    from tools.source_preflight import SourcePreflightError, validate_source_submodules
+
 
 def semantic_plan() -> tuple[ComponentStep, ...]:
     """Return the deterministic stages owned by the standalone builder."""
@@ -1154,11 +1159,15 @@ def prove(args: argparse.Namespace) -> int:
 def build(args: argparse.Namespace, emit=None) -> int:
     repo = args.repo.resolve()
     output = args.output.resolve()
+    commit = source_commit(repo)
+    try:
+        validate_source_submodules(repo, commit)
+    except SourcePreflightError as error:
+        raise BuildError(str(error)) from error
     builder = builder_python_info(args.python)
     major, minor = map(int, builder["version"].split(".")[:2])
     validate_builder_version(builder["implementation"], major, minor)
     version = project_version(repo)
-    commit = source_commit(repo)
     epoch = source_epoch(repo)
     supplied_wheel = args.wheel.resolve() if args.wheel is not None else None
     if supplied_wheel is not None:
