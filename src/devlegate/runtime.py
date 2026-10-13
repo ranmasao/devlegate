@@ -76,6 +76,10 @@ class WorkflowBlockedError(DevlegateError):
     """The repository cannot currently be interpreted safely for scheduling."""
 
 
+class WorkspacePreparationBlockedError(DevlegateError):
+    """A ticket workspace cannot be prepared without operator action."""
+
+
 class ShutdownInterrupted(Exception):
     """A requested shutdown interrupted a foreground Git child."""
 
@@ -4356,7 +4360,7 @@ class ServiceEngine:
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
         except ExecutionWorkspaceError as error:
-            raise DevlegateError(str(error)) from error
+            raise WorkspacePreparationBlockedError(str(error)) from error
         _log(
             "execution workspace "
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
@@ -7093,6 +7097,29 @@ class ServiceEngine:
                     self._service_shutdown.set()
                     self._publish_service_snapshot(lifecycle="ready")
                     return 0
+                except WorkspacePreparationBlockedError as error:
+                    if operator_command is not None:
+                        self._iteration_diagnostic = (
+                            f"{operator_command.method} {operator_command.ticket_id} "
+                            f"rejected: {error}"
+                        )
+                        status = 1
+                    elif once:
+                        self._iteration_diagnostic = f"execution failed: {error}"
+                        status = 1
+                    else:
+                        workflow_blocked = True
+                        message = str(error)
+                        self._publish_service_snapshot(
+                            lifecycle="blocked",
+                            worker_running=False,
+                            blocked_reason=message,
+                        )
+                        fingerprint = hashlib.sha256(message.encode()).hexdigest()
+                        if self._workflow_blocker_fingerprint != fingerprint:
+                            _log(f"workflow blocked: {message}")
+                        self._workflow_blocker_fingerprint = fingerprint
+                        status = 1
                 except WorkflowBlockedError as error:
                     if operator_command is not None:
                         self._iteration_diagnostic = (

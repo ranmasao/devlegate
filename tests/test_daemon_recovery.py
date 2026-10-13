@@ -61,6 +61,67 @@ def test_recoverable_stage_error_keeps_once_semantics(tmp_path, monkeypatch):
     with pytest.raises(DevlegateError, match="one-shot failure"):
         daemon.run_service(engine, once=True)
 
+
+def test_workspace_preparation_conflict_keeps_hosted_service_blocked_and_alive(
+    tmp_path, monkeypatch, capsys
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.poll_interval = "1"
+    first_iteration = threading.Event()
+    allow_failure = threading.Event()
+    stop_event = threading.Event()
+    calls = []
+
+    def iteration():
+        calls.append(True)
+        if len(calls) == 1:
+            first_iteration.set()
+            allow_failure.wait(2)
+            raise WorkspacePreparationBlockedError(
+                "execution branch is unrelated to planned code revision"
+            )
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(engine, "run_iteration", iteration)
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
+    thread.start()
+    assert first_iteration.wait(2)
+    allow_failure.set()
+    engine.wake()
+    deadline = time.monotonic() + 2
+    while (
+        engine.service_snapshot().lifecycle != "blocked"
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    assert engine.service_snapshot().lifecycle == "blocked"
+    assert (
+        "unrelated to planned code revision"
+        in engine.service_snapshot().blocked_reason
+    )
+    assert thread.is_alive()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert calls == [True, True]
+    assert capsys.readouterr().out.count("workflow blocked:") == 1
+
+
+def test_workspace_preparation_conflict_preserves_foreground_failure_status(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        engine,
+        "run_iteration",
+        lambda: (_ for _ in ()).throw(
+            WorkspacePreparationBlockedError("workspace generation conflict")
+        ),
+    )
+
+    assert daemon.run_service(engine, once=True) == 1
+
 @pytest.mark.parametrize("kind", ["operator_abort"])
 def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
     tmp_path, monkeypatch, kind, capsys

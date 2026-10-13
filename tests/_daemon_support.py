@@ -56,6 +56,7 @@ from devlegate.runtime import (
     OperatorCommand,
     ServiceEngine,
     ShutdownInterrupted,
+    WorkspacePreparationBlockedError,
     WorkflowBlockedError,
 )
 
