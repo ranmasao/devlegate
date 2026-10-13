@@ -8343,10 +8343,15 @@ class ServiceEngine:
             if ticket_id not in candidate_ids:
                 raise DevlegateError(f"ticket {ticket_id} is not currently retryable")
         intent = IterationIntent(retry_ticket_id=ticket_id, force_retry=force)
-        if stop_event is None:
-            return self.run_iteration(intent)
-        with self._stop_context(stop_event):
-            return self.run_iteration(intent)
+        try:
+            if stop_event is None:
+                return self.run_iteration(intent)
+            with self._stop_context(stop_event):
+                return self.run_iteration(intent)
+        except ExecutionWorkspaceError as error:
+            # Keep the direct retry API's public error contract without making
+            # infrastructure failures recoverable in the hosted polling loop.
+            raise DevlegateError(str(error)) from error
 
     def reconcile_update_base(
         self, ticket_id: str, onto: str, *, rewrite_published: bool = False
