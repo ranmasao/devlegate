@@ -471,6 +471,7 @@ def test_default_repo_and_output_dir_are_repository_relative(tmp_path):
 def test_keep_work_preserves_failed_workspace(monkeypatch, capsys):
     source = GRAPH.Source(Path("/repo"), "a" * 40, "1.2.3", "python")
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "validate_source_submodules", lambda *_args: None)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
 
     def fail(*_args):
@@ -493,6 +494,7 @@ def test_failed_workspace_is_removed_without_keep(monkeypatch, tmp_path):
     source = GRAPH.Source(Path("/repo"), "a" * 40, "1.2.3", "python")
     workspace = tmp_path / "workspace"
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "validate_source_submodules", lambda *_args: None)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
     monkeypatch.setattr(GRAPH.tempfile, "mkdtemp", lambda **_kwargs: str(workspace))
     monkeypatch.setattr(
@@ -504,6 +506,29 @@ def test_failed_workspace_is_removed_without_keep(monkeypatch, tmp_path):
     with pytest.raises(GRAPH.DistributionError):
         GRAPH.package(args)
     assert not workspace.exists()
+
+
+def test_package_preflight_failure_precedes_wheel_builder(monkeypatch, tmp_path):
+    source = GRAPH.Source(tmp_path, "a" * 40, "1.2.3", sys.executable)
+    monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
+    monkeypatch.setattr(
+        GRAPH,
+        "validate_source_submodules",
+        lambda *_args: (_ for _ in ()).throw(
+            GRAPH.SourcePreflightError("submodule nanoyaml is not initialized")
+        ),
+    )
+    monkeypatch.setattr(
+        GRAPH,
+        "build_python_artifact",
+        lambda *_args: pytest.fail("wheel builder was invoked"),
+    )
+    args = GRAPH.parser().parse_args(
+        ["wheel", "--repo", str(tmp_path), "--output-dir", str(tmp_path / "dist")]
+    )
+    with pytest.raises(GRAPH.DistributionError, match="nanoyaml"):
+        GRAPH.package(args)
 
 
 def test_package_tty_success_keeps_progress_transient_and_log_durable(
@@ -531,6 +556,7 @@ def test_package_tty_success_keeps_progress_transient_and_log_durable(
             emit(GRAPH.ComponentEvent("complete", step, step.identity))
 
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "validate_source_submodules", lambda *_args: None)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
     monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
     monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("wheel",))
@@ -581,6 +607,7 @@ def test_package_tty_failure_reports_diagnostic_without_counting_failed_leaf(
             raise RuntimeError(diagnostic)
 
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "validate_source_submodules", lambda *_args: None)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
     monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
     monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("wheel",))
@@ -649,6 +676,7 @@ def test_standalone_package_retains_structured_report_and_evidence_path(
             emit(GRAPH.ComponentEvent("complete", step, step.identity))
 
     monkeypatch.setattr(GRAPH, "source_identity", lambda *_args: source)
+    monkeypatch.setattr(GRAPH, "validate_source_submodules", lambda *_args: None)
     monkeypatch.setattr(GRAPH, "require_tools", lambda _names: None)
     monkeypatch.setattr(GRAPH, "component_tree", lambda _targets: plan)
     monkeypatch.setattr(GRAPH, "dependency_order", lambda _targets: ("standalone",))

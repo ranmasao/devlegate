@@ -49,6 +49,11 @@ except ModuleNotFoundError:
         freeze_plan,
     )
 
+try:
+    from source_preflight import SourcePreflightError, validate_source_submodules
+except ModuleNotFoundError:
+    from tools.source_preflight import SourcePreflightError, validate_source_submodules
+
 TARGETS = (
     "wheel",
     "sdist",
@@ -1321,6 +1326,10 @@ def package(args: argparse.Namespace) -> int:
     try:
         source = source_identity(repo, str(Path(args.python)))
         require_tools(("git",))
+        try:
+            validate_source_submodules(source.repo, source.commit)
+        except SourcePreflightError as error:
+            raise DistributionError(str(error)) from error
         if args.target in {"standalone", "deb", "arch", "all"}:
             require_tools(("file",))
     except Exception as error:
