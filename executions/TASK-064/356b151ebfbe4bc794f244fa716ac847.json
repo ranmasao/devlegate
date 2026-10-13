@@ -1,0 +1,32 @@
+{
+  "code_base_head": "786fdd02a12371db9d900371f240acb7937acdac",
+  "conclusion": "completed",
+  "control_head": "d7a9bc11f63e62d1f3a96c68478ccb6b00e1b534",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-064",
+  "execution_id": "356b151ebfbe4bc794f244fa716ac847",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-064",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "The full 1,192-test suite exceeded the available validation timeout twice; focused parser, Arch, standalone, and full-source tests passed, Ruff passed, and relative Markdown links resolved."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-064",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "The full 1,192-test suite exceeded the available validation timeout twice; focused parser, Arch, standalone, and full-source tests passed, Ruff passed, and relative Markdown links resolved."
+    ],
+    "report": null,
+    "summary": "Audited and corrected release-facing documentation for 0.5.6, including an undated factual changelog section, forced-stop recovery semantics, Arch packaging, runtime dependency boundaries, and curated versus GitHub snapshot publication policy. Updated README, roadmap, development, distribution, operations, architecture, and release-packaging references without changing product code."
+  },
+  "workspace_head": "5bde69a642be6bb1818f4cdbd8bfcdeaa1235ec2"
+}
