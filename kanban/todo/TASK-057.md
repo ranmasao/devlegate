@@ -254,3 +254,54 @@ release/product refs or historical execution worktrees during review.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.**
 Resume from `0c9f9ee1fd8e79e05a103698bb6b90a23f0b2620`.
+
+## Review decision — 2026-10-13, checkpoint 761dc1eaaebc (REQUEST CHANGES)
+
+Execution `4f4bf9ee1ede45d1a3c6c30fb962ecb2` reported
+`incomplete` at `761dc1eaaebcc13d82f60f1207f13819384519ed`.
+The patch moves toward the revised policy: only admitted `stop --force`
+creates a durable execution-scoped `manual_retry_required` marker, while
+ordinary forced restart and interrupted execution recovery no longer depend
+on a separate restart-specific continuation intent.
+
+### Blocking CI
+
+Authoritative [run 38405097354](https://github.com/ranmasao/devlegate/actions/runs/38405097354)
+on this checkpoint **failed**: 1182 passed, 1 failed, 1 skipped; Ruff
+not reached. The deterministic failure is
+`tests/test_daemon_recovery.py::test_controlled_worker_interruption_is_persisted_and_preserves_workspace[operator_abort]`:
+a new `ServiceEngine` runs one iteration and returns 1 instead of the
+old asserted 0. The test injects the low-level
+`ShutdownIntent.request("operator_abort")` directly; it does **not**
+admit the public `stop --force` command or persist its marker. Under the
+revised specification, low-level `operator_abort` alone must **not** be
+interpreted as an operator-ordered manual-retry barrier. Therefore, the
+old test expectation is now obsolete. A safely resumed worker in this
+fixture returns `WorkerRunResult(1, ...)`, so the resulting iteration
+may correctly return nonzero after invoking that worker. Do not change
+production code to restore the old inference from `operator_abort`.
+
+### Required correction
+
+1. Update the obsolete test to establish that raw `operator_abort` without
+   the explicit stop marker is eligible for safe automatic continuation,
+   and verify worker admission and resulting ordinary failure semantics.
+2. Add targeted real public `stop --force` admission regressions: persist
+   marker *before* signalling worker, survive owner restart, suppress auto
+   resume, and clear only via an authorized exact-generation manual retry.
+3. Verify `restart --force` and external process loss have no manual marker,
+   still preserve workspace/evidence and never overlap workers. Verify
+   unrelated or stale markers cannot block another execution.
+4. Inspect the branch in `_run_iteration_body` that logs `explicit retry
+   because stop --force was admitted` for *all* unsuccessful eligibility
+   cases (including generation mismatch or unsupported failure kind).
+   Ensure diagnostic states the actual reason, not an invented stop intent.
+5. Run focused tests, then authoritative full CI including Ruff, on the
+   new exact checkpoint. Keep fatal infrastructure/authority fail-closed and
+   normal non-interrupted worker failures explicit-retry only.
+
+The worker also reported missing local pytest and did not provide local
+validation; authoritative CI must be green before acceptance.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume
+from `761dc1eaaebcc13d82f60f1207f13819384519ed`.
