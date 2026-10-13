@@ -82,11 +82,13 @@ project version before building.
 ```
 
 All successful final artifacts are published to `dist/`. Use
-`--output-dir PATH` to select another output directory. It receives only final
-validated artifacts; intermediate build data stays in the temporary workspace.
-The default is `<selected-repository>/dist`, not the caller's current directory.
-Use `--keep-work` when debugging a failed build; otherwise the temporary graph
-workspace is removed.
+`--output-dir PATH` to select another output directory. It receives final
+validated artifacts plus the build log and, for standalone-dependent targets,
+the standalone build report; intermediate build data stays in the temporary
+workspace. The default is `<selected-repository>/dist`, not the caller's
+current directory. Use `--keep-work` when debugging a failed build; otherwise
+the temporary graph workspace is removed. The retained workspace path is
+written to the build log and printed for non-interactive runs.
 The command never installs a Debian package, uses `sudo`, or publishes an
 artifact.
 
@@ -105,9 +107,10 @@ must satisfy the same clean-worktree rules as the default checkout. This is
 useful for intentionally packaging another worktree or source tree.
 
 `--keep-work` preserves the new temporary workspace on both success and
-failure, then prints its exact path. It is useful for inspecting intermediate
-artifacts, build reports, and extracted validation trees. It is not a cache, and
-later invocations always create a new workspace.
+failure. Its exact path is written to the build log and printed for
+non-interactive runs. It is useful for inspecting intermediate artifacts, build
+reports, and extracted validation trees. It is not a cache, and later
+invocations always create a new workspace.
 
 The ordinary workflow needs none of these options:
 
@@ -138,7 +141,8 @@ aggregate selects `wheel + sdist + pip proofs`; `all` selects wheel, sdist,
 standalone, Debian, Arch, and full-source artifacts.
 
 `./dev` exists only in the source tree and full-source material. It is not
-installed as part of the normal wheel, standalone, or Debian runtime packages.
+installed as part of the normal wheel, standalone, Debian, or Arch runtime
+packages.
 
 ```sh
 ./dev clean

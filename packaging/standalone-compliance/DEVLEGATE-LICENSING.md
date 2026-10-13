@@ -26,9 +26,9 @@ The actual facts, applicable law, and license texts control.
 
 | Scope | License | Legal text |
 | --- | --- | --- |
-| Devlegate implementation, tests, and tooling | EUPL-1.2 | [LICENSE](LICENSE) |
-| `src/devlegate/default_templates/**` | CC0-1.0 | [LICENSES/CC0-1.0.txt](LICENSES/CC0-1.0.txt) |
-| `src/devlegate/_vendor/nanoyaml/**` | MIT | [`src/devlegate/_vendor/nanoyaml/LICENSE`](src/devlegate/_vendor/nanoyaml/LICENSE) |
+| Devlegate implementation, tests, and tooling | EUPL-1.2 | [LICENSE](../../LICENSE) |
+| `src/devlegate/default_templates/**` | CC0-1.0 | [LICENSES/CC0-1.0.txt](../../LICENSES/CC0-1.0.txt) |
+| `src/devlegate/_vendor/nanoyaml/**` | MIT | [`src/devlegate/_vendor/nanoyaml/LICENSE`](../../src/devlegate/_vendor/nanoyaml/LICENSE) |
 
 ## Devlegate core: EUPL-1.2
 
@@ -116,6 +116,6 @@ dependency API.
 
 ## Legal texts
 
-The complete legal terms are in [LICENSE](LICENSE),
-[LICENSES/CC0-1.0.txt](LICENSES/CC0-1.0.txt), and the NanoYAML MIT license
+The complete legal terms are in [LICENSE](../../LICENSE),
+[LICENSES/CC0-1.0.txt](../../LICENSES/CC0-1.0.txt), and the NanoYAML MIT license
 identified above. This guide is not a substitute for any of those legal texts.
