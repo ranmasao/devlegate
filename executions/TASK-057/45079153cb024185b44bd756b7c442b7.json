@@ -1,0 +1,28 @@
+{
+  "code_base_head": "f150168733bbe0c30873394ab9016732144b17ce",
+  "conclusion": "completed",
+  "control_head": "3a047fe7a397f2d4f5053f10233a80527b3a3d46",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-057",
+  "execution_id": "45079153cb024185b44bd756b7c442b7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-057",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-057",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented durable continuation intent semantics that distinguish forced restart recovery from operator aborts. Forced restart records resume-after-restart provenance, preserves it through stranded-worker normalization, admits automatic continuation only after existing ownership and recovery checks, and consumes or marks the intent exactly once; stop --force remains explicit-retry-only."
+  },
+  "workspace_head": "0c9f9ee1fd8e79e05a103698bb6b90a23f0b2620"
+}
