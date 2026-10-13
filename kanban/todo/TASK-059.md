@@ -218,3 +218,39 @@ is incomplete.
 
 **Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume
 from `9a8ee8ebc745dd4a3db12880cdc8e08ff2a18670`.
+
+## Review decision — 2026-10-13, checkpoint 786fdd02a123 (REQUEST CHANGES: CI)
+
+Execution `8e318052c235427aae3766907e8e10d2` completed at
+`786fdd02a12371db9d900371f240acb7937acdac`. Prior scope
+blockers are addressed: standalone direct build now invokes the shared
+`validate_source_submodules` before builder/wheel work; Arch and direct
+standalone failure-path regressions are present. DRY boundary is preserved.
+
+However authoritative [GitHub Actions run 38422404035](https://github.com/ranmasao/devlegate/actions/runs/38422404035)
+**failed: 1189 passed, 2 failed, 1 skipped**. Ruff did not run.
+Failing real-service integration cases:
+
+- `tests/test_cli_ipc.py::test_real_service_receipt_restart_is_not_a_persistent_command_queue`
+- `tests/test_cli_topology.py::test_real_service_transaction_stage_restart_preserves_execution[lifecycle_after_effect]`
+
+Both timed out waiting for a service condition; diagnostics include
+`worker identity persistence failed: [Errno 3] No such process`.
+These failures are outside the changed packaging code, but the full CI
+acceptance gate is not met. Do not assert causation or dismiss them as
+flaky without evidence.
+
+### Required follow-up
+
+1. Investigate or reproduce the two failures, including whether concurrent
+   real-service tests trigger worker startup/identity races. Preserve the
+   existing lifecycle semantics and avoid unrelated refactoring in TASK-059.
+2. If independently proven nondeterministic, document evidence and rerun
+   authoritative CI on the reviewed exact checkpoint; if a genuine defect
+   requires a separate ticket, record its ownership explicitly rather than
+   silently weakening assertions or timeouts.
+3. Require green full tests/coverage and Ruff on the exact accepted
+   checkpoint. Keep the shared source-preflight implementation and tests.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume from
+`786fdd02a12371db9d900371f240acb7937acdac`.
