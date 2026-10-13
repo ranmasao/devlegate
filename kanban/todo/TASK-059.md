@@ -188,3 +188,33 @@ This ticket does not:
 - change NanoYAML versioning;
 - replace package/license/content validation;
 - add compatibility or migration layers.
+
+## Review decision — 2026-10-13, checkpoint 9a8ee8ebc745 (REQUEST CHANGES)
+
+Execution `2f472847658d44118f2317f4d3356585` completed at
+`9a8ee8ebc745dd4a3db12880cdc8e08ff2a18670`. Authoritative
+[GitHub Actions run 38419251350](https://github.com/ranmasao/devlegate/actions/runs/38419251350)
+passed. The new recursive Git submodule preflight and early invocation
+in `tools/build_distribution.py` are appropriate, but scope coverage
+is incomplete.
+
+### Required corrections
+
+1. `tools/build_standalone.py` is also an independently callable build
+   entry point (`build` calls `build_wheel`). Direct standalone builds
+   currently bypass `validate_source_submodules`. Ensure source
+   validation precedes its wheel/build work too, reusing the same
+   validator and respecting its selected source checkout. Do not duplicate
+   conflicting validation logic. Independently materialized full-source
+   packaging should preserve its existing pinned-submodule validation
+   semantics rather than impose checkout requirements where the builder
+   intentionally materializes Git objects itself.
+2. Add explicit regression that a missing or uninitialized NanoYAML
+   blocks the `arch` target before any wheel/standalone/native packaging
+   component runs. Include a direct standalone entrypoint regression.
+3. Preserve clean-source success, pinned recursive gitlinks, fail-closed
+   diagnostics and no implicit submodule mutation. Rerun focused tests
+   followed by full authoritative CI including Ruff on the new checkpoint.
+
+**Disposition: REQUEST CHANGES; move `review` -> `todo`.** Resume
+from `9a8ee8ebc745dd4a3db12880cdc8e08ff2a18670`.
