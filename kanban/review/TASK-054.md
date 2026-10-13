@@ -1184,3 +1184,48 @@ The exact-SHA GitHub Actions run `38297334137` was
 Move TASK-054 `review` -> `todo` atomically and continue from
 `3cfb40886edb`. Leave TASK-062 and TASK-063 untouched. Do not
 edit an active ticket while a worker is running.
+
+## Review hold — 2026-10-13, execution 9e046802c9fa (artifact evidence inspection only)
+
+Execution `9e046802c9fa4c1e8b361831c5d38109` reported
+`completed` with empty remaining/questions and retained checkpoint
+`3cfb40886edbe752b3e040764b02bea84df95db3`.
+The exact-SHA GitHub Actions run `38297334137` is **successful**
+(1179 passed, 1 skipped, 78% coverage, Ruff passed).
+Prior `.PKGINFO` umask / directory modes / `.MTREE` code fixes
+and regression coverage were reviewed; no new code changes requested.
+
+Worker's claimed *new* Arch package SHA-256:
+
+    546929e7aa3b725802515fd031ec04d00c71d2be04b6ce0dd157d1efd41d4888
+
+The worker reports successful clean-source packaging and disposable
+Arch Docker/pacman install/integrity/smoke/remove, but only cites
+local, Git-ignored paths without including their contents in the
+control-plane report. At review, GitHub CI artifacts contain only
+`coverage-badge`; no `.pkg.tar.zst`, sidecar, build report, build
+log or native pacman transcript is accessible to the reviewer.
+The review cannot yet independently confirm the source-commit
+binding, exact checksum match, `pacman -Qkk` substantive mtree
+verification, absence of old permission warnings or actual removal
+proof. The old operator smoke log from `35f8d83986e8` does NOT
+establish these properties for the new candidate.
+
+**Disposition: KEEP IN REVIEW — evidence inspection pending, NOT a
+request for another implementation/worker execution.** Obtain these
+files from the existing worktree `dist/` and inspect them, without
+rebuilding or editing source:
+
+- `devlegate-arch-build.log`
+- `devlegate-arch-standalone-build.json`
+- `devlegate-arch-native-pacman.log`
+- `devlegate-0.5.6.dev0-1-x86_64.pkg.tar.zst.sha256`
+
+Retain the actual package on the operator host; upload it as well
+if independent archive digest verification is desired. Compare the
+logs/sidecar/report against the claimed checksum and exact
+`3cfb40886edb` source SHA. If verified, accept TASK-054 into
+`accepted` for normal integration. Do not move it to `todo`
+or initiate another expensive standalone build solely because
+these already generated logs were not attached to the report.
+Leave TASK-062 and TASK-063 untouched.
