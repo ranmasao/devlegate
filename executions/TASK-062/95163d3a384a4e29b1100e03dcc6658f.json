@@ -1,0 +1,28 @@
+{
+  "code_base_head": "3cfb40886edbe752b3e040764b02bea84df95db3",
+  "conclusion": "completed",
+  "control_head": "e2b2c9f50022a481c31987bbcfce5332e4708053",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-062",
+  "execution_id": "95163d3a384a4e29b1100e03dcc6658f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-062",
+  "process_returncode": 0,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-062",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a dedicated workspace-preparation blocked error so expected execution branch/workspace conflicts enter an honest hosted blocked state with deduplicated diagnostics, while unrelated DevlegateError failures remain fatal. Added hosted availability and foreground nonzero regressions covering the preserved operator-visible failure semantics."
+  },
+  "workspace_head": "b89d69e08a7836dd3625d6ba71a9eba32fefe9f0"
+}
