@@ -344,3 +344,36 @@ admission and lineage/evidence proofs. Retain the work with strict ownership.
 
 **Disposition: REQUEST CHANGES; review -> todo**, continue established
 checkpoint lineage. Published v0.5.6 remains untouched.
+
+## Review — 2026-10-14, checkpoint 3413d5147c3e (REQUEST CHANGES)
+
+Execution `9e73af98d0a84e36abe386cbb4224bf8`, checkpoint
+`3413d5147c3e91c5bb7d2d1fe11f6543202d7339`.
+[Exact-checkpoint CI #38575535707](https://github.com/ranmasao/devlegate/actions/runs/38575535707):
+**1199 passed, 1 skipped**; Ruff **failed** on one F401 unused import
+`validate_execution_binding` in `src/devlegate/runtime.py:54`.
+
+Progress: control-lineage admission has been restored before evidence pin
+and again immediately before control-worktree mutation, addressing the
+remote-movement TOCTOU failure. Unreachable legacy implementations in
+`_inspect_bound_execution_workspace` and
+`_repair_bound_execution_workspace` were physically removed.
+
+**Remaining blockers**:
+1. Move the substantive product-lineage rewrite and publication/CAS/lease/
+   displaced-history transaction from `ServiceEngine` into coherent
+   owner-held capability-based implementation; admission-only extraction
+   remains insufficient.
+2. Physically delete remaining unreachable legacy
+   checkpoint/publication and lifecycle replay bodies from `runtime.py`,
+   avoiding duplicate implementations.
+3. Add focused transaction tests for product-lineage rewrite, lease/CAS
+   conflict and evidence, checkpoint/lifecycle crash replay and fail-closed
+   behavior; retain the already green behavior suite.
+4. Remove the unused import, resolve any other Ruff violations, and get
+   full authoritative tests and Ruff green on the exact next checkpoint.
+5. Preserve controls from TASK-057, avoid TASK-066 log-reader changes and
+   do not modify the v0.5.6 release.
+
+**Disposition: REQUEST CHANGES; review -> todo**, continue existing
+TASK-061 execution lineage.
