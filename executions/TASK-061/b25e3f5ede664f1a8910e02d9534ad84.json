@@ -1,0 +1,35 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "ad12de88afb15123441302a1af7f39fa9358b39f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "b25e3f5ede664f1a8910e02d9534ad84",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Physically move the substantive product-lineage rewrite/replay mutation sequence out of ServiceEngine into the extracted transaction module; it remains in the owner capability body.",
+    "Run the complete test suite to completion; the focused recovery boundary suite and Ruff pass."
+  ],
+  "report_artifact": "executions/TASK-061/b25e3f5ede664f1a8910e02d9534ad84.md",
+  "report_sha256": "633cf2ea6b3e02aeae885237a5329356ce64ba1f205cc5beae2c6fd11176aed8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Physically move the substantive product-lineage rewrite/replay mutation sequence out of ServiceEngine into the extracted transaction module; it remains in the owner capability body.",
+      "Run the complete test suite to completion; the focused recovery boundary suite and Ruff pass."
+    ],
+    "report": "Focused tests pass (12 tests) and Ruff/compile checks pass. The full pytest run exceeded the available command timeout.",
+    "summary": "Added a typed, lock-aware update-base transaction boundary in reconciliation_transactions.py and routed ServiceEngine admission through it while preserving the required fresh TOCTOU admission before rewrite intent. Added boundary coverage for lock-held admission and owner effect dispatch."
+  },
+  "workspace_head": "0c98d3e9fcb775d9e1f21e2f975436caffc7a57f"
+}
