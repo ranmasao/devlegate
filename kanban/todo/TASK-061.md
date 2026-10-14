@@ -170,3 +170,48 @@ implement parallel workers, alter package formats, introduce plugins or
 providers, split all unrelated domains out of runtime.py, or create a
 new persistent database/state machine. Broad configuration (TASK-014)
 and OpenCode adapter isolation (TASK-012) remain separate work.
+
+## Review — 2026-10-14, checkpoint adef7f47388f (REQUEST CHANGES)
+
+Reviewed exact worker checkpoint
+`adef7f47388f82cf78933dbb00fddcf073c73c93` from execution
+`5e566f156c1a4093885abcd4ce72bffc`.
+
+**CI FAIL**: [GitHub Actions #38523276816](https://github.com/ranmasao/devlegate/actions/runs/38523276816),
+`tests/test_licensing.py::test_devlegate_owned_source_has_exact_eupl_header`
+failed because newly added `tests/test_recovery_boundaries.py` lacks the
+required EUPL-1.2 copyright/SPDX header. 1193 tests passed, 1 skipped;
+Ruff was skipped because the test step failed. Fix the test header and
+obtain authoritative clean tests + Ruff on the new checkpoint.
+
+**Primary acceptance blocker — extraction insufficient**: only small
+read-only helpers (97 lines `recovery.py`, 67 lines
+`reconciliation.py`) were extracted, while the substantive checkpoint
+publication/replay, workflow/lifecycle recovery, accepted integration,
+workspace repair, and reconciliation mutation procedures remain in
+`ServiceEngine`. `runtime.py` was reduced by only ~25 net lines.
+The ticket explicitly requires material decomposition of those mechanisms,
+not a few classification functions and wrappers.
+
+**Required rework**:
+1. Preserve current checkpoint and tests as a starting point, but implement
+   cohesive recovery and reconciliation domain boundaries for the substantial
+   transaction logic identified in the ticket. Move or delegate recovery
+   transactions through explicit narrow owner-held capabilities or
+   service-owned procedures; document precise ownership. Avoid a second
+   mutation authority, circular imports, or passing an unrestricted
+   `ServiceEngine` object into a renamed monolith.
+2. Include checkpoint publication, control lifecycle/accepted integration
+   replay and workspace recovery, plus lineage reconciliation and its
+   proof/lease/CAS/evidence invariants. If implementation must be split
+   into additional internal modules, do so coherently. Maintain TASK-057
+   manual retry/continuation intent and fail-closed behavior.
+3. Add substantive boundary/transaction regression coverage in addition to
+   pure classifier tests. Preserve all existing recovery behavior.
+4. Fix the missing test SPDX/license header, run focused checks where
+   supported, and ensure full CI/coverage/Ruff pass on the next exact SHA.
+5. Document any genuinely blocked work, without reporting the requested
+   extraction complete prematurely.
+
+Return to `todo` for **focused continuation** of the same ticket;
+do not discard the existing worker checkpoint or modify the 0.5.6 tag.
