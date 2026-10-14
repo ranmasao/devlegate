@@ -611,3 +611,34 @@ checkpoint.
    Published v0.5.6 must remain untouched.
 
 **Disposition: REQUEST CHANGES; review -> todo.**
+
+## Review — 2026-10-14, checkpoint a349fb577288 (REQUEST CHANGES)
+
+Reviewed execution `de36917ff13a4424b7b47c17faa3b041`,
+checkpoint `a349fb577288b80d1eef5e96ddd6a0ac8c5cbcec`.
+[Exact-checkpoint CI #38609467004](https://github.com/ranmasao/devlegate/actions/runs/38609467004)
+completed **successfully**.
+
+Changes add a runtime-checkable `UpdateBaseEffectCapabilities` protocol,
+rename the owner callback to `reconciliation_recover_update_base`, and
+test rejection when the callback is missing. These are interface checks,
+**not** substantive transaction extraction. The owner callback still
+invokes `ServiceEngine._reconciliation_apply_update_base_primitives()`,
+which continues to sequence WAL, rebase, replay, rollback, lease/CAS,
+evidence and finalization.
+
+**Required changes**:
+1. Stop adding wrapper/protocol-only changes. Move the *body and ordering*
+   of the update-base transaction from `ServiceEngine` to
+   `reconciliation_transactions.py` or a cohesive extracted module.
+   The module must directly sequence **narrow** owner-held Git/WAL/workspace/
+   rebase/evidence/publish/rollback/resolve capabilities, not delegate
+   to one callback encapsulating the full old implementation.
+2. Delete the old aggregate owner method after extraction, preserving
+   the single lock/mutation owner, exact TOCTOU checks, TASK-057 intent,
+   idempotent replay, lease/CAS and displaced-history preservation.
+3. Add focused tests for the extracted sequence under partial failures
+   and crash/replay; secure full authoritative CI on the next exact SHA.
+4. Keep TASK-066 and published v0.5.6 untouched.
+
+**Disposition: REQUEST CHANGES; review -> todo**.
