@@ -210,12 +210,17 @@ through typed capabilities; it cannot acquire authority or schedule work by
 itself. `ServiceEngine` remains the only component allowed to acquire the
 runtime lock, write SQLite state, move tickets, launch workers, publish refs,
 or record durable receipts.
+`devlegate.recovery_workflow` owns checkpoint/publication WAL replay, lifecycle
+report replay, and accepted-integration replay. It receives observations and
+mutation capabilities from `ServiceEngine`; it owns no lock, Git repository,
+worker, or persistent state.
 
 | Boundary | Decision/proof owner | Side-effect owner |
 | --- | --- | --- |
 | Interrupted, stale, or stranded execution | `recovery` stage and interruption classifiers | `recovery_transactions` through owner capabilities |
 | Pre-worker workspace binding and old-generation attribution | `recovery` binding contract and `recovery_workspace` topology/provenance proof | `recovery_workspace` through `ServiceEngine` workspace/Git capabilities |
-| Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and execution report store | `ServiceEngine` WAL procedures |
+| Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and `recovery_workflow` | `ServiceEngine` capabilities supplied to `recovery_workflow` |
+| Accepted integration replay | accepted-integration WAL state and fresh control/product observations | `recovery_workflow` through `ServiceEngine` integration capabilities |
 | Same-base resume and product-base eligibility | `reconciliation` lineage proofs plus fresh Git observations | `ServiceEngine` with CAS/lease checks |
 | Published lineage rewrite and displaced evidence | `reconciliation` rewrite authorization proof | `ServiceEngine` ref publication and evidence pinning |
 
@@ -228,13 +233,13 @@ service shutdown remain interruption mechanisms and do not become automatic
 continuation intent.
 
 The extracted transaction boundaries cover control-lineage adoption,
-stranded-worker normalization, and pre-worker workspace inspection/repair.
+stranded-worker normalization, pre-worker workspace inspection/repair, and
+checkpoint/lifecycle/accepted-integration replay.
 They repeat admission or ownership observations, preserve displaced evidence
 before a ref move, and refuse live, dirty, occupied, or uncertain ownership.
-Checkpoint/publication replay, lifecycle/report replay, accepted integration,
-and product-lineage rewrite remain ServiceEngine-owned procedures until their
-Git, report, and write-ahead capabilities can be split without duplicating the
-state machine.
+Product-lineage rewrite remains ServiceEngine-coordinated because its lease,
+CAS, rebase, and displaced-history operations share the existing reconciliation
+state machine and must remain under the single owner lock.
 
 ## Runtime State
 

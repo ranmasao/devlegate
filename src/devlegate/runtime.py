@@ -56,6 +56,12 @@ from devlegate.recovery_workspace import (
     inspect_bound_workspace,
     repair_bound_workspace,
 )
+from devlegate.recovery_workflow import (
+    WorkflowRecoveryError,
+    recover_accepted_integration,
+    recover_checkpoint_publication,
+    recover_lifecycle_report,
+)
 from devlegate.runtime_locator import (
     RuntimeLocator,
     RuntimeLocatorError,
@@ -4759,42 +4765,10 @@ class ServiceEngine:
         return 1 if report.result.conclusion == "failed" else 0
 
     def _recover_accepted_integration(self) -> int:
-        pending = self._state.get("accepted_integration")
-        if not isinstance(pending, dict):
-            raise DevlegateError("invalid accepted integration state")
-        ticket_id = pending.get("ticket_id")
-        if not isinstance(ticket_id, str) or not ticket_id:
-            raise DevlegateError("invalid accepted integration ticket identity")
-        control_head, _control_remote_head = self._sync_control()
-        product_fetch = self._git_runtime(
-            self.repo,
-            "fetch",
-            "--prune",
-            self.remote_name,
-            self.remote_branch,
-            check=False,
-        )
-        if product_fetch.returncode:
-            raise WorkflowBlockedError(
-                "cannot freshly observe product remote for accepted integration"
-            )
-        code = self._git_observation(self.repo, self.remote_branch)
-        control = self._git_observation(self.control_worktree, self.control_branch)
-        self._integrate_accepted(ticket_id, code, control)
-        todo_fingerprint, _todo_count = _todo_fingerprint(
-            self.control_worktree, self.todo_path
-        )
-        self._save_state(
-            "idle",
-            handled_remote_head=code.remote_head or "",
-            handled_control_head=control_head,
-            handled_todo_fingerprint=todo_fingerprint,
-            accepted_integration=None,
-        )
-        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
-        self._refresh_published_status()
-        _log(f"accepted ticket {ticket_id} integrated")
-        return 0
+        try:
+            return recover_accepted_integration(self)
+        except WorkflowRecoveryError as error:
+            raise WorkflowBlockedError(str(error)) from error
 
     def _complete_execution_lifecycle(self, report: ExecutionReport) -> int:
         automatic_retry = self._state.get("automatic_retry")
@@ -6350,6 +6324,18 @@ class ServiceEngine:
         return not workspace.dirty
 
     def _recover_checkpoint_publication(self) -> None:
+        try:
+            recover_checkpoint_publication(self)
+        except WorkflowRecoveryError as error:
+            raise WorkflowBlockedError(str(error)) from error
+
+    def _recover_lifecycle_report(self) -> ExecutionReport:
+        try:
+            return recover_lifecycle_report(self)
+        except WorkflowRecoveryError as error:
+            raise WorkflowBlockedError(str(error)) from error
+
+    def _recover_checkpoint_publication_legacy(self) -> None:
         state = self._state
         stage = state.get("execution_stage")
         pending = state.get("pending_execution_report")
@@ -6497,7 +6483,7 @@ class ServiceEngine:
                 pending_execution_report=report.as_dict(),
             )
 
-    def _recover_lifecycle_report(self) -> ExecutionReport:
+    def _recover_lifecycle_report_legacy(self) -> ExecutionReport:
         state = self._state
         ticket_id = state.get("execution_ticket_id")
         execution_id = state.get("execution_id")
@@ -8502,6 +8488,94 @@ class ServiceEngine:
 
     def recovery_publish_blocked(self, reason: str) -> None:
         self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+
+    # Recovery workflow capabilities.  These are intentionally small seams:
+    # the coordinator remains the only owner of state, locks, Git, and WAL.
+    def recovery_state(self) -> dict[str, object]:
+        return self._state
+
+    def recovery_report_matches_binding(self, report: ExecutionReport) -> None:
+        self._report_matches_execution_binding(report)
+
+    def recovery_report_matches_state(self, report: ExecutionReport) -> None:
+        self._report_matches_execution_state(report)
+
+    def recovery_workspace(self):
+        return self._execution_workspace_for_recovery()
+
+    def recovery_product(self, base: str) -> dict[str, object]:
+        return self._observe_product_generation(base)
+
+    def recovery_prove_product(self) -> None:
+        self._prove_product_generation()
+
+    def recovery_zero_delta(self, report: ExecutionReport, product: dict[str, object]) -> bool:
+        return self._is_zero_delta_stale_product_drift(
+            report.code_base_head, report.workspace_head, product
+        )
+
+    def recovery_zero_delta_payload(
+        self, report: ExecutionReport, product: dict[str, object]
+    ) -> dict[str, object]:
+        return self._zero_delta_retry_payload(report, product)
+
+    def recovery_ticket_title(self, ticket_id: str) -> str:
+        return self._ticket_store().by_id[ticket_id].title
+
+    def recovery_publish_execution(self, workspace, checkpoint: str, expected: str | None) -> None:
+        self._publish_execution_branch(workspace, checkpoint, expected)
+
+    def recovery_execution_remote(self, branch: str) -> str | None:
+        return self._execution_remote_head(branch)
+
+    def recovery_checkpoint_exact(self, workspace, checkpoint: str, start: str) -> bool:
+        return self._checkpoint_commit_is_exact(workspace, checkpoint, start)
+
+    def recovery_persist_reconciliation(
+        self, report: ExecutionReport, product: dict[str, object], execution_remote: object
+    ) -> None:
+        self._persist_product_reconciliation(report, product, execution_remote)
+
+    def recovery_report_from_store(self, ticket_id: str, execution_id: str) -> ExecutionReport:
+        self._validate_control_worktree()
+        return ExecutionReportStore(self.control_worktree).read(ticket_id, execution_id)
+
+    def recovery_validate_control(self) -> None:
+        self._validate_control_worktree()
+
+    def recovery_apply_lifecycle(self, report: ExecutionReport) -> str:
+        return self._apply_execution_lifecycle(report)
+
+    def recovery_finalize_lifecycle(self, report: ExecutionReport, control_head: str) -> None:
+        self._finalize_execution_lifecycle(report, control_head)
+
+    def recovery_observe_product_generation(self) -> None:
+        self._prove_product_generation()
+
+    def recovery_sync_control(self) -> tuple[str, str | None]:
+        return self._sync_control()
+
+    def recovery_fetch_product(self) -> bool:
+        result = self._git_runtime(
+            self.repo, "fetch", "--prune", self.remote_name, self.remote_branch, check=False
+        )
+        return result.returncode == 0
+
+    def recovery_code_observation(self):
+        return self._git_observation(self.repo, self.remote_branch)
+
+    def recovery_control_observation(self):
+        return self._git_observation(self.control_worktree, self.control_branch)
+
+    def recovery_integrate_accepted(self, ticket_id: str, code, control) -> None:
+        self._integrate_accepted(ticket_id, code, control)
+
+    def recovery_todo_fingerprint(self) -> str:
+        return _todo_fingerprint(self.control_worktree, self.todo_path)[0]
+
+    def recovery_publish_ready(self) -> None:
+        self._publish_service_snapshot(lifecycle="ready", worker_running=False)
+        self._refresh_published_status()
 
     def recovery_workspace_manager(self, ticket_id: str):
         """Provide the workspace capability without exposing the coordinator."""
