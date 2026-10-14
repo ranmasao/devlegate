@@ -1,0 +1,29 @@
+{
+  "code_base_head": "b204ba784b942b4c186fc40ea9ed705d117fb7a1",
+  "conclusion": "completed",
+  "control_head": "1ba904fd9f7f3c6a272b14a1bf436cc1ffe38b64",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-068",
+  "execution_id": "cd0249215e734617b7028b2f91e85f6f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-068",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-068/cd0249215e734617b7028b2f91e85f6f.md",
+  "report_sha256": "ff8bacd83ce13114f799ce082405c7be253808a2f019daf725d958dbfb43b896",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-068",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Before: recovery/reconciliation transaction -> owner.recovery_git()/owner.reconciliation_git() -> runtime._git -> git.run_git(). After: transaction -> devlegate.git.run_git() (reconciliation uses a local check=False wrapper to preserve prior result semantics), while ServiceEngine retains only controlled domain capability methods. Existing tests were minimally retargeted to module-level seams. Full pytest and Ruff passed.",
+    "summary": "Removed the redundant ServiceEngine recovery_git/reconciliation_git forwarders and their protocol requirements. Recovery and reconciliation transactions now use the shared Git runner directly, with reconciliation retaining only a local non-raising runner seam for existing command-simulation tests; ownership, admission, WAL, evidence, and CAS decisions remain in the owner/domain layers."
+  },
+  "workspace_head": "f95996d2af82cd4b5698616d6a7dfda2da3ce104"
+}
