@@ -406,3 +406,33 @@ Preserve this code and existing exact-checkpoint green tests.
 
 **Disposition: REQUEST CHANGES; review -> todo**, preserving current
 workspace and checkpoint lineage.
+
+## Review — 2026-10-14, checkpoint 51e99b525948 (REQUEST CHANGES)
+
+Execution `9da516ebe6e54cd18edb095ad6e5bea5`, checkpoint
+`51e99b5259486f372dddabf10cce22b022bb9692`.
+[Authoritative exact-checkpoint CI #38587546197](https://github.com/ranmasao/devlegate/actions/runs/38587546197)
+**completed successfully**. CI success is acknowledged and is not the
+reason for requesting changes.
+
+Useful progress: physically deleted unreachable legacy
+`_recover_checkpoint_publication_legacy` and
+`_recover_lifecycle_report_legacy` bodies from `runtime.py`; added two
+focused tests for evidence-before-publish ordering in published and
+unpublished rewrite cases. Preserve current checkpoint lineage.
+
+**Remaining acceptance blockers** (also expressly acknowledged in the
+worker's `incomplete` claim):
+1. Finish substantive product-lineage reconciliation/rewrite transaction
+   migration out of `ServiceEngine` into narrowly capability-scoped
+   owner-held modules, retaining WAL, lease, CAS, rollback and displaced
+   evidence semantics. Extract more than admission and two-operation
+   publication wrappers.
+2. Add focused crash/replay and fail-closed tests at the new
+   `recovery_workflow` and product rewrite seams, including interruption
+   boundaries and conflict cases.
+3. Re-run and pass authoritative full CI/coverage/Ruff on the next exact
+   checkpoint; preserve TASK-057 interruption/continuation behavior and
+   single mutation owner. Keep TASK-066 and published v0.5.6 untouched.
+
+**Disposition: REQUEST CHANGES; review -> todo.**
