@@ -9,10 +9,11 @@ import contextlib
 import fcntl
 import hashlib
 import os
-import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+from devlegate.git import run_git
 
 
 class RuntimeLocatorError(Exception):
@@ -48,11 +49,7 @@ def read_env(path: Path) -> dict[str, str]:
 
 def repository_root(cwd: Path | None = None) -> Path:
     directory = (cwd or Path.cwd()).resolve()
-    result = subprocess.run(
-        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
-        text=True,
-        capture_output=True,
-    )
+    result = run_git(directory, "rev-parse", "--show-toplevel", check=False)
     if result.returncode:
         raise RuntimeLocatorError(
             f"current directory is not a git repository: {directory}"

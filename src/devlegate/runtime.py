@@ -40,6 +40,7 @@ from devlegate.execution_workspace import (
     WorkspaceInspection,
     parse_worktree_porcelain,
 )
+from devlegate.git import run_git
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
@@ -589,16 +590,7 @@ def _read_env(path: Path) -> dict[str, str]:
         raise DevlegateError(str(error)) from error
 
 
-def _git(
-    repo: Path, *args: str, check: bool = True, input_text: str | None = None
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        input=input_text,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+_git = run_git
 
 
 def _log(message: str) -> None:

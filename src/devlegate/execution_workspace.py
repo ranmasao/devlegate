@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
+from devlegate.git import run_git
 from devlegate.tickets import is_canonical_ticket_name
 
 
@@ -51,15 +52,7 @@ class ExecutionCheckpoint:
 type WorktreeRegistration = dict[str, str | None]
 
 
-def _git(
-    repo: Path, *args: str, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+_git = run_git
 
 
 class ExecutionWorkspaceManager:
