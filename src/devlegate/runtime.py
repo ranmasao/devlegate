@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+# ruff: noqa: E501
 """Runtime and orchestration implementation for Devlegate."""
 
 import dataclasses
@@ -44,6 +45,10 @@ from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.reconciliation import prove_linear_lineage, same_parent_replacement
+from devlegate.reconciliation_transactions import (
+    ReconciliationTransactionError,
+    admit_update_base,
+)
 from devlegate.recovery import (
     classify_stage,
     validate_execution_binding,
@@ -52,15 +57,15 @@ from devlegate.recovery_transactions import (
     reconcile_control_lineage,
     recover_stranded_execution,
 )
-from devlegate.recovery_workspace import (
-    inspect_bound_workspace,
-    repair_bound_workspace,
-)
 from devlegate.recovery_workflow import (
     WorkflowRecoveryError,
     recover_accepted_integration,
     recover_checkpoint_publication,
     recover_lifecycle_report,
+)
+from devlegate.recovery_workspace import (
+    inspect_bound_workspace,
+    repair_bound_workspace,
 )
 from devlegate.runtime_locator import (
     RuntimeLocator,
@@ -8606,6 +8611,55 @@ class ServiceEngine:
         except ValueError as error:
             raise DevlegateError(str(error)) from error
 
+    # These observations form the capability boundary for the lineage
+    # transaction.  The transaction module owns their ordering; the service
+    # remains the only owner of Git, state, and workspace authority.
+    def reconciliation_pending(self) -> dict[str, object]:
+        reconciliation = self._state.get("reconciliation")
+        if not isinstance(reconciliation, dict) or reconciliation.get("status") != "pending":
+            raise ReconciliationTransactionError(
+                "reconciliation has no pending transaction"
+            )
+        return reconciliation
+
+    def reconciliation_target(self, value: str) -> str:
+        result = _git(self.repo, "rev-parse", "--verify", f"{value}^{{commit}}", check=False)
+        if result.returncode or not result.stdout.strip():
+            raise ReconciliationTransactionError(
+                "requested reconciliation target is not a commit"
+            )
+        return result.stdout.strip()
+
+    def reconciliation_product(self, base: str) -> dict[str, object]:
+        product = self._observe_product_generation(base)
+        if product.get("branch") != self.current_branch:
+            raise ReconciliationTransactionError("product checkout is on the wrong branch")
+        return product
+
+    def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
+        result = _git(
+            self.repo, "merge-base", "--is-ancestor", base, target, check=False
+        )
+        return result.returncode == 0
+
+    def reconciliation_same_parent_replacement(self, base: str, target: str) -> bool:
+        return _is_same_parent_replacement(self.repo, base, target)
+
+    def reconciliation_evidence_matches(self, reference: str, checkpoint: str) -> bool:
+        result = _git(self.repo, "rev-parse", "--verify", reference, check=False)
+        return result.returncode == 0 and result.stdout.strip() == checkpoint
+
+    def reconciliation_workspace_binding(
+        self, ticket_id: str, value: dict[str, object]
+    ) -> bool:
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        return (
+            value.get("execution_branch") == manager.branch
+            and Path(str(value.get("execution_path"))) == manager.path
+        )
+
     def _reconcile_update_base_owned(
         self,
         ticket_id: str,
@@ -8617,73 +8671,17 @@ class ServiceEngine:
         """Run reconciliation with authority held by the service owner."""
         authority = self._lock() if _take_lock else nullcontext()
         with authority:
-            reconciliation = self._state.get("reconciliation")
-            if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
-                "pending"
-            ):
-                raise DevlegateError(
-                    f"ticket {ticket_id} has no pending reconciliation"
-                )
-            if reconciliation.get("ticket_id") != ticket_id:
-                raise DevlegateError(
-                    "requested ticket does not match pending reconciliation"
-                )
-            target_result = _git(
-                self.repo, "rev-parse", "--verify", f"{onto}^{{commit}}", check=False
-            )
-            if target_result.returncode:
-                raise DevlegateError("requested reconciliation target is not a commit")
-            target = target_result.stdout.strip()
-            if not target:
-                raise DevlegateError("requested reconciliation target is empty")
-            original_base = str(reconciliation["original_base"])
-            product = self._observe_product_generation(original_base)
-            if product["branch"] != self.current_branch:
-                raise DevlegateError("product checkout is on the wrong branch")
-            if product["dirty"]:
-                raise DevlegateError("product checkout is dirty")
-            current_product = str(product["local_head"])
-            if current_product != target:
-                raise DevlegateError(
-                    "requested reconciliation target is not the current product HEAD"
-                )
-            if str(product["remote_head"]) != target:
-                raise DevlegateError(
-                    "requested reconciliation target is not the fresh product "
-                    "remote HEAD"
-                )
-            ancestor = _git(
-                self.repo,
-                "merge-base",
-                "--is-ancestor",
-                original_base,
-                target,
-                check=False,
-            )
-            same_parent_replacement = (
-                ancestor.returncode != 0
-                and _is_same_parent_replacement(self.repo, original_base, target)
-            )
-            if ancestor.returncode and not same_parent_replacement:
-                raise DevlegateError(
-                    "requested reconciliation target is not a descendant of "
-                    "the original base or a proven same-parent replacement"
-                )
-            evidence = str(reconciliation["evidence_ref"])
-            preserved = _git(self.repo, "rev-parse", "--verify", evidence, check=False)
-            if (
-                preserved.returncode
-                or preserved.stdout.strip() != reconciliation["worker_checkpoint"]
-            ):
-                raise DevlegateError("preserved worker checkpoint evidence changed")
+            try:
+                admission = admit_update_base(self, ticket_id, onto)
+            except ReconciliationTransactionError as error:
+                raise DevlegateError(str(error)) from error
+            reconciliation = self._state["reconciliation"]
+            target = admission.target
+            original_base = admission.original_base
+            evidence = admission.evidence_ref
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket_id
             )
-            if (
-                reconciliation["execution_branch"] != manager.branch
-                or Path(str(reconciliation["execution_path"])) != manager.path
-            ):
-                raise DevlegateError("reconciliation workspace binding is invalid")
             checkpoint = str(reconciliation["worker_checkpoint"])
             rewrite_stage = reconciliation.get("rewrite_stage")
             rewrite_checkpoint = reconciliation.get("rewrite_checkpoint")

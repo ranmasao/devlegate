@@ -10,6 +10,10 @@ from devlegate.reconciliation import (
     rewrite_is_authorized,
     same_parent_replacement,
 )
+from devlegate.reconciliation_transactions import (
+    ReconciliationTransactionError,
+    admit_update_base,
+)
 from devlegate.recovery import (
     classify_stage,
     classify_stranded_execution,
@@ -170,3 +174,60 @@ def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild():
     result = inspect_bound_workspace(_WorkspaceOwner(), state)
 
     assert result.classification == "RECOVERABLE"
+
+
+class _LineageOwner:
+    def __init__(self, *, descendant=True, evidence=True):
+        self.descendant = descendant
+        self.evidence = evidence
+
+    def reconciliation_pending(self):
+        return {
+            "ticket_id": "TASK-1",
+            "original_base": "base",
+            "control_head": "control",
+            "worker_checkpoint": "checkpoint",
+            "evidence_ref": "refs/evidence",
+            "execution_branch": "devlegate/TASK-1",
+            "execution_path": "/tmp/execution",
+            "execution_remote_head": None,
+        }
+
+    def reconciliation_target(self, value):
+        return value
+
+    def reconciliation_product(self, _base):
+        return {
+            "branch": "main",
+            "dirty": False,
+            "local_head": "target",
+            "remote_head": "target",
+        }
+
+    def reconciliation_target_is_descendant(self, _base, _target):
+        return self.descendant
+
+    def reconciliation_same_parent_replacement(self, _base, _target):
+        return False
+
+    def reconciliation_evidence_matches(self, _reference, _checkpoint):
+        return self.evidence
+
+    def reconciliation_workspace_binding(self, _ticket_id, _value):
+        return True
+
+
+def test_lineage_admission_captures_provenance_before_mutation():
+    admission = admit_update_base(_LineageOwner(), "TASK-1", "target")
+
+    assert admission.original_base == "base"
+    assert admission.checkpoint == "checkpoint"
+
+
+def test_lineage_admission_rejects_unproven_history():
+    try:
+        admit_update_base(_LineageOwner(descendant=False), "TASK-1", "target")
+    except ReconciliationTransactionError as error:
+        assert "descendant" in str(error)
+    else:
+        raise AssertionError("divergent lineage must fail closed")

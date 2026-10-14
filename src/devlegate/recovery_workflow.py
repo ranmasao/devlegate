@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+# ruff: noqa: E501
 """Crash replay transactions for execution publication and lifecycle.
 
 This module owns the durable stage transitions.  The service supplies only
@@ -14,7 +15,10 @@ import dataclasses
 from typing import Any, Protocol
 
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
-from devlegate.execution_workspace import ExecutionWorkspaceManager, ExecutionWorkspaceError
+from devlegate.execution_workspace import (
+    ExecutionWorkspaceError,
+    ExecutionWorkspaceManager,
+)
 
 
 class WorkflowRecoveryError(Exception):

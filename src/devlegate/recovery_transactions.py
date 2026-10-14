@@ -54,7 +54,6 @@ def reconcile_control_lineage(
     authority = owner.recovery_lock() if take_lock else nullcontext()
     with authority:
         owner.validate_control_reconcile_admission(from_head, to_head)
-        owner.validate_control_reconcile_admission(from_head, to_head)
         evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
         existing = owner.recovery_git(repo, "rev-parse", "--verify", evidence)
         if existing.returncode == 0:

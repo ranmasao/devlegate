@@ -171,6 +171,27 @@ complete scheduler iteration. All modes use the same authority and IPC
 boundary.
 `devlegate stop` requests orderly shutdown through the actual runtime owner.
 
+### Recovery Domain Ownership
+
+Recovery remains serialized by `ServiceEngine`, but its transaction decisions
+are split behind owner-held capabilities:
+
+| Domain | Module responsibility | Service-owned effects |
+| --- | --- | --- |
+| Classification | `recovery.py` classifies stage, interruption, and stranded-worker action | none |
+| Workspace | `recovery_workspace.py` proves branch, path, registration, and report ownership | worktree repair and CAS/evidence writes |
+| Workflow replay | `recovery_workflow.py` replays checkpoint, publication, lifecycle, and accepted integration stages | Git, WAL/state, report store, and control mutations |
+| Lineage admission | `reconciliation_transactions.py` orders product, ancestry, evidence, and workspace proofs | rebase, lease/CAS publication, displaced-history refs, and final state |
+
+The transaction phases are durable write-ahead boundaries: observe and prove,
+record intent, perform one owner-held Git or report mutation, re-observe exact
+identity, then commit the resolved state. A missing, dirty, occupied,
+unobservable, divergent, or mismatched object fails closed. A clean checkpoint
+can resume; a recoverable interruption can be retried only when continuation
+intent permits it; changed product lineage requires explicit reconciliation;
+an operator force-stop remains manual retry intent and is never converted into
+automatic retry.
+
 ### Operational Logging
 
 Operational output has an explicit service or execution scope. Service-scoped
