@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "4c47d7b483cb7872d9793b6df84e48adfd5b8e2e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "9722b191a4c745269a044998b8caf89b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Physically extract the existing ServiceEngine update-base transaction body into independent recovery, prepare, apply, publish, and finish implementations; the current prepare/recovery methods still delegate to the monolithic internal transaction.",
+    "Add the required focused crash, lease/CAS, evidence, lineage, workspace, and authorization tests.",
+    "Run the focused and full test suites plus Ruff on the completed extraction."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Physically extract the existing ServiceEngine update-base transaction body into independent recovery, prepare, apply, publish, and finish implementations; the current prepare/recovery methods still delegate to the monolithic internal transaction.",
+      "Add the required focused crash, lease/CAS, evidence, lineage, workspace, and authorization tests.",
+      "Run the focused and full test suites plus Ruff on the completed extraction."
+    ],
+    "report": null,
+    "summary": "Replaced the obsolete update-base compatibility callback and aggregate method name with the new pending-recovery and prepare capability names. The transaction sequencer now accepts terminal integer outcomes from recovery or preparation, allowing interrupted and fresh paths to finish without invoking later phases."
+  },
+  "workspace_head": "6a48c5310ffd4ee5d13ef51941d3ae420368e502"
+}
