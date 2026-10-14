@@ -231,7 +231,9 @@ class _LineageOwner:
 
         return Lock()
 
-    def reconciliation_apply_update_base_effects(self, ticket_id, admission, authorized):
+    def reconciliation_apply_update_base_effects(
+        self, ticket_id, admission, authorized
+    ):
         self.executed.append((ticket_id, admission, authorized))
         return 0
 
@@ -318,6 +320,32 @@ def test_unpublished_rewrite_retains_evidence_without_remote_mutation():
     )
 
     assert owner.events == [("pin", "refs/devlegate/rewrite/TASK-1", "rewritten")]
+
+
+def test_rewrite_does_not_publish_when_evidence_pin_fails():
+    class FailingOwner(_RewriteOwner):
+        def reconciliation_pin_rewrite_evidence(self, reference, rewritten_head):
+            self.events.append(("pin", reference, rewritten_head))
+            raise RuntimeError("evidence pin failed")
+
+    owner = FailingOwner()
+
+    try:
+        publish_rewritten_lineage(
+            owner,
+            branch="devlegate/TASK-1",
+            rewritten_head="rewritten",
+            expected_remote="old-remote",
+            evidence_ref="refs/devlegate/rewrite/TASK-1",
+        )
+    except RuntimeError as error:
+        assert str(error) == "evidence pin failed"
+    else:
+        raise AssertionError("evidence failure must stop publication")
+
+    assert owner.events == [
+        ("pin", "refs/devlegate/rewrite/TASK-1", "rewritten")
+    ]
 
 
 def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip():
