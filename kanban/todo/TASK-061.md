@@ -310,3 +310,37 @@ replay with a typed capabilities interface. Preserve this extraction.
 
 **Disposition: REQUEST CHANGES; review -> todo.** Continue the existing
 workspace/checkpoint lineage.
+
+## Review — 2026-10-14, checkpoint 897fa6dbde6e (REQUEST CHANGES)
+
+Reviewed execution `479fe3f933ea40e397c9d908bdf82b77`,
+checkpoint `897fa6dbde6e38dd16567649e4050089cbb0fe81`.
+[Exact-checkpoint CI #38573288086](https://github.com/ranmasao/devlegate/actions/runs/38573288086)
+**failed**: `tests/test_control_scheduler.py::test_control_reconciliation_remote_change_is_side_effect_free`
+(DID NOT RAISE DevlegateError). **1198 passed, 1 skipped**;
+Ruff did not run because the test step failed.
+
+Useful progress: `reconciliation_transactions.py` extracts typed update-base
+admission and lineage/evidence proofs. Retain the work with strict ownership.
+
+**Required changes**:
+1. Restore the repeated fresh control-reconciliation admission/proof
+   immediately before the Git mutation/evidence pin. It is an intentional
+   time-of-check/time-of-use safeguard, not redundant validation.
+   Preserve `test_control_reconciliation_remote_change_is_side_effect_free`
+   and add focused coverage for remote/control movement between checks.
+2. Complete substantive extraction of product-lineage rewrite effects and
+   its lease, CAS, displaced-history preservation, and exactly-once steps;
+   admission/proof extraction alone is not the transaction boundary
+   required by TASK-061.
+3. Remove unreachable old checkpoint, lifecycle and workspace recovery
+   bodies from `runtime.py`, leaving only justified narrow wrappers and
+   one implementation of each mutation path.
+4. Avoid blanket `# ruff: noqa: E501` in `runtime.py` and
+   `recovery_workflow.py`; format affected code explicitly and prove
+   clean Ruff and full CI on next exact SHA.
+5. Add/refine transaction-boundary tests for rewrite/replay and preserve
+   fail-closed behavior; avoid unrelated TASK-066 changes.
+
+**Disposition: REQUEST CHANGES; review -> todo**, continue established
+checkpoint lineage. Published v0.5.6 remains untouched.
