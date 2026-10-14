@@ -89,7 +89,7 @@ class UpdateBasePrimitiveCapabilities(Protocol):
 
     def reconciliation_recover_pending_rewrite(
         self, ticket_id: str, admission: UpdateBaseAdmission
-    ) -> UpdateBaseAdmission | None: ...
+    ) -> UpdateBaseAdmission | int | None: ...
 
     def reconciliation_prepare_rewrite(
         self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
@@ -316,11 +316,15 @@ def execute_update_base(
             "reconciliation owner does not provide update-base effect phases"
         )
     recovered = effects.reconciliation_recover_pending_rewrite(ticket_id, admission)
+    if isinstance(recovered, int):
+        return recovered
     if recovered is not None:
         admission = recovered
     prepared = effects.reconciliation_prepare_rewrite(
         ticket_id, admission, rewrite_published
     )
+    if isinstance(prepared, int):
+        return prepared
     rewritten = effects.reconciliation_apply_rewrite(ticket_id, admission, prepared)
     effects.reconciliation_publish_rewrite_effect(
         ticket_id, admission, prepared, rewritten
@@ -328,15 +332,6 @@ def execute_update_base(
     return effects.reconciliation_finish_rewrite(
         ticket_id, admission, prepared, rewritten
     )
-
-
-@runtime_checkable
-class UpdateBaseEffectCapabilities(Protocol):
-    """Compatibility seam for the service-owned transaction entry point."""
-
-    def reconciliation_recover_update_base(
-        self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
-    ) -> int: ...
 
 
 class _NoopContext:
