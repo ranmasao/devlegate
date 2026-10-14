@@ -215,3 +215,37 @@ not a few classification functions and wrappers.
 
 Return to `todo` for **focused continuation** of the same ticket;
 do not discard the existing worker checkpoint or modify the 0.5.6 tag.
+
+## Review — 2026-10-14, checkpoint 357c4be59b9c (REQUEST CHANGES)
+
+Reviewed continuation execution `59c6db9d1bbc4bbe997221ac1795c8fa`,
+checkpoint `357c4be59b9c2e5a843b139a30d2ea0beaed5cfc`.
+[Exact-checkpoint CI #38533174124](https://github.com/ranmasao/devlegate/actions/runs/38533174124)
+passed: **1196 passed, 1 skipped**, Ruff passed. The missing EUPL test
+header is fixed.
+
+This iteration moves meaningful owner-held transactions into the new
+`recovery_transactions.py` through typed capabilities: stranded-worker
+normalization and control-lineage adoption, with focused tests and updated
+ownership documentation. Preserve this work and its security invariants.
+
+**Acceptance blocker**: the worker explicitly reports `incomplete` and
+checkpoint/publication replay, lifecycle and accepted-integration recovery,
+workspace inspection/repair, and product-lineage reconciliation/rewrite
+remain in `ServiceEngine`. These are the principal requested extraction
+domains and cannot be deferred while declaring TASK-061 done.
+
+**Next focused continuation**:
+1. Finish extracting the remaining substantive recovery and reconciliation
+   transaction families into coherent owner-held modules/procedures, with
+   narrowly scoped typed capabilities. Preserve only one authority for
+   locks, Git mutations, SQLite/WAL, leases, CAS, and durable evidence.
+2. Test crash replay, lifecycle/report/checkpoint recovery, workspace
+   ownership/fail-closed states, product lineage rewrite, and forced-stop
+   manual-retry semantics at the new seams; do not regress existing tests.
+3. Keep new transaction boundaries documented and report exact remaining
+   scope truthfully. Re-run exact-checkpoint CI and Ruff.
+4. Avoid unrelated TASK-066 log-reader changes and do not modify v0.5.6.
+
+**Disposition: REQUEST CHANGES; review -> todo**, preserving worker
+continuation lineage.
