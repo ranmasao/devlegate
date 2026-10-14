@@ -1,0 +1,35 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "a26bc80656375246cd18988ae8f60003d39ea97f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "5e566f156c1a4093885abcd4ce72bffc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Move the substantive checkpoint/publication, lifecycle replay, stranded normalization, accepted-integration, and update-base/resume transaction procedures out of runtime.py into capability-based coordinator modules.",
+    "Run the authoritative Ruff and full CI validation in an environment with the development tools installed."
+  ],
+  "report_artifact": "executions/TASK-061/5e566f156c1a4093885abcd4ce72bffc.md",
+  "report_sha256": "8a0bec3ea68230c6fc40c93fa1d234ed67ffa621387811e57f33f8b4843aee8b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Move the substantive checkpoint/publication, lifecycle replay, stranded normalization, accepted-integration, and update-base/resume transaction procedures out of runtime.py into capability-based coordinator modules.",
+      "Run the authoritative Ruff and full CI validation in an environment with the development tools installed."
+    ],
+    "report": "Focused recovery regressions and the new boundary tests pass; source compilation and diff checks pass. Ruff could not run because the executable is unavailable.",
+    "summary": "Added read-only recovery and reconciliation contracts, routed stage, interruption, workspace-binding, and lineage decisions through them, and documented the single-owner transaction map. Added focused boundary tests without changing ServiceEngine mutation authority."
+  },
+  "workspace_head": "adef7f47388f82cf78933dbb00fddcf073c73c93"
+}
