@@ -48,8 +48,9 @@ from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
     authorize_workspace_rewrite,
-    publish_rewritten_lineage,
     prove_workspace_lineage,
+    publish_rewritten_lineage,
+    run_update_base,
 )
 from devlegate.recovery import classify_stage
 from devlegate.recovery_transactions import (
@@ -8278,6 +8279,9 @@ class ServiceEngine:
     def reconciliation_git(cwd, *args: str, check: bool = False):
         return _git(cwd, *args, check=check)
 
+    def reconciliation_lock(self):
+        return self._lock()
+
     def reconciliation_publish_rewrite(
         self, branch: str, rewritten_head: str, expected_remote: str
     ) -> None:
@@ -8317,6 +8321,19 @@ class ServiceEngine:
             if existing.returncode or existing.stdout.strip() != rewritten_head:
                 raise DevlegateError("rewritten execution evidence could not be pinned")
 
+    def reconciliation_execute_update_base(
+        self,
+        ticket_id: str,
+        admission,
+        rewrite_published: bool,
+    ) -> int:
+        return self._reconcile_update_base_transaction(
+            ticket_id,
+            admission,
+            rewrite_published=rewrite_published,
+            _take_lock=False,
+        )
+
     def _reconcile_update_base_owned(
         self,
         ticket_id: str,
@@ -8325,13 +8342,34 @@ class ServiceEngine:
         rewrite_published: bool = False,
         _take_lock: bool = False,
     ) -> int:
-        """Run reconciliation with authority held by the service owner."""
+        """Run the owner-held reconciliation transaction."""
+        try:
+            return run_update_base(
+                self,
+                ticket_id,
+                onto,
+                rewrite_published=rewrite_published,
+                take_lock=_take_lock,
+            )
+        except ReconciliationTransactionError as error:
+            raise DevlegateError(str(error)) from error
+
+    def _reconcile_update_base_transaction(
+        self,
+        ticket_id: str,
+        admission,
+        *,
+        rewrite_published: bool = False,
+        _take_lock: bool = False,
+    ) -> int:
+        """Apply the already-admitted rewrite effect.
+
+        The admission and transaction boundary live in
+        ``reconciliation_transactions``.  This method is an owner capability:
+        it may mutate only while the caller holds the service lock.
+        """
         authority = self._lock() if _take_lock else nullcontext()
         with authority:
-            try:
-                admission = admit_update_base(self, ticket_id, onto)
-            except ReconciliationTransactionError as error:
-                raise DevlegateError(str(error)) from error
             reconciliation = self._state["reconciliation"]
             target = admission.target
             original_base = admission.original_base
@@ -8579,7 +8617,7 @@ class ServiceEngine:
             # move after the initial admission, so this is an intentional
             # TOCTOU guard rather than duplicate validation.
             try:
-                admission = admit_update_base(self, ticket_id, onto)
+                admission = admit_update_base(self, ticket_id, admission.target)
             except ReconciliationTransactionError as error:
                 raise DevlegateError(str(error)) from error
             target = admission.target

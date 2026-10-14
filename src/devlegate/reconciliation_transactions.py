@@ -75,6 +75,12 @@ class UpdateBaseCapabilities(Protocol):
         self, cwd: Any, *args: str, check: bool = False
     ) -> Any: ...
 
+    def reconciliation_lock(self) -> Any: ...
+
+    def reconciliation_execute_update_base(
+        self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
+    ) -> int: ...
+
 
 def admit_update_base(
     owner: UpdateBaseCapabilities, ticket_id: str, onto: str
@@ -225,3 +231,34 @@ def authorize_workspace_rewrite(
             "published execution ref requires explicit rewrite authorization"
         )
     return commits
+
+
+def run_update_base(
+    owner: UpdateBaseCapabilities,
+    ticket_id: str,
+    onto: str,
+    *,
+    rewrite_published: bool = False,
+    take_lock: bool = False,
+) -> int:
+    """Coordinate one serialized update-base transaction.
+
+    Admission is intentionally performed in this module immediately before
+    handing control to the owner-held effect capability.  The service owns
+    the lock and all Git/state writes; this function owns the transaction
+    boundary and prevents callers from bypassing the fresh admission check.
+    """
+    authority = owner.reconciliation_lock() if take_lock else _NoopContext()
+    with authority:
+        admission = admit_update_base(owner, ticket_id, onto)
+        return owner.reconciliation_execute_update_base(
+            ticket_id, admission, rewrite_published
+        )
+
+
+class _NoopContext:
+    def __enter__(self) -> _NoopContext:
+        return self
+
+    def __exit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
+        return None

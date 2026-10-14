@@ -14,8 +14,9 @@ from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
     authorize_workspace_rewrite,
-    publish_rewritten_lineage,
     prove_workspace_lineage,
+    publish_rewritten_lineage,
+    run_update_base,
 )
 from devlegate.recovery import (
     classify_stage,
@@ -183,6 +184,7 @@ class _LineageOwner:
     def __init__(self, *, descendant=True, evidence=True):
         self.descendant = descendant
         self.evidence = evidence
+        self.executed = []
 
     def reconciliation_pending(self):
         return {
@@ -219,6 +221,20 @@ class _LineageOwner:
     def reconciliation_workspace_binding(self, _ticket_id, _value):
         return True
 
+    def reconciliation_lock(self):
+        class Lock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        return Lock()
+
+    def reconciliation_execute_update_base(self, ticket_id, admission, authorized):
+        self.executed.append((ticket_id, admission, authorized))
+        return 0
+
 
 def test_lineage_admission_captures_provenance_before_mutation():
     admission = admit_update_base(_LineageOwner(), "TASK-1", "target")
@@ -234,6 +250,19 @@ def test_lineage_admission_rejects_unproven_history():
         assert "descendant" in str(error)
     else:
         raise AssertionError("divergent lineage must fail closed")
+
+
+def test_update_base_transaction_admits_before_owner_effect_capability():
+    owner = _LineageOwner()
+
+    assert run_update_base(
+        owner, "TASK-1", "target", rewrite_published=True, take_lock=True
+    ) == 0
+
+    ticket_id, admission, authorized = owner.executed[0]
+    assert ticket_id == "TASK-1"
+    assert admission.target == "target"
+    assert authorized is True
 
 
 class _RewriteOwner:
