@@ -1,7 +1,6 @@
 ---
 "type": "devlegate.ticket"
 "title": "Unify ticket log reading and isolate follow from unrelated reports"
-"depends_on": []
 ---
 
 ## Milestone
