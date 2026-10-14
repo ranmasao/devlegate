@@ -1,0 +1,35 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "00c96821dc9104ec529dfc77b01ddcf2e30a6ffd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "479fe3f933ea40e397c9d908bdf82b77",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Physically remove the unreachable legacy checkpoint/lifecycle recovery implementations from runtime.py.",
+    "Complete the full substantive migration of product-lineage rewrite side effects out of runtime.py rather than only extracting admission/proof sequencing."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Physically remove the unreachable legacy checkpoint/lifecycle recovery implementations from runtime.py.",
+      "Complete the full substantive migration of product-lineage rewrite side effects out of runtime.py rather than only extracting admission/proof sequencing."
+    ],
+    "report": null,
+    "summary": "Added a typed product-lineage reconciliation admission transaction, wired it into ServiceEngine's update-base flow, removed a duplicate control validation, and documented recovery ownership and transaction phases. Added focused lineage boundary coverage while preserving existing recovery behavior."
+  },
+  "workspace_head": "897fa6dbde6e38dd16567649e4050089cbb0fe81"
+}
