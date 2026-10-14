@@ -1,0 +1,29 @@
+{
+  "code_base_head": "f95996d2af82cd4b5698616d6a7dfda2da3ce104",
+  "conclusion": "completed",
+  "control_head": "665ac04217d5f518c3fb56e3c752f073ab141929",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-069",
+  "execution_id": "13edb1c37bcf4ea184c53d19544b8fff",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-069",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-069/13edb1c37bcf4ea184c53d19544b8fff.md",
+  "report_sha256": "f20f30dcf0c9844cdfedd369b77999f042d2f1ac2540bc9c967dee784fb655eb",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-069",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Raw runtime command counts changed from rev-parse 78 to 70 and rev-list 8 to 7; merge-base remained 27 and update-ref remained 10 because their domain semantics differ. Ruff passed, focused tests passed, and the full suite completed with 1203 passing; four failures were environment or harness issues (missing coverage/.venv plus one transient worker-process race that passed when isolated).",
+    "summary": "Added shared commit-parent enumeration to `git.py` and migrated runtime and recovery commit resolution to `resolve_commit`, preserving runner injection and domain-specific CAS/update-ref logic. Added focused unit coverage for parent parsing and failure handling."
+  },
+  "workspace_head": "80e690c2fb9360708b4638c95b99b7b1ff236c35"
+}
