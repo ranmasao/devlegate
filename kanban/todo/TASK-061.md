@@ -377,3 +377,32 @@ remote-movement TOCTOU failure. Unreachable legacy implementations in
 
 **Disposition: REQUEST CHANGES; review -> todo**, continue existing
 TASK-061 execution lineage.
+
+## Review — 2026-10-14, checkpoint 436d3f852c43 (REQUEST CHANGES)
+
+Reviewed execution `ab8609fcd7df4e789def28d034afa4dd`,
+checkpoint `436d3f852c4364dc0f1a5cade4dd659d0a2df919`.
+[Exact-checkpoint CI #38583834141](https://github.com/ranmasao/devlegate/actions/runs/38583834141)
+**passed**: 1199 tests passed, 1 skipped, Ruff clean.
+
+Progress accepted as continuation: `publish_rewritten_lineage()` now
+sequences evidence pinning and lease-guarded publication via typed owner
+capabilities. Removed unused import and blanket E501 suppressions.
+Preserve this code and existing exact-checkpoint green tests.
+
+**Remaining acceptance blockers**:
+1. Physically remove unreachable legacy checkpoint/publication and lifecycle
+   replay bodies in `runtime.py`. Only the delegated
+   `recovery_workflow` paths should implement these transactions; keep
+   necessary thin compatibility wrappers, never duplicate algorithms.
+2. Verify all transferred recovery and lineage operations have coherent
+   owner-held capability boundaries, with no second mutation authority,
+   loss of retry intent, or proof/CAS/lease/evidence safeguards.
+3. Add focused boundary tests for checkpoint/publication and lifecycle
+   crash replay, plus rewrite lease/CAS conflict and displaced evidence
+   where existing tests do not directly exercise the new seams. Maintain
+   full CI/coverage/Ruff green on the exact next checkpoint.
+4. Avoid unrelated TASK-066 changes and do not modify v0.5.6.
+
+**Disposition: REQUEST CHANGES; review -> todo**, preserving current
+workspace and checkpoint lineage.
