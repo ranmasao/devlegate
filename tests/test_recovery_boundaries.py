@@ -231,7 +231,7 @@ class _LineageOwner:
 
         return Lock()
 
-    def reconciliation_execute_update_base(self, ticket_id, admission, authorized):
+    def reconciliation_apply_update_base_effects(self, ticket_id, admission, authorized):
         self.executed.append((ticket_id, admission, authorized))
         return 0
 

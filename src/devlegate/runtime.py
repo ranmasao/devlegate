@@ -8321,24 +8321,11 @@ class ServiceEngine:
             if existing.returncode or existing.stdout.strip() != rewritten_head:
                 raise DevlegateError("rewritten execution evidence could not be pinned")
 
-    def reconciliation_execute_update_base(
-        self,
-        ticket_id: str,
-        admission,
-        rewrite_published: bool,
-    ) -> int:
-        return self._reconcile_update_base_effects(
-            ticket_id,
-            admission,
-            rewrite_published=rewrite_published,
-            _take_lock=False,
-        )
-
     def reconciliation_apply_update_base_effects(
         self, ticket_id: str, admission, rewrite_published: bool
     ) -> int:
         """Owner-held effect capability used by the reconciliation module."""
-        return self._reconcile_update_base_effects(
+        return self._reconciliation_apply_update_base_primitives(
             ticket_id,
             admission,
             rewrite_published=rewrite_published,
@@ -8365,7 +8352,7 @@ class ServiceEngine:
         except ReconciliationTransactionError as error:
             raise DevlegateError(str(error)) from error
 
-    def _reconcile_update_base_effects(
+    def _reconciliation_apply_update_base_primitives(
         self,
         ticket_id: str,
         admission,

@@ -77,10 +77,6 @@ class UpdateBaseCapabilities(Protocol):
 
     def reconciliation_lock(self) -> Any: ...
 
-    def reconciliation_execute_update_base(
-        self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
-    ) -> int: ...
-
     def reconciliation_apply_update_base_effects(
         self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
     ) -> int: ...
@@ -264,11 +260,16 @@ def execute_update_base(
     admission: UpdateBaseAdmission,
     rewrite_published: bool,
 ) -> int:
-    """Run the effect phase after the final admission proof."""
-    effect = getattr(owner, "reconciliation_apply_update_base_effects", None)
-    if effect is None:
-        effect = owner.reconciliation_execute_update_base
-    return effect(ticket_id, admission, rewrite_published)
+    """Run the effect phase after the final admission proof.
+
+    The effect capability is deliberately mandatory. A caller that does not
+    implement the owner-held mutation boundary is not a valid reconciliation
+    owner; falling back to a second entry point would make the transaction
+    authority ambiguous and could bypass the final admission proof.
+    """
+    return owner.reconciliation_apply_update_base_effects(
+        ticket_id, admission, rewrite_published
+    )
 
 
 class _NoopContext:
