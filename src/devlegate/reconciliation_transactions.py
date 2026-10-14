@@ -81,6 +81,10 @@ class UpdateBaseCapabilities(Protocol):
         self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
     ) -> int: ...
 
+    def reconciliation_apply_update_base_effects(
+        self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
+    ) -> int: ...
+
 
 def admit_update_base(
     owner: UpdateBaseCapabilities, ticket_id: str, onto: str
@@ -251,9 +255,20 @@ def run_update_base(
     authority = owner.reconciliation_lock() if take_lock else _NoopContext()
     with authority:
         admission = admit_update_base(owner, ticket_id, onto)
-        return owner.reconciliation_execute_update_base(
-            ticket_id, admission, rewrite_published
-        )
+        return execute_update_base(owner, ticket_id, admission, rewrite_published)
+
+
+def execute_update_base(
+    owner: UpdateBaseCapabilities,
+    ticket_id: str,
+    admission: UpdateBaseAdmission,
+    rewrite_published: bool,
+) -> int:
+    """Run the effect phase after the final admission proof."""
+    effect = getattr(owner, "reconciliation_apply_update_base_effects", None)
+    if effect is None:
+        effect = owner.reconciliation_execute_update_base
+    return effect(ticket_id, admission, rewrite_published)
 
 
 class _NoopContext:

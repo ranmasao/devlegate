@@ -8327,7 +8327,18 @@ class ServiceEngine:
         admission,
         rewrite_published: bool,
     ) -> int:
-        return self._reconcile_update_base_transaction(
+        return self._reconcile_update_base_effects(
+            ticket_id,
+            admission,
+            rewrite_published=rewrite_published,
+            _take_lock=False,
+        )
+
+    def reconciliation_apply_update_base_effects(
+        self, ticket_id: str, admission, rewrite_published: bool
+    ) -> int:
+        """Owner-held effect capability used by the reconciliation module."""
+        return self._reconcile_update_base_effects(
             ticket_id,
             admission,
             rewrite_published=rewrite_published,
@@ -8354,7 +8365,7 @@ class ServiceEngine:
         except ReconciliationTransactionError as error:
             raise DevlegateError(str(error)) from error
 
-    def _reconcile_update_base_transaction(
+    def _reconcile_update_base_effects(
         self,
         ticket_id: str,
         admission,
