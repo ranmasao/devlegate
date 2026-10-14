@@ -43,6 +43,13 @@ from devlegate.execution_workspace import (
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
+from devlegate.reconciliation import prove_linear_lineage, same_parent_replacement
+from devlegate.recovery import (
+    classify_stage,
+    classify_stranded_execution,
+    interruption_kind,
+    validate_execution_binding,
+)
 from devlegate.runtime_locator import (
     RuntimeLocator,
     RuntimeLocatorError,
@@ -634,37 +641,28 @@ def _status_fingerprint(status: str) -> str:
 
 def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
     """Prove that two distinct commits are single-parent replacements."""
-    if original == target:
-        return False
-    original_parents = _git(
-        repo, "rev-list", "--parents", "-n", "1", original, check=False
-    )
-    target_parents = _git(
-        repo, "rev-list", "--parents", "-n", "1", target, check=False
-    )
-    original_fields = original_parents.stdout.split()
-    target_fields = target_parents.stdout.split()
-    return (
-        original_parents.returncode == 0
-        and target_parents.returncode == 0
-        and len(original_fields) == 2
-        and len(target_fields) == 2
-        and original_fields[1] == target_fields[1]
-    )
+    parent_map: dict[str, tuple[str, ...]] = {}
+    for commit in (original, target):
+        result = _git(repo, "rev-list", "--parents", "-n", "1", commit, check=False)
+        fields = result.stdout.split()
+        if result.returncode or len(fields) < 2:
+            return False
+        parent_map[commit] = tuple(fields[1:])
+    return same_parent_replacement(original, target, parent_map)
 
 
 def _is_linear_chain(repo: Path, root: str, commits: list[str]) -> bool:
     """Prove that commits are an ordered single-parent chain from root."""
-    previous = root
+    parent_map: dict[str, tuple[str, ...]] = {}
     for commit in commits:
         parents = _git(
             repo, "rev-list", "--parents", "-n", "1", commit, check=False
         )
         fields = parents.stdout.split()
-        if parents.returncode or len(fields) != 2 or fields[1] != previous:
+        if parents.returncode or len(fields) < 2:
             return False
-        previous = commit
-    return bool(commits)
+        parent_map[commit] = tuple(fields[1:])
+    return prove_linear_lineage(root, commits, parent_map).valid
 
 
 class ServiceEngine:
@@ -3642,12 +3640,9 @@ class ServiceEngine:
         if self._state.get("phase") == "agent_running":
             if self._stop_requested():
                 return 0
-            if self._state.get("execution_stage") in {
-                "checkpointing",
-                "post-checkpoint",
-                "publishing",
-                "post-publication",
-            }:
+            if classify_stage(self._state.get("execution_stage")) == (
+                "checkpoint-publication"
+            ):
                 self._recover_checkpoint_publication()
                 report = self._recover_lifecycle_report()
                 return self._complete_execution_lifecycle(report)
@@ -8038,18 +8033,10 @@ class ServiceEngine:
             return WorkspaceInspection(
                 "UNSAFE", "persisted execution workspace binding is incomplete"
             )
-        if state.get("phase") != "agent_pending":
-            return WorkspaceInspection(
-                "UNSAFE", "automatic workspace recovery is limited to pre-worker state"
-            )
-        if state.get("worker_identity") is not None:
-            return WorkspaceInspection(
-                "UNSAFE", "persisted worker ownership prevents workspace recovery"
-            )
-        if state.get("pending_execution_report") is not None:
-            return WorkspaceInspection(
-                "UNSAFE", "durable worker result prevents workspace recovery"
-            )
+        try:
+            validate_execution_binding(state, require_pre_worker=True)
+        except ValueError as error:
+            return WorkspaceInspection("UNSAFE", str(error))
         try:
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, str(ticket_id)
@@ -9176,17 +9163,18 @@ class ServiceEngine:
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         state = self._state
-        kind = state.get("execution_interruption_kind")
-        if kind is None:
-            kind = "process_loss"
+        try:
+            kind = interruption_kind(state)
+        except ValueError as error:
+            raise DevlegateError(str(error)) from error
+        if state.get("execution_interruption_kind") is None:
             self._save_state("agent_running", execution_interruption_kind=kind)
-        if kind not in {"operator_abort", "service_shutdown", "process_loss"}:
-            raise DevlegateError("invalid execution interruption kind")
+        decision = classify_stranded_execution(state)
         stage = state.get("execution_stage")
         identity = _worker_identity_from_value(
             state.get("worker_identity"), state.get("execution_id")
         )
-        if stage == "worker-running":
+        if decision.action == "prove-worker-absent":
             assert identity is not None
             observation = self._workers.observe(identity)
             if observation == "matching-live":
@@ -9204,7 +9192,7 @@ class ServiceEngine:
                 return str(state["execution_ticket_id"])
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             raise DevlegateError(reason)
-        if stage == "post-worker":
+        if decision.action == "normalize":
             self._normalize_stranded_execution(kind)
             return str(state["execution_ticket_id"])
         reason = (

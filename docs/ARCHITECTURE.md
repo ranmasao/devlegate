@@ -200,6 +200,31 @@ reports, checkpoints, dispositions, and Git history remain authoritative.
 Retry and automatic-resume authorization are scheduler-iteration inputs or
 local iteration state, not persistent service state.
 
+### Recovery And Reconciliation Ownership
+
+Recovery is a set of transaction boundaries inside the single service owner,
+not a second scheduler or persistence service. The small internal contracts
+in `devlegate.recovery` and `devlegate.reconciliation` are read-only: they
+classify durable state and prove observed lineage. `ServiceEngine` remains the
+only component allowed to acquire the runtime lock, write SQLite state, move
+tickets, launch workers, publish refs, or record durable receipts.
+
+| Boundary | Decision/proof owner | Side-effect owner |
+| --- | --- | --- |
+| Interrupted, stale, or stranded execution | `recovery` stage and interruption classifiers | `ServiceEngine` under the owner lock |
+| Pre-worker workspace binding and old-generation attribution | `recovery` binding contract plus execution workspace manager | `ServiceEngine` and `ExecutionWorkspaceManager` |
+| Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and execution report store | `ServiceEngine` WAL procedures |
+| Same-base resume and product-base eligibility | `reconciliation` lineage proofs plus fresh Git observations | `ServiceEngine` with CAS/lease checks |
+| Published lineage rewrite and displaced evidence | `reconciliation` rewrite authorization proof | `ServiceEngine` ref publication and evidence pinning |
+
+Recovery transaction phases are `pre-checkpoint`, `checkpoint-publication`,
+`lifecycle`, and `reconciliation`. A clean exact observation can resume; a
+retryable failed or normalized interruption must be explicitly admitted; a
+changed product/control generation requires reconciliation; missing, dirty,
+occupied, malformed, or unobservable evidence fails closed. Operator stop and
+service shutdown remain interruption mechanisms and do not become automatic
+continuation intent.
+
 ## Runtime State
 
 SQLite stores local operational runtime state. This state records active
