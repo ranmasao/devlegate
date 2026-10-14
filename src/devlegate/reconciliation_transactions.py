@@ -251,60 +251,235 @@ def run_update_base(
             raise ReconciliationTransactionError("unknown rewrite stage")
         admission = admit_update_base(owner, ticket_id, onto)
         if stage == "local-pending":
-            return owner._reconciliation_recover_local_rewrite(
-                ticket_id, admission, rewrite_published
-            )
+            return recover_local_pending(owner, ticket_id, admission, rewrite_published)
         if stage == "remote-pending":
-            return owner._reconciliation_recover_remote_rewrite(
-                ticket_id, admission, rewrite_published
+            return recover_remote_pending(owner, ticket_id, admission, rewrite_published)
+        return start_fresh_rewrite(owner, ticket_id, admission, rewrite_published)
+
+
+def _git(owner: Any, cwd: Any, *args: str, check: bool = False) -> Any:
+    return owner.reconciliation_git(cwd, *args, check=check)
+
+
+def _clear_rewrite(reconciliation: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in reconciliation.items()
+        if key not in {"rewrite_stage", "rewrite_checkpoint", "rewrite_expected_remote",
+                       "rewrite_target", "rewrite_count"}
+    }
+
+
+def _resolve(owner: Any, ticket_id: str, reconciliation: dict[str, object],
+             target: str, checkpoint: str, remote: str | None, evidence: str) -> int:
+    resolved = {
+        **reconciliation,
+        "status": "resolved",
+        "resolution": "update-base",
+        "resolution_class": (
+            "update-base with published-lineage rewrite" if remote is not None
+            else "update-base"
+        ),
+        "effective_base": target,
+        "worker_checkpoint": checkpoint,
+        "execution_remote_head": remote,
+        "evidence_ref": evidence,
+    }
+    resolved.pop("execution_report", None)
+    todo_fingerprint = owner.reconciliation_todo_fingerprint()
+    owner._save_state(
+        "idle",
+        execution_base_head=target,
+        execution_start_head=target,
+        execution_remote_head=remote,
+        handled_remote_head=target,
+        handled_control_head=str(reconciliation["control_head"]),
+        handled_todo_fingerprint=todo_fingerprint,
+        reconciliation=resolved,
+        resume_required={"ticket_id": ticket_id, "status": "required"},
+    )
+    return 0
+
+
+def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
+                           rewrite_published: bool) -> int:
+    reconciliation = owner._state["reconciliation"]
+    manager = owner.reconciliation_workspace_manager(ticket_id)
+    workspace = owner._execution_workspace_for_rewrite_recovery(manager)
+    checkpoint = str(reconciliation["worker_checkpoint"])
+    rewrite_checkpoint = reconciliation.get("rewrite_checkpoint")
+    if not isinstance(rewrite_checkpoint, str) or reconciliation.get("rewrite_target") != admission.target:
+        raise ReconciliationTransactionError("interrupted execution rewrite evidence is invalid")
+    if workspace.dirty:
+        raise ReconciliationTransactionError("interrupted execution rewrite workspace is dirty")
+    observed = owner._execution_remote_head(manager.branch)
+    expected = reconciliation.get("rewrite_expected_remote")
+    if observed == expected:
+        restored = _git(owner, workspace.path, "reset", "--hard", checkpoint)
+        if restored.returncode:
+            raise ReconciliationTransactionError("interrupted execution rewrite could not be safely aborted")
+        owner._save_state("idle", execution_base_head=admission.original_base,
+                          execution_start_head=admission.original_base,
+                          reconciliation=_clear_rewrite(reconciliation))
+        return 0
+    if observed != rewrite_checkpoint or workspace.head != rewrite_checkpoint:
+        raise ReconciliationTransactionError("execution branch remote changed during interrupted rewrite")
+    displaced = _git(owner, owner.repo, "rev-parse", "--verify",
+                     str(reconciliation.get("displaced_evidence_ref")))
+    rewritten = _git(owner, owner.repo, "rev-parse", "--verify",
+                     str(reconciliation.get("rewritten_evidence_ref")))
+    if (displaced.returncode or displaced.stdout.strip() != checkpoint or
+            rewritten.returncode or rewritten.stdout.strip() != rewrite_checkpoint):
+        raise ReconciliationTransactionError("interrupted execution rewrite evidence is invalid")
+    rewritten_commits = _git(owner, workspace.path, "rev-list", "--reverse",
+                             f"{admission.target}..{rewrite_checkpoint}")
+    commits = rewritten_commits.stdout.splitlines()
+    if rewritten_commits.returncode or not commits:
+        raise ReconciliationTransactionError("interrupted execution rewrite result is invalid")
+    previous = admission.target
+    for commit in commits:
+        parents = _git(owner, workspace.path, "rev-list", "--parents", "-n", "1", commit)
+        fields = parents.stdout.split()
+        if len(fields) != 2 or fields[1] != previous:
+            raise ReconciliationTransactionError("interrupted execution rewrite is not linear")
+        previous = commit
+    if previous != rewrite_checkpoint:
+        raise ReconciliationTransactionError("interrupted execution rewrite does not reach HEAD")
+    return _resolve(owner, ticket_id, reconciliation, admission.target, rewrite_checkpoint,
+                    rewrite_checkpoint, str(reconciliation.get("rewritten_evidence_ref")))
+
+
+def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
+                          rewrite_published: bool) -> int:
+    reconciliation = owner._state["reconciliation"]
+    manager = owner.reconciliation_workspace_manager(ticket_id)
+    workspace = owner._execution_workspace_for_rewrite_recovery(manager)
+    checkpoint = str(reconciliation["worker_checkpoint"])
+    if reconciliation.get("rewrite_target") != admission.target:
+        raise ReconciliationTransactionError("interrupted execution rewrite target does not match the requested target")
+    if workspace.dirty:
+        aborted = _git(owner, workspace.path, "rebase", "--abort")
+        if aborted.returncode:
+            raise ReconciliationTransactionError("interrupted execution rewrite workspace is dirty")
+        workspace = owner._execution_workspace_for_rewrite_recovery(manager)
+    if workspace.head != checkpoint:
+        result = _git(owner, workspace.path, "rev-list", "--reverse",
+                      f"{admission.target}..{workspace.head}")
+        commits = result.stdout.splitlines()
+        if (result.returncode or len(commits) != reconciliation.get("rewrite_count") or
+                not _linear(owner, workspace.path, admission.target, commits)):
+            raise ReconciliationTransactionError("interrupted execution rewrite cannot be safely aborted")
+        restored = _git(owner, workspace.path, "reset", "--hard", checkpoint)
+        if restored.returncode:
+            raise ReconciliationTransactionError("interrupted execution rewrite could not be safely aborted")
+    owner._save_state("idle", execution_base_head=admission.original_base,
+                      execution_start_head=admission.original_base,
+                      reconciliation=_clear_rewrite(reconciliation))
+    return start_fresh_rewrite(owner, ticket_id, admission, rewrite_published)
+
+
+def _linear(owner: Any, workspace: Any, root: str, commits: list[str]) -> bool:
+    previous = root
+    for commit in commits:
+        result = _git(owner, workspace, "rev-list", "--parents", "-n", "1", commit)
+        fields = result.stdout.split()
+        if result.returncode or len(fields) != 2 or fields[1] != previous:
+            return False
+        previous = commit
+    return True
+
+
+def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
+                        rewrite_published: bool) -> int:
+    reconciliation = owner._state["reconciliation"]
+    manager = owner.reconciliation_workspace_manager(ticket_id)
+    workspace = owner._execution_workspace_for_recovery()
+    checkpoint = admission.checkpoint
+    if workspace.head != checkpoint or workspace.dirty:
+        raise ReconciliationTransactionError("execution workspace changed before reconciliation")
+    try:
+        lineage = list(prove_workspace_lineage(owner, workspace, admission.original_base, checkpoint))
+    except ReconciliationTransactionError as error:
+        reason = str(error).replace("a merge", "merge")
+        if reason == "lineage contains merge, side branch, or gap":
+            reason = "execution lineage contains merge, side branch, or unrelated commit"
+        raise ReconciliationTransactionError(reason) from error
+    execution_remote = owner._execution_remote_head(manager.branch)
+    expected_remote = admission.execution_remote_head
+    if execution_remote != expected_remote:
+        raise ReconciliationTransactionError("execution branch remote changed since reconciliation observation")
+    if execution_remote is not None:
+        if not rewrite_published:
+            raise ReconciliationTransactionError(
+                f"published execution ref refs/heads/{manager.branch} requires --rewrite-published authorization"
             )
-        if not callable(getattr(owner, "_reconciliation_start_update_base", None)):
-            effect = getattr(owner, "reconciliation_recover_update_base", None)
-            if not callable(effect):
-                raise ReconciliationTransactionError(
-                    "reconciliation owner does not provide update-base effect phases"
-                )
-            return effect(ticket_id, admission, rewrite_published)
-        return owner._reconciliation_start_update_base(
-            ticket_id,
-            admission,
-            rewrite_published=rewrite_published,
-        )
-
-
-def execute_update_base(
-    owner: Any, ticket_id: str, admission: Any, authorized: bool
-) -> int:
-    """Run the legacy seam retained for isolated boundary tests.
-
-    The real engine does not call this helper.  Its production path is
-    ``run_update_base`` above, which dispatches from persisted WAL state.
-    """
-    phases = (
-        "reconciliation_recover_pending_rewrite",
-        "reconciliation_prepare_rewrite",
-        "reconciliation_apply_rewrite",
-        "reconciliation_publish_rewrite_effect",
-        "reconciliation_finish_rewrite",
-    )
-    if not all(callable(getattr(owner, name, None)) for name in phases):
-        raise ReconciliationTransactionError(
-            "reconciliation owner does not provide update-base effect phases"
-        )
-    recovered = owner.reconciliation_recover_pending_rewrite(ticket_id, admission)
-    if isinstance(recovered, int):
-        return recovered
-    admission = recovered if recovered is not None else admission
-    prepared = owner.reconciliation_prepare_rewrite(ticket_id, admission, authorized)
-    if isinstance(prepared, int):
-        return prepared
-    rewritten = owner.reconciliation_apply_rewrite(ticket_id, admission, prepared)
-    owner.reconciliation_publish_rewrite_effect(
-        ticket_id, admission, prepared, rewritten
-    )
-    return owner.reconciliation_finish_rewrite(
-        ticket_id, admission, prepared, rewritten
-    )
+        if execution_remote not in lineage:
+            raise ReconciliationTransactionError("published execution ref is outside the proven execution lineage")
+    previous_execution_base = owner._state["execution_base_head"]
+    try:
+        admission = admit_update_base(owner, ticket_id, admission.target)
+    except ReconciliationTransactionError:
+        raise
+    operation = {
+        **reconciliation,
+        "rewrite_authorized": bool(rewrite_published),
+        "rewrite_expected_remote": execution_remote,
+        "displaced_evidence_ref": admission.evidence_ref,
+        "rewritten_evidence_ref": (
+            f"refs/devlegate/reconciliation/{ticket_id}/{reconciliation['execution_id']}-rewritten"
+        ),
+        "rewrite_target": admission.target,
+        "rewrite_count": len(lineage),
+        "rewrite_stage": "local-pending",
+    }
+    owner._save_state("idle", reconciliation=operation)
+    owner._state["execution_base_head"] = admission.target
+    try:
+        rebased = _git(owner, workspace.path, "rebase", "--onto", admission.target,
+                       admission.original_base)
+        if rebased.returncode:
+            _git(owner, workspace.path, "rebase", "--abort")
+            owner._state["execution_base_head"] = previous_execution_base
+            restored = _git(owner, workspace.path, "rev-parse", "HEAD").stdout.strip()
+            clean = not _git(owner, workspace.path, "status", "--porcelain").stdout
+            if restored != admission.checkpoint or not clean:
+                raise ReconciliationTransactionError("reconciliation conflict could not be safely aborted")
+            raise ReconciliationTransactionError("reconciliation conflict; manual/advanced reconciliation is required")
+    except OSError as error:
+        owner._state["execution_base_head"] = previous_execution_base
+        raise ReconciliationTransactionError(f"reconciliation failed: {error}") from error
+    updated = owner._execution_workspace_for_recovery()
+    try:
+        rewritten = list(authorize_workspace_rewrite(owner, updated, admission.target,
+                                                       updated.head, execution_remote,
+                                                       rewrite_published))
+        rewrite_error = ""
+    except ReconciliationTransactionError as error:
+        rewritten = []
+        rewrite_error = str(error)
+    if (updated.dirty or rewrite_error or len(rewritten) != len(lineage) or
+            updated.head == admission.target):
+        restored = _git(owner, workspace.path, "reset", "--hard", admission.checkpoint)
+        owner._state["execution_base_head"] = previous_execution_base
+        if restored.returncode:
+            raise ReconciliationTransactionError("reconciled execution lineage is invalid")
+        owner._save_state("idle", execution_base_head=admission.original_base,
+                          execution_start_head=admission.original_base,
+                          reconciliation=reconciliation)
+        raise ReconciliationTransactionError(rewrite_error or "reconciled execution lineage is invalid")
+    if not _linear(owner, updated.path, admission.target, rewritten):
+        raise ReconciliationTransactionError("reconciled execution lineage is not ordered and linear")
+    if execution_remote is not None:
+        operation = {**operation, "rewrite_stage": "remote-pending",
+                     "rewrite_checkpoint": updated.head}
+        owner._save_state("idle", reconciliation=operation)
+    rewritten_evidence = str(operation["rewritten_evidence_ref"])
+    publish_rewritten_lineage(owner, branch=manager.branch, rewritten_head=updated.head,
+                              expected_remote=execution_remote,
+                              evidence_ref=rewritten_evidence)
+    return _resolve(owner, ticket_id, reconciliation, admission.target, updated.head,
+                    updated.head if execution_remote is not None else None,
+                    rewritten_evidence)
 
 
 class _NoopContext:

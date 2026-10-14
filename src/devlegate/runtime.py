@@ -8282,6 +8282,15 @@ class ServiceEngine:
     def reconciliation_lock(self):
         return self._lock()
 
+    def reconciliation_workspace_manager(self, ticket_id: str):
+        return ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+
+    def reconciliation_todo_fingerprint(self) -> str:
+        fingerprint, _count = _todo_fingerprint(self.control_worktree, self.todo_path)
+        return fingerprint
+
     def reconciliation_publish_rewrite(
         self, branch: str, rewritten_head: str, expected_remote: str
     ) -> None:
@@ -8754,28 +8763,6 @@ class ServiceEngine:
             )
             _log(f"reconciliation resolved for {ticket_id}; resume required")
             return 0
-
-    def _reconciliation_recover_local_rewrite(
-        self, ticket_id: str, admission, rewrite_published: bool
-    ) -> int:
-        """Recover a local-pending rewrite without starting a new one."""
-        return self._reconciliation_start_update_base(
-            ticket_id,
-            admission,
-            rewrite_published=rewrite_published,
-            _take_lock=False,
-        )
-
-    def _reconciliation_recover_remote_rewrite(
-        self, ticket_id: str, admission, rewrite_published: bool
-    ) -> int:
-        """Recover a remote-pending rewrite without republishing it."""
-        return self._reconciliation_start_update_base(
-            ticket_id,
-            admission,
-            rewrite_published=rewrite_published,
-            _take_lock=False,
-        )
 
     def _reconcile_resume_owned(
         self, ticket_id: str, *, _take_lock: bool = False
