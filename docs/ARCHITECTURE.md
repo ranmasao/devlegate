@@ -203,15 +203,17 @@ local iteration state, not persistent service state.
 ### Recovery And Reconciliation Ownership
 
 Recovery is a set of transaction boundaries inside the single service owner,
-not a second scheduler or persistence service. The small internal contracts
-in `devlegate.recovery` and `devlegate.reconciliation` are read-only: they
-classify durable state and prove observed lineage. `ServiceEngine` remains the
-only component allowed to acquire the runtime lock, write SQLite state, move
-tickets, launch workers, publish refs, or record durable receipts.
+not a second scheduler or persistence service. `devlegate.recovery` and
+`devlegate.reconciliation` provide read-only classification and lineage proofs.
+`devlegate.recovery_transactions` sequences owner-held recovery mutations
+through typed capabilities; it cannot acquire authority or schedule work by
+itself. `ServiceEngine` remains the only component allowed to acquire the
+runtime lock, write SQLite state, move tickets, launch workers, publish refs,
+or record durable receipts.
 
 | Boundary | Decision/proof owner | Side-effect owner |
 | --- | --- | --- |
-| Interrupted, stale, or stranded execution | `recovery` stage and interruption classifiers | `ServiceEngine` under the owner lock |
+| Interrupted, stale, or stranded execution | `recovery` stage and interruption classifiers | `recovery_transactions` through owner capabilities |
 | Pre-worker workspace binding and old-generation attribution | `recovery` binding contract plus execution workspace manager | `ServiceEngine` and `ExecutionWorkspaceManager` |
 | Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and execution report store | `ServiceEngine` WAL procedures |
 | Same-base resume and product-base eligibility | `reconciliation` lineage proofs plus fresh Git observations | `ServiceEngine` with CAS/lease checks |
@@ -224,6 +226,13 @@ changed product/control generation requires reconciliation; missing, dirty,
 occupied, malformed, or unobservable evidence fails closed. Operator stop and
 service shutdown remain interruption mechanisms and do not become automatic
 continuation intent.
+
+The extracted transaction boundary currently covers control-lineage adoption
+and stranded-worker normalization. Both repeat their admission observation,
+preserve displaced evidence before a ref move, and refuse live or uncertain
+worker ownership. Checkpoint/publication and product-lineage rewrite remain
+ServiceEngine-owned procedures until their Git and report capabilities can be
+split without duplicating the write-ahead state machine.
 
 ## Runtime State
 

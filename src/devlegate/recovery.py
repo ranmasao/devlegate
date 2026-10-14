@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 
-
 INTERRUPTION_KINDS = frozenset({"operator_abort", "service_shutdown", "process_loss"})
 WORKER_STAGES = frozenset({"worker-launch", "worker-running", "post-worker"})
 CHECKPOINT_STAGES = frozenset(
@@ -53,7 +52,9 @@ def classify_stranded_execution(state: Mapping[str, object]) -> RecoveryDecision
             "prove-worker-absent", "worker ownership must be observed", ticket
         )
     if stage == "post-worker":
-        return RecoveryDecision("normalize", "post-worker state can be normalized", ticket)
+        return RecoveryDecision(
+            "normalize", "post-worker state can be normalized", ticket
+        )
     return RecoveryDecision(
         "blocked",
         f"unsafe execution stage {stage or 'unknown'} requires explicit recovery",

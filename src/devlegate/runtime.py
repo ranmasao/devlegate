@@ -46,9 +46,11 @@ from devlegate.project_context import ProjectContextError, load_project_context
 from devlegate.reconciliation import prove_linear_lineage, same_parent_replacement
 from devlegate.recovery import (
     classify_stage,
-    classify_stranded_execution,
-    interruption_kind,
     validate_execution_binding,
+)
+from devlegate.recovery_transactions import (
+    reconcile_control_lineage,
+    recover_stranded_execution,
 )
 from devlegate.runtime_locator import (
     RuntimeLocator,
@@ -8452,46 +8454,61 @@ class ServiceEngine:
         """Adopt an explicitly authorized divergent control history."""
         return self._reconcile_control_owned(from_head, to_head, _take_lock=True)
 
+    # Narrow capabilities for owner-held recovery transactions.  These do not
+    # expose the coordinator or permit an extracted module to schedule work.
+    def recovery_lock(self):
+        return self._lock()
+
+    @staticmethod
+    def recovery_git(cwd, *args: str, check: bool = False):
+        return _git(cwd, *args, check=check)
+
+    def reload_ticket_store(self):
+        return self._ticket_store()
+
+    @staticmethod
+    def recovery_log(message: str) -> None:
+        _log(message)
+
+    def validate_control_reconcile_admission(
+        self, from_head: str, to_head: str
+    ) -> None:
+        self._validate_control_reconcile_admission(from_head, to_head)
+
+    def validate_control_worktree(self) -> None:
+        self._validate_control_worktree()
+
+    def recovery_save_state(self, state: str, **values: object) -> None:
+        self._save_state(state, **values)
+
+    def recovery_worker_observation(self, identity) -> str:
+        return self._workers.observe(identity)
+
+    @staticmethod
+    def recovery_worker_identity(value: object, execution_id: object):
+        return _worker_identity_from_value(value, execution_id)
+
+    def recovery_publish_blocked(self, reason: str) -> None:
+        self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+
+    def normalize_stranded_execution(self, interruption: str) -> None:
+        self._normalize_stranded_execution(interruption)
+
     def _reconcile_control_owned(
         self, from_head: str, to_head: str, *, _take_lock: bool = False
     ) -> int:
         """Replace only the local control lineage after repeated exact proof."""
-        authority = self._lock() if _take_lock else nullcontext()
-        with authority:
-            self._validate_control_reconcile_admission(from_head, to_head)
-            # Re-observe immediately before preserving evidence or changing the branch.
-            self._validate_control_reconcile_admission(from_head, to_head)
-            evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
-            existing = _git(self.repo, "rev-parse", "--verify", evidence, check=False)
-            if existing.returncode == 0:
-                if existing.stdout.strip() != from_head:
-                    raise DevlegateError(
-                        "control recovery evidence ref already points to another commit"
-                    )
-            else:
-                created = _git(
-                    self.repo,
-                    "update-ref",
-                    evidence,
-                    from_head,
-                    "0" * 40,
-                    check=False,
-                )
-                if created.returncode:
-                    raise DevlegateError(
-                        "control recovery evidence ref could not be created"
-                    )
-
-            moved = _git(self.control_worktree, "reset", "--hard", to_head, check=False)
-            if moved.returncode:
-                raise DevlegateError(
-                    f"control lineage adoption failed: {moved.stderr.strip()}"
-                )
-            self._validate_control_worktree()
-            self._ticket_store()
-            _log(f"control rewrite reconciliation accepted: {from_head} -> {to_head}")
-            _log(f"preserved displaced control head under {evidence}")
-            return 0
+        try:
+            return reconcile_control_lineage(
+                self,
+                from_head,
+                to_head,
+                repo=self.repo,
+                control_worktree=self.control_worktree,
+                take_lock=_take_lock,
+            )
+        except ValueError as error:
+            raise DevlegateError(str(error)) from error
 
     def _reconcile_update_base_owned(
         self,
@@ -9162,45 +9179,10 @@ class ServiceEngine:
 
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
-        state = self._state
         try:
-            kind = interruption_kind(state)
+            return recover_stranded_execution(self, self._state)
         except ValueError as error:
             raise DevlegateError(str(error)) from error
-        if state.get("execution_interruption_kind") is None:
-            self._save_state("agent_running", execution_interruption_kind=kind)
-        decision = classify_stranded_execution(state)
-        stage = state.get("execution_stage")
-        identity = _worker_identity_from_value(
-            state.get("worker_identity"), state.get("execution_id")
-        )
-        if decision.action == "prove-worker-absent":
-            assert identity is not None
-            observation = self._workers.observe(identity)
-            if observation == "matching-live":
-                reason = (
-                    "previous Devlegate owner was lost; execution worker is still "
-                    "alive; automatic reconciliation is blocked"
-                )
-            elif observation == "indeterminate":
-                reason = (
-                    "previous Devlegate owner was lost; worker ownership is "
-                    "indeterminate; reconciliation is blocked"
-                )
-            else:
-                self._normalize_stranded_execution(kind)
-                return str(state["execution_ticket_id"])
-            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
-            raise DevlegateError(reason)
-        if decision.action == "normalize":
-            self._normalize_stranded_execution(kind)
-            return str(state["execution_ticket_id"])
-        reason = (
-            f"previous Devlegate owner was lost during unsafe execution stage "
-            f"{stage or 'unknown'}; reconciliation is blocked"
-        )
-        self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
-        raise DevlegateError(reason)
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state

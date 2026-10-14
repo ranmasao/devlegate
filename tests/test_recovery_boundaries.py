@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
+
 from devlegate.reconciliation import (
     prove_linear_lineage,
     rewrite_is_authorized,
@@ -9,6 +13,7 @@ from devlegate.recovery import (
     interruption_kind,
     validate_execution_binding,
 )
+from devlegate.recovery_transactions import recover_stranded_execution
 
 
 def test_recovery_classification_does_not_authorize_operator_stop():
@@ -55,3 +60,61 @@ def test_lineage_proofs_reject_merges_and_gate_published_rewrites():
     ) is False
     assert not prove_linear_lineage("root", ["merge"], parents).valid
     assert same_parent_replacement("a", "replacement", {"a": ("root",)}) is False
+
+
+class _WorkerRecoveryOwner:
+    def __init__(self, observation):
+        self.observation = observation
+        self.saved = []
+        self.normalized = []
+        self.blocked = []
+
+    def recovery_save_state(self, state, **values):
+        self.saved.append((state, values))
+
+    def recovery_worker_identity(self, value, execution_id):
+        return (value, execution_id)
+
+    def recovery_worker_observation(self, identity):
+        return self.observation
+
+    def normalize_stranded_execution(self, interruption):
+        self.normalized.append(interruption)
+
+    def recovery_publish_blocked(self, reason):
+        self.blocked.append(reason)
+
+
+def test_stranded_transaction_normalizes_only_after_absence_proof():
+    owner = _WorkerRecoveryOwner("absent")
+    state = {
+        "phase": "agent_running",
+        "execution_stage": "worker-running",
+        "execution_ticket_id": "TASK-1",
+        "execution_id": "exec-1",
+        "worker_identity": {"pid": 1},
+    }
+
+    assert recover_stranded_execution(owner, state) == "TASK-1"
+    assert owner.normalized == ["process_loss"]
+    assert owner.blocked == []
+
+
+def test_stranded_transaction_blocks_live_worker_without_normalization():
+    owner = _WorkerRecoveryOwner("matching-live")
+    state = {
+        "phase": "agent_running",
+        "execution_stage": "worker-running",
+        "execution_ticket_id": "TASK-1",
+        "execution_id": "exec-1",
+        "worker_identity": {"pid": 1},
+    }
+
+    try:
+        recover_stranded_execution(owner, state)
+    except ValueError as error:
+        assert "still alive" in str(error)
+    else:
+        raise AssertionError("live worker must block recovery")
+    assert owner.normalized == []
+    assert owner.blocked
