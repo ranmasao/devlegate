@@ -55,6 +55,9 @@ def reconcile_control_lineage(
     with authority:
         owner.validate_control_reconcile_admission(from_head, to_head)
         evidence = f"refs/devlegate/recovery/control/{from_head}-{to_head}"
+        # Repeat admission before the evidence pin as well as before the
+        # worktree move.  No recovery evidence is created for a stale remote.
+        owner.validate_control_reconcile_admission(from_head, to_head)
         existing = owner.recovery_git(repo, "rev-parse", "--verify", evidence)
         if existing.returncode == 0:
             if existing.stdout.strip() != from_head:
@@ -68,6 +71,9 @@ def reconcile_control_lineage(
             if created.returncode:
                 raise ValueError("control recovery evidence ref could not be created")
 
+        # The first admission can race with a remote update.  Re-prove the
+        # exact source and target before changing the local control worktree.
+        owner.validate_control_reconcile_admission(from_head, to_head)
         moved = owner.recovery_git(control_worktree, "reset", "--hard", to_head)
         if moved.returncode:
             raise ValueError(f"control lineage adoption failed: {moved.stderr.strip()}")

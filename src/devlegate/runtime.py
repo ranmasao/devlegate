@@ -8019,100 +8019,6 @@ class ServiceEngine:
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
         return inspect_bound_workspace(self, state)
-        # Kept below only as a source-compatible reference during staged
-        # extraction; all callers use the capability-based transaction above.
-        ticket_id = state.get("execution_ticket_id")
-        execution_id = state.get("execution_id")
-        base_head = state.get("execution_base_head")
-        branch = state.get("execution_branch")
-        path = state.get("execution_path")
-        if not all(
-            isinstance(value, str) and value
-            for value in (ticket_id, execution_id, base_head, branch, path)
-        ):
-            return WorkspaceInspection(
-                "UNSAFE", "persisted execution workspace binding is incomplete"
-            )
-        try:
-            validate_execution_binding(state, require_pre_worker=True)
-        except ValueError as error:
-            return WorkspaceInspection("UNSAFE", str(error))
-        try:
-            manager = ExecutionWorkspaceManager(
-                self.repo, self.execution_worktree_root, str(ticket_id)
-            )
-        except (ExecutionWorkspaceError, OSError) as error:
-            return WorkspaceInspection("UNSAFE", str(error))
-        if branch != manager.branch or Path(path) != manager.path:
-            return WorkspaceInspection(
-                "UNSAFE", "persisted execution workspace binding is invalid"
-            )
-        expected_head = state.get("execution_start_head")
-        topology = manager.inspect(
-            str(base_head), expected_head if isinstance(expected_head, str) else None
-        )
-        if topology.classification == "REUSABLE":
-            return topology
-        # Topology alone is only a repair candidate.  A recoverable result also
-        # needs a durable, exact prior-generation receipt for any conflicting
-        # branch head.  This is deliberately read-only and mirrors the proof
-        # required by _repair_bound_execution_workspace().
-        branch_ref = f"refs/heads/{manager.branch}"
-        observed = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if observed.returncode:
-            if topology.reason == "execution branch is missing":
-                try:
-                    registrations = manager._registrations()
-                except (
-                    ExecutionWorkspaceError,
-                    OSError,
-                    subprocess.SubprocessError,
-                ) as error:
-                    return WorkspaceInspection("UNSAFE", str(error))
-                attached = next(
-                    (
-                        item_path
-                        for item_path, item in registrations.items()
-                        if item.get("branch") == manager.branch
-                    ),
-                    None,
-                )
-                if attached is not None or manager.path.exists():
-                    return WorkspaceInspection(
-                        "UNSAFE",
-                        "execution branch is missing but workspace material remains "
-                        "attached",
-                    )
-                return WorkspaceInspection(
-                    "RECOVERABLE",
-                    "execution branch is missing; exact workspace can be rebuilt",
-                )
-            return WorkspaceInspection("UNSAFE", topology.reason)
-        old_head = observed.stdout.strip()
-        try:
-            reports = ExecutionReportStore(self.control_worktree).list(str(ticket_id))
-        except (ExecutionReportError, OSError, WorkflowBlockedError) as error:
-            return WorkspaceInspection(
-                "UNSAFE", f"cannot prove branch provenance: {error}"
-            )
-        prior = [
-            report
-            for report in reports
-            if report.execution_id != execution_id
-            and report.execution_branch == manager.branch
-            and report.workspace_head == old_head
-        ]
-        if len(prior) != 1:
-            return WorkspaceInspection(
-                "UNSAFE",
-                "conflicting execution branch ownership cannot be proven; "
-                "operator recovery required",
-            )
-        return WorkspaceInspection(
-            "RECOVERABLE",
-            "conflicting branch is exactly attributable to a prior execution "
-            "generation",
-        )
 
     @staticmethod
     def _workspace_recovery_ref(ticket_id: str, execution_id: str) -> str:
@@ -8124,119 +8030,6 @@ class ServiceEngine:
             repair_bound_workspace(self, self._state)
         except ValueError as error:
             raise DevlegateError(str(error)) from error
-        return
-        state = self._state
-        if (
-            state.get("phase") != "agent_pending"
-            or state.get("worker_identity") is not None
-        ):
-            raise DevlegateError("bound execution ownership is not proven absent")
-        ticket_id = state.get("execution_ticket_id")
-        execution_id = state.get("execution_id")
-        base_head = state.get("execution_base_head")
-        branch = state.get("execution_branch")
-        path = state.get("execution_path")
-        if not all(
-            isinstance(value, str) and value
-            for value in (ticket_id, execution_id, base_head, branch, path)
-        ):
-            raise DevlegateError("persisted execution identity is incomplete")
-        if state.get("pending_execution_report") is not None:
-            raise DevlegateError(
-                "durable worker result prevents automatic workspace repair"
-            )
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
-        )
-        if branch != manager.branch or Path(path) != manager.path:
-            raise DevlegateError("persisted execution workspace binding is invalid")
-        branch_ref = f"refs/heads/{manager.branch}"
-        observed = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if observed.returncode:
-            manager.prepare(base_head)
-            return
-        old_head = observed.stdout.strip()
-        reports = ExecutionReportStore(self.control_worktree).list(ticket_id)
-        prior = [
-            report
-            for report in reports
-            if report.execution_id != execution_id
-            and report.execution_branch == manager.branch
-            and report.workspace_head == old_head
-        ]
-        if len(prior) != 1:
-            raise DevlegateError(
-                "conflicting execution branch ownership cannot be proven; "
-                "operator recovery required"
-            )
-        old_execution = prior[0].execution_id
-        evidence_ref = self._workspace_recovery_ref(ticket_id, old_execution)
-        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
-        if existing.returncode == 0 and existing.stdout.strip() != old_head:
-            raise DevlegateError(
-                "workspace recovery evidence ref has conflicting identity"
-            )
-        if existing.returncode:
-            pinned = _git(
-                self.repo, "update-ref", evidence_ref, old_head, "", check=False
-            )
-            if pinned.returncode:
-                reread = _git(
-                    self.repo, "rev-parse", "--verify", evidence_ref, check=False
-                )
-                if reread.returncode or reread.stdout.strip() != old_head:
-                    raise DevlegateError(
-                        "cannot preserve conflicting execution checkpoint"
-                    )
-        reobserved = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if reobserved.returncode or reobserved.stdout.strip() != old_head:
-            raise DevlegateError("execution branch changed before automatic repair")
-        registrations = manager._registrations()
-        registration = registrations.get(manager.path.resolve())
-        branch_path = next(
-            (
-                item_path
-                for item_path, item in registrations.items()
-                if item.get("branch") == manager.branch
-            ),
-            None,
-        )
-        if branch_path is not None and branch_path != manager.path.resolve():
-            raise DevlegateError("execution branch moved to an unexpected worktree")
-        if manager.path.exists() and registration is None:
-            raise DevlegateError("execution worktree path is not safely registered")
-        if registration is not None:
-            # Validate the conflicting generation by its observed identity. It
-            # is expected to be unrelated to the current admitted base.
-            workspace = manager._validate_existing(registration, old_head)
-            if workspace.head != old_head or workspace.dirty:
-                raise DevlegateError(
-                    "conflicting execution worktree is not clean and exact"
-                )
-            removed = _git(
-                self.repo,
-                "worktree",
-                "remove",
-                "--force",
-                str(manager.path),
-                check=False,
-            )
-            if removed.returncode:
-                raise DevlegateError("cannot remove conflicting execution worktree")
-        reobserved = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        if reobserved.returncode or reobserved.stdout.strip() != old_head:
-            raise DevlegateError("execution branch changed during automatic repair")
-        moved = _git(
-            self.repo, "update-ref", branch_ref, base_head, old_head, check=False
-        )
-        if moved.returncode:
-            raise DevlegateError("execution branch changed before CAS repair")
-        repaired = manager.prepare(base_head)
-        final = manager.inspect(base_head, repaired.head)
-        if final.classification != "REUSABLE":
-            raise DevlegateError(
-                f"repaired execution workspace is not reusable: {final.reason}"
-            )
 
     def status_view(self) -> StatusSnapshot:
         """Collect a stable, read-only external status view."""
@@ -8935,6 +8728,18 @@ class ServiceEngine:
                         "lineage"
                     )
             previous_execution_base = self._state["execution_base_head"]
+            # Re-run the complete read-only admission immediately before the
+            # durable rewrite intent.  The product/control observations can
+            # move after the initial admission, so this is an intentional
+            # TOCTOU guard rather than duplicate validation.
+            try:
+                admission = admit_update_base(self, ticket_id, onto)
+            except ReconciliationTransactionError as error:
+                raise DevlegateError(str(error)) from error
+            target = admission.target
+            original_base = admission.original_base
+            checkpoint = admission.checkpoint
+            evidence = admission.evidence_ref
             # The original reconciliation evidence ref is already an immutable
             # pin for the displaced checkpoint. Do not create descendants below
             # it: Git forbids a ref and a ref namespace beneath the same path.
