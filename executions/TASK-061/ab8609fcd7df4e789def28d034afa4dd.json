@@ -1,0 +1,35 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "8081a4de1e6aaf3947633d2a14484f62133eb21c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "ab8609fcd7df4e789def28d034afa4dd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Physically remove the unreachable legacy checkpoint/publication and lifecycle replay implementations from runtime.py; only the delegated recovery_workflow implementations should remain authoritative.",
+    "Run and resolve the complete repository test suite after the legacy-body cleanup."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Physically remove the unreachable legacy checkpoint/publication and lifecycle replay implementations from runtime.py; only the delegated recovery_workflow implementations should remain authoritative.",
+      "Run and resolve the complete repository test suite after the legacy-body cleanup."
+    ],
+    "report": null,
+    "summary": "Moved published-lineage evidence pinning and lease-guarded rewrite publication behind the typed reconciliation transaction capability boundary. Removed the unused runtime import and blanket Ruff suppressions, and preserved workflow/reconciliation behavior across the focused recovery and IPC suites."
+  },
+  "workspace_head": "436d3f852c4364dc0f1a5cade4dd659d0a2df919"
+}
