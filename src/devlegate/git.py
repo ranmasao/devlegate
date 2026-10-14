@@ -38,3 +38,19 @@ def resolve_commit(
         return None
     resolved = result.stdout.strip()
     return resolved or None
+
+
+def commit_parents(
+    cwd: Path,
+    commit: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, ...] | None:
+    """Return a commit's parents, or ``None`` when Git cannot read it."""
+    result = runner(cwd, "rev-list", "--parents", "-n", "1", commit, check=False)
+    if result.returncode:
+        return None
+    fields = result.stdout.split()
+    if len(fields) < 2:
+        return None
+    return tuple(fields[1:])

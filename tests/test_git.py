@@ -64,3 +64,23 @@ def test_resolve_commit_normalizes_success_and_missing_revision(tmp_path):
         (tmp_path, ("rev-parse", "--verify", "HEAD^{commit}"), False),
         (tmp_path, ("rev-parse", "--verify", "missing^{commit}"), False),
     ]
+
+
+def test_commit_parents_normalizes_parent_list_and_failures(tmp_path):
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        if args[-1] == "missing":
+            return subprocess.CompletedProcess([], 128, "", "missing")
+        return subprocess.CompletedProcess([], 0, "commit parent-a parent-b\n", "")
+
+    assert git.commit_parents(tmp_path, "commit", runner=fake_runner) == (
+        "parent-a",
+        "parent-b",
+    )
+    assert git.commit_parents(tmp_path, "missing", runner=fake_runner) is None
+    assert calls == [
+        (tmp_path, ("rev-list", "--parents", "-n", "1", "commit"), False),
+        (tmp_path, ("rev-list", "--parents", "-n", "1", "missing"), False),
+    ]

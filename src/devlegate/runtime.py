@@ -40,7 +40,7 @@ from devlegate.execution_workspace import (
     WorkspaceInspection,
     parse_worktree_porcelain,
 )
-from devlegate.git import resolve_commit, run_git
+from devlegate.git import commit_parents, resolve_commit, run_git
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
@@ -654,11 +654,10 @@ def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
     """Prove that two distinct commits are single-parent replacements."""
     parent_map: dict[str, tuple[str, ...]] = {}
     for commit in (original, target):
-        result = _git(repo, "rev-list", "--parents", "-n", "1", commit, check=False)
-        fields = result.stdout.split()
-        if result.returncode or len(fields) < 2:
+        parents = commit_parents(repo, commit, runner=_git)
+        if parents is None:
             return False
-        parent_map[commit] = tuple(fields[1:])
+        parent_map[commit] = parents
     return same_parent_replacement(original, target, parent_map)
 
 
@@ -1321,13 +1320,13 @@ class ServiceEngine:
                 f"forced retry workspace checkpoint failed: {error}"
             ) from error
         evidence_ref = f"refs/devlegate/recovery/force-retry/{ticket_id}/{execution_id}"
-        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        existing = resolve_commit(self.repo, evidence_ref, runner=_git)
         if (
-            existing.returncode == 0
-            and existing.stdout.strip() != checkpoint.after_head
+            existing is not None
+            and existing != checkpoint.after_head
         ):
             raise DevlegateError("forced retry evidence ref has conflicting identity")
-        if existing.returncode:
+        if existing is None:
             pinned = _git(
                 self.repo,
                 "update-ref",
@@ -1467,20 +1466,14 @@ class ServiceEngine:
         branch = state.get("execution_branch")
         if not isinstance(branch, str) or not branch:
             raise DevlegateError("persisted execution branch identity is incomplete")
-        current = _git(
-            self.repo, "rev-parse", "--verify", f"refs/heads/{branch}", check=False
-        )
+        current = resolve_commit(self.repo, f"refs/heads/{branch}", runner=_git)
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
-        evidence = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
         replay = (
-            evidence.returncode == 0
-            and evidence.stdout.strip() == observed_head
-            and current.returncode == 0
-            and current.stdout.strip() == state.get("execution_base_head")
+            evidence == observed_head
+            and current == state.get("execution_base_head")
         )
-        if current.returncode or (
-            current.stdout.strip() != observed_head and not replay
-        ):
+        if current is None or (current != observed_head and not replay):
             raise DevlegateError("execution branch does not match the authorized HEAD")
 
     def _recover_unsafe_bound_execution_workspace(
@@ -1501,21 +1494,19 @@ class ServiceEngine:
             raise DevlegateError("persisted execution workspace binding is invalid")
         branch_ref = f"refs/heads/{branch}"
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
-        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        current_head = current.stdout.strip() if current.returncode == 0 else None
-        existing = _git(self.repo, "rev-parse", "--verify", evidence_ref, check=False)
+        current_head = resolve_commit(self.repo, branch_ref, runner=_git)
+        existing = resolve_commit(self.repo, evidence_ref, runner=_git)
         authorized_replay = (
-            existing.returncode == 0
-            and existing.stdout.strip() == observed_head
+            existing == observed_head
             and current_head == str(base_head)
         )
-        if current.returncode or (
+        if current_head is None or (
             current_head != observed_head and not authorized_replay
         ):
             raise DevlegateError("execution branch changed before explicit recovery")
-        if existing.returncode == 0 and existing.stdout.strip() != observed_head:
+        if existing is not None and existing != observed_head:
             raise DevlegateError("operator recovery evidence has conflicting identity")
-        if existing.returncode:
+        if existing is None:
             pinned = _git(
                 self.repo, "update-ref", evidence_ref, observed_head, "", check=False
             )
@@ -1546,17 +1537,17 @@ class ServiceEngine:
                 remote_evidence = self._workspace_recovery_ref(
                     ticket_id, prior[0].execution_id
                 )
-            remote_existing = _git(
-                self.repo, "rev-parse", "--verify", remote_evidence, check=False
+            remote_existing = resolve_commit(
+                self.repo, remote_evidence, runner=_git
             )
             if (
-                remote_existing.returncode == 0
-                and remote_existing.stdout.strip() != remote_head
+                remote_existing is not None
+                and remote_existing != remote_head
             ):
                 raise DevlegateError(
                     "operator recovery evidence has conflicting identity"
                 )
-            if remote_existing.returncode:
+            if remote_existing is None:
                 preserved = _git(
                     self.repo,
                     "update-ref",
@@ -1628,9 +1619,8 @@ class ServiceEngine:
             )
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
-        current = _git(self.repo, "rev-parse", "--verify", branch_ref, check=False)
-        current_head = current.stdout.strip() if current.returncode == 0 else None
-        if current.returncode or (
+        current_head = resolve_commit(self.repo, branch_ref, runner=_git)
+        if current_head is None or (
             current_head != observed_head
             and not (authorized_replay and current_head == str(base_head))
         ):
@@ -5603,8 +5593,8 @@ class ServiceEngine:
     def _accepted_integration_commit_is_exact(
         self, commit: str, ticket_id: str, expected_parent: str
     ) -> bool:
-        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
-        if parent.returncode or parent.stdout.strip() != expected_parent:
+        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        if parents is None or not parents or parents[0] != expected_parent:
             return False
         names = _git(
             self.control_worktree,
@@ -5625,7 +5615,7 @@ class ServiceEngine:
         before = _git(
             self.control_worktree,
             "rev-parse",
-            f"{parent.stdout.strip()}:{self.accepted_path}/{ticket_id}.md",
+            f"{parents[0]}:{self.accepted_path}/{ticket_id}.md",
             check=False,
         )
         after = _git(

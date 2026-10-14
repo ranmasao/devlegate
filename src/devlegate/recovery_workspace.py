@@ -18,7 +18,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     WorkspaceInspection,
 )
-from devlegate.git import run_git
+from devlegate.git import resolve_commit, run_git
 from devlegate.recovery import validate_execution_binding
 
 
@@ -72,8 +72,8 @@ def inspect_bound_workspace(
         return topology
 
     branch_ref = f"refs/heads/{manager.branch}"
-    observed = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
-    if observed.returncode:
+    observed = resolve_commit(owner.repo, branch_ref, runner=run_git)
+    if observed is None:
         if topology.reason != "execution branch is missing":
             return WorkspaceInspection("UNSAFE", topology.reason)
         try:
@@ -99,7 +99,7 @@ def inspect_bound_workspace(
             "RECOVERABLE", "execution branch is missing; exact workspace can be rebuilt"
         )
 
-    old_head = observed.stdout.strip()
+    old_head = observed
     try:
         reports = owner.recovery_reports(ticket_id)
     except (ExecutionWorkspaceError, OSError, ValueError) as error:
@@ -144,11 +144,11 @@ def repair_bound_workspace(
         raise ValueError("persisted execution workspace binding is invalid")
 
     branch_ref = f"refs/heads/{manager.branch}"
-    observed = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
-    if observed.returncode:
+    observed = resolve_commit(owner.repo, branch_ref, runner=run_git)
+    if observed is None:
         manager.prepare(base_head)
         return
-    old_head = observed.stdout.strip()
+    old_head = observed
     prior = [
         report
         for report in owner.recovery_reports(ticket_id)
@@ -164,24 +164,20 @@ def repair_bound_workspace(
     evidence_ref = (
         f"refs/devlegate/recovery/workspace/{ticket_id}/{prior[0].execution_id}"
     )
-    existing = run_git(
-        owner.repo, "rev-parse", "--verify", evidence_ref, check=False
-    )
-    if existing.returncode == 0 and existing.stdout.strip() != old_head:
+    existing = resolve_commit(owner.repo, evidence_ref, runner=run_git)
+    if existing is not None and existing != old_head:
         raise ValueError("workspace recovery evidence ref has conflicting identity")
-    if existing.returncode:
+    if existing is None:
         pinned = run_git(
             owner.repo, "update-ref", evidence_ref, old_head, "", check=False
         )
         if pinned.returncode:
-            reread = run_git(
-                owner.repo, "rev-parse", "--verify", evidence_ref, check=False
-            )
-            if reread.returncode or reread.stdout.strip() != old_head:
+            reread = resolve_commit(owner.repo, evidence_ref, runner=run_git)
+            if reread != old_head:
                 raise ValueError("cannot preserve conflicting execution checkpoint")
 
-    reobserved = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
-    if reobserved.returncode or reobserved.stdout.strip() != old_head:
+    reobserved = resolve_commit(owner.repo, branch_ref, runner=run_git)
+    if reobserved != old_head:
         raise ValueError("execution branch changed before automatic repair")
     registrations = manager._registrations()
     registration = registrations.get(manager.path.resolve())
@@ -206,8 +202,8 @@ def repair_bound_workspace(
         )
         if removed.returncode:
             raise ValueError("cannot remove conflicting execution worktree")
-    reobserved = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
-    if reobserved.returncode or reobserved.stdout.strip() != old_head:
+    reobserved = resolve_commit(owner.repo, branch_ref, runner=run_git)
+    if reobserved != old_head:
         raise ValueError("execution branch changed during automatic repair")
     moved = run_git(
         owner.repo, "update-ref", branch_ref, base_head, old_head, check=False
