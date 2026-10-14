@@ -4,6 +4,12 @@ This roadmap describes the current development direction for Devlegate. It is
 not release history; see [CHANGELOG.md](CHANGELOG.md) for that. The categories
 below are directional and undated unless explicitly stated otherwise.
 
+The active development line for the next maintenance iteration is
+`release/0.5.7`. The published `v0.5.6` tag remains the stable release
+baseline. The planned recovery decomposition, inactivity watchdog, and
+completed-worktree retirement are tracked in TASK-061, TASK-056, and TASK-063;
+this roadmap does not imply that these features are already shipped.
+
 ## Current Baseline
 
 Devlegate currently separates product history, workflow control history, and

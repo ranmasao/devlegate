@@ -5,6 +5,11 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
+## 0.5.7 (Unreleased)
+
+Development is underway on `release/0.5.7`. Changes will be recorded here as
+features and fixes are integrated; no release date has been scheduled.
+
 ## 0.5.6
 
 Release preparation for safer lifecycle recovery and complete distribution
