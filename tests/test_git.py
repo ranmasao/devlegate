@@ -43,3 +43,24 @@ def test_run_git_preserves_command_and_result_options(monkeypatch, tmp_path):
             "check": False,
         },
     }
+
+
+def test_resolve_commit_normalizes_success_and_missing_revision(tmp_path):
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        if args[2] == "missing^{commit}":
+            return subprocess.CompletedProcess([], 128, "", "missing")
+        return subprocess.CompletedProcess([], 0, " abc123 \n", "")
+
+    assert git.resolve_commit(
+        tmp_path, "HEAD", runner=fake_runner
+    ) == "abc123"
+    assert git.resolve_commit(
+        tmp_path, "missing", runner=fake_runner
+    ) is None
+    assert calls == [
+        (tmp_path, ("rev-parse", "--verify", "HEAD^{commit}"), False),
+        (tmp_path, ("rev-parse", "--verify", "missing^{commit}"), False),
+    ]

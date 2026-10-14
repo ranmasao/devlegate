@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -20,3 +21,20 @@ def run_git(
         capture_output=True,
         check=check,
     )
+
+
+def resolve_commit(
+    cwd: Path,
+    revision: str,
+    *,
+    check: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Resolve a revision to its commit object name, or return ``None``."""
+    result = runner(
+        cwd, "rev-parse", "--verify", f"{revision}^{{commit}}", check=check
+    )
+    if result.returncode:
+        return None
+    resolved = result.stdout.strip()
+    return resolved or None

@@ -40,7 +40,7 @@ from devlegate.execution_workspace import (
     WorkspaceInspection,
     parse_worktree_porcelain,
 )
-from devlegate.git import run_git
+from devlegate.git import resolve_commit, run_git
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
@@ -8210,14 +8210,14 @@ class ServiceEngine:
         return reconciliation
 
     def reconciliation_target(self, value: str) -> str:
-        result = _git(
-            self.repo, "rev-parse", "--verify", f"{value}^{{commit}}", check=False
+        resolved = resolve_commit(
+            self.repo, value, check=False, runner=_git
         )
-        if result.returncode or not result.stdout.strip():
+        if resolved is None:
             raise ReconciliationTransactionError(
                 "requested reconciliation target is not a commit"
             )
-        return result.stdout.strip()
+        return resolved
 
     def reconciliation_product(self, base: str) -> dict[str, object]:
         product = self._observe_product_generation(base)

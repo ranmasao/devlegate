@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
-from devlegate.git import run_git
+from devlegate.git import resolve_commit, run_git
 from devlegate.tickets import is_canonical_ticket_name
 
 
@@ -456,10 +456,10 @@ class ExecutionWorkspaceManager:
         return self._validate_existing(registration, workspace.base_head)
 
     def _validate_base(self, base_head: str) -> None:
-        result = _git(
-            self.repo, "rev-parse", "--verify", f"{base_head}^{{commit}}", check=False
+        resolved = resolve_commit(
+            self.repo, base_head, check=False, runner=_git
         )
-        if result.returncode or result.stdout.strip() != base_head:
+        if resolved != base_head:
             raise ExecutionWorkspaceError(
                 f"planned code revision {base_head} is not available in the "
                 "product repository"
