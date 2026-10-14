@@ -14,6 +14,7 @@ from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
     authorize_workspace_rewrite,
+    execute_update_base,
     prove_workspace_lineage,
     publish_rewritten_lineage,
     run_update_base,
@@ -277,6 +278,80 @@ def test_update_base_rejects_owner_without_effect_phase():
         assert "effect phases" in str(error)
     else:
         raise AssertionError("missing effect phase must fail closed")
+
+
+def test_update_base_effect_sequence_finishes_only_after_publication():
+    class Effects:
+        def __init__(self):
+            self.events = []
+
+        def reconciliation_recover_pending_rewrite(self, ticket_id, admission):
+            self.events.append(("recover", ticket_id))
+            return None
+
+        def reconciliation_prepare_rewrite(
+            self, ticket_id, admission, rewrite_published
+        ):
+            self.events.append(("prepare", rewrite_published))
+            return "intent"
+
+        def reconciliation_apply_rewrite(self, ticket_id, admission, prepared):
+            self.events.append(("apply", prepared))
+            return "rewritten"
+
+        def reconciliation_publish_rewrite_effect(
+            self, ticket_id, admission, prepared, rewritten
+        ):
+            self.events.append(("publish", rewritten))
+
+        def reconciliation_finish_rewrite(
+            self, ticket_id, admission, prepared, rewritten
+        ):
+            self.events.append(("finish", rewritten))
+            return 0
+
+    owner = Effects()
+    admission = object()
+
+    assert execute_update_base(owner, "TASK-1", admission, True) == 0
+    assert owner.events == [
+        ("recover", "TASK-1"),
+        ("prepare", True),
+        ("apply", "intent"),
+        ("publish", "rewritten"),
+        ("finish", "rewritten"),
+    ]
+
+
+def test_update_base_effect_sequence_stops_before_publish_failure():
+    class Effects:
+        def reconciliation_recover_pending_rewrite(self, ticket_id, admission):
+            return None
+
+        def reconciliation_prepare_rewrite(
+            self, ticket_id, admission, rewrite_published
+        ):
+            return "intent"
+
+        def reconciliation_apply_rewrite(self, ticket_id, admission, prepared):
+            return "rewritten"
+
+        def reconciliation_publish_rewrite_effect(
+            self, ticket_id, admission, prepared, rewritten
+        ):
+            raise RuntimeError("lease changed")
+
+        def reconciliation_finish_rewrite(
+            self, ticket_id, admission, prepared, rewritten
+        ):
+            raise AssertionError("finish must not run")
+
+    try:
+        execute_update_base(Effects(), "TASK-1", object(), False)
+    except RuntimeError as error:
+        assert str(error) == "lease changed"
+    else:
+        raise AssertionError("publication failure must stop finalization")
 
 
 class _RewriteOwner:

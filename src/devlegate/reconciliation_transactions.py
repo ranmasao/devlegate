@@ -77,12 +77,42 @@ class UpdateBaseCapabilities(Protocol):
 
     def reconciliation_lock(self) -> Any: ...
 
-@runtime_checkable
-class UpdateBaseEffectCapabilities(Protocol):
-    """Owner-held effect phases for an admitted update-base transaction."""
 
-    def reconciliation_recover_update_base(
+@runtime_checkable
+class UpdateBasePrimitiveCapabilities(Protocol):
+    """Owner-held primitives for an admitted update-base transaction.
+
+    The transaction ordering is intentionally kept in this module.  Each
+    callback below represents one owner-held mutation or proof boundary; no
+    callback is permitted to contain the complete reconciliation procedure.
+    """
+
+    def reconciliation_recover_pending_rewrite(
+        self, ticket_id: str, admission: UpdateBaseAdmission
+    ) -> UpdateBaseAdmission | None: ...
+
+    def reconciliation_prepare_rewrite(
         self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
+    ) -> object: ...
+
+    def reconciliation_apply_rewrite(
+        self, ticket_id: str, admission: UpdateBaseAdmission, prepared: object
+    ) -> object: ...
+
+    def reconciliation_publish_rewrite_effect(
+        self,
+        ticket_id: str,
+        admission: UpdateBaseAdmission,
+        prepared: object,
+        rewritten: object,
+    ) -> None: ...
+
+    def reconciliation_finish_rewrite(
+        self,
+        ticket_id: str,
+        admission: UpdateBaseAdmission,
+        prepared: object,
+        rewritten: object,
     ) -> int: ...
 
 
@@ -264,25 +294,49 @@ def execute_update_base(
     admission: UpdateBaseAdmission,
     rewrite_published: bool,
 ) -> int:
-    """Run the effect phase after the final admission proof.
+    """Run the ordered effect phases after the final admission proof.
 
-    The effect capability is deliberately mandatory. A caller that does not
-    implement the owner-held mutation boundary is not a valid reconciliation
-    owner; falling back to a second entry point would make the transaction
-    authority ambiguous and could bypass the final admission proof.
+    Recovery of an existing WAL intent is the first phase.  New work then
+    records intent, applies the workspace rewrite, pins/publishes the result,
+    and only then resolves durable state.  Keeping this ordering here makes
+    crash replay and fail-closed publication independently testable.
     """
-    # Keep the effect boundary explicit.  The owner callback is deliberately
-    # separate from admission so a replay cannot skip the final proof.
     effects = owner
-    if not isinstance(effects, UpdateBaseEffectCapabilities) or not callable(
-        effects.reconciliation_recover_update_base
+    required = (
+        "reconciliation_recover_pending_rewrite",
+        "reconciliation_prepare_rewrite",
+        "reconciliation_apply_rewrite",
+        "reconciliation_publish_rewrite_effect",
+        "reconciliation_finish_rewrite",
+    )
+    if not isinstance(effects, UpdateBasePrimitiveCapabilities) or not all(
+        callable(getattr(effects, name, None)) for name in required
     ):
         raise ReconciliationTransactionError(
             "reconciliation owner does not provide update-base effect phases"
         )
-    return effects.reconciliation_recover_update_base(
+    recovered = effects.reconciliation_recover_pending_rewrite(ticket_id, admission)
+    if recovered is not None:
+        admission = recovered
+    prepared = effects.reconciliation_prepare_rewrite(
         ticket_id, admission, rewrite_published
     )
+    rewritten = effects.reconciliation_apply_rewrite(ticket_id, admission, prepared)
+    effects.reconciliation_publish_rewrite_effect(
+        ticket_id, admission, prepared, rewritten
+    )
+    return effects.reconciliation_finish_rewrite(
+        ticket_id, admission, prepared, rewritten
+    )
+
+
+@runtime_checkable
+class UpdateBaseEffectCapabilities(Protocol):
+    """Compatibility seam for the service-owned transaction entry point."""
+
+    def reconciliation_recover_update_base(
+        self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
+    ) -> int: ...
 
 
 class _NoopContext:
