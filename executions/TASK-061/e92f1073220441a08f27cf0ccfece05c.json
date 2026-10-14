@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "78026f49f6b74b3a8e2c877ae30f5dcb6af6f650",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "e92f1073220441a08f27cf0ccfece05c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Wire the new primitive sequencer to ServiceEngine owner-held primitives and migrate the full WAL/rebase/replay/lease-CAS/evidence/finalization transaction out of runtime.py.",
+    "Delete the obsolete aggregate _reconciliation_apply_update_base_primitives implementation and add runtime integration coverage for crash replay and fail-closed rewrite cases.",
+    "Run pytest and Ruff in an environment with the project development tools installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Wire the new primitive sequencer to ServiceEngine owner-held primitives and migrate the full WAL/rebase/replay/lease-CAS/evidence/finalization transaction out of runtime.py.",
+      "Delete the obsolete aggregate _reconciliation_apply_update_base_primitives implementation and add runtime integration coverage for crash replay and fail-closed rewrite cases.",
+      "Run pytest and Ruff in an environment with the project development tools installed."
+    ],
+    "report": null,
+    "summary": "Added a typed update-base primitive phase contract and extracted sequencer in reconciliation_transactions.py, with boundary tests covering phase ordering and publication failure stopping finalization. Existing ServiceEngine recovery/rewrite implementation remains the active owner callback and was not removed."
+  },
+  "workspace_head": "984609187924aff28df0c0f5eb8c5c8db1f2393a"
+}
