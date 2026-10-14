@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "3e4c4ad1edb4a98fef51a2c9124cd8691b912542",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "91e4c35492d4464da9148c77b3fe6b4f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Move the substantive update-base rewrite/recovery sequencing, including WAL transitions, rebase, lease/CAS publication, displaced evidence, replay, and final resolution, out of ServiceEngine into reconciliation_transactions.py or cohesive lower-level transaction modules.",
+    "Remove the compatibility fallback and add focused transaction tests for extracted crash/replay and fail-closed effect stages.",
+    "Run the full authoritative test, coverage, and Ruff suite after the substantive extraction."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Move the substantive update-base rewrite/recovery sequencing, including WAL transitions, rebase, lease/CAS publication, displaced evidence, replay, and final resolution, out of ServiceEngine into reconciliation_transactions.py or cohesive lower-level transaction modules.",
+      "Remove the compatibility fallback and add focused transaction tests for extracted crash/replay and fail-closed effect stages.",
+      "Run the full authoritative test, coverage, and Ruff suite after the substantive extraction."
+    ],
+    "report": null,
+    "summary": "Added an explicit reconciliation effect-phase capability and routed the update-base transaction seam through the reconciliation module while preserving existing owner/test-double compatibility. Renamed the runtime implementation to make the effect boundary explicit without changing recovery behavior."
+  },
+  "workspace_head": "0331f1e9788fc6738cc0c36b8ba704aea8d5162e"
+}
