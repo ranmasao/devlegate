@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a158a04f97b0aff02ab236edf02afbb2901cbe39",
+  "conclusion": "completed",
+  "control_head": "2145be5a46a3ca4a59f9b9adfc889a933c06f4d2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-067",
+  "execution_id": "4c565dafa61544af8d7c8f39e18f82fb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-067",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-067/4c565dafa61544af8d7c8f39e18f82fb.md",
+  "report_sha256": "cf638258858b892b479eaefa7a21b951a035f491157510216eb54b1de55aab02",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-067",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Inventory found three duplicated `git -C` subprocess implementations in `runtime.py`, `execution_workspace.py`, and `runtime_locator.py`. Consolidation removed those repeated mechanics without changing owner-level Git decision logic or mutation ordering. Ruff, compile checks, and focused regression tests passed; the full suite exceeded the execution window, with the observed long-running recovery test passing when isolated.",
+    "summary": "Added `devlegate.git.run_git` as the single low-level Git CLI execution path and migrated runtime, execution workspace, and repository-root discovery to it while preserving existing `_git` test seams and subprocess semantics. Added a focused command/result semantics test; higher-level recovery, reconciliation, CAS, worktree, and publication operations remain in their existing owners and capability boundaries."
+  },
+  "workspace_head": "8f3b420bc388f90965ee37ede7679cfb9d5e97f3"
+}
