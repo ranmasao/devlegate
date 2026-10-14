@@ -1,0 +1,35 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "cc8c9fab546a93753fa1bb224a9b87562f3816a4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "59c6db9d1bbc4bbe997221ac1795c8fa",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract checkpoint/publication replay, lifecycle and accepted-integration recovery, workspace inspection/repair, and product-lineage reconciliation/rewrite mechanics from ServiceEngine.",
+    "Complete the authoritative full test run after the timeout and review any remaining failures."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract checkpoint/publication replay, lifecycle and accepted-integration recovery, workspace inspection/repair, and product-lineage reconciliation/rewrite mechanics from ServiceEngine.",
+      "Complete the authoritative full test run after the timeout and review any remaining failures."
+    ],
+    "report": null,
+    "summary": "Extracted stranded-execution recovery and control-lineage adoption into `recovery_transactions.py` behind typed owner capabilities, preserving owner locking, evidence pinning, and fail-closed worker checks. Added transaction seam tests, fixed the missing EUPL header, and documented the implemented boundary."
+  },
+  "workspace_head": "357c4be59b9c2e5a843b139a30d2ea0beaed5cfc"
+}
