@@ -1,0 +1,39 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "7558004809f6ac4b08cfafe5e43910db7d1c4024",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "9e73af98d0a84e36abe386cbb4224bf8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract the substantive product-lineage rewrite and publication/CAS/lease/evidence mutation procedure from ServiceEngine into a narrow capability-based transaction module.",
+    "Remove the remaining unreachable legacy checkpoint/publication and lifecycle recovery implementations from runtime.py.",
+    "Add focused transaction tests for product-lineage rewrite replay, lease/CAS conflicts, displaced evidence, and checkpoint/lifecycle replay.",
+    "Run Ruff and complete the authoritative full test suite in an environment with Ruff installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract the substantive product-lineage rewrite and publication/CAS/lease/evidence mutation procedure from ServiceEngine into a narrow capability-based transaction module.",
+      "Remove the remaining unreachable legacy checkpoint/publication and lifecycle recovery implementations from runtime.py.",
+      "Add focused transaction tests for product-lineage rewrite replay, lease/CAS conflicts, displaced evidence, and checkpoint/lifecycle replay.",
+      "Run Ruff and complete the authoritative full test suite in an environment with Ruff installed."
+    ],
+    "report": null,
+    "summary": "Removed unreachable duplicate workspace inspection and repair implementations from runtime.py. Added repeated control-lineage admission before evidence pinning and worktree mutation, preserving fail-closed behavior when the remote moves during reconciliation."
+  },
+  "workspace_head": "3413d5147c3e91c5bb7d2d1fe11f6543202d7339"
+}
