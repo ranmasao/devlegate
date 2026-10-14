@@ -541,3 +541,40 @@ ticket's substantive extraction requirement.
 
 **Disposition: REQUEST CHANGES; review -> todo**. Preserve
 established worktree/checkpoint lineage.
+
+## Review — 2026-10-14, checkpoint 19596a55ee09 (REQUEST CHANGES)
+
+Reviewed execution `e9bb69d69f4d4e71946aa9efe48d5ca4`,
+checkpoint `19596a55ee09b910a5d7234974a38fffeb5286f9`.
+[Exact-checkpoint CI #38607634338](https://github.com/ranmasao/devlegate/actions/runs/38607634338)
+failed at Ruff: one E501 at `tests/test_recovery_boundaries.py:234`
+(overlong method signature). Tests: **1203 passed, 1 skipped**.
+
+Progress: removed the optional `getattr` fallback and redundant
+`reconciliation_execute_update_base()` entry point, requiring a
+mandatory effect capability. Retain this cleanup.
+
+**Primary acceptance blocker remains**: the mandatory
+`reconciliation_apply_update_base_effects()` still delegates the
+entire transaction to `ServiceEngine._reconciliation_apply_update_base_primitives()`,
+which still sequences WAL, rebase, rollback, lease/CAS publication, evidence
+and resolution. Renaming a monolithic effect method to 'primitives' does
+not extract transaction sequencing.
+
+**Required rework**:
+1. Move the *actual transaction sequence* into the extracted reconciliation
+   module. Expose narrow independent owner-held primitives for checkpoint
+   observation, WAL transition, rebase, exact proof, evidence pin,
+   lease/CAS publication, rollback and finalization. No aggregate
+   effect capability containing the previous transaction body.
+2. Add focused failure injection and replay tests for the module's new
+   sequencing (restart after WAL, rebase failure, lease conflict,
+   immutable evidence, no duplicate publish), preserving single owner,
+   TOCTOU rechecks and TASK-057 continuation semantics.
+3. Fix the E501 in the boundary test and verify full authoritative CI
+   including Ruff on the next exact SHA.
+4. Do not change unrelated TASK-066 or published v0.5.6.
+
+**Disposition: REQUEST CHANGES; review -> todo.** Continue existing
+checkpoint/worktree lineage. `no remote changes` in service logs does
+not invalidate this durable checkpoint.
