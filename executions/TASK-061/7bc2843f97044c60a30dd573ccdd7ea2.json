@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "214311147c7cf249fb36e012a3ab2aed30e8fb19",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "7bc2843f97044c60a30dd573ccdd7ea2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract the remaining product-lineage rewrite WAL, rebase, recovery, and final state transitions from runtime.py into the reconciliation transaction module.",
+    "Replace the remaining duplicated remote-pending rewrite lineage proof and lifecycle/recovery transaction bodies in runtime.py with module-owned procedures.",
+    "Run authoritative Ruff and full CI in an environment with the repository lint and coverage dependencies installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract the remaining product-lineage rewrite WAL, rebase, recovery, and final state transitions from runtime.py into the reconciliation transaction module.",
+      "Replace the remaining duplicated remote-pending rewrite lineage proof and lifecycle/recovery transaction bodies in runtime.py with module-owned procedures.",
+      "Run authoritative Ruff and full CI in an environment with the repository lint and coverage dependencies installed."
+    ],
+    "report": null,
+    "summary": "Moved exact execution-lineage proof and published-rewrite authorization into the typed reconciliation transaction boundary, with the ServiceEngine retaining only owner-held Git capability and mutation sequencing. Added focused boundary coverage for linear-chain proof and explicit published-tip authorization."
+  },
+  "workspace_head": "0e2ce34c40dab2d692334e2a3f160adf2e6a5a0c"
+}
