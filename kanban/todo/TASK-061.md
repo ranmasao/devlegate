@@ -249,3 +249,34 @@ domains and cannot be deferred while declaring TASK-061 done.
 
 **Disposition: REQUEST CHANGES; review -> todo**, preserving worker
 continuation lineage.
+
+## Review — 2026-10-14, checkpoint 962e872e4522 (REQUEST CHANGES)
+
+Reviewed execution `af1293ce4bda414f8aee11ba5e3021f6` at
+`962e872e4522d984dce5db3590e30c77d42f6340`.
+[Exact-checkpoint GitHub Actions #38536241642](https://github.com/ranmasao/devlegate/actions/runs/38536241642)
+passed: **1197 passed, 1 skipped**, Ruff passed.
+
+The new `recovery_workspace.py` meaningfully extracts pre-worker
+workspace inspection and repair with owner-supplied capabilities and
+fail-closed provenance/CAS checks. Preserve this work.
+
+**Still not acceptable as TASK-061 completion**:
+
+1. Checkpoint/publication replay, lifecycle/report recovery,
+   accepted-integration recovery, and product-lineage reconciliation/rewrite
+   remain substantively implemented in `ServiceEngine`; the worker lists
+   them as outstanding. Finish the extraction into cohesive, limited-capability
+   transaction modules without delegating independent mutation authority.
+2. Remove unreachable legacy code after immediate returns in
+   `_inspect_bound_execution_workspace` and
+   `_repair_bound_execution_workspace`. Having old implementations remain
+   in `runtime.py` violates single authoritative ownership and DRY.
+3. Preserve existing fail-closed proof, WAL, lease/CAS, displaced-history
+   retention, exact-once replay, and TASK-057 manual-retry invariants with
+   focused boundary tests, plus exact-checkpoint green full CI and Ruff.
+4. Keep unrelated TASK-066 log-stream changes and published v0.5.6 out of scope.
+
+**Disposition: REQUEST CHANGES; review -> todo.** Continue the established
+TASK-061 worktree/checkpoint lineage. CI success alone is not proof of
+the full extraction acceptance criteria.
