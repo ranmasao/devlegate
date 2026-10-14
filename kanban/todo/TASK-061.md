@@ -506,3 +506,38 @@ is a dispatch boundary, not the requested substantial extraction.
 
 **Disposition: REQUEST CHANGES; review -> todo**. Continue the
 existing checkpoint/worktree lineage.
+
+## Review — 2026-10-14, checkpoint 0331f1e9788f (REQUEST CHANGES)
+
+Execution `91e4c35492d4464da9148c77b3fe6b4f`,
+checkpoint `0331f1e9788fc6738cc0c36b8ba704aea8d5162e`.
+[Exact SHA CI #38606692186](https://github.com/ranmasao/devlegate/actions/runs/38606692186)
+was still **in progress** when reviewed; do not report it as passed.
+
+**Acceptance blocker:** This checkpoint introduces
+`execute_update_base()` and the capability
+`reconciliation_apply_update_base_effects()`, but the latter still
+delegates the *entire* transaction to
+`ServiceEngine._reconcile_update_base_effects()`, previously named
+`_reconcile_update_base_transaction()`. The added `getattr` fallback
+also retains `reconciliation_execute_update_base()`.
+This only renames/adds delegation and does not accomplish the
+ticket's substantive extraction requirement.
+
+**Required continuation**:
+1. Move actual WAL phase sequencing, rebase, replay, rollback,
+   lease/CAS publish, displaced-history evidence and final resolution
+   into `reconciliation_transactions.py` or cohesive extracted modules.
+   Expose narrow *primitive* owner-held capabilities; never delegate the
+   complete old transaction back into `ServiceEngine`.
+2. Remove redundant compatibility fallback once the new boundary is
+   authoritative, preserving explicit single-owner lock and TOCTOU checks.
+3. Add focused effect-phase fault injection and crash/replay tests,
+   including idempotency, lease failure, displaced evidence, and
+   partial rebase failure.
+4. Obtain full authoritative green CI including coverage and Ruff
+   on the next exact SHA; preserve TASK-057 intent semantics, avoid
+   unrelated TASK-066 and published v0.5.6 changes.
+
+**Disposition: REQUEST CHANGES; review -> todo**. Preserve
+established worktree/checkpoint lineage.
