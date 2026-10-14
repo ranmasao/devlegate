@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "3d9e137d89e405ba39b46bf4997d6ef6e9497eb9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "e9bb69d69f4d4e71946aa9efe48d5ca4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Move the substantive update-base WAL, rebase, replay, rollback, lease/CAS publication, displaced-evidence, and final-resolution sequencing out of runtime.py into reconciliation_transactions.py using narrow primitive capabilities.",
+    "Add focused interruption, replay, conflict, and fail-closed transaction tests for the extracted effect sequence.",
+    "Run pytest and Ruff in an environment with those tools installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Move the substantive update-base WAL, rebase, replay, rollback, lease/CAS publication, displaced-evidence, and final-resolution sequencing out of runtime.py into reconciliation_transactions.py using narrow primitive capabilities.",
+      "Add focused interruption, replay, conflict, and fail-closed transaction tests for the extracted effect sequence.",
+      "Run pytest and Ruff in an environment with those tools installed."
+    ],
+    "report": null,
+    "summary": "Removed the legacy update-base capability fallback and duplicate runtime entry point, making the extracted reconciliation module require one mandatory owner-held effect capability. Updated the boundary test owner and renamed the remaining runtime effect implementation to a primitive capability seam."
+  },
+  "workspace_head": "19596a55ee09b910a5d7234974a38fffeb5286f9"
+}
