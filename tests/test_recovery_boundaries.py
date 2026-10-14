@@ -13,6 +13,7 @@ from devlegate.reconciliation import (
 from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
+    publish_rewritten_lineage,
 )
 from devlegate.recovery import (
     classify_stage,
@@ -231,3 +232,45 @@ def test_lineage_admission_rejects_unproven_history():
         assert "descendant" in str(error)
     else:
         raise AssertionError("divergent lineage must fail closed")
+
+
+class _RewriteOwner:
+    def __init__(self):
+        self.events = []
+
+    def reconciliation_pin_rewrite_evidence(self, reference, rewritten_head):
+        self.events.append(("pin", reference, rewritten_head))
+
+    def reconciliation_publish_rewrite(self, branch, rewritten_head, expected_remote):
+        self.events.append(("publish", branch, rewritten_head, expected_remote))
+
+
+def test_published_rewrite_pins_displaced_history_before_lease_push():
+    owner = _RewriteOwner()
+
+    publish_rewritten_lineage(
+        owner,
+        branch="devlegate/TASK-1",
+        rewritten_head="rewritten",
+        expected_remote="old-remote",
+        evidence_ref="refs/devlegate/rewrite/TASK-1",
+    )
+
+    assert owner.events == [
+        ("pin", "refs/devlegate/rewrite/TASK-1", "rewritten"),
+        ("publish", "devlegate/TASK-1", "rewritten", "old-remote"),
+    ]
+
+
+def test_unpublished_rewrite_retains_evidence_without_remote_mutation():
+    owner = _RewriteOwner()
+
+    publish_rewritten_lineage(
+        owner,
+        branch="devlegate/TASK-1",
+        rewritten_head="rewritten",
+        expected_remote=None,
+        evidence_ref="refs/devlegate/rewrite/TASK-1",
+    )
+
+    assert owner.events == [("pin", "refs/devlegate/rewrite/TASK-1", "rewritten")]
