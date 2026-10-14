@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "50b0eaee53b23fe21b1b8fa97a163785a31c9779",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "b3a6b74b5a0a43c39e4a4732a8e50f81",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract product-lineage reconciliation and rewrite transactions from runtime.py behind narrow capabilities.",
+    "Delete the unreachable legacy workspace and replay implementations retained in runtime.py.",
+    "Add boundary tests for the new workflow transaction module and run the repository test and Ruff suites in an environment with project tooling installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract product-lineage reconciliation and rewrite transactions from runtime.py behind narrow capabilities.",
+      "Delete the unreachable legacy workspace and replay implementations retained in runtime.py.",
+      "Add boundary tests for the new workflow transaction module and run the repository test and Ruff suites in an environment with project tooling installed."
+    ],
+    "report": null,
+    "summary": "Added recovery_workflow.py with typed owner capabilities for checkpoint/publication replay, lifecycle report replay, and accepted-integration replay, and routed ServiceEngine coordination through those boundaries. Updated architecture ownership documentation and preserved the existing workspace and stranded-worker extraction."
+  },
+  "workspace_head": "aa5953b77c999bebee058b37a52cf20b488335ef"
+}
