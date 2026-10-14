@@ -1,0 +1,41 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "be70bf10442f373ecd62183503aff9240656e3ad",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "027ebb7aa30a40b19432ca4f710be38b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "The workspace shell tool denied all validation commands; can the execution environment permit pytest and Ruff for this checkpoint?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Fully relocate the update-base/recovery control flow from runtime.py into reconciliation_transactions.py instead of retaining the large owner capability body.",
+    "Add or update real-engine crash/restart regression coverage for local-pending and remote-pending replay.",
+    "Run focused/full pytest and Ruff validation once workspace command execution is available."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "The workspace shell tool denied all validation commands; can the execution environment permit pytest and Ruff for this checkpoint?"
+    ],
+    "remaining": [
+      "Fully relocate the update-base/recovery control flow from runtime.py into reconciliation_transactions.py instead of retaining the large owner capability body.",
+      "Add or update real-engine crash/restart regression coverage for local-pending and remote-pending replay.",
+      "Run focused/full pytest and Ruff validation once workspace command execution is available."
+    ],
+    "report": null,
+    "summary": "Rewired the real update-base entrypoint to dispatch on persisted rewrite_stage under the existing ServiceEngine lock, eliminating the mandatory primitive-capability failure on the production path. Added explicit local-pending and remote-pending recovery entrypoints and preserved the existing recovery, evidence, lease/CAS, and resolution logic."
+  },
+  "workspace_head": "f62eedab941926250ac2ac111fdcf15a10091bcd"
+}
