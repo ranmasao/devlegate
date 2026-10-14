@@ -436,3 +436,35 @@ worker's `incomplete` claim):
    single mutation owner. Keep TASK-066 and published v0.5.6 untouched.
 
 **Disposition: REQUEST CHANGES; review -> todo.**
+
+## Review — 2026-10-14, checkpoint 0e2ce34c40da (REQUEST CHANGES)
+
+Reviewed execution `7bc2843f97044c60a30dd573ccdd7ea2` at
+`0e2ce34c40dab2d692334e2a3f160adf2e6a5a0c`.
+[Exact SHA CI #38596475701](https://github.com/ranmasao/devlegate/actions/runs/38596475701)
+failed at Ruff: two I001 unsorted imports in `src/devlegate/runtime.py`
+and `tests/test_recovery_boundaries.py`. Tests: **1202 passed, 1 skipped**.
+
+New `prove_workspace_lineage` and `authorize_workspace_rewrite`
+routines move linear-chain proof and published-tip authorization to
+`reconciliation_transactions.py`, with boundary coverage. Preserve them.
+
+**Unfinished acceptance requirements**:
+1. The principal product-lineage rewrite and reconciliation transaction
+   is still sequenced in `ServiceEngine`: WAL state transitions, rebase,
+   crash recovery, rollback, lease/CAS publication, and final durable
+   resolution. Extract this **substantive orchestration** to a cohesive
+   module with narrow owner-held capabilities, rather than only adding
+   further proof wrappers. Retain lock/provenance and sole mutation authority.
+2. Remove any remaining duplicate remote-pending rewrite proof and
+   lifecycle/recovery implementations from `runtime.py`. Do not retain
+   old code after delegation.
+3. Add focused replay/fail-closed tests across new transaction seams
+   (rebase interrupted, published lease conflict, immutable displaced
+   evidence, restart/idempotency). Preserve existing regression tests.
+4. Fix both I001 import sorting issues and obtain green authoritative
+   full tests, coverage and Ruff on the exact next checkpoint.
+5. Preserve TASK-057 interruption intent; avoid TASK-066 and v0.5.6 changes.
+
+**Disposition: REQUEST CHANGES; review -> todo**, preserve the existing
+checkpoint/worktree lineage.
