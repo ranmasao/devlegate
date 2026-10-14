@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "fc2b8952c7a1bd1e030d790882b3d5c7bf7fa693",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "9da516ebe6e54cd18edb095ad6e5bea5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract the substantive product-lineage reconciliation/rewrite procedure from ServiceEngine into the owner-held transaction module while preserving its WAL, lease, CAS, rollback, and displaced-evidence invariants.",
+    "Add focused crash-replay and fail-closed transaction tests for recovery_workflow paths and the moved reconciliation procedure.",
+    "Run pytest and Ruff in an environment with the project development tools installed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract the substantive product-lineage reconciliation/rewrite procedure from ServiceEngine into the owner-held transaction module while preserving its WAL, lease, CAS, rollback, and displaced-evidence invariants.",
+      "Add focused crash-replay and fail-closed transaction tests for recovery_workflow paths and the moved reconciliation procedure.",
+      "Run pytest and Ruff in an environment with the project development tools installed."
+    ],
+    "report": null,
+    "summary": "Removed the unreachable legacy checkpoint-publication and lifecycle-recovery implementations from runtime.py. Added boundary tests proving rewritten lineage evidence is pinned before lease-guarded publication, including the unpublished case."
+  },
+  "workspace_head": "51e99b5259486f372dddabf10cce22b022bb9692"
+}
