@@ -1,0 +1,1 @@
+Focused code checks passed: compilation, import-level HEAD resolution, and diff hygiene. Pytest and Ruff could not be run because neither executable is installed in the workspace.

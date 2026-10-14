@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a158a04f97b0aff02ab236edf02afbb2901cbe39",
+  "conclusion": "completed",
+  "control_head": "1d8163f9aed16166b8941e63117444297ff455e9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-067",
+  "execution_id": "fa6dcfeab0fb4dd69ed7390c3760b1fa",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-067",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-067/fa6dcfeab0fb4dd69ed7390c3760b1fa.md",
+  "report_sha256": "541931c7d35873408df0f2c9813c7a40b871cb52e32f68eeb31abdac48e5fb4e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-067",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused code checks passed: compilation, import-level HEAD resolution, and diff hygiene. Pytest and Ruff could not be run because neither executable is installed in the workspace.",
+    "summary": "Added the shared semantic `resolve_commit` primitive and reused it for execution-base and reconciliation-target validation while preserving each module's existing `_git` test seam. Audited the remaining Git operations: branch/evidence probes retain distinct CAS preconditions, lineage parent checks retain distinct proof contexts, worktree operations remain topology-specific, and `recovery_git`/`reconciliation_git` forwarders remain necessary owner capability boundaries."
+  },
+  "workspace_head": "8855cd1a29490f7f94880a8ed8fbc33e13a36a6c"
+}
