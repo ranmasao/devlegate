@@ -2,6 +2,9 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+from pathlib import Path
+
+from devlegate.execution_workspace import WorkspaceInspection
 from devlegate.reconciliation import (
     prove_linear_lineage,
     rewrite_is_authorized,
@@ -14,6 +17,7 @@ from devlegate.recovery import (
     validate_execution_binding,
 )
 from devlegate.recovery_transactions import recover_stranded_execution
+from devlegate.recovery_workspace import inspect_bound_workspace
 
 
 def test_recovery_classification_does_not_authorize_operator_stop():
@@ -55,9 +59,12 @@ def test_lineage_proofs_reject_merges_and_gate_published_rewrites():
     parents = {"a": ("root",), "b": ("a",), "merge": ("a", "other")}
     proof = prove_linear_lineage("root", ["a", "b"], parents)
     assert proof.valid
-    assert rewrite_is_authorized(
-        published_head="b", lineage=proof, rewrite_published=False
-    ) is False
+    assert (
+        rewrite_is_authorized(
+            published_head="b", lineage=proof, rewrite_published=False
+        )
+        is False
+    )
     assert not prove_linear_lineage("root", ["merge"], parents).valid
     assert same_parent_replacement("a", "replacement", {"a": ("root",)}) is False
 
@@ -118,3 +125,48 @@ def test_stranded_transaction_blocks_live_worker_without_normalization():
         raise AssertionError("live worker must block recovery")
     assert owner.normalized == []
     assert owner.blocked
+
+
+class _WorkspaceManager:
+    branch = "devlegate/TASK-1"
+    path = Path("/tmp/execution")
+
+    def inspect(self, _base, _expected):
+        return WorkspaceInspection("UNSAFE", "execution branch is missing")
+
+    def _registrations(self):
+        return {}
+
+
+class _WorkspaceOwner:
+    repo = Path("/tmp/repo")
+
+    def recovery_workspace_manager(self, _ticket_id):
+        return _WorkspaceManager()
+
+    def recovery_git(self, _cwd, *_args, check=False):
+        class Result:
+            returncode = 1
+            stdout = ""
+
+        return Result()
+
+    def recovery_reports(self, _ticket_id):
+        return []
+
+
+def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild():
+    state = {
+        "phase": "agent_pending",
+        "execution_ticket_id": "TASK-1",
+        "execution_id": "exec-1",
+        "execution_base_head": "base",
+        "execution_branch": "devlegate/TASK-1",
+        "execution_path": "/tmp/execution",
+        "worker_identity": None,
+        "pending_execution_report": None,
+    }
+
+    result = inspect_bound_workspace(_WorkspaceOwner(), state)
+
+    assert result.classification == "RECOVERABLE"

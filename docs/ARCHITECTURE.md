@@ -214,7 +214,7 @@ or record durable receipts.
 | Boundary | Decision/proof owner | Side-effect owner |
 | --- | --- | --- |
 | Interrupted, stale, or stranded execution | `recovery` stage and interruption classifiers | `recovery_transactions` through owner capabilities |
-| Pre-worker workspace binding and old-generation attribution | `recovery` binding contract plus execution workspace manager | `ServiceEngine` and `ExecutionWorkspaceManager` |
+| Pre-worker workspace binding and old-generation attribution | `recovery` binding contract and `recovery_workspace` topology/provenance proof | `recovery_workspace` through `ServiceEngine` workspace/Git capabilities |
 | Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and execution report store | `ServiceEngine` WAL procedures |
 | Same-base resume and product-base eligibility | `reconciliation` lineage proofs plus fresh Git observations | `ServiceEngine` with CAS/lease checks |
 | Published lineage rewrite and displaced evidence | `reconciliation` rewrite authorization proof | `ServiceEngine` ref publication and evidence pinning |
@@ -227,12 +227,14 @@ occupied, malformed, or unobservable evidence fails closed. Operator stop and
 service shutdown remain interruption mechanisms and do not become automatic
 continuation intent.
 
-The extracted transaction boundary currently covers control-lineage adoption
-and stranded-worker normalization. Both repeat their admission observation,
-preserve displaced evidence before a ref move, and refuse live or uncertain
-worker ownership. Checkpoint/publication and product-lineage rewrite remain
-ServiceEngine-owned procedures until their Git and report capabilities can be
-split without duplicating the write-ahead state machine.
+The extracted transaction boundaries cover control-lineage adoption,
+stranded-worker normalization, and pre-worker workspace inspection/repair.
+They repeat admission or ownership observations, preserve displaced evidence
+before a ref move, and refuse live, dirty, occupied, or uncertain ownership.
+Checkpoint/publication replay, lifecycle/report replay, accepted integration,
+and product-lineage rewrite remain ServiceEngine-owned procedures until their
+Git, report, and write-ahead capabilities can be split without duplicating the
+state machine.
 
 ## Runtime State
 

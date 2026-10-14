@@ -52,6 +52,10 @@ from devlegate.recovery_transactions import (
     reconcile_control_lineage,
     recover_stranded_execution,
 )
+from devlegate.recovery_workspace import (
+    inspect_bound_workspace,
+    repair_bound_workspace,
+)
 from devlegate.runtime_locator import (
     RuntimeLocator,
     RuntimeLocatorError,
@@ -8023,6 +8027,9 @@ class ServiceEngine:
     def _inspect_bound_execution_workspace(
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
+        return inspect_bound_workspace(self, state)
+        # Kept below only as a source-compatible reference during staged
+        # extraction; all callers use the capability-based transaction above.
         ticket_id = state.get("execution_ticket_id")
         execution_id = state.get("execution_id")
         base_head = state.get("execution_base_head")
@@ -8122,6 +8129,11 @@ class ServiceEngine:
 
     def _repair_bound_execution_workspace(self) -> None:
         """Repair only a pre-worker branch proven to be an older generation."""
+        try:
+            repair_bound_workspace(self, self._state)
+        except ValueError as error:
+            raise DevlegateError(str(error)) from error
+        return
         state = self._state
         if (
             state.get("phase") != "agent_pending"
@@ -8490,6 +8502,16 @@ class ServiceEngine:
 
     def recovery_publish_blocked(self, reason: str) -> None:
         self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+
+    def recovery_workspace_manager(self, ticket_id: str):
+        """Provide the workspace capability without exposing the coordinator."""
+        return ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+
+    def recovery_reports(self, ticket_id: str) -> list[ExecutionReport]:
+        self._validate_control_worktree()
+        return ExecutionReportStore(self.control_worktree).list(ticket_id)
 
     def normalize_stranded_execution(self, interruption: str) -> None:
         self._normalize_stranded_execution(interruption)
