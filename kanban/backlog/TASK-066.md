@@ -65,6 +65,39 @@ Refactor ticket logging around **one shared resolution and streaming model**:
   lifecycle observation) in small testable helpers, **not** one monolithic
   streaming function.
 
+## Cross-command DRY audit — 2026-10-14
+
+Review of `src/devlegate/cli.py` and `src/devlegate/log_reader.py`
+finds duplication beyond `logs ticket`:
+
+- `logs execution` selects `execution_log()` without `-f` but resolves
+  `execution_id()` independently and calls `follow_execution()` with `-f`.
+  Consolidate identity resolution and initial-tail/cursor reading for both
+  modes, including prefix ambiguity and targeted report failures.
+- `ticket_log()`, `follow_ticket()`, `execution_log()`, and
+  `follow_execution()` duplicate file-tail/head-position and active/terminal
+  selection at several layers. Introduce common focused helpers rather than
+  parallel entry-point algorithms. Especially avoid the `_read_file(path, N)`
+  then `open(path); seek(EOF)` race, which can skip appended bytes between
+  tail read and cursor establishment. Validate behavior for partially written
+  lines, log rotation/truncation if supported, and missing-yet-expected logs.
+- `follow_file()` is a third file-follow implementation. Determine whether
+  it is actually reachable; either reuse the common file reader or remove
+  dead code with supporting tests, without expanding scope into a new logging
+  subsystem.
+- `logs service` is backed by `journalctl` rather than execution log files,
+  so do **not** force it into file-streaming internals. Its non-follow
+  `subprocess.run()` and follow `Popen()` legitimately differ in process
+  control, but should share argument validation, command construction, error
+  reporting, interrupt/cleanup semantics, and covered tests. Review whether
+  stderr/exit-status diagnostics from the follow subprocess are preserved.
+- Keep `cli.py` as thin dispatch. Preserve existing public syntax and
+  `--lines` semantics, and test initial output equivalence for each selector
+  in follow vs non-follow modes.
+
+The goal is **shared semantics and reusable primitives**, not cosmetic
+unification of genuinely different file and journal backends.
+
 ## Required behavior
 
 - Following a specific active execution, or a ticket's current execution,
