@@ -8321,48 +8321,6 @@ class ServiceEngine:
             if existing.returncode or existing.stdout.strip() != rewritten_head:
                 raise DevlegateError("rewritten execution evidence could not be pinned")
 
-    def reconciliation_recover_pending_rewrite(
-        self, ticket_id: str, admission
-    ) -> int | None:
-        """Replay an interrupted rewrite while the owner is locked."""
-        if self._state.get("reconciliation", {}).get("rewrite_stage") not in {
-            "local-pending",
-            "remote-pending",
-        }:
-            return None
-        return self._reconciliation_update_base_transaction(
-            ticket_id,
-            admission,
-            rewrite_published=bool(
-                self._state.get("reconciliation", {}).get("rewrite_authorized")
-            ),
-            _take_lock=False,
-        )
-
-    def reconciliation_prepare_rewrite(
-        self, ticket_id: str, admission, rewrite_published: bool
-    ) -> int:
-        """Apply a new rewrite under the owner lock after final admission."""
-        return self._reconciliation_update_base_transaction(
-            ticket_id,
-            admission,
-            rewrite_published=rewrite_published,
-            _take_lock=False,
-        )
-
-    def reconciliation_apply_rewrite(self, ticket_id, admission, prepared):
-        raise DevlegateError("rewrite was already applied by the prepare effect")
-
-    def reconciliation_publish_rewrite_effect(
-        self, ticket_id, admission, prepared, rewritten
-    ):
-        raise DevlegateError("rewrite was already published by the prepare effect")
-
-    def reconciliation_finish_rewrite(
-        self, ticket_id, admission, prepared, rewritten
-    ) -> int:
-        raise DevlegateError("rewrite was already finalized by the prepare effect")
-
     def _reconcile_update_base_owned(
         self,
         ticket_id: str,
@@ -8383,7 +8341,7 @@ class ServiceEngine:
         except ReconciliationTransactionError as error:
             raise DevlegateError(str(error)) from error
 
-    def _reconciliation_update_base_transaction(
+    def _reconciliation_start_update_base(
         self,
         ticket_id: str,
         admission,
@@ -8391,7 +8349,7 @@ class ServiceEngine:
         rewrite_published: bool = False,
         _take_lock: bool = False,
     ) -> int:
-        """Apply the already-admitted rewrite effect.
+        """Apply or recover the already-admitted rewrite effect.
 
         The admission and transaction boundary live in
         ``reconciliation_transactions``.  This method is an owner capability:
@@ -8796,6 +8754,28 @@ class ServiceEngine:
             )
             _log(f"reconciliation resolved for {ticket_id}; resume required")
             return 0
+
+    def _reconciliation_recover_local_rewrite(
+        self, ticket_id: str, admission, rewrite_published: bool
+    ) -> int:
+        """Recover a local-pending rewrite without starting a new one."""
+        return self._reconciliation_start_update_base(
+            ticket_id,
+            admission,
+            rewrite_published=rewrite_published,
+            _take_lock=False,
+        )
+
+    def _reconciliation_recover_remote_rewrite(
+        self, ticket_id: str, admission, rewrite_published: bool
+    ) -> int:
+        """Recover a remote-pending rewrite without republishing it."""
+        return self._reconciliation_start_update_base(
+            ticket_id,
+            admission,
+            rewrite_published=rewrite_published,
+            _take_lock=False,
+        )
 
     def _reconcile_resume_owned(
         self, ticket_id: str, *, _take_lock: bool = False
