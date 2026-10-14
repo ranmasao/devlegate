@@ -578,3 +578,36 @@ not extract transaction sequencing.
 **Disposition: REQUEST CHANGES; review -> todo.** Continue existing
 checkpoint/worktree lineage. `no remote changes` in service logs does
 not invalidate this durable checkpoint.
+
+## Review — 2026-10-14, checkpoint 099c25fbeb9c (REQUEST CHANGES)
+
+Execution `81572b7642cc47f0a5fdf15e5cb30a49`,
+checkpoint `099c25fbeb9cdf4ef4cf887b44e9eea85a08343d`.
+[Exact checkpoint CI #38608758627](https://github.com/ranmasao/devlegate/actions/runs/38608758627)
+was in progress at review time; do not infer a passing result.
+
+This iteration changes only `tests/test_recovery_boundaries.py`:
+fixes an E501 line-length issue and adds a regression ensuring a failed
+evidence pin prevents remote publication. Preserve these improvements.
+
+**The primary extraction requirement is still completely outstanding for
+this iteration.** `ServiceEngine._reconciliation_apply_update_base_primitives()`
+retains the entire WAL/rebase/replay/rollback/lease-CAS/evidence/finalization
+transaction. No production reconciliation implementation changed in this
+checkpoint.
+
+**Focused next iteration required**:
+1. Migrate the actual owner-held update-base transaction sequencing out
+   of `runtime.py` into `reconciliation_transactions.py` or a cohesive
+   extracted domain module. Supply narrow effect capabilities for each
+   distinct mutation, not an aggregate callback that returns to the old
+   ServiceEngine transaction.
+2. Physically remove the replaced monolithic implementation. Preserve
+   admission freshness, lock ownership, state/WAL, lease/CAS, displaced
+   evidence, rollback and replay invariants.
+3. Test interruption boundaries and fail-closed replay of the extracted
+   sequence; rerun exact checkpoint full CI and Ruff.
+4. Avoid extra wrapper-only iterations or unrelated TASK-066 changes.
+   Published v0.5.6 must remain untouched.
+
+**Disposition: REQUEST CHANGES; review -> todo.**
