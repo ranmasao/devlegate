@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a158a04f97b0aff02ab236edf02afbb2901cbe39",
+  "conclusion": "completed",
+  "control_head": "8e0250f7d3a38676d998456bd0c44064f098264b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-067",
+  "execution_id": "93e273d82e844bf6b6455f6303981f53",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-067",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-067/93e273d82e844bf6b6455f6303981f53.md",
+  "report_sha256": "c4831ff4236773445c7e7d14eb06a957c5240bff9ff8f038d5450f1f6f5fd7d9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-067",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The focused pytest and Ruff commands were attempted but the tools are unavailable in the workspace.",
+    "summary": "Corrected the SPDX identifier in src/devlegate/git.py by removing the trailing period, with no other source changes."
+  },
+  "workspace_head": "b204ba784b942b4c186fc40ea9ed705d117fb7a1"
+}
