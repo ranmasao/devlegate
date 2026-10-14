@@ -47,7 +47,9 @@ from devlegate.reconciliation import prove_linear_lineage, same_parent_replaceme
 from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
+    authorize_workspace_rewrite,
     publish_rewritten_lineage,
+    prove_workspace_lineage,
 )
 from devlegate.recovery import classify_stage
 from devlegate.recovery_transactions import (
@@ -8272,6 +8274,10 @@ class ServiceEngine:
             and Path(str(value.get("execution_path"))) == manager.path
         )
 
+    @staticmethod
+    def reconciliation_git(cwd, *args: str, check: bool = False):
+        return _git(cwd, *args, check=check)
+
     def reconciliation_publish_rewrite(
         self, branch: str, rewritten_head: str, expected_remote: str
     ) -> None:
@@ -8536,44 +8542,20 @@ class ServiceEngine:
                 raise DevlegateError(
                     "execution workspace changed before reconciliation"
                 )
-            lineage_result = _git(
-                workspace.path,
-                "rev-list",
-                "--reverse",
-                f"{original_base}..{checkpoint}",
-                check=False,
-            )
-            lineage = (
-                lineage_result.stdout.splitlines()
-                if not lineage_result.returncode
-                else []
-            )
-            if lineage_result.returncode or not lineage:
-                raise DevlegateError(
-                    "execution lineage is not a non-empty linear checkpoint chain"
+            try:
+                lineage = list(
+                    prove_workspace_lineage(self, workspace, original_base, checkpoint)
                 )
-            previous = original_base
-            for commit in lineage:
-                parents = _git(
-                    workspace.path,
-                    "rev-list",
-                    "--parents",
-                    "-n",
-                    "1",
-                    commit,
-                    check=False,
-                )
-                fields = parents.stdout.split()
-                if parents.returncode or len(fields) != 2 or fields[1] != previous:
-                    raise DevlegateError(
-                        "execution lineage contains a merge, side branch, or "
-                        "unrelated commit"
+            except ReconciliationTransactionError as error:
+                reason = str(error).replace("a merge", "merge")
+                if reason == "lineage contains merge, side branch, or gap":
+                    reason = (
+                        "execution lineage contains merge, side branch, or unrelated "
+                        "commit"
                     )
-                previous = commit
-            if previous != checkpoint:
                 raise DevlegateError(
-                    "execution lineage does not reach the preserved checkpoint"
-                )
+                    reason
+                ) from error
             execution_remote = self._execution_remote_head(manager.branch)
             expected_remote = reconciliation.get("execution_remote_head")
             if execution_remote != expected_remote:
@@ -8653,13 +8635,25 @@ class ServiceEngine:
                 self._state["execution_base_head"] = previous_execution_base
                 raise DevlegateError(f"reconciliation failed: {error}") from error
             updated = self._execution_workspace_for_recovery()
-            rewritten_lineage_result = _git(
-                updated.path, "rev-list", "--reverse", f"{target}..HEAD", check=False
-            )
-            rewritten_lineage = rewritten_lineage_result.stdout.splitlines()
+            try:
+                rewritten_lineage = list(
+                    authorize_workspace_rewrite(
+                        self,
+                        updated,
+                        target,
+                        updated.head,
+                        execution_remote,
+                        rewrite_published,
+                    )
+                )
+            except ReconciliationTransactionError as error:
+                rewritten_lineage = []
+                rewrite_error = str(error)
+            else:
+                rewrite_error = ""
             if (
                 updated.dirty
-                or rewritten_lineage_result.returncode
+                or rewrite_error
                 or len(rewritten_lineage) != len(lineage)
                 or updated.head == target
             ):
@@ -8675,7 +8669,9 @@ class ServiceEngine:
                     execution_start_head=original_base,
                     reconciliation=reconciliation,
                 )
-                raise DevlegateError("reconciled execution lineage is invalid")
+                raise DevlegateError(
+                    rewrite_error or "reconciled execution lineage is invalid"
+                )
             previous = target
             for commit in rewritten_lineage:
                 parents = _git(updated.path, "rev-list", "--parents", "-n", "1", commit)

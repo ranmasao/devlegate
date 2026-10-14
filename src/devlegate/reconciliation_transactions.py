@@ -12,7 +12,13 @@ before those capabilities may be used.
 from __future__ import annotations
 
 import dataclasses
-from typing import Protocol
+from typing import Any, Protocol
+
+from devlegate.reconciliation import (
+    LineageProof,
+    prove_linear_lineage,
+    rewrite_is_authorized,
+)
 
 
 class ReconciliationTransactionError(ValueError):
@@ -64,6 +70,10 @@ class UpdateBaseCapabilities(Protocol):
     def reconciliation_pin_rewrite_evidence(
         self, reference: str, rewritten_head: str
     ) -> None: ...
+
+    def reconciliation_git(
+        self, cwd: Any, *args: str, check: bool = False
+    ) -> Any: ...
 
 
 def admit_update_base(
@@ -154,3 +164,64 @@ def publish_rewritten_lineage(
     owner.reconciliation_pin_rewrite_evidence(evidence_ref, rewritten_head)
     if expected_remote is not None:
         owner.reconciliation_publish_rewrite(branch, rewritten_head, expected_remote)
+
+
+def prove_workspace_lineage(
+    owner: UpdateBaseCapabilities, workspace: Any, root: str, tip: str
+) -> tuple[str, ...]:
+    """Prove that ``tip`` is a non-empty, single-parent chain from ``root``.
+
+    This is deliberately an observation-only transaction step.  It is shared by
+    initial reconciliation admission and replay after a crash, so neither path
+    can accidentally weaken the merge/side-branch checks.
+    """
+    result = owner.reconciliation_git(
+        workspace.path, "rev-list", "--reverse", f"{root}..{tip}", check=False
+    )
+    commits = result.stdout.splitlines() if result.returncode == 0 else []
+    parents: dict[str, tuple[str, ...]] = {}
+    for commit in commits:
+        parent_result = owner.reconciliation_git(
+            workspace.path,
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            commit,
+            check=False,
+        )
+        fields = parent_result.stdout.split()
+        parents[commit] = tuple(fields[1:]) if parent_result.returncode == 0 else ()
+    proof = prove_linear_lineage(root, commits, parents)
+    if not proof.valid or (commits and commits[-1] != tip):
+        reason = (
+            proof.reason
+            if not proof.valid
+            else "lineage does not reach the expected tip"
+        )
+        raise ReconciliationTransactionError(
+            reason
+        )
+    return proof.commits
+
+
+def authorize_workspace_rewrite(
+    owner: UpdateBaseCapabilities,
+    workspace: Any,
+    root: str,
+    tip: str,
+    published_head: str | None,
+    rewrite_published: bool,
+) -> tuple[str, ...]:
+    """Prove the rewritten chain and require explicit publication authorization."""
+    commits = prove_workspace_lineage(owner, workspace, root, tip)
+    proof = LineageProof(root, commits, True, "linear lineage proven")
+    if not rewrite_is_authorized(
+        published_head=published_head,
+        lineage=proof,
+        rewrite_published=rewrite_published,
+    ):
+        raise ReconciliationTransactionError(
+            "published execution ref requires explicit rewrite authorization"
+        )
+    return commits

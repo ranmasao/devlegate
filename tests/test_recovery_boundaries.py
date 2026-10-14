@@ -13,7 +13,9 @@ from devlegate.reconciliation import (
 from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
+    authorize_workspace_rewrite,
     publish_rewritten_lineage,
+    prove_workspace_lineage,
 )
 from devlegate.recovery import (
     classify_stage,
@@ -244,6 +246,19 @@ class _RewriteOwner:
     def reconciliation_publish_rewrite(self, branch, rewritten_head, expected_remote):
         self.events.append(("publish", branch, rewritten_head, expected_remote))
 
+    @staticmethod
+    def reconciliation_git(_cwd, *args, check=False):
+        command = list(args)
+        if command[:2] == ["rev-list", "--reverse"]:
+            return type("Result", (), {"returncode": 0, "stdout": "one\ntwo\n"})()
+        commit = command[-1]
+        parents = {"one": "one root\n", "two": "two one\n"}
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": parents.get(commit, "")},
+        )()
+
 
 def test_published_rewrite_pins_displaced_history_before_lease_push():
     owner = _RewriteOwner()
@@ -274,3 +289,21 @@ def test_unpublished_rewrite_retains_evidence_without_remote_mutation():
     )
 
     assert owner.events == [("pin", "refs/devlegate/rewrite/TASK-1", "rewritten")]
+
+
+def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip():
+    owner = _RewriteOwner()
+    workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
+
+    assert prove_workspace_lineage(owner, workspace, "root", "two") == (
+        "one",
+        "two",
+    )
+    try:
+        authorize_workspace_rewrite(
+            owner, workspace, "root", "two", "one", rewrite_published=False
+        )
+    except ReconciliationTransactionError as error:
+        assert "authorization" in str(error)
+    else:
+        raise AssertionError("published lineage rewrite must require authorization")
