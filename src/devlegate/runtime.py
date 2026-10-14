@@ -8321,10 +8321,10 @@ class ServiceEngine:
             if existing.returncode or existing.stdout.strip() != rewritten_head:
                 raise DevlegateError("rewritten execution evidence could not be pinned")
 
-    def reconciliation_apply_update_base_effects(
+    def reconciliation_recover_update_base(
         self, ticket_id: str, admission, rewrite_published: bool
     ) -> int:
-        """Owner-held effect capability used by the reconciliation module."""
+        """Owner-held effect phase used by the reconciliation module."""
         return self._reconciliation_apply_update_base_primitives(
             ticket_id,
             admission,

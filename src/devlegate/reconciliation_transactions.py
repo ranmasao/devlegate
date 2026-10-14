@@ -12,7 +12,7 @@ before those capabilities may be used.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from devlegate.reconciliation import (
     LineageProof,
@@ -77,7 +77,11 @@ class UpdateBaseCapabilities(Protocol):
 
     def reconciliation_lock(self) -> Any: ...
 
-    def reconciliation_apply_update_base_effects(
+@runtime_checkable
+class UpdateBaseEffectCapabilities(Protocol):
+    """Owner-held effect phases for an admitted update-base transaction."""
+
+    def reconciliation_recover_update_base(
         self, ticket_id: str, admission: UpdateBaseAdmission, rewrite_published: bool
     ) -> int: ...
 
@@ -267,7 +271,16 @@ def execute_update_base(
     owner; falling back to a second entry point would make the transaction
     authority ambiguous and could bypass the final admission proof.
     """
-    return owner.reconciliation_apply_update_base_effects(
+    # Keep the effect boundary explicit.  The owner callback is deliberately
+    # separate from admission so a replay cannot skip the final proof.
+    effects = owner
+    if not isinstance(effects, UpdateBaseEffectCapabilities) or not callable(
+        effects.reconciliation_recover_update_base
+    ):
+        raise ReconciliationTransactionError(
+            "reconciliation owner does not provide update-base effect phases"
+        )
+    return effects.reconciliation_recover_update_base(
         ticket_id, admission, rewrite_published
     )
 

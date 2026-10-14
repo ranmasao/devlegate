@@ -231,7 +231,7 @@ class _LineageOwner:
 
         return Lock()
 
-    def reconciliation_apply_update_base_effects(
+    def reconciliation_recover_update_base(
         self, ticket_id, admission, authorized
     ):
         self.executed.append((ticket_id, admission, authorized))
@@ -265,6 +265,18 @@ def test_update_base_transaction_admits_before_owner_effect_capability():
     assert ticket_id == "TASK-1"
     assert admission.target == "target"
     assert authorized is True
+
+
+def test_update_base_rejects_owner_without_effect_phase():
+    class AdmissionOnly(_LineageOwner):
+        reconciliation_recover_update_base = None
+
+    try:
+        run_update_base(AdmissionOnly(), "TASK-1", "target")
+    except ReconciliationTransactionError as error:
+        assert "effect phases" in str(error)
+    else:
+        raise AssertionError("missing effect phase must fail closed")
 
 
 class _RewriteOwner:
