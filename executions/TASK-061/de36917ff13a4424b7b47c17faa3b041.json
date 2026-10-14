@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "9ff7a53cfeec4d3daf7ccce4cae4d51f05afabc0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "de36917ff13a4424b7b47c17faa3b041",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Move the substantive update-base WAL, replay, rebase, rollback, lease/CAS publication, displaced-evidence, and finalization sequence out of ServiceEngine into independently scoped primitive capabilities.",
+    "Remove the remaining monolithic runtime reconciliation implementation and add interruption/replay and conflict-focused transaction tests.",
+    "Run the full authoritative test, coverage, and Ruff workflow after the substantive extraction."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Move the substantive update-base WAL, replay, rebase, rollback, lease/CAS publication, displaced-evidence, and finalization sequence out of ServiceEngine into independently scoped primitive capabilities.",
+      "Remove the remaining monolithic runtime reconciliation implementation and add interruption/replay and conflict-focused transaction tests.",
+      "Run the full authoritative test, coverage, and Ruff workflow after the substantive extraction."
+    ],
+    "report": null,
+    "summary": "Introduced a mandatory typed update-base effect-phase capability in reconciliation_transactions.py, renamed the runtime owner-held recovery entrypoint to match that boundary, and added fail-closed seam coverage for missing effect phases."
+  },
+  "workspace_head": "a349fb577288b80d1eef5e96ddd6a0ac8c5cbcec"
+}
