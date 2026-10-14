@@ -1,0 +1,39 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "4104d98e5a930e763fcb17e802140e46fc7728d7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "af1293ce4bda414f8aee11ba5e3021f6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract checkpoint/publication replay and lifecycle/report recovery from ServiceEngine.",
+    "Extract accepted-integration recovery and product-lineage reconciliation/rewrite, including lease/CAS and displaced-history invariants.",
+    "Remove the now-unreachable legacy workspace recovery bodies from runtime.py after the staged extraction is accepted.",
+    "Run the complete test suite and authoritative Ruff/coverage checks without timeout."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract checkpoint/publication replay and lifecycle/report recovery from ServiceEngine.",
+      "Extract accepted-integration recovery and product-lineage reconciliation/rewrite, including lease/CAS and displaced-history invariants.",
+      "Remove the now-unreachable legacy workspace recovery bodies from runtime.py after the staged extraction is accepted.",
+      "Run the complete test suite and authoritative Ruff/coverage checks without timeout."
+    ],
+    "report": null,
+    "summary": "Extracted pre-worker execution workspace inspection and repair into a capability-based recovery_workspace module, preserving fail-closed topology, provenance, evidence pinning, worktree ownership, and Git CAS checks. Added boundary coverage and updated the architecture ownership map while retaining ServiceEngine as the mutation owner."
+  },
+  "workspace_head": "962e872e4522d984dce5db3590e30c77d42f6340"
+}
