@@ -1,0 +1,37 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "2fda1d9fc7f2246248d0f32bf976e1513d6d2935",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "81572b7642cc47f0a5fdf15e5cb30a49",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Move the substantive update-base WAL, rebase, replay, rollback, lease/CAS publication, displaced-evidence, and finalization sequence out of ServiceEngine into capability-driven reconciliation code.",
+    "Remove the remaining duplicate aggregate transaction authority from runtime.py.",
+    "Run focused tests, full tests, and Ruff after the substantive extraction."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Move the substantive update-base WAL, rebase, replay, rollback, lease/CAS publication, displaced-evidence, and finalization sequence out of ServiceEngine into capability-driven reconciliation code.",
+      "Remove the remaining duplicate aggregate transaction authority from runtime.py.",
+      "Run focused tests, full tests, and Ruff after the substantive extraction."
+    ],
+    "report": null,
+    "summary": "Inspected the current reconciliation boundary and added focused coverage for evidence-pin failure preventing publication. Fixed the overlong boundary-test method signature while preserving the existing transaction implementation."
+  },
+  "workspace_head": "099c25fbeb9cdf4ef4cf887b44e9eea85a08343d"
+}
