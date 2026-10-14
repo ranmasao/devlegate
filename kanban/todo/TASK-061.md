@@ -280,3 +280,33 @@ fail-closed provenance/CAS checks. Preserve this work.
 **Disposition: REQUEST CHANGES; review -> todo.** Continue the established
 TASK-061 worktree/checkpoint lineage. CI success alone is not proof of
 the full extraction acceptance criteria.
+
+## Review — 2026-10-14, checkpoint aa5953b77c99 (REQUEST CHANGES)
+
+Reviewed execution `b3a6b74b5a0a43c39e4a4732a8e50f81`,
+checkpoint `aa5953b77c999bebee058b37a52cf20b488335ef`.
+[Exact-checkpoint CI #38568431656](https://github.com/ranmasao/devlegate/actions/runs/38568431656)
+**failed** at Ruff: 38 lint errors, including line length and import
+formatting. The test phase passed **1197 tests, 1 skipped**.
+
+Positive progress: `recovery_workflow.py` now holds the checkpoint and
+publication WAL replay, lifecycle report recovery, and accepted-integration
+replay with a typed capabilities interface. Preserve this extraction.
+
+**Outstanding acceptance blockers**:
+1. Complete product-lineage reconciliation and published-lineage rewrite
+   extraction with explicit narrow owner-held capabilities, preserving lease,
+   CAS, rollback/displaced-history evidence, and fail-closed behavior.
+2. Remove unreachable duplicate legacy implementations from `runtime.py`,
+   including old workspace and recovery/replay bodies after delegating to
+   new modules. Do not leave parallel authority paths.
+3. Add focused boundary/transaction tests for new `recovery_workflow`
+   paths (crash/replay, checkpoint, lifecycle, accepted integration, invalid
+   evidence), not only the pre-existing runtime tests.
+4. Fix all 38 Ruff errors, run focused checks as available, and achieve
+   green authoritative CI on the next exact checkpoint. Do not claim the
+   entire TASK-061 complete while substantial requested parts remain.
+5. Keep TASK-066 logging refactor and stable v0.5.6 out of scope.
+
+**Disposition: REQUEST CHANGES; review -> todo.** Continue the existing
+workspace/checkpoint lineage.
