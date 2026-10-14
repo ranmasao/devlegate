@@ -468,3 +468,41 @@ routines move linear-chain proof and published-tip authorization to
 
 **Disposition: REQUEST CHANGES; review -> todo**, preserve the existing
 checkpoint/worktree lineage.
+
+## Review — 2026-10-14, checkpoint 0c98d3e9fcb7 (REQUEST CHANGES)
+
+Reviewed execution `b25e3f5ede664f1a8910e02d9534ad84`,
+checkpoint `0c98d3e9fcb775d9e1f21e2f975436caffc7a57f`.
+[Exact-checkpoint CI #38602872877](https://github.com/ranmasao/devlegate/actions/runs/38602872877)
+**passed**: 1203 tests passed, 1 skipped; Ruff clean.
+
+This checkpoint adds lock-aware `run_update_base()` and capability
+dispatch with fresh admission, plus boundary tests. Retain this work.
+
+**Primary blocker — substantive transaction still in ServiceEngine**:
+`run_update_base()` calls `owner.reconciliation_execute_update_base()`,
+which immediately calls `ServiceEngine._reconcile_update_base_transaction()`.
+That owner method still sequences the complete update-base WAL, rebase,
+replay/recovery, lease/CAS publish, displaced evidence, and final state.
+The call path `ServiceEngine -> reconciliation_transactions -> ServiceEngine`
+is a dispatch boundary, not the requested substantial extraction.
+
+**Required rework**:
+1. Move the actual update-base/rewrite transaction sequencing into
+   `reconciliation_transactions.py` (or coherent extracted domain modules).
+   ServiceEngine should supply narrow, typed *primitive* owner-held
+   capabilities for Git observation/mutation, WAL state transitions,
+   evidence pins, workspace/rebase, lease/CAS publication, rollback, and
+   completion, rather than one capability encapsulating the entire old
+   transaction. Preserve single lock/mutation authority and TOCTOU rechecks.
+2. Remove replaced/duplicated remote-pending rewrite lineage and lifecycle
+   recovery code from `runtime.py`; keep only necessary thin entrypoints.
+3. Add focused interruption/replay and fail-closed tests exercising the
+   extracted transaction **sequence**, including lease conflicts,
+   displaced-history evidence, rebase partial failure, replay after crash,
+   and no duplicate publication. Preserve TASK-057 intent behavior.
+4. Re-run exact-checkpoint authoritative full tests, coverage and Ruff;
+   don't change TASK-066 or published v0.5.6.
+
+**Disposition: REQUEST CHANGES; review -> todo**. Continue the
+existing checkpoint/worktree lineage.
