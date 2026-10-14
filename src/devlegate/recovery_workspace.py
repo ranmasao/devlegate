@@ -18,6 +18,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     WorkspaceInspection,
 )
+from devlegate.git import run_git
 from devlegate.recovery import validate_execution_binding
 
 
@@ -27,8 +28,6 @@ class WorkspaceRecoveryCapabilities(Protocol):
     repo: Path
     control_worktree: Path
     execution_worktree_root: Path
-
-    def recovery_git(self, cwd: Path, *args: str, check: bool = False) -> Any: ...
 
     def recovery_workspace_manager(
         self, ticket_id: str
@@ -73,7 +72,7 @@ def inspect_bound_workspace(
         return topology
 
     branch_ref = f"refs/heads/{manager.branch}"
-    observed = owner.recovery_git(owner.repo, "rev-parse", "--verify", branch_ref)
+    observed = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
     if observed.returncode:
         if topology.reason != "execution branch is missing":
             return WorkspaceInspection("UNSAFE", topology.reason)
@@ -145,7 +144,7 @@ def repair_bound_workspace(
         raise ValueError("persisted execution workspace binding is invalid")
 
     branch_ref = f"refs/heads/{manager.branch}"
-    observed = owner.recovery_git(owner.repo, "rev-parse", "--verify", branch_ref)
+    observed = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
     if observed.returncode:
         manager.prepare(base_head)
         return
@@ -165,21 +164,23 @@ def repair_bound_workspace(
     evidence_ref = (
         f"refs/devlegate/recovery/workspace/{ticket_id}/{prior[0].execution_id}"
     )
-    existing = owner.recovery_git(owner.repo, "rev-parse", "--verify", evidence_ref)
+    existing = run_git(
+        owner.repo, "rev-parse", "--verify", evidence_ref, check=False
+    )
     if existing.returncode == 0 and existing.stdout.strip() != old_head:
         raise ValueError("workspace recovery evidence ref has conflicting identity")
     if existing.returncode:
-        pinned = owner.recovery_git(
-            owner.repo, "update-ref", evidence_ref, old_head, ""
+        pinned = run_git(
+            owner.repo, "update-ref", evidence_ref, old_head, "", check=False
         )
         if pinned.returncode:
-            reread = owner.recovery_git(
-                owner.repo, "rev-parse", "--verify", evidence_ref
+            reread = run_git(
+                owner.repo, "rev-parse", "--verify", evidence_ref, check=False
             )
             if reread.returncode or reread.stdout.strip() != old_head:
                 raise ValueError("cannot preserve conflicting execution checkpoint")
 
-    reobserved = owner.recovery_git(owner.repo, "rev-parse", "--verify", branch_ref)
+    reobserved = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
     if reobserved.returncode or reobserved.stdout.strip() != old_head:
         raise ValueError("execution branch changed before automatic repair")
     registrations = manager._registrations()
@@ -200,16 +201,16 @@ def repair_bound_workspace(
         workspace = manager._validate_existing(registration, old_head)
         if workspace.head != old_head or workspace.dirty:
             raise ValueError("conflicting execution worktree is not clean and exact")
-        removed = owner.recovery_git(
-            owner.repo, "worktree", "remove", "--force", str(manager.path)
+        removed = run_git(
+            owner.repo, "worktree", "remove", "--force", str(manager.path), check=False
         )
         if removed.returncode:
             raise ValueError("cannot remove conflicting execution worktree")
-    reobserved = owner.recovery_git(owner.repo, "rev-parse", "--verify", branch_ref)
+    reobserved = run_git(owner.repo, "rev-parse", "--verify", branch_ref, check=False)
     if reobserved.returncode or reobserved.stdout.strip() != old_head:
         raise ValueError("execution branch changed during automatic repair")
-    moved = owner.recovery_git(
-        owner.repo, "update-ref", branch_ref, base_head, old_head
+    moved = run_git(
+        owner.repo, "update-ref", branch_ref, base_head, old_head, check=False
     )
     if moved.returncode:
         raise ValueError("execution branch changed before CAS repair")

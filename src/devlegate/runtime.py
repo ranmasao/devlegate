@@ -8030,10 +8030,6 @@ class ServiceEngine:
     def recovery_lock(self):
         return self._lock()
 
-    @staticmethod
-    def recovery_git(cwd, *args: str, check: bool = False):
-        return _git(cwd, *args, check=check)
-
     def reload_ticket_store(self):
         return self._ticket_store()
 
@@ -8250,10 +8246,6 @@ class ServiceEngine:
             value.get("execution_branch") == manager.branch
             and Path(str(value.get("execution_path"))) == manager.path
         )
-
-    @staticmethod
-    def reconciliation_git(cwd, *args: str, check: bool = False):
-        return _git(cwd, *args, check=check)
 
     def reconciliation_lock(self):
         return self._lock()

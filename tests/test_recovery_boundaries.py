@@ -4,6 +4,7 @@
 
 from pathlib import Path
 
+from devlegate import reconciliation_transactions, recovery_workspace
 from devlegate.execution_workspace import WorkspaceInspection
 from devlegate.reconciliation import (
     prove_linear_lineage,
@@ -162,7 +163,9 @@ class _WorkspaceOwner:
         return []
 
 
-def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild():
+def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild(
+    monkeypatch,
+):
     state = {
         "phase": "agent_pending",
         "execution_ticket_id": "TASK-1",
@@ -174,6 +177,9 @@ def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild():
         "pending_execution_report": None,
     }
 
+    monkeypatch.setattr(
+        recovery_workspace, "run_git", _WorkspaceOwner().recovery_git
+    )
     result = inspect_bound_workspace(_WorkspaceOwner(), state)
 
     assert result.classification == "RECOVERABLE"
@@ -334,9 +340,14 @@ def test_rewrite_does_not_publish_when_evidence_pin_fails():
     ]
 
 
-def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip():
+def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip(
+    monkeypatch,
+):
     owner = _RewriteOwner()
     workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
+    monkeypatch.setattr(
+        reconciliation_transactions, "_git", owner.reconciliation_git
+    )
 
     assert prove_workspace_lineage(owner, workspace, "root", "two") == (
         "one",

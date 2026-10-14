@@ -5,6 +5,7 @@
 """Execution workspace, checkpoint, branch, and publication semantics."""
 
 from _control_support import *  # noqa: F403,F405
+from devlegate import recovery_workspace
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -1047,6 +1048,7 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         return real_git(repo, *args, **kwargs)
 
     monkeypatch.setattr(runtime, "_git", observe_effect)
+    monkeypatch.setattr(recovery_workspace, "run_git", observe_effect)
     devlegate._repair_bound_execution_workspace()
     assert devlegate.plan_view().action == "run-worker"
     assert effects.index("evidence") < effects.index("branch")
