@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-# ruff: noqa: E501
 """Crash replay transactions for execution publication and lifecycle.
 
 This module owns the durable stage transitions.  The service supplies only
@@ -34,18 +33,30 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_workspace(self) -> Any: ...
     def recovery_product(self, base: str) -> dict[str, object]: ...
     def recovery_prove_product(self) -> None: ...
-    def recovery_zero_delta(self, report: ExecutionReport, product: dict[str, object]) -> bool: ...
-    def recovery_zero_delta_payload(self, report: ExecutionReport, product: dict[str, object]) -> dict[str, object]: ...
+    def recovery_zero_delta(
+        self, report: ExecutionReport, product: dict[str, object]
+    ) -> bool: ...
+    def recovery_zero_delta_payload(
+        self, report: ExecutionReport, product: dict[str, object]
+    ) -> dict[str, object]: ...
     def recovery_ticket_title(self, ticket_id: str) -> str: ...
     def recovery_save_state(self, state: str, **values: object) -> None: ...
-    def recovery_publish_execution(self, workspace: Any, checkpoint: str, expected: str | None) -> None: ...
+    def recovery_publish_execution(
+        self, workspace: Any, checkpoint: str, expected: str | None
+    ) -> None: ...
     def recovery_execution_remote(self, branch: str) -> str | None: ...
-    def recovery_report_from_store(self, ticket_id: str, execution_id: str) -> ExecutionReport: ...
+    def recovery_report_from_store(
+        self, ticket_id: str, execution_id: str
+    ) -> ExecutionReport: ...
     def recovery_validate_control(self) -> None: ...
     def recovery_apply_lifecycle(self, report: ExecutionReport) -> str: ...
-    def recovery_finalize_lifecycle(self, report: ExecutionReport, control_head: str) -> None: ...
+    def recovery_finalize_lifecycle(
+        self, report: ExecutionReport, control_head: str
+    ) -> None: ...
     def recovery_observe_product_generation(self) -> None: ...
-    def recovery_integrate_accepted(self, ticket_id: str, code: Any, control: Any) -> None: ...
+    def recovery_integrate_accepted(
+        self, ticket_id: str, code: Any, control: Any
+    ) -> None: ...
     def recovery_sync_control(self) -> tuple[str, str | None]: ...
     def recovery_fetch_product(self) -> bool: ...
     def recovery_code_observation(self) -> Any: ...
@@ -99,26 +110,40 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
                     ),
                 )
             except (ExecutionWorkspaceError, OSError) as error:
-                raise WorkflowRecoveryError(f"cannot recover execution checkpoint: {error}") from error
+                raise WorkflowRecoveryError(
+                    f"cannot recover execution checkpoint: {error}"
+                ) from error
             checkpoint_head = checkpoint.after_head
         else:
             checkpoint_head = workspace.head
-            if not owner.recovery_checkpoint_exact(workspace, checkpoint_head, start_head):
-                raise WorkflowRecoveryError("execution worktree contains ambiguous checkpoint history")
+            if not owner.recovery_checkpoint_exact(
+                workspace, checkpoint_head, start_head
+            ):
+                raise WorkflowRecoveryError(
+                    "execution worktree contains ambiguous checkpoint history"
+                )
         report = dataclasses.replace(report, workspace_head=checkpoint_head)
         workspace = owner.recovery_workspace()
         if workspace.head != checkpoint_head or workspace.dirty:
-            raise WorkflowRecoveryError("execution worktree changed or is dirty after checkpoint")
+            raise WorkflowRecoveryError(
+                "execution worktree changed or is dirty after checkpoint"
+            )
         owner.recovery_save_state(
-            "agent_running", execution_stage="post-checkpoint", pending_execution_report=report.as_dict()
+            "agent_running",
+            execution_stage="post-checkpoint",
+            pending_execution_report=report.as_dict(),
         )
         stage = "post-checkpoint"
     product = owner.recovery_product(report.code_base_head)
     classification = product["classification"]
     if classification == "unobservable":
-        raise WorkflowRecoveryError("product remote could not be observed; retrying when connectivity returns")
+        raise WorkflowRecoveryError(
+            "product remote could not be observed; retrying when connectivity returns"
+        )
     if classification == "unsafe-local" and not product.get("remote_head"):
-        raise WorkflowRecoveryError(f"product generation is unsafe-local; {product['reason']}")
+        raise WorkflowRecoveryError(
+            f"product generation is unsafe-local; {product['reason']}"
+        )
     if owner.recovery_zero_delta(report, product):
         owner.recovery_save_state(
             "agent_running",
@@ -128,13 +153,21 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         )
         return
     if classification != "stable":
-        owner.recovery_persist_reconciliation(report, product, state.get("execution_remote_head"))
-        raise WorkflowRecoveryError("product generation changed; reconciliation required")
+        owner.recovery_persist_reconciliation(
+            report, product, state.get("execution_remote_head")
+        )
+        raise WorkflowRecoveryError(
+            "product generation changed; reconciliation required"
+        )
     if stage in {"post-checkpoint", "publishing"}:
         if report.workspace_head is None or workspace.head != report.workspace_head:
-            raise WorkflowRecoveryError("execution worktree HEAD does not match the proven checkpoint")
+            raise WorkflowRecoveryError(
+                "execution worktree HEAD does not match the proven checkpoint"
+            )
         if workspace.dirty:
-            raise WorkflowRecoveryError("execution worktree is dirty after the proven checkpoint")
+            raise WorkflowRecoveryError(
+                "execution worktree is dirty after the proven checkpoint"
+            )
         remote = owner.recovery_execution_remote(report.execution_branch)
         expected = state.get("execution_remote_head")
         if expected is not None and not isinstance(expected, str):
@@ -143,18 +176,31 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
             owner.recovery_publish_execution(workspace, report.workspace_head, expected)
             remote = owner.recovery_execution_remote(report.execution_branch)
         if remote != report.workspace_head:
-            raise WorkflowRecoveryError("execution remote does not match the proven checkpoint")
+            raise WorkflowRecoveryError(
+                "execution remote does not match the proven checkpoint"
+            )
         owner.recovery_save_state(
-            "agent_running", execution_stage="post-publication", pending_execution_report=report.as_dict()
+            "agent_running",
+            execution_stage="post-publication",
+            pending_execution_report=report.as_dict(),
         )
         stage = "post-publication"
     if stage == "post-publication":
         if report.workspace_head is None or workspace.head != report.workspace_head:
-            raise WorkflowRecoveryError("execution worktree HEAD changed after publication")
-        if owner.recovery_execution_remote(report.execution_branch) != report.workspace_head:
-            raise WorkflowRecoveryError("published execution checkpoint is no longer exact")
+            raise WorkflowRecoveryError(
+                "execution worktree HEAD changed after publication"
+            )
+        if (
+            owner.recovery_execution_remote(report.execution_branch)
+            != report.workspace_head
+        ):
+            raise WorkflowRecoveryError(
+                "published execution checkpoint is no longer exact"
+            )
         owner.recovery_save_state(
-            "agent_running", execution_stage="lifecycle", pending_execution_report=report.as_dict()
+            "agent_running",
+            execution_stage="lifecycle",
+            pending_execution_report=report.as_dict(),
         )
 
 
@@ -170,20 +216,32 @@ def recover_lifecycle_report(owner: WorkflowRecoveryCapabilities) -> ExecutionRe
         try:
             report = ExecutionReport.from_dict(pending)
         except ExecutionReportError as error:
-            raise WorkflowRecoveryError(f"pending lifecycle report is invalid: {error}") from error
+            raise WorkflowRecoveryError(
+                f"pending lifecycle report is invalid: {error}"
+            ) from error
     else:
         owner.recovery_validate_control()
         try:
             report = owner.recovery_report_from_store(ticket_id, execution_id)
         except ExecutionReportError as error:
-            raise WorkflowRecoveryError("lifecycle report evidence is unavailable; recovery is ambiguous") from error
-    if not isinstance(state.get("local_head"), str) or not isinstance(state.get("remote_head"), str):
+            raise WorkflowRecoveryError(
+                "lifecycle report evidence is unavailable; recovery is ambiguous"
+            ) from error
+    if not isinstance(state.get("local_head"), str) or not isinstance(
+        state.get("remote_head"), str
+    ):
         raise WorkflowRecoveryError("lifecycle product binding is incomplete")
     retry = state.get("automatic_retry")
-    if isinstance(retry, dict) and retry.get("status") == "pending" and report.workspace_head == report.code_base_head:
+    if (
+        isinstance(retry, dict)
+        and retry.get("status") == "pending"
+        and report.workspace_head == report.code_base_head
+    ):
         owner.recovery_report_matches_binding(report)
         if owner.recovery_execution_remote(report.execution_branch) is not None:
-            raise WorkflowRecoveryError("zero-delta retry execution branch is already published")
+            raise WorkflowRecoveryError(
+                "zero-delta retry execution branch is already published"
+            )
     else:
         owner.recovery_observe_product_generation()
         owner.recovery_report_matches_state(report)
@@ -198,7 +256,9 @@ def recover_accepted_integration(owner: WorkflowRecoveryCapabilities) -> int:
     ticket_id = pending["ticket_id"]
     control_head, _ = owner.recovery_sync_control()
     if not owner.recovery_fetch_product():
-        raise WorkflowRecoveryError("cannot freshly observe product remote for accepted integration")
+        raise WorkflowRecoveryError(
+            "cannot freshly observe product remote for accepted integration"
+        )
     code = owner.recovery_code_observation()
     control = owner.recovery_control_observation()
     owner.recovery_integrate_accepted(ticket_id, code, control)

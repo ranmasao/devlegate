@@ -43,9 +43,7 @@ class UpdateBaseCapabilities(Protocol):
 
     def reconciliation_product(self, base: str) -> dict[str, object]: ...
 
-    def reconciliation_target_is_descendant(
-        self, base: str, target: str
-    ) -> bool: ...
+    def reconciliation_target_is_descendant(self, base: str, target: str) -> bool: ...
 
     def reconciliation_same_parent_replacement(
         self, base: str, target: str
@@ -58,6 +56,14 @@ class UpdateBaseCapabilities(Protocol):
     def reconciliation_workspace_binding(
         self, ticket_id: str, value: dict[str, object]
     ) -> bool: ...
+
+    def reconciliation_publish_rewrite(
+        self, branch: str, rewritten_head: str, expected_remote: str
+    ) -> None: ...
+
+    def reconciliation_pin_rewrite_evidence(
+        self, reference: str, rewritten_head: str
+    ) -> None: ...
 
 
 def admit_update_base(
@@ -76,9 +82,17 @@ def admit_update_base(
     evidence_ref = reconciliation.get("evidence_ref")
     branch = reconciliation.get("execution_branch")
     path = reconciliation.get("execution_path")
-    if not all(isinstance(value, str) and value for value in (
-        original_base, control_head, checkpoint, evidence_ref, branch, path
-    )):
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            original_base,
+            control_head,
+            checkpoint,
+            evidence_ref,
+            branch,
+            path,
+        )
+    ):
         raise ReconciliationTransactionError("reconciliation evidence is incomplete")
     product = owner.reconciliation_product(original_base)
     if product.get("branch") is not None and product.get("dirty"):
@@ -121,3 +135,22 @@ def admit_update_base(
         evidence_ref=evidence_ref,
         execution_remote_head=remote,
     )
+
+
+def publish_rewritten_lineage(
+    owner: UpdateBaseCapabilities,
+    *,
+    branch: str,
+    rewritten_head: str,
+    expected_remote: str | None,
+    evidence_ref: str,
+) -> None:
+    """Publish one proven rewrite and retain its immutable evidence.
+
+    The owner performs the actual Git operations.  The rewritten tip is
+    pinned before remote publication, so a crash after the lease-guarded push
+    leaves enough evidence for exact replay.
+    """
+    owner.reconciliation_pin_rewrite_evidence(evidence_ref, rewritten_head)
+    if expected_remote is not None:
+        owner.reconciliation_publish_rewrite(branch, rewritten_head, expected_remote)

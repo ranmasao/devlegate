@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-# ruff: noqa: E501
 """Runtime and orchestration implementation for Devlegate."""
 
 import dataclasses
@@ -48,11 +47,9 @@ from devlegate.reconciliation import prove_linear_lineage, same_parent_replaceme
 from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     admit_update_base,
+    publish_rewritten_lineage,
 )
-from devlegate.recovery import (
-    classify_stage,
-    validate_execution_binding,
-)
+from devlegate.recovery import classify_stage
 from devlegate.recovery_transactions import (
     reconcile_control_lineage,
     recover_stranded_execution,
@@ -456,11 +453,12 @@ def _recover_request_fingerprint(
     ticket_id: str, execution_id: str, observed_head: str
 ) -> str:
     return _mutation_fingerprint(
-        "recover", {
+        "recover",
+        {
             "ticket_id": ticket_id,
             "execution_id": execution_id,
             "observed_head": observed_head,
-        }
+        },
     )
 
 
@@ -499,24 +497,29 @@ def _worker_identity_from_value(
 ) -> WorkerProcessIdentity | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or not set(value).issubset(
-        {
+    if (
+        not isinstance(value, dict)
+        or not set(value).issubset(
+            {
+                "execution_id",
+                "pid",
+                "pgid",
+                "sid",
+                "boot_id",
+                "start_time",
+                "containment_id",
+            }
+        )
+        or set(value)
+        < {
             "execution_id",
             "pid",
             "pgid",
             "sid",
             "boot_id",
             "start_time",
-            "containment_id",
         }
-    ) or set(value) < {
-        "execution_id",
-        "pid",
-        "pgid",
-        "sid",
-        "boot_id",
-        "start_time",
-    }:
+    ):
         raise DevlegateError("invalid worker identity")
     if execution_id is not None and value["execution_id"] != execution_id:
         raise DevlegateError("worker identity does not match execution identity")
@@ -672,9 +675,7 @@ def _is_linear_chain(repo: Path, root: str, commits: list[str]) -> bool:
     """Prove that commits are an ordered single-parent chain from root."""
     parent_map: dict[str, tuple[str, ...]] = {}
     for commit in commits:
-        parents = _git(
-            repo, "rev-list", "--parents", "-n", "1", commit, check=False
-        )
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", commit, check=False)
         fields = parents.stdout.split()
         if parents.returncode or len(fields) < 2:
             return False
@@ -847,8 +848,7 @@ class ServiceEngine:
                     and force
                     and self._state.get("phase") in {"agent_pending", "agent_running"}
                     and all(
-                        isinstance(self._state.get(field), str)
-                        and self._state[field]
+                        isinstance(self._state.get(field), str) and self._state[field]
                         for field in (
                             "execution_ticket_id",
                             "execution_id",
@@ -1636,9 +1636,7 @@ class ServiceEngine:
             expected_worktree_head = (
                 str(base_head) if authorized_replay else observed_head
             )
-            workspace = manager._validate_existing(
-                registration, expected_worktree_head
-            )
+            workspace = manager._validate_existing(registration, expected_worktree_head)
             if workspace.head != expected_worktree_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
             removed = _git(
@@ -1740,9 +1738,7 @@ class ServiceEngine:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
-        product = self._observe_product_generation(
-            str(reconciliation["original_base"])
-        )
+        product = self._observe_product_generation(str(reconciliation["original_base"]))
         local_head = str(product["local_head"])
         remote_head = str(product["remote_head"])
         if not local_head or local_head != remote_head:
@@ -1754,9 +1750,7 @@ class ServiceEngine:
         if command.onto is None:
             command.onto = local_head
         else:
-            command.onto = self._canonical_reconcile_assertion(
-                command.onto, local_head
-            )
+            command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
 
     def _canonical_reconcile_assertion(self, value: str, current_head: str) -> str:
         if not value:
@@ -1798,9 +1792,7 @@ class ServiceEngine:
             raise DevlegateError(
                 "requested ticket does not match pending reconciliation"
             )
-        product = self._observe_product_generation(
-            str(reconciliation["original_base"])
-        )
+        product = self._observe_product_generation(str(reconciliation["original_base"]))
         if not product["target_eligible"]:
             raise DevlegateError(
                 "current product generation is not eligible for reconciliation"
@@ -1810,9 +1802,7 @@ class ServiceEngine:
         if not local_head or local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
         if command.onto is not None:
-            command.onto = self._canonical_reconcile_assertion(
-                command.onto, local_head
-            )
+            command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
         else:
             command.onto = None if product["stable"] else local_head
         if product["stable"]:
@@ -3230,7 +3220,8 @@ class ServiceEngine:
         manual_retry = state.get("manual_retry_required")
         if manual_retry is not None and (
             not isinstance(manual_retry, dict)
-            or set(manual_retry) != {
+            or set(manual_retry)
+            != {
                 "ticket_id",
                 "execution_id",
                 "generation",
@@ -4249,8 +4240,7 @@ class ServiceEngine:
                 or not isinstance(failed_for_ticket, dict)
                 or failed_for_ticket.get("execution_id")
                 != manual_retry.get("execution_id")
-                or failed_for_ticket.get("generation")
-                != manual_retry.get("generation")
+                or failed_for_ticket.get("generation") != manual_retry.get("generation")
             ):
                 self._save_state("idle", manual_retry_required=None)
                 manual_retry = None
@@ -4297,8 +4287,7 @@ class ServiceEngine:
             if authorization is not None:
                 authorized_ticket_id = authorization.ticket_id
                 if not (
-                    authorization.is_zero_delta_retry
-                    or authorization.is_forced_retry
+                    authorization.is_zero_delta_retry or authorization.is_forced_retry
                 ):
                     if not isinstance(failed_for_ticket, dict) or any(
                         failed_for_ticket.get(field) != expected
@@ -4637,9 +4626,8 @@ class ServiceEngine:
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             _log(reason)
             return 1
-        if (
-            product["classification"] == "unsafe-local"
-            and not product.get("remote_head")
+        if product["classification"] == "unsafe-local" and not product.get(
+            "remote_head"
         ):
             reason = f"product generation is unsafe-local; {product['reason']}"
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
@@ -6062,9 +6050,7 @@ class ServiceEngine:
             and local_head == admitted_head
             and remote_head == admitted_head
         )
-        if not branch_ok or dirty or (
-            local_head and local_head != admitted_head
-        ):
+        if not branch_ok or dirty or (local_head and local_head != admitted_head):
             classification = "unsafe-local"
         elif not local_head or not remote_observable:
             classification = "unobservable"
@@ -6262,9 +6248,7 @@ class ServiceEngine:
             )
         common = _git(manager.path, "rev-parse", "--git-common-dir", check=False)
         root = _git(manager.path, "rev-parse", "--show-toplevel", check=False)
-        expected_common = _git(
-            self.repo, "rev-parse", "--git-common-dir", check=False
-        )
+        expected_common = _git(self.repo, "rev-parse", "--git-common-dir", check=False)
         branch_name = _git(
             manager.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
@@ -6411,9 +6395,7 @@ class ServiceEngine:
                 pending_execution_report=report.as_dict(),
             )
             stage = "post-checkpoint"
-        product = (
-            self._observe_product_generation(report.code_base_head)
-        )
+        product = self._observe_product_generation(report.code_base_head)
         classification = product["classification"]
         if classification == "unobservable":
             raise WorkflowBlockedError(
@@ -7077,10 +7059,14 @@ class ServiceEngine:
             )
             if resolution_class == "resume":
                 return self._reconcile_resume_owned(command.ticket_id)
-            if resolution_class not in {
-                "update-base",
-                "update-base with published-lineage rewrite",
-            } or command.onto is None:
+            if (
+                resolution_class
+                not in {
+                    "update-base",
+                    "update-base with published-lineage rewrite",
+                }
+                or command.onto is None
+            ):
                 raise DevlegateError(
                     "automatic reconciliation classification is invalid"
                 )
@@ -8307,7 +8293,9 @@ class ServiceEngine:
     def recovery_prove_product(self) -> None:
         self._prove_product_generation()
 
-    def recovery_zero_delta(self, report: ExecutionReport, product: dict[str, object]) -> bool:
+    def recovery_zero_delta(
+        self, report: ExecutionReport, product: dict[str, object]
+    ) -> bool:
         return self._is_zero_delta_stale_product_drift(
             report.code_base_head, report.workspace_head, product
         )
@@ -8320,7 +8308,9 @@ class ServiceEngine:
     def recovery_ticket_title(self, ticket_id: str) -> str:
         return self._ticket_store().by_id[ticket_id].title
 
-    def recovery_publish_execution(self, workspace, checkpoint: str, expected: str | None) -> None:
+    def recovery_publish_execution(
+        self, workspace, checkpoint: str, expected: str | None
+    ) -> None:
         self._publish_execution_branch(workspace, checkpoint, expected)
 
     def recovery_execution_remote(self, branch: str) -> str | None:
@@ -8330,11 +8320,16 @@ class ServiceEngine:
         return self._checkpoint_commit_is_exact(workspace, checkpoint, start)
 
     def recovery_persist_reconciliation(
-        self, report: ExecutionReport, product: dict[str, object], execution_remote: object
+        self,
+        report: ExecutionReport,
+        product: dict[str, object],
+        execution_remote: object,
     ) -> None:
         self._persist_product_reconciliation(report, product, execution_remote)
 
-    def recovery_report_from_store(self, ticket_id: str, execution_id: str) -> ExecutionReport:
+    def recovery_report_from_store(
+        self, ticket_id: str, execution_id: str
+    ) -> ExecutionReport:
         self._validate_control_worktree()
         return ExecutionReportStore(self.control_worktree).read(ticket_id, execution_id)
 
@@ -8344,7 +8339,9 @@ class ServiceEngine:
     def recovery_apply_lifecycle(self, report: ExecutionReport) -> str:
         return self._apply_execution_lifecycle(report)
 
-    def recovery_finalize_lifecycle(self, report: ExecutionReport, control_head: str) -> None:
+    def recovery_finalize_lifecycle(
+        self, report: ExecutionReport, control_head: str
+    ) -> None:
         self._finalize_execution_lifecycle(report, control_head)
 
     def recovery_observe_product_generation(self) -> None:
@@ -8355,7 +8352,12 @@ class ServiceEngine:
 
     def recovery_fetch_product(self) -> bool:
         result = self._git_runtime(
-            self.repo, "fetch", "--prune", self.remote_name, self.remote_branch, check=False
+            self.repo,
+            "fetch",
+            "--prune",
+            self.remote_name,
+            self.remote_branch,
+            check=False,
         )
         return result.returncode == 0
 
@@ -8409,14 +8411,19 @@ class ServiceEngine:
     # remains the only owner of Git, state, and workspace authority.
     def reconciliation_pending(self) -> dict[str, object]:
         reconciliation = self._state.get("reconciliation")
-        if not isinstance(reconciliation, dict) or reconciliation.get("status") != "pending":
+        if (
+            not isinstance(reconciliation, dict)
+            or reconciliation.get("status") != "pending"
+        ):
             raise ReconciliationTransactionError(
                 "reconciliation has no pending transaction"
             )
         return reconciliation
 
     def reconciliation_target(self, value: str) -> str:
-        result = _git(self.repo, "rev-parse", "--verify", f"{value}^{{commit}}", check=False)
+        result = _git(
+            self.repo, "rev-parse", "--verify", f"{value}^{{commit}}", check=False
+        )
         if result.returncode or not result.stdout.strip():
             raise ReconciliationTransactionError(
                 "requested reconciliation target is not a commit"
@@ -8426,7 +8433,9 @@ class ServiceEngine:
     def reconciliation_product(self, base: str) -> dict[str, object]:
         product = self._observe_product_generation(base)
         if product.get("branch") != self.current_branch:
-            raise ReconciliationTransactionError("product checkout is on the wrong branch")
+            raise ReconciliationTransactionError(
+                "product checkout is on the wrong branch"
+            )
         return product
 
     def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
@@ -8452,6 +8461,45 @@ class ServiceEngine:
             value.get("execution_branch") == manager.branch
             and Path(str(value.get("execution_path"))) == manager.path
         )
+
+    def reconciliation_publish_rewrite(
+        self, branch: str, rewritten_head: str, expected_remote: str
+    ) -> None:
+        reconciliation = self._state.get("reconciliation")
+        if not isinstance(reconciliation, dict):
+            raise DevlegateError("reconciliation workspace binding is unavailable")
+        workspace_path = Path(str(reconciliation.get("execution_path")))
+        pushed = _git(
+            workspace_path,
+            "push",
+            f"--force-with-lease=refs/heads/{branch}:{expected_remote}",
+            self.remote_name,
+            f"{rewritten_head}:refs/heads/{branch}",
+            check=False,
+        )
+        observed = self._execution_remote_head(branch)
+        if pushed.returncode and observed != rewritten_head:
+            raise DevlegateError(
+                pushed.stderr.strip() or "published execution rewrite failed"
+            )
+        if observed != rewritten_head:
+            raise DevlegateError("execution branch remote changed during publication")
+
+    def reconciliation_pin_rewrite_evidence(
+        self, reference: str, rewritten_head: str
+    ) -> None:
+        pinned = _git(
+            self.repo,
+            "update-ref",
+            reference,
+            rewritten_head,
+            "0" * 40,
+            check=False,
+        )
+        if pinned.returncode:
+            existing = _git(self.repo, "rev-parse", "--verify", reference, check=False)
+            if existing.returncode or existing.stdout.strip() != rewritten_head:
+                raise DevlegateError("rewritten execution evidence could not be pinned")
 
     def _reconcile_update_base_owned(
         self,
@@ -8516,7 +8564,8 @@ class ServiceEngine:
                     reconciliation = {
                         key: value
                         for key, value in reconciliation.items()
-                        if key not in {
+                        if key
+                        not in {
                             "rewrite_stage",
                             "rewrite_checkpoint",
                             "rewrite_expected_remote",
@@ -8696,7 +8745,12 @@ class ServiceEngine:
             previous = original_base
             for commit in lineage:
                 parents = _git(
-                    workspace.path, "rev-list", "--parents", "-n", "1", commit,
+                    workspace.path,
+                    "rev-list",
+                    "--parents",
+                    "-n",
+                    "1",
+                    commit,
                     check=False,
                 )
                 fields = parents.stdout.split()
@@ -8826,58 +8880,15 @@ class ServiceEngine:
             if execution_remote is not None:
                 operation = {**operation, "rewrite_stage": "remote-pending"}
                 operation["rewrite_checkpoint"] = updated.head
-                pinned_rewritten = _git(
-                    self.repo,
-                    "update-ref",
-                    operation["rewritten_evidence_ref"],
-                    updated.head,
-                    "0" * 40,
-                    check=False,
-                )
-                if pinned_rewritten.returncode:
-                    raise DevlegateError(
-                        "rewritten execution evidence could not be pinned"
-                    )
                 self._save_state("idle", reconciliation=operation)
-                lease = f"refs/heads/{manager.branch}:{execution_remote}"
-                pushed = _git(
-                    updated.path,
-                    "push",
-                    f"--force-with-lease={lease}",
-                    self.remote_name,
-                    f"{updated.head}:refs/heads/{manager.branch}",
-                    check=False,
-                )
-                observed = self._execution_remote_head(manager.branch)
-                if pushed.returncode and observed != updated.head:
-                    raise DevlegateError(
-                        pushed.stderr.strip() or "published execution rewrite failed"
-                    )
-                if observed != updated.head:
-                    raise DevlegateError(
-                        "execution branch remote changed during publication"
-                    )
             rewritten_evidence = str(operation["rewritten_evidence_ref"])
-            pinned_rewritten = _git(
-                self.repo,
-                "update-ref",
-                rewritten_evidence,
-                updated.head,
-                "0" * 40,
-                check=False,
+            publish_rewritten_lineage(
+                self,
+                branch=manager.branch,
+                rewritten_head=updated.head,
+                expected_remote=execution_remote,
+                evidence_ref=rewritten_evidence,
             )
-            if pinned_rewritten.returncode:
-                existing = _git(
-                    self.repo,
-                    "rev-parse",
-                    "--verify",
-                    rewritten_evidence,
-                    check=False,
-                )
-                if existing.returncode or existing.stdout.strip() != updated.head:
-                    raise DevlegateError(
-                        "rewritten execution evidence could not be pinned"
-                    )
             resolved = {
                 **reconciliation,
                 "status": "resolved",
