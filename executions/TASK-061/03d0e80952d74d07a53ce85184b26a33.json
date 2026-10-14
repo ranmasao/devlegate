@@ -1,0 +1,33 @@
+{
+  "code_base_head": "c98dc170879747bdf672b9388cd5ba5b88ae56c4",
+  "conclusion": "incomplete",
+  "control_head": "cbbcb113f50981aed9c1bdce874b0896837c9a54",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-061",
+  "execution_id": "03d0e80952d74d07a53ce85184b26a33",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-061",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the complete authoritative pytest/coverage suite to completion and identify the non-reconciliation failure observed during the timed parallel run."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-061",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the complete authoritative pytest/coverage suite to completion and identify the non-reconciliation failure observed during the timed parallel run."
+    ],
+    "report": null,
+    "summary": "Removed the obsolete ServiceEngine reconciliation implementation and runtime-only lineage helper/imports. Preserved stage-specific WAL cleanup semantics in reconciliation_transactions.py and fixed all Ruff E501 violations without suppressions."
+  },
+  "workspace_head": "a158a04f97b0aff02ab236edf02afbb2901cbe39"
+}
