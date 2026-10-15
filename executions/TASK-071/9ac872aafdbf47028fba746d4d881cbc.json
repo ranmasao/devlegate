@@ -1,0 +1,35 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "incomplete",
+  "control_head": "fcc735b3526b85078eff69d2bbba24a88ba4f69a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "9ac872aafdbf47028fba746d4d881cbc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Investigate and fix the two hosted IPC drop lifecycle regressions in tests/test_cli_ipc.py::test_real_service_drop_retire_old_lineage_and_runs_fresh[T-1] and [T-2], where lifecycle replay blocks on changed ticket and the operator request does not produce the established admission result.",
+    "Re-run the exact full pytest suite after the hosted IPC regressions are fixed."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Investigate and fix the two hosted IPC drop lifecycle regressions in tests/test_cli_ipc.py::test_real_service_drop_retire_old_lineage_and_runs_fresh[T-1] and [T-2], where lifecycle replay blocks on changed ticket and the operator request does not produce the established admission result.",
+      "Re-run the exact full pytest suite after the hosted IPC regressions are fixed."
+    ],
+    "report": null,
+    "summary": "Extracted runtime Git read operations into typed semantic helpers for refs, ancestry, parents, ranges, paths, history, diffs, remote refs, and ahead/behind inspection. Runtime now has no direct read-only Git subcommand construction, while mutation and owner-bound transport paths remain in their existing owners."
+  },
+  "workspace_head": "91de5c30f4b46a89063fe325773b13df728cb31e"
+}
