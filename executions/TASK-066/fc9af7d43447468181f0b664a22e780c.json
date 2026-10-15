@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a3b39eed7e114263a443b018e2ad621af648cbc7",
+  "conclusion": "completed",
+  "control_head": "34795d63c9e921b0d2770d965a36a68e155478f3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-066",
+  "execution_id": "fc9af7d43447468181f0b664a22e780c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-066",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-066/fc9af7d43447468181f0b664a22e780c.md",
+  "report_sha256": "ad288cdd2e2c43ea6cd2975bbc170b64dd52fcdf81974ff60d858dc57f0a7d51",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-066",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused log-reader tests and Ruff pass. The full pytest suite was started but exceeded the 120-second command timeout; no implementation issue was observed.",
+    "summary": "Fixed _LogCursor tail handoff to preserve the captured EOF boundary, so concurrent appends are delivered exactly once. Prevented follow_ticket from replaying an already-drained active execution while SQLite state transitions, and added deterministic regressions for both cases."
+  },
+  "workspace_head": "489005b39a0d4818bef905dfc811612afd92f728"
+}
