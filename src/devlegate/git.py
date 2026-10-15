@@ -200,6 +200,64 @@ def worktree_root(
     return Path(value).resolve()
 
 
+def worktree_paths(
+    cwd: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[Path, ...]:
+    """Return registered worktree paths from Git's porcelain listing."""
+    result = runner(cwd, "worktree", "list", "--porcelain", check=False)
+    if result.returncode:
+        raise GitObservationError(
+            "cannot observe Git worktrees: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    paths: list[Path] = []
+    seen_paths: set[Path] = set()
+    record: list[str] = []
+    for line in (*result.stdout.splitlines(), ""):
+        if line:
+            record.append(line)
+            continue
+        if not record:
+            continue
+        fields: dict[str, str | None] = {}
+        for item in record:
+            key, separator, value = item.partition(" ")
+            if key in fields:
+                raise GitObservationError("Git returned duplicate worktree metadata")
+            if key in {"detached", "bare", "locked"} and not separator:
+                fields[key] = None
+                continue
+            if not separator or key not in {
+                "worktree",
+                "HEAD",
+                "branch",
+                "locked",
+                "prunable",
+            } or not value:
+                raise GitObservationError("Git returned malformed worktree output")
+            fields[key] = value
+        if "worktree" not in fields or "HEAD" not in fields:
+            raise GitObservationError("Git returned incomplete worktree output")
+        if not {"branch", "detached", "bare"}.intersection(fields):
+            raise GitObservationError("Git returned incomplete worktree output")
+        if "branch" in fields and not (fields["branch"] or "").startswith(
+            "refs/heads/"
+        ):
+            raise GitObservationError("Git returned malformed worktree branch")
+        if "branch" in fields and "detached" in fields:
+            raise GitObservationError("Git returned malformed worktree output")
+        path = Path(fields["worktree"] or "")
+        resolved = (path if path.is_absolute() else cwd / path).resolve()
+        if resolved in seen_paths:
+            raise GitObservationError("Git returned duplicate worktree paths")
+        seen_paths.add(resolved)
+        paths.append(resolved)
+        record = []
+    return tuple(paths)
+
+
 def common_dir(
     cwd: Path,
     *,

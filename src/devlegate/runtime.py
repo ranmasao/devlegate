@@ -38,7 +38,6 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
     WorkspaceInspection,
-    parse_worktree_porcelain,
 )
 from devlegate.git import (
     GitAncestryError,
@@ -63,6 +62,7 @@ from devlegate.git import (
     resolve_object,
     run_git,
     working_tree_status,
+    worktree_paths,
     worktree_root,
 )
 from devlegate.git import (
@@ -2601,6 +2601,13 @@ class ServiceEngine:
     def _remote_exists_runtime(self, repo: Path, remote: str) -> bool:
         return remote_exists(repo, remote, runner=self._git_runtime)
 
+    def _remote_exists_for_status(self) -> bool:
+        """Keep status diagnostics fail-closed for unreadable Git config."""
+        try:
+            return remote_exists(self.repo, self.remote_name, runner=_git)
+        except GitObservationError:
+            return False
+
     def _ahead_behind_runtime(
         self, repo: Path, local: str, remote: str
     ) -> tuple[int, int]:
@@ -2658,10 +2665,9 @@ class ServiceEngine:
                 "control worktree is missing; run 'devlegate control init' "
                 f"to attach {self.control_branch}"
             )
-        registered = self._git_runtime(self.repo, "worktree", "list", "--porcelain")
         try:
-            registered_paths = set(parse_worktree_porcelain(registered.stdout))
-        except ExecutionWorkspaceError as error:
+            registered_paths = set(worktree_paths(self.repo, runner=self._git_runtime))
+        except GitObservationError as error:
             raise WorkflowBlockedError(str(error)) from error
         if self.control_worktree.resolve() not in registered_paths:
             raise WorkflowBlockedError(
@@ -2792,10 +2798,9 @@ class ServiceEngine:
                 f"on remote {self.remote_name}"
             )
         if self.control_worktree.exists() or self.control_worktree.is_symlink():
-            registered = _git(self.repo, "worktree", "list", "--porcelain")
             try:
-                registered_paths = set(parse_worktree_porcelain(registered.stdout))
-            except ExecutionWorkspaceError as error:
+                registered_paths = set(worktree_paths(self.repo, runner=_git))
+            except GitObservationError as error:
                 raise DevlegateError(str(error)) from error
             if self.control_worktree.resolve() not in registered_paths:
                 raise DevlegateError(
@@ -5612,7 +5617,7 @@ class ServiceEngine:
         observed = resolve_commit(self.repo, evidence_ref, runner=_git)
         if observed is not None and observed != checkpoint:
             raise DevlegateError("drop execution evidence ref is inconsistent")
-        if observed.returncode:
+        if observed is None:
             pinned = _git(
                 self.repo,
                 "update-ref",
@@ -8778,10 +8783,7 @@ class ServiceEngine:
             ),
             (
                 "configured remote",
-                _git(
-                    self.repo, "remote", "get-url", self.remote_name, check=False
-                ).returncode
-                == 0,
+                self._remote_exists_for_status(),
                 self.remote_name,
             ),
             (

@@ -142,6 +142,34 @@ def test_common_dir_resolves_relative_output_from_repository(tmp_path):
     assert git.common_dir(repo, runner=fake_runner) == (repo / ".git").resolve()
 
 
+def test_worktree_paths_extracts_registered_paths(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    def fake_runner(cwd, *args, check):
+        return subprocess.CompletedProcess(
+            [],
+            0,
+            f"worktree {first}\nHEAD abc\nbranch refs/heads/main\n\n"
+            f"worktree {second}\nHEAD def\ndetached\n",
+            "",
+        )
+
+    assert git.worktree_paths(tmp_path, runner=fake_runner) == (first, second)
+
+
+def test_worktree_paths_rejects_malformed_output(tmp_path):
+    def fake_runner(cwd, *args, check):
+        return subprocess.CompletedProcess([], 0, "HEAD abc\n", "")
+
+    try:
+        git.worktree_paths(tmp_path, runner=fake_runner)
+    except git.GitObservationError as error:
+        assert "worktree" in str(error)
+    else:
+        raise AssertionError("malformed worktree output must fail closed")
+
+
 def test_read_object_does_not_treat_repository_failure_as_absence(tmp_path):
     def fake_runner(cwd, *args, check):
         return subprocess.CompletedProcess([], 128, "", "fatal: not a git repository")
