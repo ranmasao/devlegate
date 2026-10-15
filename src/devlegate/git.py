@@ -10,6 +10,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 
+class GitAncestryError(RuntimeError):
+    """Git could not determine an ancestry relationship."""
+
+
 def run_git(
     cwd: Path, *args: str, check: bool = True, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -38,6 +42,37 @@ def resolve_commit(
         return None
     resolved = result.stdout.strip()
     return resolved or None
+
+
+def is_ancestor(
+    cwd: Path,
+    ancestor: str,
+    descendant: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> bool:
+    """Return whether ``ancestor`` is reachable from ``descendant``.
+
+    Git uses exit status 1 for a valid negative answer. Any other non-zero
+    status is an observation failure and must not be treated as ``False``.
+    """
+    result = runner(
+        cwd,
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.strip() or "unknown Git error"
+    raise GitAncestryError(
+        f"cannot determine whether {ancestor} is an ancestor of {descendant}: "
+        f"{detail}"
+    )
 
 
 def commit_parents(

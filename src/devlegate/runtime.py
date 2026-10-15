@@ -40,7 +40,13 @@ from devlegate.execution_workspace import (
     WorkspaceInspection,
     parse_worktree_porcelain,
 )
-from devlegate.git import commit_parents, resolve_commit, run_git
+from devlegate.git import (
+    GitAncestryError,
+    commit_parents,
+    is_ancestor,
+    resolve_commit,
+    run_git,
+)
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
@@ -1229,15 +1235,9 @@ class ServiceEngine:
                 "forced retry control admission identity is incomplete"
             )
         current_head, _remote_head = self._sync_control()
-        descendant = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            admitted_control,
-            current_head,
-            check=False,
-        )
-        if descendant.returncode:
+        if not is_ancestor(
+            self.control_worktree, admitted_control, current_head, runner=_git
+        ):
             raise DevlegateError(
                 "control history diverged; use explicit control reconciliation"
             )
@@ -1729,19 +1729,12 @@ class ServiceEngine:
                 "requested reconciliation target is a hexadecimal commit prefix; "
                 "use at least 4 characters"
             )
-        resolved = _git(
-            self.repo,
-            "rev-parse",
-            "--verify",
-            f"{value}^{{commit}}",
-            check=False,
-        )
-        if resolved.returncode:
+        canonical = resolve_commit(self.repo, value, runner=_git)
+        if canonical is None:
             raise DevlegateError(
                 "requested reconciliation target is not a valid commit; "
                 "use a full SHA or a unique hexadecimal prefix of at least 4 characters"
             )
-        canonical = resolved.stdout.strip()
         if canonical != current_head:
             raise DevlegateError(
                 "requested reconciliation target is not the current product HEAD"
@@ -1823,15 +1816,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "automatic zero-delta retry requires one current product generation"
             )
-        ancestor = _git(
-            self.repo,
-            "merge-base",
-            "--is-ancestor",
-            original_base,
-            local_head,
-            check=False,
-        )
-        if ancestor.returncode:
+        if not is_ancestor(self.repo, original_base, local_head, runner=_git):
             raise WorkflowBlockedError(
                 "automatic zero-delta retry product history is not a descendant"
             )
@@ -1900,11 +1885,11 @@ class ServiceEngine:
         if not observation.working_tree_clean:
             raise DevlegateError("control working tree is dirty")
 
-        local = _git(self.control_worktree, "rev-parse", "--verify", "HEAD^{commit}")
-        if local.stdout.strip() != from_head:
+        local = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+        if local != from_head:
             raise DevlegateError(
                 f"control local HEAD changed; expected {from_head}, "
-                f"found {local.stdout.strip()}"
+                f"found {local}"
             )
         fetch = _git(
             self.control_worktree,
@@ -1919,38 +1904,19 @@ class ServiceEngine:
                 f"cannot freshly fetch control branch: {fetch.stderr.strip()}"
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
-        remote = _git(
-            self.control_worktree,
-            "rev-parse",
-            "--verify",
-            f"{remote_ref}^{{commit}}",
-            check=False,
+        observed_remote = resolve_commit(
+            self.control_worktree, remote_ref, runner=_git
         )
-        if remote.returncode:
+        if observed_remote is None:
             raise DevlegateError(f"control remote branch not found: {remote_ref}")
-        observed_remote = remote.stdout.strip()
         if observed_remote != to_head:
             raise DevlegateError(
                 f"control remote HEAD changed; expected {to_head}, "
                 f"found {observed_remote}"
             )
-        local_ancestor = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            from_head,
-            to_head,
-            check=False,
-        )
-        remote_ancestor = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            to_head,
-            from_head,
-            check=False,
-        )
-        if local_ancestor.returncode == 0 or remote_ancestor.returncode == 0:
+        if is_ancestor(
+            self.control_worktree, from_head, to_head, runner=_git
+        ) or is_ancestor(self.control_worktree, to_head, from_head, runner=_git):
             raise DevlegateError(
                 "control reconciliation is unnecessary; histories are not divergent"
             )
@@ -2561,6 +2527,19 @@ class ServiceEngine:
             result.check_returncode()
         return result
 
+    def _resolve_commit_runtime(self, repo: Path, revision: str) -> str | None:
+        """Resolve one commit through the runtime Git interruption seam."""
+        return resolve_commit(repo, revision, runner=self._git_runtime)
+
+    def _is_ancestor_runtime(
+        self, repo: Path, ancestor: str, descendant: str
+    ) -> bool:
+        """Check ancestry without collapsing Git errors into a negative answer."""
+        try:
+            return is_ancestor(repo, ancestor, descendant, runner=self._git_runtime)
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(str(error)) from error
+
     def _stop_before_admission(self) -> bool:
         """Return whether a new mutable operation must not be committed."""
         return self._stop_requested() or self._lifecycle_drain_pending()
@@ -2742,14 +2721,12 @@ class ServiceEngine:
                 f"cannot fetch existing control branch {self.control_branch!r}: "
                 f"{fetch.stderr.strip()}"
             )
-        remote = _git(
+        remote_head = resolve_commit(
             self.repo,
-            "rev-parse",
-            "--verify",
             f"{self.remote_name}/{self.control_branch}",
-            check=False,
+            runner=_git,
         )
-        if remote.returncode:
+        if remote_head is None:
             raise DevlegateError(
                 f"configured control branch {self.control_branch!r} is unavailable "
                 f"on remote {self.remote_name}"
@@ -2793,18 +2770,14 @@ class ServiceEngine:
                         f"managed workflow directory is unavailable: "
                         f"{self.control_worktree / configured_path} ({state})"
                     )
-            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
-            remote_head = remote.stdout.strip()
+            local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+            if local_head is None:
+                raise DevlegateError("existing control worktree HEAD is unavailable")
             if (
                 local_head != remote_head
-                and _git(
-                    self.control_worktree,
-                    "merge-base",
-                    "--is-ancestor",
-                    local_head,
-                    remote_head,
-                    check=False,
-                ).returncode
+                and not is_ancestor(
+                    self.control_worktree, local_head, remote_head, runner=_git
+                )
             ):
                 raise DevlegateError(
                     "existing control worktree is not compatible with the remote "
@@ -2823,20 +2796,12 @@ class ServiceEngine:
             check=False,
         )
         if local_branch.returncode == 0:
-            local_head = _git(
-                self.repo, "rev-parse", self.control_branch
-            ).stdout.strip()
-            remote_head = remote.stdout.strip()
+            local_head = resolve_commit(self.repo, self.control_branch, runner=_git)
+            if local_head is None:
+                raise DevlegateError("local control branch HEAD is unavailable")
             if (
                 local_head != remote_head
-                and _git(
-                    self.repo,
-                    "merge-base",
-                    "--is-ancestor",
-                    local_head,
-                    remote_head,
-                    check=False,
-                ).returncode
+                and not is_ancestor(self.repo, local_head, remote_head, runner=_git)
             ):
                 raise DevlegateError(
                     "local control branch diverges from the remote control branch"
@@ -3481,30 +3446,17 @@ class ServiceEngine:
                 f"control fetch failed: {fetch.stderr.strip() or 'unknown git error'}"
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
-        remote = self._git_runtime(
-            self.control_worktree,
-            "rev-parse",
-            "--verify",
-            remote_ref,
-            check=False,
-        )
-        if remote.returncode:
+        remote_head = self._resolve_commit_runtime(self.control_worktree, remote_ref)
+        if remote_head is None:
             raise WorkflowBlockedError(f"control remote branch not found: {remote_ref}")
-        remote_head = remote.stdout.strip()
-        local_head = self._git_runtime(
-            self.control_worktree, "rev-parse", "HEAD"
-        ).stdout.strip()
+        local_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+        if local_head is None:
+            raise WorkflowBlockedError("control HEAD could not be resolved")
         if local_head != remote_head:
             previous_head = local_head
-            ancestor = self._git_runtime(
-                self.control_worktree,
-                "merge-base",
-                "--is-ancestor",
-                local_head,
-                remote_head,
-                check=False,
-            )
-            if ancestor.returncode:
+            if not self._is_ancestor_runtime(
+                self.control_worktree, local_head, remote_head
+            ):
                 pending_integration = self._state.get("accepted_integration")
                 if isinstance(pending_integration, dict):
                     classification, _commit = (
@@ -3530,9 +3482,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     f"control fast-forward failed: {merge.stderr.strip()}"
                 )
-            local_head = self._git_runtime(
-                self.control_worktree, "rev-parse", "HEAD"
-            ).stdout.strip()
+            local_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+            if local_head is None:
+                raise WorkflowBlockedError("control HEAD could not be resolved")
             _log(f"control updated: {previous_head} -> {local_head}")
         return local_head, remote_head
 
@@ -3691,18 +3643,13 @@ class ServiceEngine:
             _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
             return 1
         else:
-            remote_result = self._git_runtime(
-                self.repo, "rev-parse", "--verify", remote_ref, check=False
-            )
-            if remote_result.returncode:
+            remote_head = self._resolve_commit_runtime(self.repo, remote_ref)
+            if remote_head is None:
                 _log(
                     f"remote branch not found: {remote_ref}; "
-                    f"git stderr: {remote_result.stderr.strip() or 'unknown git error'}"
+                    "git could not resolve the configured remote branch"
                 )
                 return 1
-            remote_head = self._git_runtime(
-                self.repo, "rev-parse", remote_ref
-            ).stdout.strip()
             persisted_head = str(self._state.get("remote_head", ""))
             if pending_sync:
                 persisted_local_head = str(self._state.get("local_head", ""))
@@ -3713,27 +3660,11 @@ class ServiceEngine:
                             "persisted merge revision does not match the local HEAD"
                         )
                 elif local_head != persisted_local_head:
-                    persisted_local_is_ancestor = (
-                        self._git_runtime(
-                            self.repo,
-                            "merge-base",
-                            "--is-ancestor",
-                            persisted_local_head,
-                            local_head,
-                            check=False,
-                        ).returncode
-                        == 0
+                    persisted_local_is_ancestor = self._is_ancestor_runtime(
+                        self.repo, persisted_local_head, local_head
                     )
-                    current_local_is_ancestor = (
-                        self._git_runtime(
-                            self.repo,
-                            "merge-base",
-                            "--is-ancestor",
-                            local_head,
-                            persisted_local_head,
-                            check=False,
-                        ).returncode
-                        == 0
+                    current_local_is_ancestor = self._is_ancestor_runtime(
+                        self.repo, local_head, persisted_local_head
                     )
                     if current_local_is_ancestor:
                         raise DevlegateError(
@@ -3750,16 +3681,8 @@ class ServiceEngine:
                         )
 
                 target_is_current = target_head == remote_head
-                target_is_ancestor = (
-                    self._git_runtime(
-                        self.repo,
-                        "merge-base",
-                        "--is-ancestor",
-                        target_head,
-                        remote_head,
-                        check=False,
-                    ).returncode
-                    == 0
+                target_is_ancestor = self._is_ancestor_runtime(
+                    self.repo, target_head, remote_head
                 )
                 if not target_is_current and not target_is_ancestor:
                     raise DevlegateError(
@@ -3779,27 +3702,11 @@ class ServiceEngine:
                 )
                 preserve_local_ahead = False
                 if local_ahead_pending:
-                    local_is_ancestor = (
-                        self._git_runtime(
-                            self.repo,
-                            "merge-base",
-                            "--is-ancestor",
-                            local_head,
-                            target_head,
-                            check=False,
-                        ).returncode
-                        == 0
+                    local_is_ancestor = self._is_ancestor_runtime(
+                        self.repo, local_head, target_head
                     )
-                    remote_is_ancestor = (
-                        self._git_runtime(
-                            self.repo,
-                            "merge-base",
-                            "--is-ancestor",
-                            target_head,
-                            local_head,
-                            check=False,
-                        ).returncode
-                        == 0
+                    remote_is_ancestor = self._is_ancestor_runtime(
+                        self.repo, target_head, local_head
                     )
                     if not local_is_ancestor and not remote_is_ancestor:
                         self._log_sync_failure(local_head, remote_ref)
@@ -3839,9 +3746,9 @@ class ServiceEngine:
                     if merge.returncode:
                         self._log_sync_failure(local_head, remote_ref, merge.stderr)
                         return 1
-                    local_head = self._git_runtime(
-                        self.repo, "rev-parse", "HEAD"
-                    ).stdout.strip()
+                    local_head = self._resolve_commit_runtime(self.repo, "HEAD")
+                    if local_head is None:
+                        raise WorkflowBlockedError("product HEAD could not be resolved")
                     if local_head != target_head:
                         raise DevlegateError(
                             "fast-forward completed without reaching the target "
@@ -3868,17 +3775,7 @@ class ServiceEngine:
                     _log("resumed after completed merge")
             elif local_head == remote_head:
                 changed_paths = ""
-            elif (
-                self._git_runtime(
-                    self.repo,
-                    "merge-base",
-                    "--is-ancestor",
-                    local_head,
-                    remote_head,
-                    check=False,
-                ).returncode
-                == 0
-            ):
+            elif self._is_ancestor_runtime(self.repo, local_head, remote_head):
                 had_remote_change = True
                 changed_paths = self._git_runtime(
                     self.repo,
@@ -3903,9 +3800,9 @@ class ServiceEngine:
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)
                     return 1
-                actual_head = self._git_runtime(
-                    self.repo, "rev-parse", "HEAD"
-                ).stdout.strip()
+                actual_head = self._resolve_commit_runtime(self.repo, "HEAD")
+                if actual_head is None:
+                    raise WorkflowBlockedError("product HEAD could not be resolved")
                 if actual_head != remote_head:
                     raise DevlegateError(
                         "fast-forward completed without reaching the remote revision"
@@ -3921,17 +3818,7 @@ class ServiceEngine:
                     remote_head=remote_head,
                     changed_paths=changed_paths,
                 )
-            elif (
-                self._git_runtime(
-                    self.repo,
-                    "merge-base",
-                    "--is-ancestor",
-                    remote_head,
-                    local_head,
-                    check=False,
-                ).returncode
-                == 0
-            ):
+            elif self._is_ancestor_runtime(self.repo, remote_head, local_head):
                 local_ahead = True
                 changed_paths = self._git_runtime(
                     self.repo,
@@ -4778,15 +4665,7 @@ class ServiceEngine:
             return False
         if self._execution_remote_head(execution_branch) is not None:
             return False
-        ancestor = _git(
-            self.repo,
-            "merge-base",
-            "--is-ancestor",
-            admitted_base,
-            remote_head,
-            check=False,
-        )
-        return ancestor.returncode == 0
+        return self._is_ancestor_runtime(self.repo, admitted_base, remote_head)
 
     @staticmethod
     def _zero_delta_retry_payload(
@@ -5158,15 +5037,12 @@ class ServiceEngine:
                 "execution branch remote changed during worker execution"
             )
         if expected_remote_head is not None:
-            ancestor = _git(
+            if not is_ancestor(
                 workspace.path,
-                "merge-base",
-                "--is-ancestor",
                 expected_remote_head,
                 checkpoint_head,
-                check=False,
-            )
-            if ancestor.returncode:
+                runner=_git,
+            ):
                 raise DevlegateError(
                     "execution predecessor is not an ancestor of checkpoint"
                 )
@@ -5371,22 +5247,11 @@ class ServiceEngine:
             self._retire_zero_delta_execution(report)
             return self._complete_accepted(ticket_id, control.local_head)
 
-        def is_ancestor(older: str, newer: str) -> bool:
-            return (
-                _git(
-                    self.repo,
-                    "merge-base",
-                    "--is-ancestor",
-                    older,
-                    newer,
-                    check=False,
-                ).returncode
-                == 0
-            )
-
-        if product_head == checkpoint or is_ancestor(checkpoint, product_head):
+        if product_head == checkpoint or is_ancestor(
+            self.repo, checkpoint, product_head, runner=_git
+        ):
             pass
-        elif is_ancestor(product_head, checkpoint):
+        elif is_ancestor(self.repo, product_head, checkpoint, runner=_git):
             pushed = _git(
                 self.repo,
                 "push",
@@ -6326,15 +6191,13 @@ class ServiceEngine:
         )
         if lineage.returncode or lineage.stdout.splitlines() != [commit]:
             return False
-        ancestor = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            report.control_head,
-            parent_head,
-            check=False,
-        )
-        if ancestor.returncode:
+        try:
+            lineage_ancestor = is_ancestor(
+                self.control_worktree, report.control_head, parent_head, runner=_git
+            )
+        except GitAncestryError:
+            return False
+        if not lineage_ancestor:
             return False
         if self._control_report_at(commit, report) is None:
             return False
@@ -6413,15 +6276,13 @@ class ServiceEngine:
         if parent.returncode:
             raise WorkflowBlockedError("unpublished lifecycle parent is unavailable")
         parent_head = parent.stdout.strip()
-        parent_remote = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            parent_head,
-            remote_head,
-            check=False,
-        )
-        if parent_remote.returncode:
+        try:
+            parent_on_remote = is_ancestor(
+                self.control_worktree, parent_head, remote_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        if not parent_on_remote:
             raise WorkflowBlockedError(
                 "unpublished lifecycle parent is not on the fresh remote lineage"
             )
@@ -6476,15 +6337,13 @@ class ServiceEngine:
         ticket_id: str,
         selected_body: str,
     ) -> None:
-        ancestor = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            control_head,
-            candidate,
-            check=False,
-        )
-        if ancestor.returncode:
+        try:
+            candidate_descends = is_ancestor(
+                self.control_worktree, control_head, candidate, runner=_git
+            )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        if not candidate_descends:
             raise WorkflowBlockedError(
                 "control history diverged from the execution admission generation"
             )
@@ -6618,13 +6477,14 @@ class ServiceEngine:
                     f"{fetched.stderr.strip() or 'unknown git error'}"
                 )
             remote_ref = f"{self.remote_name}/{self.control_branch}"
-            remote_result = _git(
-                self.control_worktree, "rev-parse", "--verify", remote_ref, check=False
+            remote_head = resolve_commit(
+                self.control_worktree, remote_ref, runner=_git
             )
-            if remote_result.returncode:
+            if remote_head is None:
                 raise WorkflowBlockedError("control remote branch is unavailable")
-            remote_head = remote_result.stdout.strip()
-            local_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+            local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+            if local_head is None:
+                raise WorkflowBlockedError("control HEAD is unavailable")
             existing = self._remote_lifecycle_commit(
                 remote_head, report, apply_conclusion=apply_conclusion
             )
@@ -6639,15 +6499,9 @@ class ServiceEngine:
                 lifecycle_parent = parent.stdout.strip()
                 self._prove_control_descendant(lifecycle_parent, report)
                 if local_head != remote_head:
-                    relation = _git(
-                        self.control_worktree,
-                        "merge-base",
-                        "--is-ancestor",
-                        local_head,
-                        remote_head,
-                        check=False,
-                    )
-                    if relation.returncode:
+                    if not is_ancestor(
+                        self.control_worktree, local_head, remote_head, runner=_git
+                    ):
                         raise WorkflowBlockedError(
                             "local control history diverges from published lifecycle"
                         )
@@ -6663,25 +6517,15 @@ class ServiceEngine:
                             raise WorkflowBlockedError(
                                 "cannot fast-forward control worktree"
                             )
-                return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+                return resolve_commit(self.control_worktree, "HEAD", runner=_git) or ""
             if local_head != report.control_head:
-                admitted_local = _git(
-                    self.control_worktree,
-                    "merge-base",
-                    "--is-ancestor",
-                    report.control_head,
-                    local_head,
-                    check=False,
+                admitted_local = is_ancestor(
+                    self.control_worktree, report.control_head, local_head, runner=_git
                 )
-                local_remote = _git(
-                    self.control_worktree,
-                    "merge-base",
-                    "--is-ancestor",
-                    local_head,
-                    remote_head,
-                    check=False,
+                local_remote = is_ancestor(
+                    self.control_worktree, local_head, remote_head, runner=_git
                 )
-                if admitted_local.returncode == 0 and local_remote.returncode == 0:
+                if admitted_local and local_remote:
                     # A locally observed commit can already be published when a
                     # previous replay failed after fast-forwarding the worktree.
                     # Do not mistake that published lineage for a local lifecycle
@@ -6707,7 +6551,7 @@ class ServiceEngine:
                         raise WorkflowBlockedError(
                             "cannot replay lifecycle on control descendant"
                         )
-                if local_remote.returncode == 0 and local_head != remote_head:
+                if local_remote and local_head != remote_head:
                     merge = _git(
                         self.control_worktree,
                         "merge",
@@ -8214,10 +8058,10 @@ class ServiceEngine:
         return product
 
     def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
-        result = _git(
-            self.repo, "merge-base", "--is-ancestor", base, target, check=False
-        )
-        return result.returncode == 0
+        try:
+            return is_ancestor(self.repo, base, target, runner=_git)
+        except GitAncestryError as error:
+            raise ReconciliationTransactionError(str(error)) from error
 
     def reconciliation_same_parent_replacement(self, base: str, target: str) -> bool:
         return _is_same_parent_replacement(self.repo, base, target)
@@ -8387,15 +8231,9 @@ class ServiceEngine:
                     "execution remote changed or has divergent lineage"
                 )
             if isinstance(expected_remote, str):
-                ancestor = _git(
-                    self.repo,
-                    "merge-base",
-                    "--is-ancestor",
-                    expected_remote,
-                    checkpoint,
-                    check=False,
-                )
-                if ancestor.returncode:
+                if not is_ancestor(
+                    self.repo, expected_remote, checkpoint, runner=_git
+                ):
                     raise DevlegateError(
                         "execution predecessor is not an ancestor of checkpoint"
                     )
@@ -8533,22 +8371,15 @@ class ServiceEngine:
             check=False,
         )
         control_ref = f"{self.remote_name}/{self.control_branch}"
-        current_remote = _git(
-            self.control_worktree, "rev-parse", "--verify", control_ref, check=False
+        control_head = resolve_commit(
+            self.control_worktree, control_ref, runner=_git
         )
-        if control_fetch.returncode or current_remote.returncode:
+        if control_fetch.returncode or control_head is None:
             raise DevlegateError("cannot freshly observe control remote")
-        control_head = current_remote.stdout.strip()
-        local_control = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
-        local_is_ancestor = _git(
-            self.control_worktree,
-            "merge-base",
-            "--is-ancestor",
-            local_control,
-            control_head,
-            check=False,
-        )
-        if local_is_ancestor.returncode:
+        local_control = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+        if local_control is None or not is_ancestor(
+            self.control_worktree, local_control, control_head, runner=_git
+        ):
             raise DevlegateError("local control history diverged during recovery")
         self._prove_bound_ticket_descendant(
             control_head,

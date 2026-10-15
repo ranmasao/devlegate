@@ -84,3 +84,26 @@ def test_commit_parents_normalizes_parent_list_and_failures(tmp_path):
         (tmp_path, ("rev-list", "--parents", "-n", "1", "commit"), False),
         (tmp_path, ("rev-list", "--parents", "-n", "1", "missing"), False),
     ]
+
+
+def test_is_ancestor_distinguishes_negative_answer_from_git_error(tmp_path):
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        code = {"yes": 0, "no": 1, "broken": 128}[args[-1]]
+        return subprocess.CompletedProcess([], code, "", "fatal" if code else "")
+
+    assert git.is_ancestor(tmp_path, "base", "yes", runner=fake_runner)
+    assert not git.is_ancestor(tmp_path, "base", "no", runner=fake_runner)
+    try:
+        git.is_ancestor(tmp_path, "base", "broken", runner=fake_runner)
+    except git.GitAncestryError as error:
+        assert "cannot determine" in str(error)
+    else:
+        raise AssertionError("Git errors must not be reported as non-ancestry")
+    assert calls == [
+        (tmp_path, ("merge-base", "--is-ancestor", "base", "yes"), False),
+        (tmp_path, ("merge-base", "--is-ancestor", "base", "no"), False),
+        (tmp_path, ("merge-base", "--is-ancestor", "base", "broken"), False),
+    ]
