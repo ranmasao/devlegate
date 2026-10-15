@@ -1,0 +1,29 @@
+{
+  "code_base_head": "80e690c2fb9360708b4638c95b99b7b1ff236c35",
+  "conclusion": "completed",
+  "control_head": "537b8b97c60e5ed996136533d3d11e48b90150f6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-070",
+  "execution_id": "a0825ba8000b47edb70ade6781fd5991",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-070",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-070/a0825ba8000b47edb70ade6781fd5991.md",
+  "report_sha256": "334c732efac6f0128f1634b4d77863575c2d6e5861bd95e83f3a1d8bbcd35cc8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-070",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Added focused ancestry tests covering exit 0, exit 1, and Git error exit codes. Focused Git/state/runtime, recovery/control regression tests, Ruff, compileall, and diff checks pass.",
+    "summary": "Added shared Git commit resolution and strict tri-state ancestry handling, then replaced duplicated runtime ancestry and ref-resolution command/parsing sites while preserving domain policy and CAS callers. Runtime raw sites changed from merge-base 27 to 1 diagnostic use, rev-parse 70 to 52, rev-list 7 to 7, and update-ref 10 to 10; update-ref and rev-list were retained where create/CAS/evidence or output semantics differ."
+  },
+  "workspace_head": "ad460842d17387eb566ea8241de128d26b78e220"
+}
