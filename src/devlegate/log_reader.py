@@ -74,6 +74,14 @@ def execution_id(
         raise LogReaderError(
             "execution ID must be a lowercase hexadecimal ID or prefix"
         )
+    if len(selector) == 32:
+        if state_dir is not None and state_key is not None:
+            current = _current_execution_id(state_dir, state_key)
+            if current == selector:
+                return selector
+        if _execution_report(control_worktree, selector) is not None:
+            return selector
+        raise LogReaderError(f"execution not found: {selector}")
     try:
         reports = ExecutionReportStore(control_worktree).list()
     except ExecutionReportError as error:
@@ -98,35 +106,75 @@ def execution_id(
     return matches[0]
 
 
-def _read_file(path: Path, lines: int) -> Iterable[str]:
-    lines = _lines(lines)
-    if not path.is_file():
-        raise LogReaderError(f"execution log not found: {path}")
-    if lines == 0:
-        return ()
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, 2)
-            size = handle.tell()
-            if size == 0:
-                return ()
-            handle.seek(-1, 2)
-            ends_with_newline = handle.read(1) == b"\n"
-            required_newlines = lines + int(ends_with_newline)
-            position = size
-            chunks: list[bytes] = []
-            newline_count = 0
-            while position and newline_count < required_newlines:
-                chunk_size = min(8192, position)
-                position -= chunk_size
-                handle.seek(position)
-                chunk = handle.read(chunk_size)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
+class _LogCursor:
+    """Read a log tail and continue from the exact byte position it used."""
+
+    def __init__(self, path: Path, lines: int) -> None:
+        self.path = path
+        self.lines = _lines(lines)
+        if not path.is_file():
+            raise LogReaderError(f"execution log not found: {path}")
+        try:
+            self.handle = path.open("rb")
+            self._tail()
+        except (OSError, UnicodeError) as error:
+            self.close()
+            raise LogReaderError(
+                f"cannot read execution log {path}: {error}"
+            ) from error
+
+    def _tail(self) -> None:
+        handle = self.handle
+        handle.seek(0, 2)
+        size = handle.tell()
+        if self.lines == 0 or size == 0:
+            self.initial: tuple[str, ...] = ()
+            return
+        handle.seek(-1, 2)
+        ends_with_newline = handle.read(1) == b"\n"
+        required_newlines = self.lines + int(ends_with_newline)
+        position = size
+        chunks: list[bytes] = []
+        newline_count = 0
+        while position and newline_count < required_newlines:
+            chunk_size = min(8192, position)
+            position -= chunk_size
+            handle.seek(position)
+            chunk = handle.read(chunk_size)
+            chunks.append(chunk)
+            newline_count += chunk.count(b"\n")
         content = b"".join(reversed(chunks)).splitlines(keepends=True)
-        return tuple(record.decode("utf-8") for record in content[-lines:])
-    except (OSError, UnicodeError) as error:
-        raise LogReaderError(f"cannot read execution log {path}: {error}") from error
+        self.initial = tuple(
+            record.decode("utf-8") for record in content[-self.lines :]
+        )
+        handle.seek(0, 2)
+
+    def read_available(self) -> tuple[str, ...]:
+        records: list[str] = []
+        try:
+            while True:
+                record = self.handle.readline()
+                if not record:
+                    break
+                records.append(record.decode("utf-8"))
+        except (OSError, UnicodeError) as error:
+            raise LogReaderError(
+                f"cannot read execution log {self.path}: {error}"
+            ) from error
+        return tuple(records)
+
+    def close(self) -> None:
+        handle = getattr(self, "handle", None)
+        if handle is not None:
+            handle.close()
+
+
+def _read_file(path: Path, lines: int) -> Iterable[str]:
+    cursor = _LogCursor(path, lines)
+    try:
+        return cursor.initial
+    finally:
+        cursor.close()
 
 
 def execution_log(
@@ -239,8 +287,13 @@ def follow_ticket(
     while True:
         state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
         reports = _ticket_reports(control_worktree, ticket_id)
+        active = _active_ticket_execution(state_dir, state_key, ticket_id)
         for report in reports:
             if report.execution_id in printed:
+                continue
+            # The active execution is read through the streaming cursor below.
+            # This keeps its tail and cursor position from being separated.
+            if active == report.execution_id and state != "done":
                 continue
             path = execution_log_path(state_dir, state_key, report.execution_id)
             print(
@@ -253,16 +306,20 @@ def follow_ticket(
         # the ticket reaches the canonical workflow terminal state.
         if state == "done":
             return 0
-        active = _active_ticket_execution(state_dir, state_key, ticket_id)
         if active is not None:
             if active not in printed:
-                print(_execution_header(active, None), end="", flush=True)
-            result = follow_execution(
+                report = next(
+                    (item for item in reports if item.execution_id == active), None
+                )
+                conclusion = report.result.conclusion if report is not None else None
+                print(_execution_header(active, conclusion), end="", flush=True)
+            result = _follow_execution(
                 state_dir,
                 state_key,
                 control_worktree,
                 active,
-                0 if active in printed else lines,
+                lines,
+                ticket_id=ticket_id,
             )
             if result != 0:
                 return result
@@ -321,19 +378,19 @@ def stream_journal(
 
 
 def follow_file(path: Path, lines: int) -> int:
-    lines = _lines(lines)
-    print("".join(_read_file(path, lines)), end="")
-    with path.open(encoding="utf-8") as handle:
-        handle.seek(0, 2)
-        try:
-            while True:
-                line = handle.readline()
-                if line:
-                    print(line, end="")
-                else:
-                    time.sleep(0.1)
-        except KeyboardInterrupt:
-            return 130
+    cursor = _LogCursor(path, lines)
+    try:
+        print("".join(cursor.initial), end="")
+        while True:
+            records = cursor.read_available()
+            if records:
+                print("".join(records), end="")
+            else:
+                time.sleep(0.1)
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        cursor.close()
 
 
 def _execution_active(state_dir: Path, state_key: str, execution: str) -> bool:
@@ -348,20 +405,58 @@ def _execution_active(state_dir: Path, state_key: str, execution: str) -> bool:
     )
 
 
-def _execution_terminal(control_worktree: Path, execution: str) -> bool:
+def _execution_report(
+    control_worktree: Path, execution: str, ticket_id: str | None = None
+):
+    store = ExecutionReportStore(control_worktree)
+    if ticket_id is not None:
+        try:
+            return store.read(ticket_id, execution)
+        except ExecutionReportError as error:
+            report_path = (
+                control_worktree
+                / "executions"
+                / ticket_id
+                / f"{execution}.json"
+            )
+            if report_path.exists():
+                raise LogReaderError(str(error)) from error
+            return None
+
+    root = control_worktree / "executions"
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise LogReaderError("execution report root is unsafe")
+    candidates = []
+    if root.is_dir():
+        for ticket_root in root.iterdir():
+            if ticket_root.is_dir() and not ticket_root.is_symlink():
+                candidate = ticket_root / f"{execution}.json"
+                if candidate.exists():
+                    candidates.append((ticket_root.name, candidate))
+    if len(candidates) > 1:
+        raise LogReaderError(f"execution identity is ambiguous: {execution}")
+    if not candidates:
+        return None
     try:
-        reports = ExecutionReportStore(control_worktree).list()
+        return store.read(candidates[0][0], execution)
     except ExecutionReportError as error:
         raise LogReaderError(str(error)) from error
-    return any(report.execution_id == execution for report in reports)
 
 
-def follow_execution(
+def _execution_terminal(
+    control_worktree: Path, execution: str, ticket_id: str | None = None
+) -> bool:
+    return _execution_report(control_worktree, execution, ticket_id) is not None
+
+
+def _follow_execution(
     state_dir: Path,
     state_key: str,
     control_worktree: Path,
     execution: str,
     lines: int,
+    *,
+    ticket_id: str | None = None,
 ) -> int:
     """Follow one immutable execution until its durable report and log EOF."""
     lines = _lines(lines)
@@ -369,15 +464,14 @@ def follow_execution(
         path = execution_log_path(state_dir, state_key, execution)
     except OperationalLogError as error:
         raise LogReaderError(str(error)) from error
-    handle = None
+    cursor = None
     try:
-        while handle is None:
-            terminal = _execution_terminal(control_worktree, execution)
+        while cursor is None:
+            terminal = _execution_terminal(control_worktree, execution, ticket_id)
             active = _execution_active(state_dir, state_key, execution)
             if path.is_file():
-                print("".join(_read_file(path, lines)), end="", flush=True)
-                handle = path.open(encoding="utf-8")
-                handle.seek(0, 2)
+                cursor = _LogCursor(path, lines)
+                print("".join(cursor.initial), end="", flush=True)
                 break
             if terminal or not active:
                 if terminal:
@@ -388,19 +482,16 @@ def follow_execution(
             time.sleep(0.1)
 
         while True:
-            line = handle.readline()
-            if line:
-                print(line, end="", flush=True)
+            records = cursor.read_available()
+            if records:
+                print("".join(records), end="", flush=True)
                 continue
-            if _execution_terminal(control_worktree, execution):
+            if _execution_terminal(control_worktree, execution, ticket_id):
                 # The report is the lifecycle boundary; consume everything that
                 # was published before or during terminalization, then stop.
                 time.sleep(0.1)
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return 0
-                    print(line, end="", flush=True)
+                print("".join(cursor.read_available()), end="", flush=True)
+                return 0
             if not _execution_active(state_dir, state_key, execution):
                 time.sleep(0.1)
                 continue
@@ -408,5 +499,18 @@ def follow_execution(
     except KeyboardInterrupt:
         return 130
     finally:
-        if handle is not None:
-            handle.close()
+        if cursor is not None:
+            cursor.close()
+
+
+def follow_execution(
+    state_dir: Path,
+    state_key: str,
+    control_worktree: Path,
+    execution: str,
+    lines: int,
+) -> int:
+    """Follow one immutable execution until its durable report and log EOF."""
+    return _follow_execution(
+        state_dir, state_key, control_worktree, execution, lines
+    )

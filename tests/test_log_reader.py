@@ -326,6 +326,99 @@ def test_execution_follow_drains_after_terminal_report(tmp_path, monkeypatch, ca
     assert capsys.readouterr().out == "before\nfinal\n"
 
 
+def test_execution_follow_ignores_unrelated_invalid_report(
+    tmp_path, monkeypatch, capsys
+):
+    identifier = "a" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    SQLiteRuntimeStore(state, "key").replace(
+        {
+            "phase": "agent_running",
+            "execution_id": identifier,
+            "execution_ticket_id": "ticket",
+        }
+    )
+    path = execution_log_path(state, "key", identifier)
+    path.parent.mkdir(parents=True)
+    path.write_text("live\n")
+    unrelated = control / "executions" / "old-ticket"
+    unrelated.mkdir(parents=True)
+    (unrelated / ("b" * 32 + ".json")).write_text("not json")
+
+    def terminalize(_seconds):
+        path.write_text("live\nfinished\n")
+        _report(control, identifier, ticket="ticket")
+        SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+        monkeypatch.setattr("devlegate.log_reader.time.sleep", lambda _value: None)
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", terminalize)
+    assert follow_execution(state, "key", control, identifier, 10) == 0
+    assert capsys.readouterr().out == "live\nfinished\n"
+
+
+def test_execution_follow_rejects_malformed_requested_report(tmp_path):
+    identifier = "c" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    path = control / "executions" / "ticket" / f"{identifier}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("not json")
+    log = execution_log_path(state, "key", identifier)
+    log.parent.mkdir(parents=True)
+    log.write_text("output\n")
+
+    with pytest.raises(LogReaderError, match="cannot read execution report"):
+        follow_execution(state, "key", control, identifier, 10)
+
+
+def test_ticket_follow_ignores_unrelated_invalid_report(tmp_path, monkeypatch, capsys):
+    identifier = "d" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    SQLiteRuntimeStore(state, "key").replace(
+        {
+            "phase": "agent_running",
+            "execution_id": identifier,
+            "execution_ticket_id": "T-1",
+        }
+    )
+    log = execution_log_path(state, "key", identifier)
+    log.parent.mkdir(parents=True)
+    log.write_text("ticket\n")
+    unrelated = control / "executions" / "old-ticket"
+    unrelated.mkdir(parents=True)
+    (unrelated / ("e" * 32 + ".json")).write_text("not json")
+    calls = 0
+
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            _report(control, identifier, ticket="T-1")
+            SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+        elif calls == 2:
+            (control / "kanban" / "todo" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    (control / "kanban" / "done").mkdir(parents=True)
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    assert (
+        follow_ticket(
+            state,
+            "key",
+            control,
+            "T-1",
+            10,
+            {"todo": "kanban/todo", "done": "kanban/done"},
+        )
+        == 0
+    )
+    assert "ticket\n" in capsys.readouterr().out
+
+
 def test_execution_follow_exits_for_already_terminal_execution(
     tmp_path, monkeypatch, capsys
 ):
