@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a3b39eed7e114263a443b018e2ad621af648cbc7",
+  "conclusion": "completed",
+  "control_head": "63c2a2e4df156b64d2d857cea3d245c04e968c84",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-066",
+  "execution_id": "f7b88af37af94d469c6e94bd6d4b154b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-066",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-066/f7b88af37af94d469c6e94bd6d4b154b.md",
+  "report_sha256": "a1ca98695c6153847c3055ece9998452785d03ebd49e92be8e7202fbf95cc582",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-066",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented the fail-closed report-root fix in src/devlegate/log_reader.py and added the focused test in tests/test_log_reader.py. Focused log-reader tests, Ruff, compile validation, and diff checks passed.",
+    "summary": "Hardened requested execution report lookup by validating the control-worktree, executions root, and ticket directory before treating a missing report as nonterminal. Added regression coverage for a dangling executions-root symlink while preserving invalid identity handling and normal not-yet-published reports."
+  },
+  "workspace_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5"
+}
