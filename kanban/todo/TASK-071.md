@@ -20,8 +20,14 @@ After TASK-070, `runtime.py` still contains about 164 direct `_git`/`_git_runtim
 4. Replace direct read-command construction/parsing in `runtime.py` with semantic helpers. Keep domain-specific comparison, evidence policy, mutation authorization and retries in their existing owners. Preserve owner-bound `_git_runtime` shutdown/interruption behavior when routing through helpers.
 5. Preserve tests' relevant seams with minimal changes. Add focused tests for missing ref vs command failure, ancestry error, malformed output and root commit parents where meaningful. No broad E2E suite, no new external dependencies, no generic VCS interface.
 
+## Transparency of Git executions
+
+- A helper must disclose every Git subprocess it launches and whether it can perform filesystem/network effects. Read-only inspection helpers must not implicitly fetch, update refs, repair worktrees, or spawn background Git commands.
+- Avoid hidden multi-command implementations for a formerly single-command observation unless required for correctness. Compare the number and kind of executed Git commands in representative read paths before and after; investigate and explicitly justify any increase. Use a lightweight spy on the existing Git execution seam or focused tests, not a new broad test harness.
+- Do not claim success from a reduced number of raw call sites if the new helpers add unexpected Git subprocesses. Record the static-to-semantic mapping and note any additional command executed internally.
+
 ## Acceptance
 
-Report categorized before/after raw read-call counts and examples of actual semantic duplication removed. The remaining *read-only* direct Git calls in `runtime.py` must be zero, except specifically justified exceptional owner-bound infrastructure not reasonably factored without worsening correctness. Preserve all admission, evidence, WAL and CAS invariants. Exact-checkpoint full pytest and Ruff green.
+Report categorized before/after raw read-call counts and examples of actual semantic duplication removed. The remaining *read-only* direct Git calls in `runtime.py` must be zero, except specifically justified exceptional owner-bound infrastructure not reasonably factored without worsening correctness. Preserve all admission, evidence, WAL and CAS invariants. No unaccounted extra Git subprocesses, implicit remote operations, or hidden mutations. Exact-checkpoint full pytest and Ruff green.
 
 The next stage, TASK-072, removes raw mutating Git command construction from `runtime.py`.
