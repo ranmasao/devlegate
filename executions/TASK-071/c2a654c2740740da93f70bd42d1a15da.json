@@ -1,0 +1,37 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "incomplete",
+  "control_head": "528d3ed9a70715eacf1cabe950dcb6c84dda5e67",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "c2a654c2740740da93f70bd42d1a15da",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete extraction of the remaining direct read-command construction in runtime.py; inventory still reports 78 explicit read subcommand arguments.",
+    "Investigate and fix the two full-suite drop-retirement replay failures in tests/test_cli_ipc.py.",
+    "Run the exact full pytest suite and Ruff after the remaining extraction and regression fixes."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete extraction of the remaining direct read-command construction in runtime.py; inventory still reports 78 explicit read subcommand arguments.",
+      "Investigate and fix the two full-suite drop-retirement replay failures in tests/test_cli_ipc.py.",
+      "Run the exact full pytest suite and Ruff after the remaining extraction and regression fixes."
+    ],
+    "report": null,
+    "summary": "Initialized owner-bound Git observation state before constructor validation, fixed repository-relative common-dir resolution, tightened missing-versus-observation failure handling, and added typed remote-ref, commit-range, and commit-change helpers. Added focused Git regressions for root parents, relative common dirs, and unreadable repository failures."
+  },
+  "workspace_head": "0688293f13283e3b4816338d4e7c7dec14ebea13"
+}
