@@ -1,0 +1,33 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "incomplete",
+  "control_head": "51b0d14b0a5d1cb66b44fce0cc766a614095b205",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "05f571e21f9e4e26932ec7491da1fad6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Re-run the full pytest suite in a provisioned environment containing the expected coverage package and repository .venv executables; the implementation itself is complete."
+  ],
+  "report_artifact": "executions/TASK-071/05f571e21f9e4e26932ec7491da1fad6.md",
+  "report_sha256": "23590b0022933e801d55399482d7500c1fa3344965ab7e395eb6e10eeff6d635",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Re-run the full pytest suite in a provisioned environment containing the expected coverage package and repository .venv executables; the implementation itself is complete."
+    ],
+    "report": "Runtime read-side Git construction is reduced to zero for the reviewed worktree and remote inspection exceptions. The full suite's remaining failures are environment setup failures: missing coverage and missing .venv/bin/python and .venv/bin/devlegate.",
+    "summary": "Fixed drop evidence pinning to distinguish an absent evidence ref from an existing commit, and extracted runtime worktree and remote inspection into typed Git helpers. Added strict worktree metadata validation and focused regression coverage while preserving owner-bound Git transport and fail-closed observation errors."
+  },
+  "workspace_head": "f91d66902b4602f061afbbaab9f28e1873730af9"
+}
