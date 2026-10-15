@@ -1,0 +1,35 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "incomplete",
+  "control_head": "491e902634ddedb0ff57ce2a183393a336012ff5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "2de154d82c314bab9e269aaf90db1f1a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Migrate the remaining direct read-only Git command construction in runtime.py, especially recovery, evidence, diff-tree, and ls-remote paths, until the direct read-call count is zero or each exception is explicitly justified.",
+    "Run the focused pytest suite, exact-checkpoint full pytest, and Ruff after provisioning the repository .venv."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Migrate the remaining direct read-only Git command construction in runtime.py, especially recovery, evidence, diff-tree, and ls-remote paths, until the direct read-call count is zero or each exception is explicitly justified.",
+      "Run the focused pytest suite, exact-checkpoint full pytest, and Ruff after provisioning the repository .venv."
+    ],
+    "report": null,
+    "summary": "Added a cohesive Git read layer with typed observation errors, branch/worktree/status/ref/range/ancestry/object helpers, and correct root-commit parent handling. Migrated the primary runtime observation, synchronization, lifecycle, workspace, and disposition paths and added focused Git failure tests."
+  },
+  "workspace_head": "f754e053b0e7718d1e3ff2d6329125f728128cf5"
+}
