@@ -41,3 +41,34 @@ Review of the exact published checkpoint `f754e053b0e7718d1e3ff2d6329125f728128c
 ### Review disposition
 
 Return `review → todo` for focused continuation. Do not accept/integrate `f754e053`. Do not clear the execution evidence, reset the implementation branch, or move work into TASK-072. The existing post-worker QA initiative is deferred and is **not** a new condition of this ticket.
+
+## Curator review — 2026-10-15: SECOND REWORK (execution c2a654c2740740da93f70bd42d1a15da)
+
+Exact reviewed checkpoint: `0688293f13283e3b4816338d4e7c7dec14ebea13`; predecessor `f754e053b0e7718d1e3ff2d6329125f728128cf5`. Preserve **both** immutable execution reports and the continuing feature-branch lineage. Worker again reported `incomplete` with unfinished extraction and tests. The new checkpoint fixes the mass constructor failure and relative common-dir handling, adds stricter missing-object/path handling and focused regressions. **Do not integrate.**
+
+### Authoritative CI failure
+
+[GitHub Actions run #38786925587](https://github.com/ranmasao/devlegate/actions/runs/38786925587), exactly at `0688293f`: **1208 passed, 13 failed, 1 skipped**, 0 setup errors; Ruff skipped because pytest failed. All 13 failures must be accounted for, not merely the two the worker observed locally.
+
+Affected tests (all failed on this exact SHA):
+
+- `tests/test_recovery_boundaries.py::test_workspace_inspection_allows_only_unattached_missing_branch_rebuild`: new Git observation path raises `AttributeError: 'Result' object has no attribute 'stderr'`; preserve the existing injected runner/test seam while keeping real errors fail-closed.
+- `tests/test_cli_ipc.py::test_real_service_drop_retire_old_lineage_and_runs_fresh[T-1]` and `[T-2]`: `drop requires a valid pending execution report` during hosted replay.
+- `tests/test_daemon_lifecycle.py::test_restart_after_drop_disposition_finishes_drop_without_lifecycle`: 4 failure variants (`after-evidence`, `after-disposition`, `after-remote`, `after-worktree`). First two leave stale `execution_id`; latter two report `published execution checkpoint does not match the execution branch`.
+- `tests/test_daemon_lifecycle.py::test_restart_recovers_dropped_submodule_worktree_without_lifecycle`: published execution checkpoint/branch replay failure.
+- `tests/test_daemon_cross_layer.py::test_drop_final_durable_boundaries_replay_without_active_state`: 2 variants (`after-clear`, `before-receipt`), refusing already-completed drop replay.
+- `tests/test_daemon_cross_layer.py::test_drop_retirement_workspace_error_does_not_kill_owner_loop`: `NoneType` subscript error in operator result flow.
+- `tests/test_control_scheduler.py::test_control_init_does_not_treat_remote_observation_failure_as_absence`: unexpected diagnostic contract for failed remote observation; preserve meaning and existing public error contract, not just string-match changes.
+- `tests/test_control_workspace.py::test_product_status_observation_failure_stops_lifecycle_before_checkpoint`: `GitObservationError` escapes instead of the expected safe reconciliation classification. Do not let a failed Git observation authorize any unsafe mutation.
+
+### Remaining work and reviewer-specific concerns
+
+1. **Fix the failing functional/recovery tests first**. Treat drop and restart replay as durability-critical, investigate shared root causes rather than weakening the tests or silently changing established state semantics. Test each intermediate crash boundary and the live owner/IPC path.
+2. **Finish direct read extraction**. Using the same narrow static call-site pattern as last review, direct explicit read-command calls in `runtime.py` fell from ~53 to ~47 (first checkpoint `f754e053` to current `0688293f`); the worker's broader inventory reports **78** remaining. These are different counting methods, but **both show the acceptance target is unmet**. Reconcile actual categories and owner-bound exceptions with a complete before/after inventory. Explicit remaining Git operations include `rev-parse`, `rev-list`, `show`, `log`, `ls-remote`, `diff-tree`, evidence and recovery checks. No forwarding-only methods or hidden subprocesses.
+3. **Check constructor failure path beyond the happy case**. Moving `_host_owner_thread_id` before `_validate()` removed the mass failure, but `_git_runtime()` still accesses `self._state` on unsuccessful Git commands; `_state` is not initialized until **after** `_validate()`. Ensure startup Git failure yields a meaningful typed/user-facing error rather than another `AttributeError`, while keeping owner protection after initialization.
+4. **Keep absent vs error fail-closed**. `git._is_missing_revision_error()` currently recognizes the unqualified substring `"missing"`; ensure an unrelated infrastructure error containing that word cannot become `None`/missing ref. Extend focused real/subprocess-compatible negative tests; preserve genuinely absent behavior for repos/refs/paths.
+5. Preserve existing shutdown, owner, WAL, CAS/lease, publication, submodule and report-provenance invariants; compare any new executed Git commands and effects explicitly. Run focused regressions and **green full pytest and Ruff at the exact final checkpoint**. Supply a categorized read-call inventory with justified exceptions. Do not move unfinished work to TASK-072.
+
+### Decision
+
+**REWORK: `review → todo` for the same TASK-071**. The branch/checkpoint is not accepted or integrated. QA remains deferred and is not a new condition. Correct regressions and complete existing acceptance criteria before resubmission.
