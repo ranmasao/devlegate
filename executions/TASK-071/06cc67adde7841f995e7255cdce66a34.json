@@ -1,0 +1,35 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "incomplete",
+  "control_head": "8f533f877cce8478f5d47dfa9d0b74ba799679a2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "06cc67adde7841f995e7255cdce66a34",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete extraction of the remaining 44 explicit read-command call sites from runtime.py into semantic Git-specific helpers.",
+    "Run the exact full suite in an environment providing the declared coverage dependency and .venv executables."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete extraction of the remaining 44 explicit read-command call sites from runtime.py into semantic Git-specific helpers.",
+      "Run the exact full suite in an environment providing the declared coverage dependency and .venv executables."
+    ],
+    "report": null,
+    "summary": "Hardened Git observation error handling, preserved injected runner seams, added typed arbitrary-object resolution for blob disposition refs, and fixed constructor/startup lifecycle access. Repaired drop/restart/recovery durability paths and fail-closed status/control observation behavior."
+  },
+  "workspace_head": "ccd30669fbde2309dc0a3c53771d116d1c71d8dd"
+}
