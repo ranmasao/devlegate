@@ -129,3 +129,38 @@ def test_is_ancestor_distinguishes_negative_answer_from_git_error(tmp_path):
         (tmp_path, ("merge-base", "--is-ancestor", "base", "no"), False),
         (tmp_path, ("merge-base", "--is-ancestor", "base", "broken"), False),
     ]
+
+
+def test_common_dir_resolves_relative_output_from_repository(tmp_path):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_runner(cwd, *args, check):
+        assert cwd == repo
+        return subprocess.CompletedProcess([], 0, ".git\n", "")
+
+    assert git.common_dir(repo, runner=fake_runner) == (repo / ".git").resolve()
+
+
+def test_read_object_does_not_treat_repository_failure_as_absence(tmp_path):
+    def fake_runner(cwd, *args, check):
+        return subprocess.CompletedProcess([], 128, "", "fatal: not a git repository")
+
+    try:
+        git.read_object(tmp_path, "missing", runner=fake_runner)
+    except git.GitObservationError as error:
+        assert "not a git repository" in str(error)
+    else:
+        raise AssertionError("repository failures must not look like missing objects")
+
+
+def test_read_path_does_not_treat_repository_failure_as_absence(tmp_path):
+    def fake_runner(cwd, *args, check):
+        return subprocess.CompletedProcess([], 128, "", "fatal: not a git repository")
+
+    try:
+        git.read_path(tmp_path, "HEAD", "file", runner=fake_runner)
+    except git.GitObservationError as error:
+        assert "not a git repository" in str(error)
+    else:
+        raise AssertionError("repository failures must not look like missing paths")

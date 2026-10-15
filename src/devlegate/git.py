@@ -44,13 +44,7 @@ def resolve_commit(
     )
     if result.returncode:
         detail = result.stderr.strip().lower()
-        missing = (
-            "unknown revision" in detail
-            or "ambiguous argument" in detail
-            or "bad object" in detail
-            or "needed a single revision" in detail
-            or detail == "missing"
-        )
+        missing = _is_missing_revision_error(detail)
         if missing:
             return None
         raise GitObservationError(
@@ -104,16 +98,7 @@ def commit_parents(
     result = runner(cwd, "rev-list", "--parents", "-n", "1", commit, check=False)
     if result.returncode:
         detail = result.stderr.strip().lower()
-        if any(
-            marker in detail
-            for marker in (
-                "unknown revision",
-                "ambiguous argument",
-                "bad object",
-                "needed a single revision",
-                "missing",
-            )
-        ):
+        if _is_missing_revision_error(detail):
             return None
         raise GitObservationError(
             f"cannot read parents for {commit!r}: "
@@ -177,7 +162,8 @@ def common_dir(
     value = result.stdout.strip()
     if not value:
         raise GitObservationError("Git returned an empty common directory")
-    return Path(value).resolve()
+    path = Path(value)
+    return (path if path.is_absolute() else cwd / path).resolve()
 
 
 def working_tree_status(
@@ -189,7 +175,8 @@ def working_tree_status(
     result = runner(cwd, "status", "--porcelain", check=False)
     if result.returncode:
         raise GitObservationError(
-            f"cannot observe working tree: {result.stderr.strip() or 'unknown Git error'}"
+            "cannot observe working tree: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
         )
     return result.stdout
 
@@ -210,6 +197,28 @@ def remote_exists(
         f"cannot observe Git remote {remote!r}: "
         f"{result.stderr.strip() or 'unknown Git error'}"
     )
+
+
+def remote_ref(
+    cwd: Path,
+    remote: str,
+    ref: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return a remote ref object name, or ``None`` when it is absent."""
+    result = runner(cwd, "ls-remote", remote, ref, check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot observe remote ref {ref!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    fields = result.stdout.split()
+    if not fields:
+        return None
+    if len(fields) != 2 or len(fields[0]) != 40:
+        raise GitObservationError("Git returned malformed remote ref output")
+    return fields[0]
 
 
 def commit_range(
@@ -234,6 +243,53 @@ def commit_range(
     if any(not value or len(value) != 40 for value in values):
         raise GitObservationError("Git returned malformed range output")
     return values
+
+
+def commit_changes(
+    cwd: Path,
+    commit: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, ...]:
+    """Return a commit's name-status changes without rename inference."""
+    result = runner(
+        cwd,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-status",
+        "--no-renames",
+        "-r",
+        commit,
+        check=False,
+    )
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect changes for {commit!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    return tuple(result.stdout.splitlines())
+
+
+def path_object(
+    cwd: Path,
+    commit: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return a path's blob/tree object name at a commit, or ``None`` absent."""
+    result = runner(cwd, "rev-parse", f"{commit}:{path}", check=False)
+    if result.returncode:
+        if result.returncode == 128 and _is_missing_path_error(result.stderr):
+            return None
+        raise GitObservationError(
+            f"cannot inspect {path!r} at {commit!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
+        raise GitObservationError("Git returned malformed path object output")
+    return value
 
 
 def ahead_behind(
@@ -272,14 +328,16 @@ def read_object(
     """Return an object's type and contents, or ``None`` when it is absent."""
     object_type = runner(cwd, "cat-file", "-t", object_id, check=False)
     if object_type.returncode:
-        if object_type.returncode == 128:
+        if object_type.returncode == 128 and _is_missing_object_error(
+            object_type.stderr
+        ):
             return None
         raise GitObservationError(
             f"cannot read Git object {object_id!r}: "
             f"{object_type.stderr.strip() or 'unknown Git error'}"
         )
     kind = object_type.stdout.strip()
-    if not kind:
+    if kind not in {"blob", "tree", "commit", "tag"}:
         raise GitObservationError("Git returned an empty object type")
     content = runner(cwd, "cat-file", "-p", object_id, check=False)
     if content.returncode:
@@ -300,10 +358,43 @@ def read_path(
     """Read a path from a commit, returning ``None`` when it is absent."""
     result = runner(cwd, "show", f"{commit}:{path}", check=False)
     if result.returncode:
-        if result.returncode == 128:
+        if result.returncode == 128 and _is_missing_path_error(result.stderr):
             return None
         raise GitObservationError(
             f"cannot read {path!r} at {commit!r}: "
             f"{result.stderr.strip() or 'unknown Git error'}"
         )
     return result.stdout
+
+
+def _is_missing_revision_error(detail: str) -> bool:
+    """Recognize Git's revision lookup failures, not repository failures."""
+    if "not a git repository" in detail or "cannot open" in detail:
+        return False
+    return any(
+        marker in detail
+        for marker in (
+            "unknown revision",
+            "ambiguous argument",
+            "bad object",
+            "needed a single revision",
+            "not a valid object name",
+            "missing",
+        )
+    )
+
+
+def _is_missing_object_error(detail: str) -> bool:
+    normalized = detail.strip().lower()
+    if "not a git repository" in normalized or "cannot open" in normalized:
+        return False
+    return "not a valid object name" in normalized or "bad object" in normalized
+
+
+def _is_missing_path_error(detail: str) -> bool:
+    normalized = detail.strip().lower()
+    if "not a git repository" in normalized or "cannot open" in normalized:
+        return False
+    return (
+        "path '" in normalized and "does not exist" in normalized
+    ) or "exists on disk, but not in" in normalized

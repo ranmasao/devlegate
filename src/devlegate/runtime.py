@@ -45,12 +45,15 @@ from devlegate.git import (
     GitObservationError,
     ahead_behind,
     branch_name,
-    common_dir,
+    commit_changes,
     commit_parents,
+    commit_range,
+    common_dir,
     is_ancestor,
     read_object,
     read_path,
     remote_exists,
+    remote_ref,
     resolve_commit,
     run_git,
     working_tree_status,
@@ -761,6 +764,9 @@ class ServiceEngine:
             show_worker_output=show_worker_output,
         )
         self._owned_execution_id: str | None = None
+        # Git observation helpers are used during startup validation.  Keep
+        # their owner and interruption state valid before validation begins.
+        self._host_owner_thread_id: int | None = None
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
@@ -768,7 +774,6 @@ class ServiceEngine:
         self._published_live_execution: dict[str, object] | None = None
         self._published_retry_candidates: tuple[dict[str, str], ...] = ()
         self._published_drop_candidates: tuple[dict[str, str], ...] = ()
-        self._host_owner_thread_id: int | None = None
         self._automatic_drop_recovery_execution: str | None = None
         self._published_snapshot = ServiceSnapshot(
             lifecycle="initialized",
@@ -2571,6 +2576,9 @@ class ServiceEngine:
         """Observe porcelain status through the runtime interruption seam."""
         return working_tree_status(repo, runner=self._git_runtime)
 
+    def _remote_exists_runtime(self, repo: Path, remote: str) -> bool:
+        return remote_exists(repo, remote, runner=self._git_runtime)
+
     def _ahead_behind_runtime(
         self, repo: Path, local: str, remote: str
     ) -> tuple[int, int]:
@@ -2686,7 +2694,9 @@ class ServiceEngine:
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
             )
-        if not self.read_only and not remote_exists(self.repo, self.remote_name, runner=_git):
+        if not self.read_only and not self._remote_exists_runtime(
+            self.repo, self.remote_name
+        ):
             raise DevlegateError(f"git remote not found: {self.remote_name}")
         if not self.read_only:
             self._validate_state_access()
@@ -2723,21 +2733,18 @@ class ServiceEngine:
 
     def _control_remote_exists(self) -> bool:
         """Observe the control ref without conflating transport failure and absence."""
-        observed = _git(
-            self.repo,
-            "ls-remote",
-            "--heads",
-            self.remote_name,
-            f"refs/heads/{self.control_branch}",
-            check=False,
-        )
-        if observed.returncode:
-            detail = observed.stderr.strip() or "remote could not be observed"
-            raise DevlegateError(
-                f"cannot observe control branch {self.control_branch!r} on "
-                f"remote {self.remote_name}: {detail}"
+        try:
+            return (
+                remote_ref(
+                    self.repo,
+                    self.remote_name,
+                    f"refs/heads/{self.control_branch}",
+                    runner=self._git_runtime,
+                )
+                is not None
             )
-        return bool(observed.stdout.strip())
+        except GitObservationError as error:
+            raise DevlegateError(str(error)) from error
 
     def _attach_existing_control(self) -> dict[str, object]:
         fetch = _git(
@@ -5105,19 +5112,15 @@ class ServiceEngine:
             raise DevlegateError("execution branch remote changed during publication")
 
     def _execution_remote_head(self, branch: str) -> str | None:
-        remote = _git(
-            self.repo,
-            "ls-remote",
-            self.remote_name,
-            f"refs/heads/{branch}",
-            check=False,
-        )
-        if remote.returncode:
-            raise DevlegateError(
-                remote.stderr.strip() or "cannot observe execution branch remote"
+        try:
+            return remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{branch}",
+                runner=self._git_runtime,
             )
-        fields = remote.stdout.split()
-        return fields[0] if fields else None
+        except GitObservationError as error:
+            raise DevlegateError(str(error)) from error
 
     def _accepted_execution_report(self, ticket_id: str) -> ExecutionReport:
         root = self.control_worktree / "executions" / ticket_id
@@ -5502,16 +5505,15 @@ class ServiceEngine:
             ):
                 return "local_exact_unpublished", local_head
             return "ambiguous", None
-        lineage = _git(
-            self.control_worktree,
-            "rev-list",
-            "--reverse",
-            f"{expected_parent}..{remote_head}",
-            check=False,
-        )
-        if lineage.returncode:
+        try:
+            descendants = commit_range(
+                self.control_worktree,
+                f"{expected_parent}..{remote_head}",
+                reverse=True,
+                runner=self._git_runtime,
+            )
+        except GitObservationError:
             return "ambiguous", None
-        descendants = lineage.stdout.splitlines()
         if not descendants:
             return "ambiguous", None
         candidate = descendants[0]
@@ -5527,21 +5529,17 @@ class ServiceEngine:
         parents = commit_parents(self.control_worktree, commit, runner=_git)
         if parents is None or not parents or parents[0] != expected_parent:
             return False
-        names = _git(
-            self.control_worktree,
-            "diff-tree",
-            "--no-commit-id",
-            "--name-status",
-            "--no-renames",
-            "-r",
-            commit,
-            check=False,
-        )
         expected = {
             f"D\t{self.accepted_path}/{ticket_id}.md",
             f"A\t{self.done_path}/{ticket_id}.md",
         }
-        if names.returncode or set(names.stdout.splitlines()) != expected:
+        try:
+            names = commit_changes(
+                self.control_worktree, commit, runner=self._git_runtime
+            )
+        except GitObservationError:
+            return False
+        if set(names) != expected:
             return False
         before = _git(
             self.control_worktree,
@@ -6189,14 +6187,16 @@ class ServiceEngine:
         )
         if parents.returncode or len(parents.stdout.split()) != 2:
             return False
-        lineage = _git(
-            workspace.path,
-            "rev-list",
-            "--reverse",
-            f"{start_head}..{commit}",
-            check=False,
-        )
-        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+        try:
+            lineage = commit_range(
+                workspace.path,
+                f"{start_head}..{commit}",
+                reverse=True,
+                runner=self._git_runtime,
+            )
+        except GitObservationError:
+            return False
+        if lineage != (commit,):
             return False
         return not workspace.dirty
 
@@ -6236,14 +6236,16 @@ class ServiceEngine:
         if parents is None or len(parents) != 1:
             return False
         parent_head = parents[0]
-        lineage = _git(
-            self.control_worktree,
-            "rev-list",
-            "--reverse",
-            f"{parent_head}..{commit}",
-            check=False,
-        )
-        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+        try:
+            lineage = commit_range(
+                self.control_worktree,
+                f"{parent_head}..{commit}",
+                reverse=True,
+                runner=self._git_runtime,
+            )
+        except GitObservationError:
+            return False
+        if lineage != (commit,):
             return False
         try:
             lineage_ancestor = is_ancestor(
