@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a3b39eed7e114263a443b018e2ad621af648cbc7",
+  "conclusion": "completed",
+  "control_head": "3f538ec7100ac8c9ad2a7163f611941547b2bc75",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-066",
+  "execution_id": "bf6a9b0cb1cc4cd29789a945f6de9403",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-066",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-066/bf6a9b0cb1cc4cd29789a945f6de9403.md",
+  "report_sha256": "fca630ff6f2f4bf6171e36f9453413455dd429c4618df36b2c6d8ad2775a24b1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-066",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused log-reader tests and adjacent CLI/logging tests pass, Ruff and diff checks pass. The full pytest run exceeded the 10-minute timeout after partial progress without reporting a failure before termination.",
+    "summary": "Prefix execution lookup now enumerates candidate identities without parsing unrelated reports, then validates only the unique requested report while preserving active-execution precedence. Requested report handling now fails closed for dangling symlinks, unsafe directories, malformed content, and other read errors; focused regression tests were added."
+  },
+  "workspace_head": "d9e17f285da91419cbaed76473dc77faed9f2ca5"
+}
