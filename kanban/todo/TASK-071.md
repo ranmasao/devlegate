@@ -91,3 +91,22 @@ The ticket's central goal is unfinished: raw read-only Git command construction 
 ### Disposition
 
 **REWORK: review → todo**. Keep the same ticket, execution reports and feature-branch lineage. Do not integrate the incomplete checkpoint; no branch reset or destructive cleanup.
+
+## Curator review — 2026-10-16: FOURTH REWORK (execution 9ac872aafdbf47028fba746d4d881cbc)
+
+**Review target:** exact candidate `91de5c30f4b46a89063fe325773b13df728cb31e`, one commit after `ccd30669fbde2309dc0a3c53771d116d1c71d8dd`; product base remains `507da8f926f92cd3be25ab97b5c382b74bdb78b5`. **Do not accept or integrate.** Keep all existing checkpoint commits and execution evidence for the same ticket.
+
+### Positive findings
+
+This checkpoint extracts essentially all formerly direct `rev-parse`, `rev-list`, `show`, `log`, `diff`, `ls-remote`, `merge-base` and `diff-tree` calls from `runtime.py` to coherent Git-specific semantic primitives. No speculative multi-VCS abstraction. The new execution report still correctly says `incomplete`.
+
+### Blocking findings (exact checkpoint)
+
+1. **Concrete runtime regression in drop evidence pinning.** `src/devlegate/runtime.py`, `_pin_drop_evidence()` (~5612–5616): `observed = resolve_commit(...)` has type `str | None`, yet `if observed.returncode:` treats it as a `CompletedProcess`. For both present and absent evidence this produces `AttributeError` during durable drop/restart replay. Correct the condition semantically (create an absent ref only under the existing safe ownership/provenance checks, reject a mismatching existing ref); retain existing idempotent pin/disposition semantics and do not weaken CAS. This is a source-confirmed bug, not a flaky assertion.
+2. **Authoritative CI is red.** [CI #38815930732](https://github.com/ranmasao/devlegate/actions/runs/38815930732) at `91de5c30`: **1210 passed, 11 failed, 1 skipped, 1 warning**; Ruff was skipped after pytest failed. Seven failures are in `tests/test_daemon_lifecycle.py` (four crash boundaries and submodule) and `tests/test_daemon_cross_layer.py` (two replay boundaries), all exercising durable `drop`; two more in hosted IPC `test_real_service_drop_retire_old_lineage_and_runs_fresh[T-1/T-2]`; another in `test_drop_retirement_workspace_error_does_not_kill_owner_loop`. These are safety-critical regression paths. Fix the concrete typed-result bug above, then verify the remaining drop/IPC cases with explicit successful admission/replay results rather than making the tests accept protocol errors. The eleventh failure is `test_real_cli_force_restart_escalates_existing_graceful_lifecycle`, which timed out on the expected `operator_abort` state; independently investigate/reproduce, and only classify as flaky with evidence. Do not ignore it.
+3. **Read-only extraction is not strictly zero.** A semantic audit of the remaining raw calls in `runtime.py` finds **two** `git worktree list --porcelain` constructions (~2661 and ~2795), plus **one** `git remote get-url` (~8781). These are read operations despite their top-level subcommand names. Replace with cohesive typed inspection helpers (preserve worktree identity/registration validation and owner transport) or document and justify each unavoidable exception against this ticket's explicit admission criteria. The superficial regex count for top-level read subcommands is not sufficient.
+4. **Verification and evidence.** Provide complete before/after read-call inventory including nested subcommands, actual executed Git-process/effect traces, and justification of exceptions. Add focused failure/negative regression for `_pin_drop_evidence` using `None` and existing SHA, along with the existing crash/restart/IPC tests. Run full exact-checkpoint pytest **and Ruff** after corrections. This latest commit modified only `git.py` and `runtime.py`, with no accompanying new focused test changes; ensure the newly added observation helpers' typed contracts are covered. Avoid hidden Git subprocesses or mutations inside read helpers.
+
+### Disposition
+
+**REWORK: `review → todo` (same TASK-071).** The code extraction is close but the current candidate fails durability and the strict structural acceptance criteria. QA remains deferred and is not introduced here. Preserve all checkpoints, prior execution reports, and the work branch. Human acceptance remains pending after the next review; do not promote the ticket to `accepted` automatically.
