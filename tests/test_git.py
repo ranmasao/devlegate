@@ -86,6 +86,28 @@ def test_commit_parents_normalizes_parent_list_and_failures(tmp_path):
     ]
 
 
+def test_commit_parents_returns_empty_tuple_for_root_commit(tmp_path):
+    def fake_runner(cwd, *args, check):
+        return subprocess.CompletedProcess([], 0, "root\n", "")
+
+    assert git.commit_parents(tmp_path, "root", runner=fake_runner) == ()
+
+
+def test_resolve_commit_distinguishes_missing_revision_from_git_failure(tmp_path):
+    def fake_runner(cwd, *args, check):
+        if args[-1] == "missing^{commit}":
+            return subprocess.CompletedProcess([], 128, "", "unknown revision")
+        return subprocess.CompletedProcess([], 128, "", "fatal: repository unreadable")
+
+    assert git.resolve_commit(tmp_path, "missing", runner=fake_runner) is None
+    try:
+        git.resolve_commit(tmp_path, "broken", runner=fake_runner)
+    except git.GitObservationError as error:
+        assert "repository unreadable" in str(error)
+    else:
+        raise AssertionError("Git observation failures must not look like missing refs")
+
+
 def test_is_ancestor_distinguishes_negative_answer_from_git_error(tmp_path):
     calls = []
 

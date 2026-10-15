@@ -42,10 +42,19 @@ from devlegate.execution_workspace import (
 )
 from devlegate.git import (
     GitAncestryError,
+    GitObservationError,
+    ahead_behind,
+    branch_name,
+    common_dir,
     commit_parents,
     is_ancestor,
+    read_object,
+    read_path,
+    remote_exists,
     resolve_commit,
     run_git,
+    working_tree_status,
+    worktree_root,
 )
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
@@ -660,7 +669,10 @@ def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
     """Prove that two distinct commits are single-parent replacements."""
     parent_map: dict[str, tuple[str, ...]] = {}
     for commit in (original, target):
-        parents = commit_parents(repo, commit, runner=_git)
+        try:
+            parents = commit_parents(repo, commit, runner=_git)
+        except GitObservationError:
+            return False
         if parents is None:
             return False
         parent_map[commit] = parents
@@ -2551,6 +2563,22 @@ class ServiceEngine:
         """Resolve one commit through the runtime Git interruption seam."""
         return resolve_commit(repo, revision, runner=self._git_runtime)
 
+    def _branch_runtime(self, repo: Path) -> str | None:
+        """Observe the branch through the runtime interruption seam."""
+        return branch_name(repo, runner=self._git_runtime)
+
+    def _status_runtime(self, repo: Path) -> str:
+        """Observe porcelain status through the runtime interruption seam."""
+        return working_tree_status(repo, runner=self._git_runtime)
+
+    def _ahead_behind_runtime(
+        self, repo: Path, local: str, remote: str
+    ) -> tuple[int, int]:
+        return ahead_behind(repo, local, remote, runner=self._git_runtime)
+
+    def _worktree_root_runtime(self, repo: Path) -> Path:
+        return worktree_root(repo, runner=self._git_runtime)
+
     def _is_ancestor_runtime(
         self, repo: Path, ancestor: str, descendant: str
     ) -> bool:
@@ -2609,25 +2637,19 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "control path is not a registered Git worktree for this repository"
             )
-        root = self._git_runtime(
-            self.control_worktree, "rev-parse", "--show-toplevel", check=False
-        )
-        if (
-            root.returncode
-            or Path(root.stdout.strip()).resolve() != self.control_worktree.resolve()
-        ):
+        try:
+            root = self._worktree_root_runtime(self.control_worktree)
+        except GitObservationError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        if root != self.control_worktree.resolve():
             raise WorkflowBlockedError(
                 "control worktree does not resolve to its configured checkout"
             )
-        branch = self._git_runtime(
-            self.control_worktree,
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "HEAD",
-            check=False,
-        )
-        if branch.returncode or branch.stdout.strip() != self.control_branch:
+        try:
+            branch = self._branch_runtime(self.control_worktree)
+        except GitObservationError as error:
+            raise WorkflowBlockedError(str(error)) from error
+        if branch != self.control_branch:
             raise WorkflowBlockedError(
                 f"control worktree is not on configured branch {self.control_branch}"
             )
@@ -2649,15 +2671,13 @@ class ServiceEngine:
                 raise DevlegateError(
                     f"OpenCode executable not found: {self.opencode_bin}"
                 )
-        branch = _git(
-            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
-        if branch.returncode:
+        try:
+            self.current_branch = self._branch_runtime(self.repo)
+        except GitObservationError as error:
+            raise DevlegateError(str(error)) from error
+        if self.current_branch is None:
             if not self.read_only:
                 raise DevlegateError("detached HEAD is not supported")
-            self.current_branch = None
-        else:
-            self.current_branch = branch.stdout.strip()
         self.remote_branch = self.remote_branch or self.current_branch or ""
         if not self.read_only and (
             self.current_branch is None or self.current_branch != self.remote_branch
@@ -2666,12 +2686,7 @@ class ServiceEngine:
                 f"current branch '{self.current_branch}' does not match "
                 f"REMOTE_BRANCH '{self.remote_branch}'"
             )
-        if (
-            not self.read_only
-            and _git(
-                self.repo, "remote", "get-url", self.remote_name, check=False
-            ).returncode
-        ):
+        if not self.read_only and not remote_exists(self.repo, self.remote_name, runner=_git):
             raise DevlegateError(f"git remote not found: {self.remote_name}")
         if not self.read_only:
             self._validate_state_access()
@@ -2687,23 +2702,15 @@ class ServiceEngine:
     def _assert_product_checkout_unchanged(
         self, expected_branch: str | None, expected_head: str
     ) -> None:
-        branch_result = _git(
-            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
-        observed_branch = (
-            branch_result.stdout.strip() if branch_result.returncode == 0 else None
-        )
-        head_result = _git(self.repo, "rev-parse", "HEAD", check=False)
-        observed_head = (
-            head_result.stdout.strip() if head_result.returncode == 0 else None
-        )
-        status_result = _git(self.repo, "status", "--porcelain", check=False)
-        if status_result.returncode:
+        try:
+            observed_branch = self._branch_runtime(self.repo)
+            observed_head = self._resolve_commit_runtime(self.repo, "HEAD")
+            status = self._status_runtime(self.repo)
+        except GitObservationError as error:
             raise DevlegateError(
                 "cannot verify product checkout after worker execution; "
                 "execution isolation cannot be proven"
-            )
-        status = status_result.stdout
+            ) from error
         if (
             observed_branch != expected_branch
             or observed_head != expected_head
@@ -3419,23 +3426,23 @@ class ServiceEngine:
     def _log_sync_failure(
         self, local_head: str, remote_ref: str, stderr: str = ""
     ) -> None:
-        remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
-        remote_head = remote_result.stdout.strip() or "<unknown>"
+        try:
+            observed_remote = self._resolve_commit_runtime(self.repo, remote_ref)
+            remote_head = observed_remote or "<unknown>"
+        except GitObservationError:
+            remote_head = "<unknown>"
         base_result = _git(
             self.repo, "merge-base", local_head, remote_head, check=False
         )
         merge_base = base_result.stdout.strip() or "<none>"
-        counts_result = _git(
-            self.repo,
-            "rev-list",
-            "--left-right",
-            "--count",
-            f"{local_head}...{remote_head}",
-            check=False,
-        )
-        counts = counts_result.stdout.strip().split()
-        ahead = counts[0] if len(counts) == 2 else "unknown"
-        behind = counts[1] if len(counts) == 2 else "unknown"
+        try:
+            ahead_count, behind_count = self._ahead_behind_runtime(
+                self.repo, local_head, remote_head
+            )
+            ahead = str(ahead_count)
+            behind = str(behind_count)
+        except GitObservationError:
+            ahead = behind = "unknown"
         if ahead != "unknown" and behind != "unknown":
             if ahead != "0" and behind != "0":
                 classification = "histories have diverged"
@@ -3564,14 +3571,12 @@ class ServiceEngine:
                 ticket_id, execution_id, observed_head
             )
             return 0
-        branch = self._git_runtime(
-            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
-        if branch.returncode:
+        branch = self._branch_runtime(self.repo)
+        if branch is None:
             raise WorkflowBlockedError(
                 f"current checkout is detached; expected branch '{self.current_branch}'"
             )
-        actual_branch = branch.stdout.strip()
+        actual_branch = branch
         if actual_branch != self.current_branch:
             raise WorkflowBlockedError(
                 f"current checkout branch '{actual_branch}' does not match "
@@ -3639,7 +3644,7 @@ class ServiceEngine:
                     "explicit retry cannot also authorize automatic resume"
                 )
             authorization = ExecutionAuthorization(automatic_ticket, "automatic_resume")
-        status = self._git_runtime(self.repo, "status", "--porcelain").stdout
+        status = self._status_runtime(self.repo)
         dirty_changed = self._observe_worktree(status)
         if status:
             if dirty_changed:
@@ -3652,7 +3657,9 @@ class ServiceEngine:
         control_head, control_remote_head = self._sync_control()
         if self._stop_before_admission() and initial_phase != "merge_pending":
             return 0
-        local_head = self._git_runtime(self.repo, "rev-parse", "HEAD").stdout.strip()
+        local_head = self._resolve_commit_runtime(self.repo, "HEAD")
+        if local_head is None:
+            raise WorkflowBlockedError("local HEAD could not be resolved")
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
         state_phase = self._state.get("phase")
         pending_sync = state_phase in {"agent_pending", "merge_pending"}
@@ -4761,12 +4768,12 @@ class ServiceEngine:
                 "zero-delta execution workspace topology is ambiguous"
             )
         local_ref = f"refs/heads/{report.execution_branch}"
-        local = _git(self.repo, "rev-parse", "--verify", local_ref, check=False)
-        if local.returncode == 0 and local.stdout.strip() != checkpoint:
+        local_head = self._resolve_commit_runtime(self.repo, local_ref)
+        if local_head is not None and local_head != checkpoint:
             raise WorkflowBlockedError(
                 "zero-delta execution branch changed before retirement"
             )
-        if local.returncode == 0:
+        if local_head is not None:
             removed = _git(
                 self.repo, "branch", "-D", report.execution_branch, check=False
             )
@@ -5040,9 +5047,7 @@ class ServiceEngine:
                 f"expected path {manager.path}"
             )
         workspace = manager.prepare(base_head)
-        current_control = _git(
-            self.control_worktree, "rev-parse", "HEAD"
-        ).stdout.strip()
+        current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
             raise ExecutionWorkspaceError(
                 "control revision changed during workspace preparation; refusing "
@@ -5056,7 +5061,7 @@ class ServiceEngine:
         checkpoint_head: str,
         expected_remote_head: str | None,
     ) -> None:
-        observed = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        observed = self._resolve_commit_runtime(workspace.path, "HEAD")
         if observed != checkpoint_head:
             raise DevlegateError("execution HEAD changed before branch publication")
         observed_remote_head = self._execution_remote_head(workspace.branch)
@@ -5342,11 +5347,11 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "published product checkpoint could not be proven"
             )
-        current = _git(self.repo, "rev-parse", "HEAD", check=False)
-        status = _git(self.repo, "status", "--porcelain", check=False)
-        if current.returncode or status.returncode or status.stdout:
+        current = self._resolve_commit_runtime(self.repo, "HEAD")
+        status = self._status_runtime(self.repo)
+        if status:
             raise WorkflowBlockedError("product checkout is not safely synchronized")
-        if current.stdout.strip() != checkpoint:
+        if current != checkpoint:
             fetch = _git(
                 self.repo,
                 "fetch",
@@ -5380,7 +5385,7 @@ class ServiceEngine:
         return self._complete_accepted(ticket_id, expected_head)
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
-        current = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        current = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if not _is_git_identity(expected_head):
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
@@ -5445,7 +5450,9 @@ class ServiceEngine:
             raise DevlegateError(
                 commit.stderr.strip() or "cannot create control transition"
             )
-        commit_head = _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        commit_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+        if commit_head is None:
+            raise WorkflowBlockedError("created control transition has no HEAD")
         if not self._accepted_integration_commit_is_exact(
             commit_head, ticket_id, expected_head
         ):
@@ -5570,18 +5577,14 @@ class ServiceEngine:
         self, ticket_id: str, execution_id: str
     ) -> dict[str, object] | None:
         ref = self._drop_disposition_ref(ticket_id, execution_id)
-        resolved = _git(self.repo, "rev-parse", "--verify", ref, check=False)
-        if resolved.returncode:
+        object_id = resolve_commit(self.repo, ref, runner=_git)
+        if object_id is None:
             return None
-        object_id = resolved.stdout.strip()
-        object_type = _git(self.repo, "cat-file", "-t", object_id, check=False)
-        if object_type.returncode or object_type.stdout.strip() != "blob":
+        object = read_object(self.repo, object_id, runner=_git)
+        if object is None or object[0] != "blob":
             raise DevlegateError("drop disposition ref does not point to a blob")
-        content = _git(self.repo, "cat-file", "-p", object_id, check=False)
-        if content.returncode:
-            raise DevlegateError("drop disposition blob is unavailable")
         try:
-            value = json.loads(content.stdout)
+            value = json.loads(object[1])
         except json.JSONDecodeError as error:
             raise DevlegateError("drop disposition blob is invalid") from error
         if not isinstance(value, dict):
@@ -5866,10 +5869,10 @@ class ServiceEngine:
                 f"cannot retire execution worktree: {error}"
             ) from error
         local_ref = f"refs/heads/{report.execution_branch}"
-        local = _git(self.repo, "rev-parse", "--verify", local_ref, check=False)
-        if local.returncode == 0 and local.stdout.strip() != expected:
+        local_head = self._resolve_commit_runtime(self.repo, local_ref)
+        if local_head is not None and local_head != expected:
             raise DevlegateError("local execution branch changed before drop")
-        if local.returncode == 0:
+        if local_head is not None:
             removed = _git(
                 self.repo, "branch", "-D", report.execution_branch, check=False
             )
@@ -5896,14 +5899,14 @@ class ServiceEngine:
         self._save_state("idle", clear_execution=True)
 
     def _observe_product_generation(self, admitted_head: str) -> dict[str, object]:
-        branch_result = _git(
-            self.repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
-        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else None
-        head_result = _git(self.repo, "rev-parse", "HEAD", check=False)
-        local_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
-        status_result = _git(self.repo, "status", "--porcelain", check=False)
-        dirty = bool(status_result.stdout) if status_result.returncode == 0 else True
+        try:
+            branch = self._branch_runtime(self.repo)
+            local_head = self._resolve_commit_runtime(self.repo, "HEAD") or ""
+            dirty = bool(self._status_runtime(self.repo))
+        except GitObservationError:
+            branch = None
+            local_head = ""
+            dirty = True
         fetch = _git(
             self.repo,
             "fetch",
@@ -5912,18 +5915,13 @@ class ServiceEngine:
             self.remote_branch,
             check=False,
         )
-        remote_result = _git(
-            self.repo,
-            "rev-parse",
-            "--verify",
-            f"{self.remote_name}/{self.remote_branch}",
-            check=False,
-        )
         remote_head = (
-            remote_result.stdout.strip()
-            if fetch.returncode == 0 and remote_result.returncode == 0
-            else ""
-        )
+            self._resolve_commit_runtime(
+                self.repo, f"{self.remote_name}/{self.remote_branch}"
+            )
+            if fetch.returncode == 0
+            else None
+        ) or ""
         branch_ok = branch == self.current_branch
         observation = []
         if not branch_ok:
@@ -6139,29 +6137,26 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "cannot validate staged execution rewrite worktree binding"
             )
-        common = _git(manager.path, "rev-parse", "--git-common-dir", check=False)
-        root = _git(manager.path, "rev-parse", "--show-toplevel", check=False)
-        expected_common = _git(self.repo, "rev-parse", "--git-common-dir", check=False)
-        branch_name = _git(
-            manager.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
+        try:
+            common = common_dir(manager.path, runner=_git)
+            root = worktree_root(manager.path, runner=_git)
+            expected_common = common_dir(self.repo, runner=_git)
+            observed_branch = branch_name(manager.path, runner=_git)
+        except GitObservationError as error:
+            raise WorkflowBlockedError(str(error)) from error
         if (
-            common.returncode
-            or root.returncode
-            or expected_common.returncode
-            or Path(root.stdout.strip()).resolve() != manager.path.resolve()
-            or branch_name.returncode
-            or branch_name.stdout.strip() != manager.branch
+            common != expected_common
+            or root != manager.path.resolve()
+            or observed_branch != manager.branch
         ):
             raise WorkflowBlockedError(
                 "staged execution rewrite worktree binding is invalid"
             )
-        head = _git(manager.path, "rev-parse", "HEAD", check=False)
-        status = _git(manager.path, "status", "--porcelain", check=False)
+        head_value = resolve_commit(manager.path, "HEAD", runner=_git)
+        status_value = working_tree_status(manager.path, runner=_git)
         if (
-            head.returncode
-            or status.returncode
-            or registration.get("head") != head.stdout.strip()
+            head_value is None
+            or registration.get("head") != head_value
         ):
             raise WorkflowBlockedError(
                 "cannot observe staged execution rewrite worktree"
@@ -6170,9 +6165,9 @@ class ServiceEngine:
             ticket_id=manager.ticket_id,
             branch=manager.branch,
             path=manager.path,
-            head=head.stdout.strip(),
+            head=head_value,
             base_head=str(self._state.get("execution_base_head", "")),
-            dirty=bool(status.stdout),
+            dirty=bool(status_value),
         )
 
     def _checkpoint_commit_is_exact(
@@ -6221,11 +6216,11 @@ class ServiceEngine:
         self, commit: str, report: ExecutionReport
     ) -> ExecutionReport | None:
         path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        shown = _git(self.control_worktree, "show", f"{commit}:{path}", check=False)
-        if shown.returncode:
+        shown = read_path(self.control_worktree, commit, path, runner=_git)
+        if shown is None:
             return None
         try:
-            recovered = ExecutionReport.from_dict(json.loads(shown.stdout))
+            recovered = ExecutionReport.from_dict(json.loads(shown))
         except (ExecutionReportError, json.JSONDecodeError):
             return None
         return recovered if recovered.as_dict() == report.as_dict() else None
@@ -6237,10 +6232,10 @@ class ServiceEngine:
         *,
         apply_conclusion: bool = True,
     ) -> bool:
-        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
-        if parent.returncode:
+        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        if parents is None or len(parents) != 1:
             return False
-        parent_head = parent.stdout.strip()
+        parent_head = parents[0]
         lineage = _git(
             self.control_worktree,
             "rev-list",
@@ -6331,10 +6326,10 @@ class ServiceEngine:
         *,
         apply_conclusion: bool = True,
     ) -> None:
-        parent = _git(self.control_worktree, "rev-parse", f"{commit}^", check=False)
-        if parent.returncode:
+        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        if parents is None or len(parents) != 1:
             raise WorkflowBlockedError("unpublished lifecycle parent is unavailable")
-        parent_head = parent.stdout.strip()
+        parent_head = parents[0]
         try:
             parent_on_remote = is_ancestor(
                 self.control_worktree, parent_head, remote_head, runner=_git
@@ -6502,7 +6497,7 @@ class ServiceEngine:
             raise DevlegateError(
                 committed.stderr.strip() or "cannot create control-plane commit"
             )
-        return _git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        return self._resolve_commit_runtime(self.control_worktree, "HEAD") or ""
 
     def _apply_execution_lifecycle(
         self,
@@ -6519,7 +6514,7 @@ class ServiceEngine:
             self._report_matches_execution_state(report)
         self._validate_control_worktree()
         for _attempt in range(3):
-            status = _git(self.control_worktree, "status", "--porcelain").stdout
+            status = self._status_runtime(self.control_worktree)
             if status:
                 raise WorkflowBlockedError("control working tree is dirty")
             fetched = _git(
@@ -7046,23 +7041,20 @@ class ServiceEngine:
         return state, fingerprint
 
     def _git_observation(self, repo: Path, remote_branch: str) -> GitObservation:
-        branch_result = self._git_runtime(
-            repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-        )
-        detached = branch_result.returncode != 0
-        branch = branch_result.stdout.strip() if not detached else None
-        local_head = self._git_runtime(repo, "rev-parse", "HEAD").stdout.strip()
+        branch = self._branch_runtime(repo)
+        detached = branch is None
+        local_head = self._resolve_commit_runtime(repo, "HEAD")
+        if local_head is None:
+            raise GitObservationError("Git could not resolve HEAD")
         remote_ref = f"{self.remote_name}/{remote_branch}"
-        remote_result = self._git_runtime(
-            repo, "rev-parse", "--verify", remote_ref, check=False
-        )
-        status = self._git_runtime(repo, "status", "--porcelain").stdout
+        remote_head = self._resolve_commit_runtime(repo, remote_ref)
+        status = self._status_runtime(repo)
         return GitObservation(
             branch,
             detached,
             local_head,
             remote_ref,
-            remote_result.stdout.strip() if remote_result.returncode == 0 else None,
+            remote_head,
             not bool(status),
             _status_fingerprint(status),
         )
@@ -8144,8 +8136,7 @@ class ServiceEngine:
         return _is_same_parent_replacement(self.repo, base, target)
 
     def reconciliation_evidence_matches(self, reference: str, checkpoint: str) -> bool:
-        result = _git(self.repo, "rev-parse", "--verify", reference, check=False)
-        return result.returncode == 0 and result.stdout.strip() == checkpoint
+        return self._resolve_commit_runtime(self.repo, reference) == checkpoint
 
     def reconciliation_workspace_binding(
         self, ticket_id: str, value: dict[str, object]
@@ -8205,8 +8196,8 @@ class ServiceEngine:
             check=False,
         )
         if pinned.returncode:
-            existing = _git(self.repo, "rev-parse", "--verify", reference, check=False)
-            if existing.returncode or existing.stdout.strip() != rewritten_head:
+            existing = self._resolve_commit_runtime(self.repo, reference)
+            if existing != rewritten_head:
                 raise DevlegateError("rewritten execution evidence could not be pinned")
 
     def _reconcile_update_base_owned(
@@ -8442,7 +8433,7 @@ class ServiceEngine:
                 "product generation changed before interrupted execution recovery"
             )
         self._validate_control_worktree()
-        status = _git(self.control_worktree, "status", "--porcelain").stdout
+        status = self._status_runtime(self.control_worktree)
         if status:
             raise DevlegateError("control working tree is dirty")
         control_fetch = _git(
@@ -8603,7 +8594,9 @@ class ServiceEngine:
             raise DevlegateError(
                 f"ticket {ticket_id} is not the same managed todo execution"
             )
-        current_local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        current_local_head = self._resolve_commit_runtime(self.repo, "HEAD")
+        if current_local_head is None:
+            raise WorkflowBlockedError("product HEAD could not be resolved")
         if current_local_head != state["local_head"]:
             raise DevlegateError("product checkout changed since interrupted execution")
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
@@ -8860,7 +8853,7 @@ class ServiceEngine:
                 print(*args)
 
         write(f"Devlegate {__version__} preflight")
-        status = _git(self.repo, "status", "--porcelain").stdout
+        status = self._status_runtime(self.repo)
         control_observation = self._status_git_observation()["control"]
         todo_fingerprint, todo_count = _todo_fingerprint(
             self.control_worktree, self.todo_path
@@ -8876,17 +8869,14 @@ class ServiceEngine:
             load_project_context(self.repo)
         except ProjectContextError as error:
             project_context_error = str(error)
-        local_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        local_head = self._resolve_commit_runtime(self.repo, "HEAD") or ""
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
-        remote_result = _git(self.repo, "rev-parse", remote_ref, check=False)
-        remote_head = remote_result.stdout.strip()
+        remote_head = self._resolve_commit_runtime(self.repo, remote_ref) or ""
         generation_differs = (
             str(self._state.get("handled_remote_head", "")) != remote_head
             or str(self._state.get("handled_control_head", ""))
             != (
-                _git(
-                    self.control_worktree, "rev-parse", "HEAD", check=False
-                ).stdout.strip()
+                self._resolve_commit_runtime(self.control_worktree, "HEAD") or ""
                 if self.control_worktree.is_dir()
                 else ""
             )

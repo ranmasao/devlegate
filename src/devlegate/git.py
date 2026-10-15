@@ -14,6 +14,10 @@ class GitAncestryError(RuntimeError):
     """Git could not determine an ancestry relationship."""
 
 
+class GitObservationError(RuntimeError):
+    """Git returned an unreadable, malformed, or otherwise unusable result."""
+
+
 def run_git(
     cwd: Path, *args: str, check: bool = True, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -34,14 +38,29 @@ def resolve_commit(
     check: bool = False,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
-    """Resolve a revision to its commit object name, or return ``None``."""
+    """Resolve a revision to its commit object name, or return ``None`` when absent."""
     result = runner(
         cwd, "rev-parse", "--verify", f"{revision}^{{commit}}", check=check
     )
     if result.returncode:
-        return None
+        detail = result.stderr.strip().lower()
+        missing = (
+            "unknown revision" in detail
+            or "ambiguous argument" in detail
+            or "bad object" in detail
+            or "needed a single revision" in detail
+            or detail == "missing"
+        )
+        if missing:
+            return None
+        raise GitObservationError(
+            f"cannot resolve Git revision {revision!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
     resolved = result.stdout.strip()
-    return resolved or None
+    if not resolved or len(resolved.split()) != 1:
+        raise GitObservationError(f"Git returned malformed commit for {revision!r}")
+    return resolved
 
 
 def is_ancestor(
@@ -81,11 +100,210 @@ def commit_parents(
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> tuple[str, ...] | None:
-    """Return a commit's parents, or ``None`` when Git cannot read it."""
+    """Return a commit's parents, or ``None`` when the commit is absent."""
     result = runner(cwd, "rev-list", "--parents", "-n", "1", commit, check=False)
     if result.returncode:
-        return None
+        detail = result.stderr.strip().lower()
+        if any(
+            marker in detail
+            for marker in (
+                "unknown revision",
+                "ambiguous argument",
+                "bad object",
+                "needed a single revision",
+                "missing",
+            )
+        ):
+            return None
+        raise GitObservationError(
+            f"cannot read parents for {commit!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
     fields = result.stdout.split()
-    if len(fields) < 2:
-        return None
+    if len(fields) < 1 or fields[0] != commit:
+        raise GitObservationError(f"Git returned malformed parents for {commit!r}")
     return tuple(fields[1:])
+
+
+def branch_name(
+    cwd: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return the short current branch, or ``None`` for detached HEAD."""
+    result = runner(cwd, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    if result.returncode:
+        if result.returncode == 1:
+            return None
+        raise GitObservationError(
+            f"cannot observe branch: {result.stderr.strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if not value or "\n" in value:
+        raise GitObservationError("Git returned a malformed branch name")
+    return value
+
+
+def worktree_root(
+    cwd: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> Path:
+    """Return the absolute top-level path for a checkout."""
+    result = runner(cwd, "rev-parse", "--show-toplevel", check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot observe Git worktree root: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if not value:
+        raise GitObservationError("Git returned an empty worktree root")
+    return Path(value).resolve()
+
+
+def common_dir(
+    cwd: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> Path:
+    """Return the absolute common Git directory for a checkout."""
+    result = runner(cwd, "rev-parse", "--git-common-dir", check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot observe Git common directory: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if not value:
+        raise GitObservationError("Git returned an empty common directory")
+    return Path(value).resolve()
+
+
+def working_tree_status(
+    cwd: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str:
+    """Return porcelain status text, failing on an unreadable checkout."""
+    result = runner(cwd, "status", "--porcelain", check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot observe working tree: {result.stderr.strip() or 'unknown Git error'}"
+        )
+    return result.stdout
+
+
+def remote_exists(
+    cwd: Path,
+    remote: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> bool:
+    """Return whether a configured remote exists; fail on unreadable config."""
+    result = runner(cwd, "remote", "get-url", remote, check=False)
+    if result.returncode == 0:
+        return bool(result.stdout.strip())
+    if result.returncode == 2 or "no such remote" in result.stderr.lower():
+        return False
+    raise GitObservationError(
+        f"cannot observe Git remote {remote!r}: "
+        f"{result.stderr.strip() or 'unknown Git error'}"
+    )
+
+
+def commit_range(
+    cwd: Path,
+    range_spec: str,
+    *,
+    reverse: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, ...]:
+    """Return commits in a revision range, preserving observation failures."""
+    args = ["rev-list"]
+    if reverse:
+        args.append("--reverse")
+    args.append(range_spec)
+    result = runner(cwd, *args, check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect Git range {range_spec!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    values = tuple(result.stdout.splitlines())
+    if any(not value or len(value) != 40 for value in values):
+        raise GitObservationError("Git returned malformed range output")
+    return values
+
+
+def ahead_behind(
+    cwd: Path,
+    local: str,
+    remote: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[int, int]:
+    """Return local-ahead and remote-ahead counts for two commits."""
+    result = runner(
+        cwd,
+        "rev-list",
+        "--left-right",
+        "--count",
+        f"{local}...{remote}",
+        check=False,
+    )
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot compare Git revisions: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    fields = result.stdout.split()
+    if len(fields) != 2 or any(not field.isdecimal() for field in fields):
+        raise GitObservationError("Git returned malformed ahead/behind counts")
+    return int(fields[0]), int(fields[1])
+
+
+def read_object(
+    cwd: Path,
+    object_id: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, str] | None:
+    """Return an object's type and contents, or ``None`` when it is absent."""
+    object_type = runner(cwd, "cat-file", "-t", object_id, check=False)
+    if object_type.returncode:
+        if object_type.returncode == 128:
+            return None
+        raise GitObservationError(
+            f"cannot read Git object {object_id!r}: "
+            f"{object_type.stderr.strip() or 'unknown Git error'}"
+        )
+    kind = object_type.stdout.strip()
+    if not kind:
+        raise GitObservationError("Git returned an empty object type")
+    content = runner(cwd, "cat-file", "-p", object_id, check=False)
+    if content.returncode:
+        raise GitObservationError(
+            f"cannot read Git object {object_id!r}: "
+            f"{content.stderr.strip() or 'unknown Git error'}"
+        )
+    return kind, content.stdout
+
+
+def read_path(
+    cwd: Path,
+    commit: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Read a path from a commit, returning ``None`` when it is absent."""
+    result = runner(cwd, "show", f"{commit}:{path}", check=False)
+    if result.returncode:
+        if result.returncode == 128:
+            return None
+        raise GitObservationError(
+            f"cannot read {path!r} at {commit!r}: "
+            f"{result.stderr.strip() or 'unknown Git error'}"
+        )
+    return result.stdout
