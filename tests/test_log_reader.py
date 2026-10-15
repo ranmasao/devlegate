@@ -448,6 +448,20 @@ def test_execution_follow_rejects_dangling_requested_report(tmp_path):
         follow_execution(state, "key", control, identifier, 10)
 
 
+def test_execution_follow_rejects_dangling_report_root(tmp_path):
+    identifier = "g" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    control.mkdir()
+    (control / "executions").symlink_to(tmp_path / "missing-executions")
+    log = execution_log_path(state, "key", identifier)
+    log.parent.mkdir(parents=True)
+    log.write_text("output\n")
+
+    with pytest.raises(LogReaderError, match="execution report root is unsafe"):
+        follow_execution(state, "key", control, identifier, 10)
+
+
 def test_ticket_follow_ignores_unrelated_invalid_report(tmp_path, monkeypatch, capsys):
     identifier = "d" * 32
     state = tmp_path / "state"

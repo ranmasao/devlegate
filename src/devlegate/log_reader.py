@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import stat
 import subprocess
 import time
 from collections.abc import Callable, Iterable
@@ -451,22 +452,36 @@ def _execution_report(
     store = ExecutionReportStore(control_worktree)
     if ticket_id is not None:
         try:
-            return store.read(ticket_id, execution)
+            report_path = store._path(ticket_id, execution)
         except ExecutionReportError as error:
-            report_path = (
-                control_worktree
-                / "executions"
-                / ticket_id
-                / f"{execution}.json"
-            )
+            raise LogReaderError(str(error)) from error
+        root = control_worktree / "executions"
+        ticket_root = report_path.parent
+        try:
+            for path, description in (
+                (control_worktree, "control worktree root"),
+                (root, "execution report root"),
+                (ticket_root, "execution report ticket directory"),
+            ):
+                try:
+                    path_stat = path.lstat()
+                except FileNotFoundError:
+                    return None
+                except OSError as error:
+                    raise LogReaderError(
+                        f"cannot inspect {description}"
+                    ) from error
+                if path.is_symlink() or not stat.S_ISDIR(path_stat.st_mode):
+                    raise LogReaderError(f"{description} is unsafe")
+
             try:
                 report_path.lstat()
             except FileNotFoundError:
-                if report_path.parent.is_symlink():
-                    raise LogReaderError(str(error)) from error
                 return None
-            except OSError as stat_error:
-                raise LogReaderError(str(error)) from stat_error
+            except OSError as error:
+                raise LogReaderError("cannot inspect execution report") from error
+            return store.read(ticket_id, execution)
+        except ExecutionReportError as error:
             raise LogReaderError(str(error)) from error
 
     root = control_worktree / "executions"
