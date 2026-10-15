@@ -147,7 +147,9 @@ class _LogCursor:
         self.initial = tuple(
             record.decode("utf-8") for record in content[-self.lines :]
         )
-        handle.seek(0, 2)
+        # Keep follow mode at the EOF captured for this initial snapshot. Any
+        # bytes appended while assembling the tail must be read exactly once.
+        handle.seek(size)
 
     def read_available(self) -> tuple[str, ...]:
         records: list[str] = []
@@ -307,6 +309,12 @@ def follow_ticket(
         if state == "done":
             return 0
         if active is not None:
+            if active in printed:
+                try:
+                    time.sleep(0.1)
+                except KeyboardInterrupt:
+                    return 130
+                continue
             if active not in printed:
                 report = next(
                     (item for item in reports if item.execution_id == active), None

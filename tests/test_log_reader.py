@@ -10,6 +10,7 @@ import pytest
 
 from devlegate.log_reader import (
     LogReaderError,
+    _LogCursor,
     execution_id,
     execution_log,
     follow_execution,
@@ -188,6 +189,44 @@ def test_execution_log_tail_supports_missing_final_newline(tmp_path):
     path.write_text("one\ntwo")
     _, content = execution_log(tmp_path / "state", "key", control, identifier, 1)
     assert list(content) == ["two"]
+
+
+def test_log_cursor_reads_append_during_tail_assembly_once(tmp_path, monkeypatch):
+    path = tmp_path / "execution.log"
+    path.write_text("old\n")
+    original_open = Path.open
+    appended = False
+
+    class ReadingHandle:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def read(self, *args, **kwargs):
+            nonlocal appended
+            content = self.handle.read(*args, **kwargs)
+            if not appended and content:
+                appended = True
+                with original_open(path, "ab") as output:
+                    output.write(b"new\n")
+            return content
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+    def open_with_append(candidate, *args, **kwargs):
+        handle = original_open(candidate, *args, **kwargs)
+        if candidate == path:
+            return ReadingHandle(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", open_with_append)
+    cursor = _LogCursor(path, 1)
+    try:
+        assert cursor.initial == ("old\n",)
+        assert cursor.read_available() == ("new\n",)
+        assert cursor.read_available() == ()
+    finally:
+        cursor.close()
 
 
 def test_execution_log_reports_missing_file(tmp_path):
@@ -417,6 +456,68 @@ def test_ticket_follow_ignores_unrelated_invalid_report(tmp_path, monkeypatch, c
         == 0
     )
     assert "ticket\n" in capsys.readouterr().out
+
+
+def test_ticket_follow_does_not_replay_report_before_state_transition(
+    tmp_path, monkeypatch, capsys
+):
+    first = "a" * 32
+    second = "b" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    SQLiteRuntimeStore(state, "key").replace(
+        {
+            "phase": "agent_running",
+            "execution_id": first,
+            "execution_ticket_id": "T-1",
+        }
+    )
+    first_path = execution_log_path(state, "key", first)
+    first_path.parent.mkdir(parents=True)
+    first_path.write_text("first\n")
+    second_path = execution_log_path(state, "key", second)
+    calls = 0
+
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_path.write_text("first\nfinal\n")
+            _report(control, first, ticket="T-1")
+        elif calls == 2:
+            second_path.write_text("second\n")
+            SQLiteRuntimeStore(state, "key").replace(
+                {
+                    "phase": "agent_running",
+                    "execution_id": second,
+                    "execution_ticket_id": "T-1",
+                }
+            )
+        elif calls == 3:
+            _report(control, second, ticket="T-1")
+        elif calls == 4:
+            (control / "kanban" / "done").mkdir(parents=True)
+            (control / "kanban" / "todo" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    assert (
+        follow_ticket(
+            state,
+            "key",
+            control,
+            "T-1",
+            10,
+            {"todo": "kanban/todo", "done": "kanban/done"},
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert output.count("first\n") == 1
+    assert output.count("final\n") == 1
+    assert output.count("second\n") == 1
 
 
 def test_execution_follow_exits_for_already_terminal_execution(
