@@ -26,8 +26,18 @@ After TASK-070, `runtime.py` still contains about 164 direct `_git`/`_git_runtim
 - Avoid hidden multi-command implementations for a formerly single-command observation unless required for correctness. Compare the number and kind of executed Git commands in representative read paths before and after; investigate and explicitly justify any increase. Use a lightweight spy on the existing Git execution seam or focused tests, not a new broad test harness.
 - Do not claim success from a reduced number of raw call sites if the new helpers add unexpected Git subprocesses. Record the static-to-semantic mapping and note any additional command executed internally.
 
+## Git execution cost and effect classes
+
+Track newly introduced *executed commands* by **actual effects**, not just by Git subcommand name or number of helper calls:
+
+- **Tier 1 — local-only read:** no remote access, no persistent repository/worktree mutation (e.g. `rev-parse`, `rev-list`, `merge-base`, `cat-file` in read-only modes). Lowest default cost; a small justified increase is acceptable for clearer semantics or stronger proof, but avoid accidental per-object `N+1` loops and expensive history scans.
+- **Tier 2 — remote read:** accesses the remote but does not mutate repository/worktree state, e.g. `ls-remote`. Higher latency/cost; extra network round trips require explicit justification.
+- **Tier 3 — state-changing operation:** mutates local or remote Git state, including refs/index/worktree/object store; e.g. `update-ref`, `add`, `commit`, `reset`, `merge`, `push` and ordinary `fetch` (remote read **plus local object/ref writes**). Highest scrutiny due to side effects, durability, and recovery/authorization implications. Identify *local versus remote* writes separately.
+
+A command can have mixed effects; classify by the **highest applicable tier**, not its apparent name. Some observations such as `status` may refresh the index depending on how invoked; check actual options/side effects. Keep latency/performance cost separate from correctness risk: tiers are review priorities, not fictitious numeric weights. No new remote operations or mutations may be hidden inside read-oriented helpers. Compare before/after traces per tier and explain material increases; do not require identical process counts at all costs.
+
 ## Acceptance
 
-Report categorized before/after raw read-call counts and examples of actual semantic duplication removed. The remaining *read-only* direct Git calls in `runtime.py` must be zero, except specifically justified exceptional owner-bound infrastructure not reasonably factored without worsening correctness. Preserve all admission, evidence, WAL and CAS invariants. No unaccounted extra Git subprocesses, implicit remote operations, or hidden mutations. Exact-checkpoint full pytest and Ruff green.
+Report categorized before/after raw read-call counts and examples of actual semantic duplication removed. The remaining *read-only* direct Git calls in `runtime.py` must be zero, except specifically justified exceptional owner-bound infrastructure not reasonably factored without worsening correctness. Preserve all admission, evidence, WAL and CAS invariants. Cost-tier accounting for extra Git subprocesses; small justified local-only reads may increase, but no hidden remote operations or mutations. Exact-checkpoint full pytest and Ruff green.
 
 The next stage, TASK-072, removes raw mutating Git command construction from `runtime.py`.
