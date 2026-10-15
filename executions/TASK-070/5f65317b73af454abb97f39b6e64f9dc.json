@@ -1,0 +1,29 @@
+{
+  "code_base_head": "80e690c2fb9360708b4638c95b99b7b1ff236c35",
+  "conclusion": "completed",
+  "control_head": "3a341f59f7068a129a5a95988459e81668ba6f01",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-070",
+  "execution_id": "5f65317b73af454abb97f39b6e64f9dc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-070",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-070/5f65317b73af454abb97f39b6e64f9dc.md",
+  "report_sha256": "6dfa07505834748f0410b3ea7eee3355d2b94f91b89efb52d9bc361599a9d002",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-070",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused retry, ancestry, recovery, lifecycle, CLI, and containment suites pass. Full pytest completed with only environment failures caused by unavailable coverage and missing .venv executables; Ruff is not installed in the workspace.",
+    "summary": "Translated GitAncestryError at force-retry admission into fail-closed DevlegateError without mutating state. Audited and added narrow domain-boundary translations for automatic retry, reconciliation, publication, lifecycle replay, and recovery paths while preserving the shared ancestry helper and existing rev-list/update-ref semantics."
+  },
+  "workspace_head": "3e5e4226fb516cf3cfacdc4ed2353a7ea8797b53"
+}
