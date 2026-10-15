@@ -49,9 +49,14 @@ from devlegate.git import (
     commit_parents,
     commit_range,
     common_dir,
+    file_history_commit,
+    history_commits,
     is_ancestor,
+    parent_commit,
+    path_object,
     read_object,
     read_path,
+    ref_exists,
     remote_exists,
     remote_ref,
     resolve_commit,
@@ -59,6 +64,12 @@ from devlegate.git import (
     run_git,
     working_tree_status,
     worktree_root,
+)
+from devlegate.git import (
+    changed_paths as git_changed_paths,
+)
+from devlegate.git import (
+    merge_base as git_merge_base,
 )
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
@@ -2244,6 +2255,11 @@ class ServiceEngine:
         except DevlegateError as error:
             command.admission_error = error
             raise
+        except (GitObservationError, GitAncestryError) as error:
+            command.admission_error = DevlegateError(
+                "service busy; mutable request was not admitted"
+            )
+            raise command.admission_error from error
         finally:
             command.admission_event.set()
 
@@ -2785,28 +2801,13 @@ class ServiceEngine:
                 raise DevlegateError(
                     "existing control path is not a registered Git worktree"
                 )
-            root = _git(
-                self.control_worktree, "rev-parse", "--git-common-dir", check=False
-            )
-            branch = _git(
-                self.control_worktree,
-                "symbolic-ref",
-                "--quiet",
-                "--short",
-                "HEAD",
-                check=False,
-            )
-            expected_git = _git(
-                self.repo, "rev-parse", "--git-common-dir"
-            ).stdout.strip()
-            if (
-                root.returncode
-                or Path(root.stdout.strip()).resolve() != Path(expected_git).resolve()
-            ):
+            root = common_dir(self.control_worktree, runner=_git)
+            expected_git = common_dir(self.repo, runner=_git)
+            if root != expected_git:
                 raise DevlegateError(
                     "existing control worktree belongs to another repository"
                 )
-            if branch.returncode or branch.stdout.strip() != self.control_branch:
+            if branch_name(self.control_worktree, runner=_git) != self.control_branch:
                 raise DevlegateError("existing control worktree is on the wrong branch")
             for state, configured_path in self._workflow_paths().items():
                 if not (self.control_worktree / configured_path).is_dir():
@@ -2835,14 +2836,10 @@ class ServiceEngine:
                 "control_worktree": str(self.control_worktree),
             }
         self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
-        local_branch = _git(
-            self.repo,
-            "show-ref",
-            "--verify",
-            f"refs/heads/{self.control_branch}",
-            check=False,
+        local_branch = ref_exists(
+            self.repo, f"refs/heads/{self.control_branch}", runner=_git
         )
-        if local_branch.returncode == 0:
+        if local_branch:
             local_head = resolve_commit(self.repo, self.control_branch, runner=_git)
             if local_head is None:
                 raise DevlegateError("local control branch HEAD is unavailable")
@@ -2859,7 +2856,7 @@ class ServiceEngine:
                     "local control branch diverges from the remote control branch"
                 )
         args = ["worktree", "add"]
-        if local_branch.returncode:
+        if not local_branch:
             args += ["--track", "-b", self.control_branch]
             args += [
                 str(self.control_worktree),
@@ -2883,14 +2880,10 @@ class ServiceEngine:
                 "expected control worktree path already exists: "
                 f"{self.control_worktree}"
             )
-        local_branch = _git(
-            self.repo,
-            "show-ref",
-            "--verify",
-            f"refs/heads/{self.control_branch}",
-            check=False,
+        local_branch = ref_exists(
+            self.repo, f"refs/heads/{self.control_branch}", runner=_git
         )
-        if local_branch.returncode == 0:
+        if local_branch:
             raise DevlegateError(
                 f"local control branch {self.control_branch!r} exists while the "
                 "remote branch is absent"
@@ -3448,10 +3441,13 @@ class ServiceEngine:
             remote_head = observed_remote or "<unknown>"
         except GitObservationError:
             remote_head = "<unknown>"
-        base_result = _git(
-            self.repo, "merge-base", local_head, remote_head, check=False
-        )
-        merge_base = base_result.stdout.strip() or "<none>"
+        try:
+            merge_base_value = git_merge_base(
+                self.repo, local_head, remote_head, runner=_git
+            )
+            merge_base = merge_base_value or "<none>"
+        except GitObservationError:
+            merge_base = "<none>"
         try:
             ahead_count, behind_count = self._ahead_behind_runtime(
                 self.repo, local_head, remote_head
@@ -3771,14 +3767,9 @@ class ServiceEngine:
                             f"local HEAD {local_head[:12]}"
                         )
                 if local_head != target_head and not preserve_local_ahead:
-                    changed_paths = self._git_runtime(
-                        self.repo,
-                        "diff",
-                        "--name-only",
-                        local_head,
-                        target_head,
-                        check=False,
-                    ).stdout.rstrip()
+                    changed_paths = git_changed_paths(
+                        self.repo, local_head, target_head, runner=self._git_runtime
+                    )
                     if (
                         self._stop_before_admission()
                         and initial_phase != "merge_pending"
@@ -3829,14 +3820,9 @@ class ServiceEngine:
                 changed_paths = ""
             elif self._is_ancestor_runtime(self.repo, local_head, remote_head):
                 had_remote_change = True
-                changed_paths = self._git_runtime(
-                    self.repo,
-                    "diff",
-                    "--name-only",
-                    local_head,
-                    remote_head,
-                    check=False,
-                ).stdout.rstrip()
+                changed_paths = git_changed_paths(
+                    self.repo, local_head, remote_head, runner=self._git_runtime
+                )
                 if self._stop_before_admission():
                     return 0
                 self._save_state(
@@ -3872,14 +3858,9 @@ class ServiceEngine:
                 )
             elif self._is_ancestor_runtime(self.repo, remote_head, local_head):
                 local_ahead = True
-                changed_paths = self._git_runtime(
-                    self.repo,
-                    "diff",
-                    "--name-only",
-                    remote_head,
-                    local_head,
-                    check=False,
-                ).stdout.rstrip()
+                changed_paths = git_changed_paths(
+                    self.repo, remote_head, local_head, runner=self._git_runtime
+                )
                 _log(
                     f"local branch is ahead of {self.remote_name}/"
                     f"{self.remote_branch}; preserving local HEAD {local_head[:12]}"
@@ -4565,11 +4546,10 @@ class ServiceEngine:
             evidence_ref = self._reconciliation_evidence_ref(
                 selected_ticket.id, execution_id
             )
-            existing_evidence = _git(
-                self.repo, "rev-parse", "--verify", evidence_ref, check=False
-            )
-            if existing_evidence.returncode == 0 and (
-                existing_evidence.stdout.strip() != checkpoint.after_head
+            existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
+            if (
+                existing_evidence is not None
+                and existing_evidence != checkpoint.after_head
             ):
                 raise DevlegateError("reconciliation evidence ref is inconsistent")
             pinned = _git(
@@ -5150,77 +5130,51 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 f"malformed execution evidence for accepted ticket {ticket_id}"
             ) from error
-        accepted_commit = _git(
+        accepted_revision = file_history_commit(
             self.control_worktree,
-            "log",
-            "-1",
-            "--format=%H",
             "HEAD",
-            "--",
             f"{self.accepted_path}/{ticket_id}.md",
-            check=False,
+            runner=_git,
         )
-        if accepted_commit.returncode or not accepted_commit.stdout.strip():
+        if accepted_revision is None:
             raise WorkflowBlockedError("accepted ticket transition is unavailable")
-        accepted_revision = accepted_commit.stdout.strip()
         accepted_path = f"{self.accepted_path}/{ticket_id}.md"
         if (
-            _git(
-                self.control_worktree,
-                "cat-file",
-                "-e",
-                f"{accepted_revision}:{accepted_path}",
-                check=False,
-            ).returncode
-            != 0
-        ):
-            previous = _git(
-                self.control_worktree,
-                "rev-parse",
-                f"{accepted_revision}^",
-                check=False,
+            read_path(
+                self.control_worktree, accepted_revision, accepted_path, runner=_git
             )
-            if previous.returncode:
+            is None
+        ):
+            previous = parent_commit(
+                self.control_worktree, accepted_revision, runner=_git
+            )
+            if previous is None:
                 raise WorkflowBlockedError(
                     "accepted ticket transition parent is unavailable"
                 )
-            accepted_revision = previous.stdout.strip()
-        parent = _git(
-            self.control_worktree,
-            "rev-parse",
-            f"{accepted_revision}^",
-            check=False,
-        )
-        if parent.returncode:
+            accepted_revision = previous
+        parent = parent_commit(self.control_worktree, accepted_revision, runner=_git)
+        if parent is None:
             raise WorkflowBlockedError(
                 "accepted ticket transition parent is unavailable"
             )
-        review_commit = _git(
+        exact_review_commit = file_history_commit(
             self.control_worktree,
-            "log",
-            "-1",
-            "--format=%H",
-            parent.stdout.strip(),
-            "--",
+            parent,
             f"{self.review_path}/{ticket_id}.md",
-            check=False,
+            runner=_git,
         )
-        if review_commit.returncode or not review_commit.stdout.strip():
+        if exact_review_commit is None:
             raise WorkflowBlockedError("review admission transition is unavailable")
-        exact_review_commit = review_commit.stdout.strip()
         reports = [
             report
             for report in reports
-            if _git(
+            if file_history_commit(
                 self.control_worktree,
-                "log",
-                "-1",
-                "--format=%H",
-                parent.stdout.strip(),
-                "--",
+                parent,
                 f"executions/{ticket_id}/{report.execution_id}.json",
-                check=False,
-            ).stdout.strip()
+                runner=_git,
+            )
             == exact_review_commit
         ]
         expected_branch = f"devlegate/work/{ticket_id}"
@@ -5279,17 +5233,11 @@ class ServiceEngine:
         checkpoint = report.workspace_head
         assert checkpoint is not None
         product_ref = f"refs/heads/{self.remote_branch}"
-        observed = _git(
-            self.repo, "ls-remote", self.remote_name, product_ref, check=False
+        product_head = remote_ref(
+            self.repo, self.remote_name, product_ref, runner=self._git_runtime
         )
-        if observed.returncode:
-            raise DevlegateError(
-                observed.stderr.strip() or "cannot observe product branch"
-            )
-        fields = observed.stdout.split()
-        if not fields:
+        if product_head is None:
             raise WorkflowBlockedError("configured product branch is unavailable")
-        product_head = fields[0]
 
         if checkpoint == report.code_base_head:
             if product_head != report.code_base_head:
@@ -5337,24 +5285,22 @@ class ServiceEngine:
                 "product history diverged from accepted checkpoint; rebase or merge "
                 "is not performed"
             )
-        reobserved = _git(
-            self.repo, "ls-remote", self.remote_name, product_ref, check=False
-        )
-        observed_fields = reobserved.stdout.split()
         try:
-            published_checkpoint_is_ancestor = bool(observed_fields) and (
-                observed_fields[0] == checkpoint
+            reobserved_head = remote_ref(
+                self.repo, self.remote_name, product_ref, runner=self._git_runtime
+            )
+            published_checkpoint_is_ancestor = reobserved_head is not None and (
+                reobserved_head == checkpoint
                 or is_ancestor(
-                    self.repo, checkpoint, observed_fields[0], runner=_git
+                    self.repo, checkpoint, reobserved_head, runner=self._git_runtime
                 )
             )
-        except GitAncestryError as error:
+        except (GitAncestryError, GitObservationError) as error:
             raise WorkflowBlockedError(
                 "published product history could not be observed"
             ) from error
         if (
-            reobserved.returncode
-            or not observed_fields
+            reobserved_head is None
             or not published_checkpoint_is_ancestor
         ):
             raise WorkflowBlockedError(
@@ -5495,16 +5441,14 @@ class ServiceEngine:
         if not _is_git_identity(expected_parent) or not _is_git_identity(local_head):
             return "ambiguous", None
         if remote_head is None:
-            remote = _git(
+            remote_head = remote_ref(
                 self.control_worktree,
-                "ls-remote",
                 self.remote_name,
                 f"refs/heads/{self.control_branch}",
-                check=False,
+                runner=self._git_runtime,
             )
-            if remote.returncode or not remote.stdout.split():
+            if remote_head is None:
                 return "ambiguous", None
-            remote_head = remote.stdout.split()[0]
         if not _is_git_identity(remote_head):
             return "ambiguous", None
         if remote_head == expected_parent:
@@ -5551,23 +5495,19 @@ class ServiceEngine:
             return False
         if set(names) != expected:
             return False
-        before = _git(
+        before = path_object(
             self.control_worktree,
-            "rev-parse",
-            f"{parents[0]}:{self.accepted_path}/{ticket_id}.md",
-            check=False,
+            parents[0],
+            f"{self.accepted_path}/{ticket_id}.md",
+            runner=self._git_runtime,
         )
-        after = _git(
+        after = path_object(
             self.control_worktree,
-            "rev-parse",
-            f"{commit}:{self.done_path}/{ticket_id}.md",
-            check=False,
+            commit,
+            f"{self.done_path}/{ticket_id}.md",
+            runner=self._git_runtime,
         )
-        return (
-            before.returncode == 0
-            and after.returncode == 0
-            and before.stdout.strip() == after.stdout.strip()
-        )
+        return before is not None and before == after
 
     @staticmethod
     def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
@@ -5669,14 +5609,8 @@ class ServiceEngine:
         if not isinstance(checkpoint, str) or not checkpoint:
             raise DevlegateError("drop execution checkpoint identity is missing")
         evidence_ref = self._drop_evidence_ref(report.ticket_id, report.execution_id)
-        observed = _git(
-            self.repo,
-            "rev-parse",
-            "--verify",
-            f"{evidence_ref}^{{commit}}",
-            check=False,
-        )
-        if observed.returncode == 0 and observed.stdout.strip() != checkpoint:
+        observed = resolve_commit(self.repo, evidence_ref, runner=_git)
+        if observed is not None and observed != checkpoint:
             raise DevlegateError("drop execution evidence ref is inconsistent")
         if observed.returncode:
             pinned = _git(
@@ -5687,14 +5621,8 @@ class ServiceEngine:
                 check=False,
             )
             if pinned.returncode:
-                reread = _git(
-                    self.repo,
-                    "rev-parse",
-                    "--verify",
-                    f"{evidence_ref}^{{commit}}",
-                    check=False,
-                )
-                if reread.returncode or reread.stdout.strip() != checkpoint:
+                reread = resolve_commit(self.repo, evidence_ref, runner=_git)
+                if reread != checkpoint:
                     raise DevlegateError("cannot pin drop execution evidence")
         payload = self._drop_disposition_payload(report, checkpoint)
         existing = self._read_drop_disposition(report.ticket_id, report.execution_id)
@@ -5742,14 +5670,12 @@ class ServiceEngine:
             raise DevlegateError("execution disposition is invalid")
         if payload.get("disposition") == "dropping":
             return False
-        evidence = _git(
+        evidence = resolve_commit(
             self.repo,
-            "rev-parse",
-            "--verify",
-            f"{self._drop_evidence_ref(ticket_id, execution_id)}^{{commit}}",
-            check=False,
+            self._drop_evidence_ref(ticket_id, execution_id),
+            runner=_git,
         )
-        if evidence.returncode or evidence.stdout.strip() != payload.get("checkpoint"):
+        if evidence != payload.get("checkpoint"):
             raise DevlegateError("completed drop has inconsistent checkpoint evidence")
         return not (
             self._state.get("phase") in {"agent_pending", "agent_running"}
@@ -5785,14 +5711,12 @@ class ServiceEngine:
         elif not allow_missing_remote:
             raise DevlegateError("execution worktree is missing")
         else:
-            evidence = _git(
+            evidence = resolve_commit(
                 self.repo,
-                "rev-parse",
-                "--verify",
-                f"{self._drop_evidence_ref(ticket_id, execution_id)}^{{commit}}",
-                check=False,
+                self._drop_evidence_ref(ticket_id, execution_id),
+                runner=_git,
             )
-            if evidence.returncode or evidence.stdout.strip() != report.workspace_head:
+            if evidence != report.workspace_head:
                 raise DevlegateError("retired execution checkpoint evidence is invalid")
         remote = self._execution_remote_head(report.execution_branch)
         if remote != report.workspace_head and not (
@@ -5989,12 +5913,8 @@ class ServiceEngine:
         evidence_ref = self._reconciliation_evidence_ref(
             report.ticket_id, report.execution_id
         )
-        existing_evidence = _git(
-            self.repo, "rev-parse", "--verify", evidence_ref, check=False
-        )
-        if existing_evidence.returncode == 0 and (
-            existing_evidence.stdout.strip() != report.workspace_head
-        ):
+        existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
+        if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
         pinned = _git(
             self.repo,
@@ -6090,14 +6010,8 @@ class ServiceEngine:
             check=False,
         )
         product_ref = f"{self.remote_name}/{self.remote_branch}"
-        observed_product = _git(
-            self.repo, "rev-parse", "--verify", product_ref, check=False
-        )
-        if (
-            product_fetch.returncode
-            or observed_product.returncode
-            or (observed_product.stdout.strip() != remote_head)
-        ):
+        observed_product = resolve_commit(self.repo, product_ref, runner=_git)
+        if product_fetch.returncode or observed_product != remote_head:
             raise WorkflowBlockedError(
                 "product checkout or remote changed before execution recovery"
             )
@@ -6181,21 +6095,11 @@ class ServiceEngine:
     def _checkpoint_commit_is_exact(
         self, workspace: ExecutionWorkspace, commit: str, start_head: str
     ) -> bool:
-        parent = _git(
-            workspace.path, "rev-parse", "--verify", f"{commit}^", check=False
-        )
-        if parent.returncode or parent.stdout.strip() != start_head:
+        parent = parent_commit(workspace.path, commit, runner=self._git_runtime)
+        if parent != start_head:
             return False
-        parents = _git(
-            workspace.path,
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            commit,
-            check=False,
-        )
-        if parents.returncode or len(parents.stdout.split()) != 2:
+        parents = commit_parents(workspace.path, commit, runner=self._git_runtime)
+        if parents is None or len(parents) != 1:
             return False
         try:
             lineage = commit_range(
@@ -6267,16 +6171,7 @@ class ServiceEngine:
             return False
         if self._control_report_at(commit, report) is None:
             return False
-        names = _git(
-            self.control_worktree,
-            "diff-tree",
-            "--no-commit-id",
-            "--name-status",
-            "--no-renames",
-            "-r",
-            commit,
-            check=False,
-        )
+        names = commit_changes(self.control_worktree, commit, runner=self._git_runtime)
         report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
         expected = {f"A\t{report_path}"}
         if report.report_artifact is not None:
@@ -6288,45 +6183,41 @@ class ServiceEngine:
                     f"A\t{self.review_path}/{report.ticket_id}.md",
                 }
             )
-        if names.returncode != 0 or set(names.stdout.splitlines()) != expected:
+        if set(names) != expected:
             return False
         report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        report_bytes = _git(
-            self.control_worktree, "show", f"{commit}:{report_path}", check=False
+        report_bytes = read_path(
+            self.control_worktree, commit, report_path, runner=self._git_runtime
         )
-        if report_bytes.returncode or report_bytes.stdout != report.to_json():
+        if report_bytes is None or report_bytes != report.to_json():
             return False
         if report.report_artifact is not None:
-            artifact_bytes = _git(
+            artifact_bytes = read_path(
                 self.control_worktree,
-                "show",
-                f"{commit}:{report.report_artifact}",
-                check=False,
+                commit,
+                report.report_artifact,
+                runner=self._git_runtime,
             )
             if (
-                artifact_bytes.returncode
+                artifact_bytes is None
                 or report.result.claim is None
-                or artifact_bytes.stdout != report.result.claim.report
+                or artifact_bytes != report.result.claim.report
             ):
                 return False
         if apply_conclusion and report.result.conclusion != "failed":
-            parent_blob = _git(
+            parent_blob = path_object(
                 self.control_worktree,
-                "rev-parse",
-                f"{parent_head}:{self.todo_path}/{report.ticket_id}.md",
-                check=False,
+                parent_head,
+                f"{self.todo_path}/{report.ticket_id}.md",
+                runner=self._git_runtime,
             )
-            review_blob = _git(
+            review_blob = path_object(
                 self.control_worktree,
-                "rev-parse",
-                f"{commit}:{self.review_path}/{report.ticket_id}.md",
-                check=False,
+                commit,
+                f"{self.review_path}/{report.ticket_id}.md",
+                runner=self._git_runtime,
             )
-            if (
-                parent_blob.returncode
-                or review_blob.returncode
-                or parent_blob.stdout.strip() != review_blob.stdout.strip()
-            ):
+            if parent_blob is None or review_blob is None or parent_blob != review_blob:
                 return False
         return True
 
@@ -6352,14 +6243,13 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "unpublished lifecycle parent is not on the fresh remote lineage"
             )
-        lineage = _git(
+        lineage = commit_range(
             self.control_worktree,
-            "rev-list",
-            "--reverse",
             f"{parent_head}..{commit}",
-            check=False,
+            reverse=True,
+            runner=self._git_runtime,
         )
-        if lineage.returncode or lineage.stdout.splitlines() != [commit]:
+        if lineage != (commit,):
             raise WorkflowBlockedError(
                 "unpublished control history contains more than one commit"
             )
@@ -6378,18 +6268,13 @@ class ServiceEngine:
         apply_conclusion: bool = True,
     ) -> str | None:
         path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        history = _git(
-            self.control_worktree,
-            "log",
-            "--format=%H",
-            remote_head,
-            "--",
-            path,
-            check=False,
-        )
-        if history.returncode:
+        try:
+            history = history_commits(
+                self.control_worktree, remote_head, path, runner=self._git_runtime
+            )
+        except GitObservationError:
             return None
-        for commit in history.stdout.splitlines():
+        for commit in history:
             if self._lifecycle_commit_is_exact(
                 commit, report, apply_conclusion=apply_conclusion
             ):
@@ -6414,24 +6299,17 @@ class ServiceEngine:
                 "control history diverged from the execution admission generation"
             )
         original_path = f"{self.todo_path}/{ticket_id}.md"
-        original = _git(
-            self.control_worktree,
-            "show",
-            f"{control_head}:{original_path}",
-            check=False,
+        original = read_path(
+            self.control_worktree, control_head, original_path, runner=self._git_runtime
         )
-        current = _git(
-            self.control_worktree, "show", f"{candidate}:{original_path}", check=False
+        current = read_path(
+            self.control_worktree, candidate, original_path, runner=self._git_runtime
         )
-        if (
-            original.returncode
-            or current.returncode
-            or original.stdout != current.stdout
-        ):
+        if original is None or current is None or original != current:
             raise WorkflowBlockedError(
                 "control descendant changed the active ticket; lifecycle replay refused"
             )
-        original_lines = original.stdout.splitlines(keepends=True)
+        original_lines = original.splitlines(keepends=True)
         delimiters = [
             index
             for index, line in enumerate(original_lines)
@@ -6555,14 +6433,13 @@ class ServiceEngine:
                 remote_head, report, apply_conclusion=apply_conclusion
             )
             if existing is not None:
-                parent = _git(
-                    self.control_worktree, "rev-parse", f"{existing}^", check=False
+                lifecycle_parent = parent_commit(
+                    self.control_worktree, existing, runner=_git
                 )
-                if parent.returncode:
+                if lifecycle_parent is None:
                     raise WorkflowBlockedError(
                         "published lifecycle parent is unavailable"
                     )
-                lifecycle_parent = parent.stdout.strip()
                 self._prove_control_descendant(lifecycle_parent, report)
                 if local_head != remote_head:
                     try:
@@ -8268,9 +8145,7 @@ class ServiceEngine:
                 )
             self._validate_control_worktree()
             recorded_control = str(reconciliation["control_head"])
-            control_head = _git(
-                self.control_worktree, "rev-parse", "HEAD"
-            ).stdout.strip()
+            control_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
             if control_head != recorded_control:
                 raise DevlegateError("control revision changed during reconciliation")
             ticket = self._ticket_store().by_id.get(ticket_id)
@@ -8287,14 +8162,10 @@ class ServiceEngine:
             workspace = self._execution_workspace_for_recovery()
             if workspace.head != checkpoint or workspace.dirty:
                 raise DevlegateError("execution workspace changed before resume")
-            evidence = _git(
-                self.repo,
-                "rev-parse",
-                "--verify",
-                str(reconciliation["evidence_ref"]),
-                check=False,
+            evidence = resolve_commit(
+                self.repo, str(reconciliation["evidence_ref"]), runner=_git
             )
-            if evidence.returncode or evidence.stdout.strip() != checkpoint:
+            if evidence != checkpoint:
                 raise DevlegateError("preserved worker checkpoint evidence changed")
             if "execution_remote_head" in reconciliation:
                 expected_remote = reconciliation["execution_remote_head"]
@@ -8439,14 +8310,8 @@ class ServiceEngine:
             self.remote_branch,
             check=False,
         )
-        product_remote = _git(
-            self.repo, "rev-parse", "--verify", product_ref, check=False
-        )
-        if (
-            product_fetch.returncode
-            or product_remote.returncode
-            or product_remote.stdout.strip() != state["remote_head"]
-        ):
+        product_remote = resolve_commit(self.repo, product_ref, runner=_git)
+        if product_fetch.returncode or product_remote != state["remote_head"]:
             raise DevlegateError(
                 "product generation changed before interrupted execution recovery"
             )
@@ -8631,13 +8496,8 @@ class ServiceEngine:
                 "cannot freshly observe product remote before interrupted recovery: "
                 f"{product_fetch.stderr.strip() or 'unknown git error'}"
             )
-        current_remote = _git(
-            self.repo, "rev-parse", "--verify", remote_ref, check=False
-        )
-        if (
-            current_remote.returncode
-            or current_remote.stdout.strip() != state["remote_head"]
-        ):
+        current_remote = resolve_commit(self.repo, remote_ref, runner=_git)
+        if current_remote != state["remote_head"]:
             raise DevlegateError(
                 "product remote generation changed since interrupted execution"
             )
@@ -8656,23 +8516,16 @@ class ServiceEngine:
                 f"{control_fetch.stderr.strip() or 'unknown git error'}"
             )
         control_remote_ref = f"{self.remote_name}/{self.control_branch}"
-        current_control_remote = _git(
-            self.control_worktree,
-            "rev-parse",
-            "--verify",
-            control_remote_ref,
-            check=False,
+        current_control_remote = resolve_commit(
+            self.control_worktree, control_remote_ref, runner=_git
         )
-        if (
-            current_control_remote.returncode
-            or current_control_remote.stdout.strip() != state["control_head"]
-        ):
+        if current_control_remote != state["control_head"]:
             raise DevlegateError(
                 "control remote generation changed since interrupted execution"
             )
-        current_control_head = _git(
-            self.control_worktree, "rev-parse", "HEAD"
-        ).stdout.strip()
+        current_control_head = resolve_commit(
+            self.control_worktree, "HEAD", runner=_git
+        )
         execution_control_head = state["execution_control_head"]
         if (
             current_control_head != state["control_head"]
@@ -9024,20 +8877,13 @@ class ServiceEngine:
         write(f"known remote HEAD: {remote_head or '<unknown>'}")
         display_counts = None
         if remote_head:
-            counts = _git(
-                self.repo,
-                "rev-list",
-                "--left-right",
-                "--count",
-                f"{local_head}...{remote_head}",
-                check=False,
-            ).stdout.strip()
-            count_parts = counts.split()
-            display_counts = (
-                f"{count_parts[0]} {count_parts[1]}"
-                if len(count_parts) == 2
-                else "<unknown>"
-            )
+            try:
+                ahead, behind = self._ahead_behind_runtime(
+                    self.repo, local_head, remote_head
+                )
+                display_counts = f"{ahead} {behind}"
+            except GitObservationError:
+                display_counts = "<unknown>"
             write(f"ahead/behind: {display_counts}")
         write(f"todo files: {todo_count}")
         write(f"todo fingerprint: {todo_fingerprint}")

@@ -121,6 +121,26 @@ def is_ancestor(
     )
 
 
+def merge_base(
+    cwd: Path,
+    left: str,
+    right: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return the common base of two revisions, or ``None`` if absent."""
+    result = runner(cwd, "merge-base", left, right, check=False)
+    if result.returncode == 1:
+        return None
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect merge base: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if not _is_object_id(value):
+        raise GitObservationError("Git returned malformed merge base output")
+    return value
 def commit_parents(
     cwd: Path,
     commit: str,
@@ -249,7 +269,7 @@ def remote_ref(
     fields = result.stdout.split()
     if not fields:
         return None
-    if len(fields) != 2 or len(fields[0]) != 40:
+    if len(fields) != 2 or not _is_object_id(fields[0]):
         raise GitObservationError("Git returned malformed remote ref output")
     return fields[0]
 
@@ -301,6 +321,88 @@ def commit_changes(
             f"{_stderr(result).strip() or 'unknown Git error'}"
         )
     return tuple(result.stdout.splitlines())
+
+
+def changed_paths(
+    cwd: Path,
+    older: str,
+    newer: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str:
+    """Return the newline-delimited paths changed between two revisions."""
+    result = runner(cwd, "diff", "--name-only", older, newer, check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect changes from {older!r} to {newer!r}: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    return result.stdout.rstrip()
+
+
+def parent_commit(
+    cwd: Path,
+    commit: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return the first parent, or ``None`` for an absent/root commit."""
+    parents = commit_parents(cwd, commit, runner=runner)
+    return parents[0] if parents else None
+
+
+def file_history_commit(
+    cwd: Path,
+    revision: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Return the newest revision touching ``path`` at or below ``revision``."""
+    result = runner(
+        cwd, "log", "-1", "--format=%H", revision, "--", path, check=False
+    )
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect history for {path!r}: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    value = result.stdout.strip()
+    if not value:
+        return None
+    if not _is_object_id(value):
+        raise GitObservationError("Git returned malformed history output")
+    return value
+
+
+def history_commits(
+    cwd: Path,
+    revision: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, ...]:
+    """Return revisions touching ``path`` in newest-first order."""
+    result = runner(cwd, "log", "--format=%H", revision, "--", path, check=False)
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect history for {path!r}: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    values = tuple(result.stdout.splitlines())
+    if any(not _is_object_id(value) for value in values):
+        raise GitObservationError("Git returned malformed history output")
+    return values
+
+
+def ref_exists(
+    cwd: Path,
+    revision: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> bool:
+    """Return whether a revision exists, preserving repository failures."""
+    return resolve_object(cwd, revision, runner=runner) is not None
 
 
 def path_object(
@@ -416,6 +518,10 @@ def _is_missing_revision_error(detail: str) -> bool:
             "not a valid object name",
         )
     )
+
+
+def _is_object_id(value: str) -> bool:
+    return len(value) == 40 and all(char in "0123456789abcdef" for char in value)
 
 
 def _is_missing_object_error(detail: str) -> bool:
