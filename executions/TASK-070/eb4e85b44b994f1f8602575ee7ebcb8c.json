@@ -1,0 +1,33 @@
+{
+  "code_base_head": "80e690c2fb9360708b4638c95b99b7b1ff236c35",
+  "conclusion": "incomplete",
+  "control_head": "4aee2a0fef1e2e8d13a5993b6a95ae339f10f5ae",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-070",
+  "execution_id": "eb4e85b44b994f1f8602575ee7ebcb8c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-070",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the full exact-checkpoint CI, including Ruff, and confirm it passes before review."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-070",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the full exact-checkpoint CI, including Ruff, and confirm it passes before review."
+    ],
+    "report": null,
+    "summary": "Split the lifecycle replay error message into adjacent string literals so it meets the 88-character Ruff limit while preserving the GitAncestryError-to-WorkflowBlockedError translation and cause chain."
+  },
+  "workspace_head": "a3b39eed7e114263a443b018e2ad621af648cbc7"
+}
