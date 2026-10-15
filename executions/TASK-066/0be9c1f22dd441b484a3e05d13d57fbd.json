@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a3b39eed7e114263a443b018e2ad621af648cbc7",
+  "conclusion": "completed",
+  "control_head": "9db9f037a7432bc9a36d315ff5f02184d72cf796",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-066",
+  "execution_id": "0be9c1f22dd441b484a3e05d13d57fbd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-066",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-066/0be9c1f22dd441b484a3e05d13d57fbd.md",
+  "report_sha256": "59b91a1610f17c0ca27694cbad90ac7e1b4601b89edb785f393198ea1f0ef8b7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-066",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused log-reader tests and Ruff checks pass.",
+    "summary": "Refactored execution and ticket log following around a shared byte-positioned log cursor, with ticket-scoped terminal report validation and targeted exact execution lookup. Unrelated malformed historical reports no longer interrupt live execution or ticket log following, while malformed requested evidence remains fail-closed; regression tests cover both cases."
+  },
+  "workspace_head": "6daa401f3731e4f6a9e837a5966458d07053751e"
+}
