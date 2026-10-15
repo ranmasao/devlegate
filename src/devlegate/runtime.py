@@ -6567,7 +6567,8 @@ class ServiceEngine:
                         )
                     except GitAncestryError as error:
                         raise WorkflowBlockedError(
-                            "control history could not be observed during lifecycle replay"
+                            "control history could not be observed during "
+                            "lifecycle replay"
                         ) from error
                     if not local_control_is_ancestor:
                         raise WorkflowBlockedError(
