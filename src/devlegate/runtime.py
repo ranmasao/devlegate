@@ -1235,9 +1235,15 @@ class ServiceEngine:
                 "forced retry control admission identity is incomplete"
             )
         current_head, _remote_head = self._sync_control()
-        if not is_ancestor(
-            self.control_worktree, admitted_control, current_head, runner=_git
-        ):
+        try:
+            control_is_ancestor = is_ancestor(
+                self.control_worktree, admitted_control, current_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise DevlegateError(
+                "control history diverged; use explicit control reconciliation"
+            ) from error
+        if not control_is_ancestor:
             raise DevlegateError(
                 "control history diverged; use explicit control reconciliation"
             )
@@ -1816,7 +1822,15 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "automatic zero-delta retry requires one current product generation"
             )
-        if not is_ancestor(self.repo, original_base, local_head, runner=_git):
+        try:
+            product_is_descendant = is_ancestor(
+                self.repo, original_base, local_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(
+                "automatic zero-delta retry product history could not be observed"
+            ) from error
+        if not product_is_descendant:
             raise WorkflowBlockedError(
                 "automatic zero-delta retry product history is not a descendant"
             )
@@ -1914,9 +1928,15 @@ class ServiceEngine:
                 f"control remote HEAD changed; expected {to_head}, "
                 f"found {observed_remote}"
             )
-        if is_ancestor(
-            self.control_worktree, from_head, to_head, runner=_git
-        ) or is_ancestor(self.control_worktree, to_head, from_head, runner=_git):
+        try:
+            histories_are_related = is_ancestor(
+                self.control_worktree, from_head, to_head, runner=_git
+            ) or is_ancestor(self.control_worktree, to_head, from_head, runner=_git)
+        except GitAncestryError as error:
+            raise DevlegateError(
+                "control history could not be observed; reconciliation is unsafe"
+            ) from error
+        if histories_are_related:
             raise DevlegateError(
                 "control reconciliation is unnecessary; histories are not divergent"
             )
@@ -2773,12 +2793,15 @@ class ServiceEngine:
             local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
             if local_head is None:
                 raise DevlegateError("existing control worktree HEAD is unavailable")
-            if (
-                local_head != remote_head
-                and not is_ancestor(
+            try:
+                control_compatible = local_head == remote_head or is_ancestor(
                     self.control_worktree, local_head, remote_head, runner=_git
                 )
-            ):
+            except GitAncestryError as error:
+                raise DevlegateError(
+                    "existing control worktree history could not be observed"
+                ) from error
+            if not control_compatible:
                 raise DevlegateError(
                     "existing control worktree is not compatible with the remote "
                     "control branch"
@@ -2799,10 +2822,15 @@ class ServiceEngine:
             local_head = resolve_commit(self.repo, self.control_branch, runner=_git)
             if local_head is None:
                 raise DevlegateError("local control branch HEAD is unavailable")
-            if (
-                local_head != remote_head
-                and not is_ancestor(self.repo, local_head, remote_head, runner=_git)
-            ):
+            try:
+                control_compatible = local_head == remote_head or is_ancestor(
+                    self.repo, local_head, remote_head, runner=_git
+                )
+            except GitAncestryError as error:
+                raise DevlegateError(
+                    "local control history could not be observed"
+                ) from error
+            if not control_compatible:
                 raise DevlegateError(
                     "local control branch diverges from the remote control branch"
                 )
@@ -5037,12 +5065,18 @@ class ServiceEngine:
                 "execution branch remote changed during worker execution"
             )
         if expected_remote_head is not None:
-            if not is_ancestor(
-                workspace.path,
-                expected_remote_head,
-                checkpoint_head,
-                runner=_git,
-            ):
+            try:
+                predecessor_is_ancestor = is_ancestor(
+                    workspace.path,
+                    expected_remote_head,
+                    checkpoint_head,
+                    runner=_git,
+                )
+            except GitAncestryError as error:
+                raise DevlegateError(
+                    "execution predecessor history could not be observed"
+                ) from error
+            if not predecessor_is_ancestor:
                 raise DevlegateError(
                     "execution predecessor is not an ancestor of checkpoint"
                 )
@@ -5247,11 +5281,28 @@ class ServiceEngine:
             self._retire_zero_delta_execution(report)
             return self._complete_accepted(ticket_id, control.local_head)
 
-        if product_head == checkpoint or is_ancestor(
-            self.repo, checkpoint, product_head, runner=_git
-        ):
+        try:
+            if product_head == checkpoint:
+                checkpoint_is_ancestor = True
+                product_is_ancestor = False
+            else:
+                checkpoint_is_ancestor = is_ancestor(
+                    self.repo, checkpoint, product_head, runner=_git
+                )
+                product_is_ancestor = (
+                    False
+                    if checkpoint_is_ancestor
+                    else is_ancestor(
+                        self.repo, product_head, checkpoint, runner=_git
+                    )
+                )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(
+                "product history could not be observed during accepted publication"
+            ) from error
+        if checkpoint_is_ancestor:
             pass
-        elif is_ancestor(self.repo, product_head, checkpoint, runner=_git):
+        elif product_is_ancestor:
             pushed = _git(
                 self.repo,
                 "push",
@@ -5272,13 +5323,21 @@ class ServiceEngine:
             self.repo, "ls-remote", self.remote_name, product_ref, check=False
         )
         observed_fields = reobserved.stdout.split()
+        try:
+            published_checkpoint_is_ancestor = bool(observed_fields) and (
+                observed_fields[0] == checkpoint
+                or is_ancestor(
+                    self.repo, checkpoint, observed_fields[0], runner=_git
+                )
+            )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(
+                "published product history could not be observed"
+            ) from error
         if (
             reobserved.returncode
             or not observed_fields
-            or (
-                observed_fields[0] != checkpoint
-                and not is_ancestor(checkpoint, observed_fields[0])
-            )
+            or not published_checkpoint_is_ancestor
         ):
             raise WorkflowBlockedError(
                 "published product checkpoint could not be proven"
@@ -6499,9 +6558,18 @@ class ServiceEngine:
                 lifecycle_parent = parent.stdout.strip()
                 self._prove_control_descendant(lifecycle_parent, report)
                 if local_head != remote_head:
-                    if not is_ancestor(
-                        self.control_worktree, local_head, remote_head, runner=_git
-                    ):
+                    try:
+                        local_control_is_ancestor = is_ancestor(
+                            self.control_worktree,
+                            local_head,
+                            remote_head,
+                            runner=_git,
+                        )
+                    except GitAncestryError as error:
+                        raise WorkflowBlockedError(
+                            "control history could not be observed during lifecycle replay"
+                        ) from error
+                    if not local_control_is_ancestor:
                         raise WorkflowBlockedError(
                             "local control history diverges from published lifecycle"
                         )
@@ -6519,12 +6587,20 @@ class ServiceEngine:
                             )
                 return resolve_commit(self.control_worktree, "HEAD", runner=_git) or ""
             if local_head != report.control_head:
-                admitted_local = is_ancestor(
-                    self.control_worktree, report.control_head, local_head, runner=_git
-                )
-                local_remote = is_ancestor(
-                    self.control_worktree, local_head, remote_head, runner=_git
-                )
+                try:
+                    admitted_local = is_ancestor(
+                        self.control_worktree,
+                        report.control_head,
+                        local_head,
+                        runner=_git,
+                    )
+                    local_remote = is_ancestor(
+                        self.control_worktree, local_head, remote_head, runner=_git
+                    )
+                except GitAncestryError as error:
+                    raise WorkflowBlockedError(
+                        "control history could not be observed during lifecycle replay"
+                    ) from error
                 if admitted_local and local_remote:
                     # A locally observed commit can already be published when a
                     # previous replay failed after fast-forwarding the worktree.
@@ -8231,9 +8307,15 @@ class ServiceEngine:
                     "execution remote changed or has divergent lineage"
                 )
             if isinstance(expected_remote, str):
-                if not is_ancestor(
-                    self.repo, expected_remote, checkpoint, runner=_git
-                ):
+                try:
+                    predecessor_is_ancestor = is_ancestor(
+                        self.repo, expected_remote, checkpoint, runner=_git
+                    )
+                except GitAncestryError as error:
+                    raise DevlegateError(
+                        "execution predecessor history could not be observed"
+                    ) from error
+                if not predecessor_is_ancestor:
                     raise DevlegateError(
                         "execution predecessor is not an ancestor of checkpoint"
                     )
@@ -8377,9 +8459,15 @@ class ServiceEngine:
         if control_fetch.returncode or control_head is None:
             raise DevlegateError("cannot freshly observe control remote")
         local_control = resolve_commit(self.control_worktree, "HEAD", runner=_git)
-        if local_control is None or not is_ancestor(
-            self.control_worktree, local_control, control_head, runner=_git
-        ):
+        try:
+            control_is_ancestor = local_control is not None and is_ancestor(
+                self.control_worktree, local_control, control_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise DevlegateError(
+                "local control history could not be observed during recovery"
+            ) from error
+        if not control_is_ancestor:
             raise DevlegateError("local control history diverged during recovery")
         self._prove_bound_ticket_descendant(
             control_head,
