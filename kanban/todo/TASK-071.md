@@ -72,3 +72,22 @@ Affected tests (all failed on this exact SHA):
 ### Decision
 
 **REWORK: `review → todo` for the same TASK-071**. The branch/checkpoint is not accepted or integrated. QA remains deferred and is not a new condition. Correct regressions and complete existing acceptance criteria before resubmission.
+
+## Curator review — 2026-10-16: THIRD REWORK (execution 06cc67adde7841f995e7255cdce66a34)
+
+Exact checkpoint: `ccd30669fbde2309dc0a3c53771d116d1c71d8dd`, one descendant commit after `0688293f13283e3b4816338d4e7c7dec14ebea13`. **Good progress:** CI [#38811563638](https://github.com/ranmasao/devlegate/actions/runs/38811563638) at this exact SHA is green (**1221 passed, 1 skipped, Ruff passed**); the prior 13 test regressions are no longer observed in authoritative CI. The worker explicitly reported `incomplete`, not `completed`.
+
+### Remaining acceptance blocker
+
+The ticket's central goal is unfinished: raw read-only Git command construction remains throughout `src/devlegate/runtime.py`. Worker report says **44** explicit read-command sites remain; curator's narrower regex-based Git-call inventory counts **47** matching read-only calls at this checkpoint (examples: `rev-parse` 23, `log` 4, `show` 4, `diff` 3, `ls-remote` 3, `rev-list` 3, plus `diff-tree`, `cat-file`, `symbolic-ref`, `show-ref`, `merge-base`, `remote`). The discrepancy is counting methodology, not evidence of completion. Current code still directly constructs read operations in control/worktree inspection, accepted-integration lineage and history, drop/evidence, checkpoint validation, recovery/reconciliation and remote-observation paths.
+
+### Required focused continuation
+
+1. Preserve all work through `ccd30669`. Finish **only** the remaining read-side extraction into cohesive Git semantics and narrowly scoped domain helpers, or explicitly justify a genuinely necessary owner-bound exception. Do not delegate unfinished read work to TASK-072 (its scope is mutation/publication).
+2. Produce a complete, reproducible before/after **categorized call-site inventory** including multiline invocations, separating semantic reads from actual mutations/effectful sync. Document actual duplication removed, domain-specific logic retained, and any executed Git command/effect changes; do not mistake fewer call sites for fewer Git subprocesses.
+3. Preserve existing `_git_runtime` owner/shutdown behavior and Git absence-versus-error distinctions. Avoid reopening the now-green `drop`, restart replay, constructor, IPC and reconciliation regressions. New helpers must not hide fetch/push/ref/worktree mutations, duplicate remote probes, or add unexpected Git calls.
+4. Validate focused behavior and the **full exact-checkpoint pytest + Ruff** again after finishing. Current green CI is valuable but **does not override the unfulfilled structural acceptance criterion**. No new QA workflow requirement.
+
+### Disposition
+
+**REWORK: review → todo**. Keep the same ticket, execution reports and feature-branch lineage. Do not integrate the incomplete checkpoint; no branch reset or destructive cleanup.
