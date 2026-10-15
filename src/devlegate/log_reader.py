@@ -82,11 +82,8 @@ def execution_id(
         if _execution_report(control_worktree, selector) is not None:
             return selector
         raise LogReaderError(f"execution not found: {selector}")
-    try:
-        reports = ExecutionReportStore(control_worktree).list()
-    except ExecutionReportError as error:
-        raise LogReaderError(str(error)) from error
-    identities = [report.execution_id for report in reports]
+    identities = list(_execution_candidates(control_worktree, selector))
+    current = None
     if state_dir is not None and state_key is not None:
         current = _current_execution_id(state_dir, state_key)
         if current is not None:
@@ -103,7 +100,42 @@ def execution_id(
         raise LogReaderError(
             f"execution prefix is ambiguous: {selector}\nmatches:\n{matching}"
         )
+    if (
+        matches[0] != current
+        and _execution_report(control_worktree, matches[0]) is None
+    ):
+        raise LogReaderError(f"execution not found: {selector}")
     return matches[0]
+
+
+def _execution_candidates(control_worktree: Path, selector: str) -> tuple[str, ...]:
+    """Enumerate report identities without deserializing unrelated reports."""
+    root = control_worktree / "executions"
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise LogReaderError("execution report root is unsafe")
+    candidates: set[str] = set()
+    if not root.is_dir():
+        return ()
+    try:
+        ticket_roots = tuple(root.iterdir())
+        for ticket_root in ticket_roots:
+            if ticket_root.is_symlink():
+                raise LogReaderError("execution report ticket directory is unsafe")
+            if not ticket_root.is_dir():
+                raise LogReaderError("execution report ticket directory is unsafe")
+            for path in ticket_root.iterdir():
+                if (
+                    path.name.endswith(".json")
+                    and path.stem
+                    and all(
+                        character in "0123456789abcdef" for character in path.stem
+                    )
+                    and path.stem.startswith(selector)
+                ):
+                    candidates.add(path.stem)
+    except OSError as error:
+        raise LogReaderError(f"cannot enumerate execution reports: {error}") from error
+    return tuple(sorted(candidates))
 
 
 class _LogCursor:
@@ -427,9 +459,15 @@ def _execution_report(
                 / ticket_id
                 / f"{execution}.json"
             )
-            if report_path.exists():
-                raise LogReaderError(str(error)) from error
-            return None
+            try:
+                report_path.lstat()
+            except FileNotFoundError:
+                if report_path.parent.is_symlink():
+                    raise LogReaderError(str(error)) from error
+                return None
+            except OSError as stat_error:
+                raise LogReaderError(str(error)) from stat_error
+            raise LogReaderError(str(error)) from error
 
     root = control_worktree / "executions"
     if root.is_symlink() or (root.exists() and not root.is_dir()):
@@ -437,10 +475,11 @@ def _execution_report(
     candidates = []
     if root.is_dir():
         for ticket_root in root.iterdir():
-            if ticket_root.is_dir() and not ticket_root.is_symlink():
-                candidate = ticket_root / f"{execution}.json"
-                if candidate.exists():
-                    candidates.append((ticket_root.name, candidate))
+            if ticket_root.is_symlink() or not ticket_root.is_dir():
+                raise LogReaderError("execution report ticket directory is unsafe")
+            candidate = ticket_root / f"{execution}.json"
+            if candidate.exists() or candidate.is_symlink():
+                candidates.append((ticket_root.name, candidate))
     if len(candidates) > 1:
         raise LogReaderError(f"execution identity is ambiguous: {execution}")
     if not candidates:

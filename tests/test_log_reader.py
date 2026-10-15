@@ -65,6 +65,28 @@ def test_execution_prefix_requires_unique_report(tmp_path):
         execution_id(control, "b" * 8)
 
 
+def test_execution_prefix_ignores_unrelated_malformed_report(tmp_path):
+    control = tmp_path / "control"
+    requested = "a" * 32
+    _report(control, requested)
+    unrelated = control / "executions" / "other-ticket"
+    unrelated.mkdir(parents=True)
+    (unrelated / ("b" * 32 + ".json")).write_text("not json")
+
+    assert execution_id(control, "a" * 8) == requested
+
+
+def test_execution_prefix_rejects_malformed_requested_report(tmp_path):
+    control = tmp_path / "control"
+    requested = "a" * 32
+    path = control / "executions" / "ticket" / f"{requested}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("not json")
+
+    with pytest.raises(LogReaderError, match="cannot read execution report"):
+        execution_id(control, "a" * 8)
+
+
 def test_execution_prefix_rejects_ambiguity(tmp_path):
     control = tmp_path / "control"
     _report(control, "a" * 31 + "1", ticket="one")
@@ -408,6 +430,21 @@ def test_execution_follow_rejects_malformed_requested_report(tmp_path):
     log.write_text("output\n")
 
     with pytest.raises(LogReaderError, match="cannot read execution report"):
+        follow_execution(state, "key", control, identifier, 10)
+
+
+def test_execution_follow_rejects_dangling_requested_report(tmp_path):
+    identifier = "f" * 32
+    state = tmp_path / "state"
+    control = tmp_path / "control"
+    path = control / "executions" / "ticket" / f"{identifier}.json"
+    path.parent.mkdir(parents=True)
+    path.symlink_to(path.with_name("missing.json"))
+    log = execution_log_path(state, "key", identifier)
+    log.parent.mkdir(parents=True)
+    log.write_text("output\n")
+
+    with pytest.raises(LogReaderError, match="execution report path is a symlink"):
         follow_execution(state, "key", control, identifier, 10)
 
 
