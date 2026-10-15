@@ -55,6 +55,7 @@ from devlegate.git import (
     remote_exists,
     remote_ref,
     resolve_commit,
+    resolve_object,
     run_git,
     working_tree_status,
     worktree_root,
@@ -2553,7 +2554,12 @@ class ServiceEngine:
         """Run Git under the foreground shutdown policy for this runtime region."""
         self._assert_repository_owner()
         result = _git(repo, *args, check=False)
-        if result.returncode and self._state.get("phase") == "merge_pending":
+        state = getattr(self, "_state", {})
+        if (
+            result.returncode
+            and isinstance(state, dict)
+            and state.get("phase") == "merge_pending"
+        ):
             try:
                 self._raise_on_shutdown_interruption(result)
             except ShutdownInterrupted:
@@ -2682,7 +2688,9 @@ class ServiceEngine:
         try:
             self.current_branch = self._branch_runtime(self.repo)
         except GitObservationError as error:
-            raise DevlegateError(str(error)) from error
+            raise DevlegateError(
+                f"cannot observe control branch {self.control_branch!r}: {error}"
+            ) from error
         if self.current_branch is None:
             if not self.read_only:
                 raise DevlegateError("detached HEAD is not supported")
@@ -2744,7 +2752,9 @@ class ServiceEngine:
                 is not None
             )
         except GitObservationError as error:
-            raise DevlegateError(str(error)) from error
+            raise DevlegateError(
+                f"cannot observe control branch {self.control_branch!r}: {error}"
+            ) from error
 
     def _attach_existing_control(self) -> dict[str, object]:
         fetch = _git(
@@ -5575,7 +5585,7 @@ class ServiceEngine:
         self, ticket_id: str, execution_id: str
     ) -> dict[str, object] | None:
         ref = self._drop_disposition_ref(ticket_id, execution_id)
-        object_id = resolve_commit(self.repo, ref, runner=_git)
+        object_id = resolve_object(self.repo, ref, runner=_git)
         if object_id is None:
             return None
         object = read_object(self.repo, object_id, runner=_git)
@@ -7159,7 +7169,10 @@ class ServiceEngine:
     ) -> StatusSnapshot:
         state_before, state_token_before = self._status_state_observation()
         self._status_snapshot_hook("after-state-before")
-        git_before = self._status_git_observation()
+        try:
+            git_before = self._status_git_observation()
+        except GitObservationError as error:
+            raise DevlegateError(f"cannot observe Git checkout: {error}") from error
         self._status_snapshot_hook("after-git-before")
         try:
             workflow_token_before = _workflow_fingerprint(
@@ -7191,7 +7204,10 @@ class ServiceEngine:
             raise SnapshotChanged from error
         except OSError as error:
             raise DevlegateError(f"cannot observe workflow files: {error}") from error
-        git_after = self._status_git_observation()
+        try:
+            git_after = self._status_git_observation()
+        except GitObservationError as error:
+            raise DevlegateError(f"cannot observe Git checkout: {error}") from error
         state_after, state_token_after = self._status_state_observation()
         if (
             state_token_before != state_token_after
