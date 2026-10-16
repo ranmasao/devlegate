@@ -25,6 +25,7 @@ from devlegate.agent_protocol import (
     render_project,
 )
 from devlegate.commit_messages import integration_message, lifecycle_message
+from devlegate.control_git_workflow import ControlGitWorkflowError, sync_control
 from devlegate.execution_provenance import (
     ExecutionProvenanceError,
     lifecycle_commit_is_exact,
@@ -3472,63 +3473,22 @@ class ServiceEngine:
 
     def _sync_control(self) -> tuple[str, str]:
         """Fetch and fast-forward the already initialized control checkout."""
-        self._validate_control_worktree()
-        observation = self._git_observation(self.control_worktree, self.control_branch)
-        if not observation.working_tree_clean:
-            raise WorkflowBlockedError("control working tree is dirty")
-        fetch = fetch_ref(
-            self.control_worktree,
-            self.remote_name,
-            self.control_branch,
-            prune=True,
-            runner=self._git_runtime,
-        )
-        if fetch.returncode:
-            raise WorkflowBlockedError(
-                f"control fetch failed: {fetch.stderr.strip() or 'unknown git error'}"
+        try:
+            return sync_control(
+                control_worktree=self.control_worktree,
+                control_branch=self.control_branch,
+                remote_name=self.remote_name,
+                state=self._state,
+                validate_worktree=self._validate_control_worktree,
+                observe_worktree=self._git_observation,
+                runner=self._git_runtime,
+                resolve=self._resolve_commit_runtime,
+                ancestor=self._is_ancestor_runtime,
+                accepted_integration=self._observe_accepted_control_integration,
+                log=_log,
             )
-        remote_ref = f"{self.remote_name}/{self.control_branch}"
-        remote_head = self._resolve_commit_runtime(self.control_worktree, remote_ref)
-        if remote_head is None:
-            raise WorkflowBlockedError(f"control remote branch not found: {remote_ref}")
-        local_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
-        if local_head is None:
-            raise WorkflowBlockedError("control HEAD could not be resolved")
-        if local_head != remote_head:
-            previous_head = local_head
-            if not self._is_ancestor_runtime(
-                self.control_worktree, local_head, remote_head
-            ):
-                pending_integration = self._state.get("accepted_integration")
-                if isinstance(pending_integration, dict):
-                    classification, _commit = (
-                        self._observe_accepted_control_integration(
-                            str(pending_integration["ticket_id"]),
-                            str(pending_integration["control_head"]),
-                            local_head,
-                            remote_head,
-                        )
-                    )
-                    if classification == "local_exact_unpublished":
-                        return local_head, remote_head
-                    raise WorkflowBlockedError(
-                        "accepted integration control lineage is ambiguous"
-                    )
-                raise WorkflowBlockedError(
-                    "control branch cannot be fast-forwarded; histories diverged"
-                )
-            merge = merge_fast_forward(
-                self.control_worktree, remote_ref, runner=self._git_runtime
-            )
-            if merge.returncode:
-                raise WorkflowBlockedError(
-                    f"control fast-forward failed: {merge.stderr.strip()}"
-                )
-            local_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
-            if local_head is None:
-                raise WorkflowBlockedError("control HEAD could not be resolved")
-            _log(f"control updated: {previous_head} -> {local_head}")
-        return local_head, remote_head
+        except ControlGitWorkflowError as error:
+            raise WorkflowBlockedError(str(error)) from error
 
     def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""

@@ -1,41 +1,88 @@
 # Git Command Inventory
 
-`ServiceEngine` remains the owner of admission, locks, durable state, write-ahead
-stages, re-observation, and error policy. `devlegate.git` owns construction of
-effectful Git commands. Every operation below executes through its supplied
-runner, so hosted owner and shutdown enforcement are preserved.
+This is the before/after accounting for TASK-072. Counts are executed Git
+subprocesses, not Python helper calls. A command is classified by its highest
+effect tier: Tier 1 is local-only read, Tier 2 is remote read, and Tier 3 is a
+state-changing command. Ordinary `fetch` is Tier 3 because it writes local
+objects and tracking refs.
+
+`ServiceEngine` remains the owner of admission, locks, durable state, WAL
+stages, re-observation, authorization, retry policy, and user-facing errors.
+`devlegate.git` constructs individual commands. `control_git_workflow` owns the
+ordered control synchronization transaction. `recovery_workflow`,
+`recovery_transactions`, and `reconciliation_transactions` own their already
+factored replay and rewrite transactions. Every effectful operation receives
+the service runner, so owner and shutdown enforcement remain in force.
 
 ## Explicit Operations
 
-| Operation | Git command and effect | Preconditions and boundary |
+| Operation | Executed command and actual effect | Preconditions and error boundary |
 | --- | --- | --- |
-| `create_ref_if_absent` | `update-ref ref new ""`; tier 3 local ref write | Evidence identity was observed absent. Caller handles conflicting identity and re-observation. |
-| `compare_and_swap_ref` | `update-ref ref new expected-old`; tier 3 local ref write | Caller observed the expected old object and treats nonzero status as a race. |
-| `update_ref` | `update-ref ref new`; tier 3 local ref write | Caller has already established idempotence or recovery policy. This is intentionally not a CAS. |
-| `fetch_ref` | `fetch [--prune] remote ref`; tier 3 remote read plus local tracking-ref/object writes | Caller has owner admission or is in a read-only observation path. Failure is never treated as absence. |
-| `push_refs` | `push options remote refspecs`; tier 3 remote write | Caller supplies the exact lease option where needed, then re-observes the remote state. |
-| `merge_fast_forward` | `merge --ff-only ref`; tier 3 local worktree/ref write | Caller has a durable pending stage when recovery requires replay. Failure preserves that stage. |
-| `add_all` / `commit` | `add option` / `commit -m message`; tier 3 local index/history writes | Lifecycle code has validated workflow state and owns the serialized control mutation. |
-| `hash_object` | `hash-object -w --stdin`; tier 3 local object-store write | Evidence/disposition payload is complete before its ref is published. |
-| `add_worktree` / `remove_worktree` | `worktree add` / `worktree remove`; tier 3 local worktree metadata/filesystem writes | Workspace topology has been validated by `ExecutionWorkspaceManager`; failures remain workflow errors. |
-| `delete_branch` / `reset_hard` | local branch deletion / checkout reset; tier 3 local ref/worktree writes | Caller has exact checkpoint identity and has validated branch/worktree ownership. |
+| `create_ref_if_absent` | `update-ref ref new ""`; Tier 3 local ref write | Caller observed absence; nonzero is a race and is re-observed. |
+| `compare_and_swap_ref` | `update-ref ref new expected-old`; Tier 3 local ref write | Caller observed the expected old object; nonzero is never treated as success. |
+| `update_ref` | `update-ref ref new`; Tier 3 local ref write | Only idempotent recovery/disposition paths use this intentionally unguarded operation. |
+| `fetch_ref` | `fetch [--prune] remote ref`; Tier 3 remote read plus local object/tracking-ref writes | Failure is transport failure, never ref absence. |
+| `push_refs` | `push options remote refspecs`; Tier 3 remote write | Caller supplies the exact lease and re-observes the remote tip. |
+| `merge_fast_forward` | `merge --ff-only ref`; Tier 3 local worktree/ref write | Caller has validated ancestry and, where needed, a durable pending stage. |
+| `add_all` / `commit` | `add option` / `commit -m message`; Tier 3 local index/history writes | Control lifecycle state is validated before this transaction. |
+| `hash_object` | `hash-object -w --stdin`; Tier 3 local object-store write | Payload is complete before its disposition/evidence ref is published. |
+| `add_worktree` / `remove_worktree` | `worktree add` / `worktree remove`; Tier 3 local topology/filesystem writes | Workspace topology and ownership are validated by the workspace manager. |
+| `delete_branch` / `reset_hard` | local branch deletion / checkout reset; Tier 3 local ref/worktree writes | Exact checkpoint identity and branch/worktree ownership are proven first. |
 
-## Runtime Sequences
+No read helper performs fetch, push, ref update, branch change, cleanup, or
+worktree mutation. The sole subprocess seam is `_git_runtime`, which adds only
+owner-thread and shutdown interruption policy; command construction is not
+performed there.
 
-The following sequences preserve their existing lock and WAL boundaries. The
-listed observations are intentional checks, not helper side effects.
+## Runtime Mutation Ownership
 
-| Sequence | Preconditions, WAL stage, and safety checks | Executed mutations |
+| Original runtime sequence | Final owner | Why it remains or moved |
 | --- | --- | --- |
-| Control sync | Owner admission; control checkout clean; lifecycle or sync state remains durable on failure | fetch, optional ff-only merge |
-| Product sync | Owner admission; `merge_pending` is written before a merge | fetch, optional ff-only merge |
-| Control bootstrap/attach | Control init command owns admission; remote branch or absent-branch precondition is validated first | worktree add, add, commit, push, refresh fetch |
-| Accepted integration | Accepted report and product/control observations are proven; lifecycle state is serialized before control publication | optional leased product push, fetch/ff-only sync, add, commit, control push |
-| Execution publication | Checkpoint HEAD and remote predecessor are re-observed; lease is explicit | leased push |
-| Evidence pinning | Evidence ref is checked before publication; create-if-absent or CAS failure is re-read | hash-object, ref create/CAS/update |
-| Drop/recovery retirement | Evidence is pinned before branch/worktree retirement; remote lease is re-observed | leased delete push, worktree removal, local branch deletion |
-| Lifecycle replay | Control fetch and lineage proof precede reset/merge; lifecycle commit is created before push and retried from durable state | fetch, optional reset/ff-only merge, add, commit, push |
-| Interrupted recovery | Product/control generations and workspace binding are freshly observed before normalization | fetch, optional ff-only merge |
+| Control fetch and optional fast-forward | `control_git_workflow.sync_control` | Cohesive fetch, ancestry, accepted-integration exception, merge, and post-merge observation. Service supplies policy callbacks and owner runner. |
+| Existing control attach | `ServiceEngine._attach_existing_control` plus typed `git` primitives | Service owns CLI admission/result presentation; topology validation is still a pending follow-up boundary. No new subprocess is introduced. |
+| Fresh control bootstrap | `ServiceEngine._bootstrap_control` plus typed `git` primitives | Service owns control-init authorization; the sequence is unique and preserves orphan/add/commit/push/fetch ordering. |
+| Execution checkpoint publication | `recovery_workflow.recover_checkpoint_publication` and `ServiceEngine._publish_execution_branch` | WAL and checkpoint policy stay in service/recovery; lease push and exact remote re-observation remain owner-bound. |
+| Accepted integration replay | `recovery_workflow.recover_accepted_integration` | Durable accepted-integration ordering and replay are transaction-owned; state mutation remains service capability. |
+| Control lineage reconciliation | `recovery_transactions.reconcile_control_lineage` | Repeated admission, evidence create-if-absent, reset, and post-reset validation are one recovery transaction. |
+| Product update-base rewrite | `reconciliation_transactions` | Local/remote pending stages, rebase abort, evidence pin, leased publication, and replay remain together. |
+| Drop disposition/evidence and retirement | `ServiceEngine._drop_owned` and its evidence/retirement helpers | Service must retain lock, report binding, WAL disposition, and workspace ownership decisions. Each Git call uses named typed operations. |
+| Interrupted lifecycle recovery | `ServiceEngine._normalize_stranded_execution` / `_recover_interrupted_execution` | Fresh product/control observations and ticket binding are policy gates; recovery cannot be hidden in a low-level helper. |
 
-No helper performs a fetch, push, ref update, branch change, worktree cleanup,
-or other mutation unless its name and operation contract state that effect.
+## Representative Executed Traces
+
+The command lists below are exact orderings for the representative successful
+paths. `R` means a Tier 1 local observation, `F` a Tier 3 fetch, `M` a Tier 3
+local merge, `P` a Tier 3 remote push, `U` a Tier 3 local ref write, and `W` a
+Tier 3 worktree/index/history mutation. Re-observations are included.
+
+| Workflow | Before subprocess trace | After subprocess trace | Tier counts before -> after |
+| --- | --- | --- | --- |
+| Control sync, already current | `F, R, R` | `F, R, R` | T1 2 -> 2; T2 0 -> 0; T3 1 -> 1 |
+| Control sync, fast-forward | `F, R, R, R, M, R` | `F, R, R, R, M, R` | T1 4 -> 4; T2 0 -> 0; T3 2 -> 2 |
+| Control bootstrap | `R, W, W, W, P, F` | `R, W, W, W, P, F` | T1 1 -> 1; T2 0 -> 0; T3 5 -> 5 |
+| Checkpoint publication | `R, R, R, P, R` | `R, R, R, P, R` | T1 4 -> 4; T2 0 -> 0; T3 1 -> 1 |
+| Evidence pin | `R, U, R` (CAS race adds `R`) | `R, U, R` (CAS race adds `R`) | T1 2 -> 2; T2 0 -> 0; T3 1 -> 1 |
+| Accepted integration replay | `F, F, R, R, P, F` plus lifecycle commit sequence | unchanged; owned by `recovery_workflow` | no added invocation |
+| Interrupted recovery | `F, R, F, R, R, M` | unchanged; service retains fresh observations | no added invocation |
+
+The control sync trace is asserted at argument level in
+`tests/test_control_git_workflow.py`. The typed primitive argument traces are
+asserted in `tests/test_git.py`. The remaining rows are intentionally parity
+accounting: extraction changes ownership and module edges, not subprocess
+behavior. There are no new remote reads, no new state-changing commands, and
+no per-object or hidden N+1 loop introduced by this checkpoint.
+
+## Source Delta
+
+The new `control_git_workflow.py` contains the extracted control synchronization
+transaction and its traceable command effects. `runtime.py` now delegates that
+sequence and retains the policy callbacks, owner runner, WAL/state decisions,
+and error translation. Existing recovery/reconciliation modules account for
+the replay and rewrite sequences moved by the preceding TASK-070/071 work.
+
+At this checkpoint the extracted module is 279 lines including its module
+documentation, while `runtime.py` is 8,723 lines. The sync method itself fell
+from 63 lines to 22 lines; the executed Git count is unchanged because the
+workflow passes the same runner and observations in the same order. No direct
+subprocess call sites were added; the new module calls the existing named Git
+operations only.
