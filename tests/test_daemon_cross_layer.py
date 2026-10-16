@@ -28,6 +28,75 @@ def test_explicit_retry_intent_cannot_leak_to_next_iteration(tmp_path, monkeypat
         None,
     ]
 
+
+@pytest.mark.parametrize("advance_remote", [False, True])
+def test_control_sync_trace_covers_runtime_observations(
+    tmp_path, monkeypatch, advance_remote
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    if advance_remote:
+        publisher = control_publisher(tmp_path)
+        git(publisher, "switch", "devlegate/control")
+        (publisher / "trace-marker").write_text("trace\n")
+        git(publisher, "add", "trace-marker")
+        git(publisher, "commit", "-m", "trace control update")
+        git(
+            publisher,
+            "push",
+            "origin",
+            "HEAD:refs/heads/devlegate/control",
+        )
+
+    original_git = runtime._git
+    trace: list[tuple[str, ...]] = []
+
+    def traced_git(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", traced_git)
+    before = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    local_head, remote_head = engine._sync_control()
+    commands = [
+        ("merge-base", "--is-ancestor")
+        if args[:2] == ("merge-base", "--is-ancestor")
+        else args
+        for args in trace
+    ]
+
+    assert remote_head == local_head
+    if advance_remote:
+        assert local_head != before
+        assert commands == [
+            ("worktree", "list", "--porcelain"),
+            ("rev-parse", "--show-toplevel"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
+            ("status", "--porcelain"),
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+            ("merge-base", "--is-ancestor"),
+            ("merge", "--ff-only", "origin/devlegate/control"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+        ]
+    else:
+        assert local_head == before
+        assert commands == [
+            ("worktree", "list", "--porcelain"),
+            ("rev-parse", "--show-toplevel"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+            ("symbolic-ref", "--quiet", "--short", "HEAD"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
+            ("status", "--porcelain"),
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+        ]
+
 def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     engine._state.update(
