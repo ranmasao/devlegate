@@ -79,3 +79,23 @@ Resolve candidate commit/report association without this cross-product: use an i
 - Do not change historical `executions/` artifacts, rewrite existing feature/product/control history, or self-promote `todo → review`. Let the normal Devlegate worker lifecycle publish the new report and transition.
 
 **Reviewer disposition:** `kanban/review/TASK-077.md → kanban/todo/TASK-077.md`, preserving the same ticket ID and original specification.
+
+## Reviewer decision — 2026-10-16: SECOND HARDENING PASS (return to todo)
+
+**Reviewed execution:** `575d6e3570ba402086cdb41d0ed5999d` at exact feature checkpoint `9796571aab47da7f1088961e0c8a86cff0dabe92`. The worker claim is `completed`, with a clean current `todo → review` lifecycle publication; it is **not curator acceptance**. This section supersedes prior review decisions for the current pass while retaining their historical context.
+
+**Verified improvements (retain them):** `execution_provenance.py` now indexes report-path changes and proves only the newest selected candidate; no more `history × reports` exact-proof cross-product. The real-Git same-checkpoint re-admission test covers the previous false ambiguity. Existing marked curator-annotation and altered-review-content tests remain in place. `runtime.py` was not expanded in this hardening pass.
+
+### Remaining blocker — history-size-dependent Git process amplification and missing command evidence
+
+`resolve_accepted_execution_report()` still runs `history_commits(repo, ..., "executions/<ticket>")` followed by one `commit_changes(repo, commit, runner=runner)` **for every historical commit**. This invokes one separate `git diff-tree` per old execution/history entry, i.e. a history-size-dependent `N+1` Git subprocess pattern. Although linear rather than quadratic, it still misses the explicit TASK-077 requirement to eliminate unnecessary `N+1` calls and provide actual executed-command traces.
+
+**Required fix:** identify the relevant newest report-addition/lifecycle admission in a *bounded number of Git processes* as older historical reports grow, while still proving the selected candidate via the existing exact lifecycle check. A single suitably constrained Git-history observation that yields paths/status and commit identity is one viable approach, but select the minimal robust implementation. Preserve the newest-generation-only, fail-closed rule: if the most recent candidate is tampered, invalid, or does not match the active review generation, reject it rather than silently falling back to earlier reports. Preserve history/ref failure distinctions, immutable evidence, curator-note checks, and the exact feature-branch checkpoint binding. No mutation or remote/network Git operations in the resolver. No new generalized history framework, cache layer, unnecessary protocols, or new resolver logic in `runtime.py`.
+
+**Required proof:** focused real-Git regression or small command-runner spy with multiple historical attempts (e.g. 1, 2, 8, 16) proving that the *executed Git subprocess count for candidate discovery* does **not grow one-for-one with old reports**. Show complete command-level before/after traces for representative normal admission, same-checkpoint retry, invalid newest evidence, and curator annotation. Classify each executed command by effect tier: local-only read, remote-only read, or local/remote state-changing; justify every added invocation, including local reads. Existing recovery/accepted integration invariants must remain green.
+
+### Exact-SHA CI issue — external GitHub rate limit, not a provenance failure
+
+[CI #38947129706](https://github.com/ranmasao/devlegate/actions/runs/38947129706) on `9796571aab47` finished **1 failed, 1224 passed, 1 skipped**, with Ruff skipped after pytest failed. The only failing test, `tests/test_standalone_builder.py::test_standalone_assets_match_pinned_science_reference_mirror`, encountered external HTTP 403 `rate limit exceeded` from `api.github.com/repos/astral-sh/python-build-standalone/releases/tags/20260901`. Do not misclassify this as a source regression, loosen tests, or change unrelated standalone-building code as part of this provenance ticket. **Obtain green full pytest+coverage and Ruff on the next exact checkpoint**; if the external service remains rate-limited, report the blocker accurately and retain the ticket in review rather than claiming a passing full CI.
+
+**Reviewer disposition:** `kanban/review/TASK-077.md → kanban/todo/TASK-077.md` (same ID) for focused hardening. Preserve original ticket requirements, all execution reports, Git history, and existing feature checkpoint. The service owns the next worker execution and new atomic report+`todo → review` publication; reviewer does not self-integrate.
