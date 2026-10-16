@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Extract Git mutation and publication mechanics from runtime"
-"depends_on": ["TASK-071"]
+"depends_on": ["TASK-071", "TASK-077"]
 ---
 
 ## Goal
