@@ -1,0 +1,29 @@
+{
+  "code_base_head": "507da8f926f92cd3be25ab97b5c382b74bdb78b5",
+  "conclusion": "completed",
+  "control_head": "c4ecb93e1bfe4f7fd71714ac9b67dda00066a4c6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-071",
+  "execution_id": "bf44bea11d124012b6cac7f8d3623239",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-071",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-071/bf44bea11d124012b6cac7f8d3623239.md",
+  "report_sha256": "24d09d98cf804b3ae92e6f739a5e55d1e6b298d41882a2cdb672f5de870f1f82",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-071",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "No source or provenance changes were needed. The worktree is clean at exact checkpoint f91d66902b4602f061afbbaab9f28e1873730af9. Structural audit found zero direct read-only Git command constructions in runtime.py; remaining direct Git calls are mutation/transport scope for TASK-072. Local compileall and git diff --check passed. pytest and ruff executables are unavailable in this environment; authoritative exact-SHA CI #38826585503 recorded 1223 passed, 1 skipped, and Ruff green.",
+    "summary": "Verified the existing TASK-071 implementation at f91d669: typed Git inspection primitives are extracted from runtime.py, with no direct read-only Git command construction remaining. Owner-bound runtime transport, failure distinctions, common-directory handling, root-parent behavior, and drop evidence pinning remain intact."
+  },
+  "workspace_head": "f91d66902b4602f061afbbaab9f28e1873730af9"
+}
