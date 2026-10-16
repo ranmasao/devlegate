@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c",
+  "conclusion": "completed",
+  "control_head": "ca71c429b19cae245aea488aec8390b12bd69860",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-072",
+  "execution_id": "4a064ea7192e4a25b490451d9a017e14",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-072",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-072/4a064ea7192e4a25b490451d9a017e14.md",
+  "report_sha256": "6435e8b71b0d15ce8c062e6a7af34679bcaf1a1d037d36e32f6aa5544626ad8e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-072",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused control workflow and daemon cross-layer tests pass; source compilation and diff checks pass. The standalone Ruff executable is unavailable in this workspace.",
+    "summary": "Added full ServiceEngine Git-runner trace regressions for existing-control attach and fresh-control bootstrap, covering nested observations, worktree creation, publication, and refresh. Updated the Git command inventory with exact ordered traces, Tier 1/2/3 classifications, and local versus remote mutation effects."
+  },
+  "workspace_head": "a30447295d6423da442aab23dbb00623090e91ad"
+}
