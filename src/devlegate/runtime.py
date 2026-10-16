@@ -48,14 +48,23 @@ from devlegate.git import (
     GitAncestryError,
     GitObservationError,
     ahead_behind,
+    add_all,
+    add_worktree,
     branch_name,
     commit_changes,
+    commit as git_commit,
     commit_parents,
     commit_range,
     common_dir,
+    compare_and_swap_ref,
+    create_ref_if_absent,
+    delete_branch,
     file_history_commit,
+    fetch_ref,
+    hash_object,
     history_commits,
     is_ancestor,
+    merge_fast_forward,
     parent_commit,
     path_object,
     read_object,
@@ -66,6 +75,10 @@ from devlegate.git import (
     resolve_commit,
     resolve_object,
     run_git,
+    push_refs,
+    remove_worktree,
+    reset_hard,
+    update_ref,
     working_tree_status,
     worktree_paths,
     worktree_root,
@@ -1367,13 +1380,8 @@ class ServiceEngine:
         ):
             raise DevlegateError("forced retry evidence ref has conflicting identity")
         if existing is None:
-            pinned = _git(
-                self.repo,
-                "update-ref",
-                evidence_ref,
-                checkpoint.after_head,
-                "",
-                check=False,
+            pinned = create_ref_if_absent(
+                self.repo, evidence_ref, checkpoint.after_head, runner=_git
             )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve forced retry evidence")
@@ -1547,8 +1555,8 @@ class ServiceEngine:
         if existing is not None and existing != observed_head:
             raise DevlegateError("operator recovery evidence has conflicting identity")
         if existing is None:
-            pinned = _git(
-                self.repo, "update-ref", evidence_ref, observed_head, "", check=False
+            pinned = create_ref_if_absent(
+                self.repo, evidence_ref, observed_head, runner=_git
             )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve the authorized branch HEAD")
@@ -1588,22 +1596,16 @@ class ServiceEngine:
                     "operator recovery evidence has conflicting identity"
                 )
             if remote_existing is None:
-                preserved = _git(
-                    self.repo,
-                    "update-ref",
-                    remote_evidence,
-                    remote_head,
-                    "",
-                    check=False,
+                preserved = create_ref_if_absent(
+                    self.repo, remote_evidence, remote_head, runner=_git
                 )
                 if preserved.returncode:
                     raise DevlegateError("cannot preserve the remote branch HEAD")
-                published = _git(
+                published = push_refs(
                     self.repo,
-                    "push",
                     self.remote_name,
                     f"{remote_head}:{remote_evidence}",
-                    check=False,
+                    runner=_git,
                 )
                 if published.returncode:
                     raise DevlegateError("cannot publish remote recovery evidence")
@@ -1612,13 +1614,12 @@ class ServiceEngine:
                 raise DevlegateError(
                     "execution remote branch changed before recovery CAS"
                 )
-            retired = _git(
+            retired = push_refs(
                 self.repo,
-                "push",
-                f"--force-with-lease=refs/heads/{branch}:{remote_head}",
                 self.remote_name,
                 f"{base_head}:refs/heads/{branch}",
-                check=False,
+                options=(f"--force-with-lease=refs/heads/{branch}:{remote_head}",),
+                runner=_git,
             )
             if retired.returncode:
                 raise DevlegateError(
@@ -1649,13 +1650,8 @@ class ServiceEngine:
             workspace = manager._validate_existing(registration, expected_worktree_head)
             if workspace.head != expected_worktree_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
-            removed = _git(
-                self.repo,
-                "worktree",
-                "remove",
-                "--force",
-                str(manager.path),
-                check=False,
+            removed = remove_worktree(
+                self.repo, manager.path, force=True, runner=_git
             )
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
@@ -1666,13 +1662,8 @@ class ServiceEngine:
         ):
             raise DevlegateError("execution branch changed during explicit recovery")
         if current_head == observed_head:
-            moved = _git(
-                self.repo,
-                "update-ref",
-                branch_ref,
-                str(base_head),
-                observed_head,
-                check=False,
+            moved = compare_and_swap_ref(
+                self.repo, branch_ref, str(base_head), observed_head, runner=_git
             )
             if moved.returncode:
                 raise DevlegateError(
@@ -1939,13 +1930,12 @@ class ServiceEngine:
                 f"control local HEAD changed; expected {from_head}, "
                 f"found {local}"
             )
-        fetch = _git(
+        fetch = fetch_ref(
             self.control_worktree,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.control_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         if fetch.returncode:
             raise DevlegateError(
@@ -2784,8 +2774,8 @@ class ServiceEngine:
             ) from error
 
     def _attach_existing_control(self) -> dict[str, object]:
-        fetch = _git(
-            self.repo, "fetch", self.remote_name, self.control_branch, check=False
+        fetch = fetch_ref(
+            self.repo, self.remote_name, self.control_branch, runner=_git
         )
         if fetch.returncode:
             raise DevlegateError(
@@ -2865,7 +2855,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "local control branch diverges from the remote control branch"
                 )
-        args = ["worktree", "add"]
+        args: list[str] = []
         if not local_branch:
             args += ["--track", "-b", self.control_branch]
             args += [
@@ -2874,7 +2864,7 @@ class ServiceEngine:
             ]
         else:
             args += [str(self.control_worktree), self.control_branch]
-        created = _git(self.repo, *args, check=False)
+        created = add_worktree(self.repo, *args, runner=_git)
         if created.returncode:
             raise DevlegateError(
                 f"cannot attach control worktree: {created.stderr.strip()}"
@@ -2899,15 +2889,13 @@ class ServiceEngine:
                 "remote branch is absent"
             )
         self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
-        created = _git(
+        created = add_worktree(
             self.repo,
-            "worktree",
-            "add",
             "--orphan",
             "-b",
             self.control_branch,
             str(self.control_worktree),
-            check=False,
+            runner=_git,
         )
         if created.returncode:
             raise DevlegateError(
@@ -2918,35 +2906,32 @@ class ServiceEngine:
                 directory = self.control_worktree / configured_path
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / ".gitkeep").touch()
-            added = _git(self.control_worktree, "add", "--all", check=False)
+            added = add_all(self.control_worktree, runner=_git)
             if added.returncode:
                 raise DevlegateError(
                     f"cannot stage initial control state: {added.stderr.strip()}"
                 )
-            committed = _git(
+            committed = git_commit(
                 self.control_worktree,
-                "commit",
-                "-m",
                 "Initialize Devlegate control plane",
-                check=False,
+                runner=_git,
             )
             if committed.returncode:
                 raise DevlegateError(
                     f"cannot commit initial control state: {committed.stderr.strip()}"
                 )
-            pushed = _git(
+            pushed = push_refs(
                 self.control_worktree,
-                "push",
                 self.remote_name,
                 f"HEAD:refs/heads/{self.control_branch}",
-                check=False,
+                runner=_git,
             )
             if pushed.returncode:
                 raise DevlegateError(
                     f"cannot publish initial control branch: {pushed.stderr.strip()}"
                 )
-            refreshed = _git(
-                self.repo, "fetch", self.remote_name, self.control_branch, check=False
+            refreshed = fetch_ref(
+                self.repo, self.remote_name, self.control_branch, runner=_git
             )
             if refreshed.returncode:
                 raise DevlegateError(
@@ -3491,13 +3476,12 @@ class ServiceEngine:
         observation = self._git_observation(self.control_worktree, self.control_branch)
         if not observation.working_tree_clean:
             raise WorkflowBlockedError("control working tree is dirty")
-        fetch = self._git_runtime(
+        fetch = fetch_ref(
             self.control_worktree,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.control_branch,
-            check=False,
+            prune=True,
+            runner=self._git_runtime,
         )
         if fetch.returncode:
             raise WorkflowBlockedError(
@@ -3533,8 +3517,8 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "control branch cannot be fast-forwarded; histories diverged"
                 )
-            merge = self._git_runtime(
-                self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+            merge = merge_fast_forward(
+                self.control_worktree, remote_ref, runner=self._git_runtime
             )
             if merge.returncode:
                 raise WorkflowBlockedError(
@@ -3689,13 +3673,12 @@ class ServiceEngine:
         pending_agent_execution = state_phase == "agent_pending"
         had_remote_change = False
         local_ahead = False
-        fetch = self._git_runtime(
+        fetch = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=self._git_runtime,
         )
         if fetch.returncode:
             _log(f"fetch failed: {fetch.stderr.strip() or 'unknown git error'}")
@@ -3793,8 +3776,8 @@ class ServiceEngine:
                         changed_paths=changed_paths,
                         control_head=control_head,
                     )
-                    merge = self._git_runtime(
-                        self.repo, "merge", "--ff-only", remote_ref, check=False
+                    merge = merge_fast_forward(
+                        self.repo, remote_ref, runner=self._git_runtime
                     )
                     if merge.returncode:
                         self._log_sync_failure(local_head, remote_ref, merge.stderr)
@@ -3842,8 +3825,8 @@ class ServiceEngine:
                     changed_paths=changed_paths,
                     control_head=control_head,
                 )
-                merge = self._git_runtime(
-                    self.repo, "merge", "--ff-only", remote_ref, check=False
+                merge = merge_fast_forward(
+                    self.repo, remote_ref, runner=self._git_runtime
                 )
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)
@@ -4562,12 +4545,8 @@ class ServiceEngine:
                 and existing_evidence != checkpoint.after_head
             ):
                 raise DevlegateError("reconciliation evidence ref is inconsistent")
-            pinned = _git(
-                self.repo,
-                "update-ref",
-                evidence_ref,
-                checkpoint.after_head,
-                check=False,
+            pinned = update_ref(
+                self.repo, evidence_ref, checkpoint.after_head, runner=_git
             )
             if pinned.returncode:
                 raise DevlegateError(
@@ -4742,13 +4721,14 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "zero-delta execution branch changed before retirement"
                 )
-            retired = _git(
+            retired = push_refs(
                 self.repo,
-                "push",
-                f"--force-with-lease=refs/heads/{report.execution_branch}:{remote}",
                 self.remote_name,
                 f":refs/heads/{report.execution_branch}",
-                check=False,
+                options=(
+                    f"--force-with-lease=refs/heads/{report.execution_branch}:{remote}",
+                ),
+                runner=_git,
             )
             if (
                 retired.returncode
@@ -4781,9 +4761,7 @@ class ServiceEngine:
                 "zero-delta execution branch changed before retirement"
             )
         if local_head is not None:
-            removed = _git(
-                self.repo, "branch", "-D", report.execution_branch, check=False
-            )
+            removed = delete_branch(self.repo, report.execution_branch, runner=_git)
             if removed.returncode:
                 raise WorkflowBlockedError(
                     removed.stderr.strip()
@@ -5093,13 +5071,12 @@ class ServiceEngine:
                     "execution predecessor is not an ancestor of checkpoint"
                 )
         lease = f"refs/heads/{workspace.branch}:{expected_remote_head or ''}"
-        pushed = _git(
+        pushed = push_refs(
             workspace.path,
-            "push",
-            f"--force-with-lease={lease}",
             self.remote_name,
             f"{checkpoint_head}:refs/heads/{workspace.branch}",
-            check=False,
+            options=(f"--force-with-lease={lease}",),
+            runner=_git,
         )
         if pushed.returncode:
             current_remote_head = self._execution_remote_head(workspace.branch)
@@ -5256,12 +5233,8 @@ class ServiceEngine:
         if checkpoint_is_ancestor:
             pass
         elif product_is_ancestor:
-            pushed = _git(
-                self.repo,
-                "push",
-                self.remote_name,
-                f"{checkpoint}:{product_ref}",
-                check=False,
+            pushed = push_refs(
+                self.repo, self.remote_name, f"{checkpoint}:{product_ref}", runner=_git
             )
             if pushed.returncode:
                 raise DevlegateError(
@@ -5298,21 +5271,13 @@ class ServiceEngine:
         if status:
             raise WorkflowBlockedError("product checkout is not safely synchronized")
         if current != checkpoint:
-            fetch = _git(
-                self.repo,
-                "fetch",
-                self.remote_name,
-                self.remote_branch,
-                check=False,
+            fetch = fetch_ref(
+                self.repo, self.remote_name, self.remote_branch, runner=_git
             )
             if fetch.returncode:
                 raise WorkflowBlockedError("cannot refresh published product branch")
-            sync = _git(
-                self.repo,
-                "merge",
-                "--ff-only",
-                f"{self.remote_name}/{self.remote_branch}",
-                check=False,
+            sync = merge_fast_forward(
+                self.repo, f"{self.remote_name}/{self.remote_branch}", runner=_git
             )
             if sync.returncode:
                 raise WorkflowBlockedError(
@@ -5345,12 +5310,11 @@ class ServiceEngine:
                 ticket_id, expected_head, current, None
             )
             if classification == "local_exact_unpublished" and commit is not None:
-                push = _git(
+                push = push_refs(
                     self.control_worktree,
-                    "push",
                     self.remote_name,
                     f"{commit}:refs/heads/{self.control_branch}",
-                    check=False,
+                    runner=_git,
                 )
                 if push.returncode:
                     raise DevlegateError(
@@ -5374,11 +5338,9 @@ class ServiceEngine:
             )
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
         ticket.path.rename(target)
-        _git(self.control_worktree, "add", "-A")
-        commit = _git(
+        add_all(self.control_worktree, option="-A", runner=_git)
+        commit = git_commit(
             self.control_worktree,
-            "commit",
-            "-m",
             integration_message(
                 ticket_id,
                 ticket.title,
@@ -5390,7 +5352,7 @@ class ServiceEngine:
                 ),
                 report.workspace_head or "",
             ),
-            check=False,
+            runner=_git,
         )
         if commit.returncode:
             raise DevlegateError(
@@ -5405,12 +5367,11 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "created accepted integration commit is not exact"
             )
-        push = _git(
+        push = push_refs(
             self.control_worktree,
-            "push",
             self.remote_name,
             f"{commit_head}:refs/heads/{self.control_branch}",
-            check=False,
+            runner=_git,
         )
         if push.returncode:
             raise DevlegateError(
@@ -5569,22 +5530,14 @@ class ServiceEngine:
                 raise DevlegateError("drop disposition intent is inconsistent")
             return
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        blob = _git(
-            self.repo,
-            "hash-object",
-            "-w",
-            "--stdin",
-            input_text=encoded,
-            check=False,
-        )
+        blob = hash_object(self.repo, encoded, runner=_git)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition intent")
-        updated = _git(
+        updated = update_ref(
             self.repo,
-            "update-ref",
             self._drop_disposition_ref(report.ticket_id, report.execution_id),
             blob.stdout.strip(),
-            check=False,
+            runner=_git,
         )
         if updated.returncode:
             reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
@@ -5600,13 +5553,7 @@ class ServiceEngine:
         if observed is not None and observed != checkpoint:
             raise DevlegateError("drop execution evidence ref is inconsistent")
         if observed is None:
-            pinned = _git(
-                self.repo,
-                "update-ref",
-                evidence_ref,
-                checkpoint,
-                check=False,
-            )
+            pinned = update_ref(self.repo, evidence_ref, checkpoint, runner=_git)
             if pinned.returncode:
                 reread = resolve_commit(self.repo, evidence_ref, runner=_git)
                 if reread != checkpoint:
@@ -5619,25 +5566,14 @@ class ServiceEngine:
             if existing.get("disposition") not in {"dropping", "dropped"}:
                 raise DevlegateError("drop disposition evidence is inconsistent")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        blob = _git(
-            self.repo,
-            "hash-object",
-            "-w",
-            "--stdin",
-            input_text=encoded,
-            check=False,
-        )
+        blob = hash_object(self.repo, encoded, runner=_git)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition evidence")
         disposition_ref = self._drop_disposition_ref(
             report.ticket_id, report.execution_id
         )
-        updated = _git(
-            self.repo,
-            "update-ref",
-            disposition_ref,
-            blob.stdout.strip(),
-            check=False,
+        updated = update_ref(
+            self.repo, disposition_ref, blob.stdout.strip(), runner=_git
         )
         if updated.returncode:
             reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
@@ -5763,13 +5699,14 @@ class ServiceEngine:
         if remote is not None and remote != expected:
             raise DevlegateError("execution remote changed before drop")
         if remote == expected:
-            deleted = _git(
+            deleted = push_refs(
                 self.repo,
-                "push",
-                f"--force-with-lease=refs/heads/{report.execution_branch}:{expected}",
                 self.remote_name,
                 f":refs/heads/{report.execution_branch}",
-                check=False,
+                options=(
+                    f"--force-with-lease=refs/heads/{report.execution_branch}:{expected}",
+                ),
+                runner=_git,
             )
             if deleted.returncode:
                 remaining = self._execution_remote_head(report.execution_branch)
@@ -5792,9 +5729,7 @@ class ServiceEngine:
         if local_head is not None and local_head != expected:
             raise DevlegateError("local execution branch changed before drop")
         if local_head is not None:
-            removed = _git(
-                self.repo, "branch", "-D", report.execution_branch, check=False
-            )
+            removed = delete_branch(self.repo, report.execution_branch, runner=_git)
             if removed.returncode:
                 raise DevlegateError(
                     removed.stderr.strip() or "cannot retire local execution branch"
@@ -5826,13 +5761,12 @@ class ServiceEngine:
             branch = None
             local_head = ""
             dirty = True
-        fetch = _git(
+        fetch = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         remote_head = (
             self._resolve_commit_runtime(
@@ -5903,12 +5837,8 @@ class ServiceEngine:
         existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
         if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
-        pinned = _git(
-            self.repo,
-            "update-ref",
-            evidence_ref,
-            str(report.workspace_head),
-            check=False,
+        pinned = update_ref(
+            self.repo, evidence_ref, str(report.workspace_head), runner=_git
         )
         if pinned.returncode:
             raise WorkflowBlockedError(
@@ -5988,13 +5918,12 @@ class ServiceEngine:
         if not isinstance(local_head, str) or not isinstance(remote_head, str):
             raise WorkflowBlockedError("execution product binding is incomplete")
         self._assert_product_checkout_unchanged(self.current_branch, local_head)
-        product_fetch = _git(
+        product_fetch = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         product_ref = f"{self.remote_name}/{self.remote_branch}"
         observed_product = resolve_commit(self.repo, product_ref, runner=_git)
@@ -6274,11 +6203,9 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 f"resulting ticket store is invalid: {error}"
             ) from error
-        _git(self.control_worktree, "add", "-A")
-        committed = _git(
+        add_all(self.control_worktree, option="-A", runner=_git)
+        committed = git_commit(
             self.control_worktree,
-            "commit",
-            "-m",
             lifecycle_message(
                 report.ticket_id,
                 ticket.title,
@@ -6290,7 +6217,7 @@ class ServiceEngine:
                     else report.result.reason
                 ),
             ),
-            check=False,
+            runner=_git,
         )
         if committed.returncode:
             raise DevlegateError(
@@ -6316,13 +6243,12 @@ class ServiceEngine:
             status = self._status_runtime(self.control_worktree)
             if status:
                 raise WorkflowBlockedError("control working tree is dirty")
-            fetched = _git(
+            fetched = fetch_ref(
                 self.control_worktree,
-                "fetch",
-                "--prune",
                 self.remote_name,
                 self.control_branch,
-                check=False,
+                prune=True,
+                runner=_git,
             )
             if fetched.returncode:
                 raise WorkflowBlockedError(
@@ -6368,12 +6294,8 @@ class ServiceEngine:
                             "local control history diverges from published lifecycle"
                         )
                     else:
-                        merge = _git(
-                            self.control_worktree,
-                            "merge",
-                            "--ff-only",
-                            remote_ref,
-                            check=False,
+                        merge = merge_fast_forward(
+                            self.control_worktree, remote_ref, runner=_git
                         )
                         if merge.returncode:
                             raise WorkflowBlockedError(
@@ -6410,24 +6332,16 @@ class ServiceEngine:
                         apply_conclusion=apply_conclusion,
                     )
                     self._prove_control_descendant(remote_head, report)
-                    reset = _git(
-                        self.control_worktree,
-                        "reset",
-                        "--hard",
-                        remote_head,
-                        check=False,
+                    reset = reset_hard(
+                        self.control_worktree, remote_head, runner=_git
                     )
                     if reset.returncode:
                         raise WorkflowBlockedError(
                             "cannot replay lifecycle on control descendant"
                         )
                 if local_remote and local_head != remote_head:
-                    merge = _git(
-                        self.control_worktree,
-                        "merge",
-                        "--ff-only",
-                        remote_ref,
-                        check=False,
+                    merge = merge_fast_forward(
+                        self.control_worktree, remote_ref, runner=_git
                     )
                     if merge.returncode:
                         raise WorkflowBlockedError(
@@ -6439,8 +6353,8 @@ class ServiceEngine:
                     f"control advanced during execution: {report.control_head[:12]} "
                     f"-> {remote_head[:12]}; replaying compatible lifecycle"
                 )
-                merge = _git(
-                    self.control_worktree, "merge", "--ff-only", remote_ref, check=False
+                merge = merge_fast_forward(
+                    self.control_worktree, remote_ref, runner=_git
                 )
                 if merge.returncode:
                     raise WorkflowBlockedError("cannot fast-forward control descendant")
@@ -6449,12 +6363,11 @@ class ServiceEngine:
             lifecycle_head = self._apply_lifecycle_once(
                 report, apply_conclusion=apply_conclusion
             )
-            pushed = _git(
+            pushed = push_refs(
                 self.control_worktree,
-                "push",
                 self.remote_name,
                 f"HEAD:refs/heads/{self.control_branch}",
-                check=False,
+                runner=_git,
             )
             if pushed.returncode == 0:
                 return lifecycle_head
@@ -7843,13 +7756,12 @@ class ServiceEngine:
         return self._sync_control()
 
     def recovery_fetch_product(self) -> bool:
-        result = self._git_runtime(
+        result = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=self._git_runtime,
         )
         return result.returncode == 0
 
@@ -7972,13 +7884,12 @@ class ServiceEngine:
         if not isinstance(reconciliation, dict):
             raise DevlegateError("reconciliation workspace binding is unavailable")
         workspace_path = Path(str(reconciliation.get("execution_path")))
-        pushed = _git(
+        pushed = push_refs(
             workspace_path,
-            "push",
-            f"--force-with-lease=refs/heads/{branch}:{expected_remote}",
             self.remote_name,
             f"{rewritten_head}:refs/heads/{branch}",
-            check=False,
+            options=(f"--force-with-lease=refs/heads/{branch}:{expected_remote}",),
+            runner=_git,
         )
         observed = self._execution_remote_head(branch)
         if pushed.returncode and observed != rewritten_head:
@@ -7991,13 +7902,8 @@ class ServiceEngine:
     def reconciliation_pin_rewrite_evidence(
         self, reference: str, rewritten_head: str
     ) -> None:
-        pinned = _git(
-            self.repo,
-            "update-ref",
-            reference,
-            rewritten_head,
-            "0" * 40,
-            check=False,
+        pinned = compare_and_swap_ref(
+            self.repo, reference, rewritten_head, "0" * 40, runner=_git
         )
         if pinned.returncode:
             existing = self._resolve_commit_runtime(self.repo, reference)
@@ -8211,13 +8117,12 @@ class ServiceEngine:
             self.current_branch, str(state["local_head"])
         )
         product_ref = f"{self.remote_name}/{self.remote_branch}"
-        product_fetch = _git(
+        product_fetch = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         product_remote = resolve_commit(self.repo, product_ref, runner=_git)
         if product_fetch.returncode or product_remote != state["remote_head"]:
@@ -8228,13 +8133,12 @@ class ServiceEngine:
         status = self._status_runtime(self.control_worktree)
         if status:
             raise DevlegateError("control working tree is dirty")
-        control_fetch = _git(
+        control_fetch = fetch_ref(
             self.control_worktree,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.control_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         control_ref = f"{self.remote_name}/{self.control_branch}"
         control_head = resolve_commit(
@@ -8260,8 +8164,8 @@ class ServiceEngine:
             str(state["selected_ticket_body"]),
         )
         if local_control != control_head:
-            merged = _git(
-                self.control_worktree, "merge", "--ff-only", control_ref, check=False
+            merged = merge_fast_forward(
+                self.control_worktree, control_ref, runner=_git
             )
             if merged.returncode:
                 raise DevlegateError(
@@ -8392,13 +8296,12 @@ class ServiceEngine:
         if current_local_head != state["local_head"]:
             raise DevlegateError("product checkout changed since interrupted execution")
         remote_ref = f"{self.remote_name}/{self.remote_branch}"
-        product_fetch = _git(
+        product_fetch = fetch_ref(
             self.repo,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.remote_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         if product_fetch.returncode:
             raise DevlegateError(
@@ -8411,13 +8314,12 @@ class ServiceEngine:
                 "product remote generation changed since interrupted execution"
             )
         self._validate_control_worktree()
-        control_fetch = _git(
+        control_fetch = fetch_ref(
             self.control_worktree,
-            "fetch",
-            "--prune",
             self.remote_name,
             self.control_branch,
-            check=False,
+            prune=True,
+            runner=_git,
         )
         if control_fetch.returncode:
             raise DevlegateError(

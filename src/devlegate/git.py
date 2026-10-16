@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -16,6 +16,9 @@ class GitAncestryError(RuntimeError):
 
 class GitObservationError(RuntimeError):
     """Git returned an unreadable, malformed, or otherwise unusable result."""
+
+
+GitRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 def _stderr(result: subprocess.CompletedProcess[str]) -> str:
@@ -35,6 +38,175 @@ def run_git(
         capture_output=True,
         check=check,
     )
+
+
+def create_ref_if_absent(
+    cwd: Path,
+    reference: str,
+    object_id: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Create ``reference`` only when it does not already exist.
+
+    The empty expected-old argument is intentional Git create-if-absent
+    semantics, not an unconditional update.
+    """
+    return runner(cwd, "update-ref", reference, object_id, "", check=False)
+
+
+def compare_and_swap_ref(
+    cwd: Path,
+    reference: str,
+    object_id: str,
+    expected_old: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Update ``reference`` only if it still names ``expected_old``."""
+    return runner(
+        cwd, "update-ref", reference, object_id, expected_old, check=False
+    )
+
+
+def update_ref(
+    cwd: Path,
+    reference: str,
+    object_id: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Unconditionally update ``reference``."""
+    return runner(cwd, "update-ref", reference, object_id, check=False)
+
+
+def fetch_ref(
+    cwd: Path,
+    remote: str,
+    ref: str,
+    *,
+    prune: bool = False,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Fetch one remote ref, including Git's local tracking-ref update."""
+    return runner(
+        cwd,
+        "fetch",
+        *(('--prune',) if prune else ()),
+        remote,
+        ref,
+        check=False,
+    )
+
+
+def push_refs(
+    cwd: Path,
+    remote: str,
+    *specs: str,
+    options: Sequence[str] = (),
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Push explicit refspecs and options to a remote."""
+    return runner(cwd, "push", *options, remote, *specs, check=False)
+
+
+def merge_fast_forward(
+    cwd: Path,
+    reference: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Fast-forward the current checkout to ``reference``."""
+    return runner(cwd, "merge", "--ff-only", reference, check=False)
+
+
+def add_all(
+    cwd: Path, *, option: str = "--all", runner: GitRunner = run_git
+) -> subprocess.CompletedProcess[str]:
+    """Stage all tracked and untracked changes in ``cwd``."""
+    return runner(cwd, "add", option, check=False)
+
+
+def commit(
+    cwd: Path, message: str, *, runner: GitRunner = run_git
+) -> subprocess.CompletedProcess[str]:
+    """Create a commit with the supplied message."""
+    return runner(cwd, "commit", "-m", message, check=False)
+
+
+def hash_object(
+    cwd: Path,
+    content: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Write content to the object store and return Git's object id."""
+    return runner(
+        cwd,
+        "hash-object",
+        "-w",
+        "--stdin",
+        check=False,
+        input_text=content,
+    )
+
+
+def add_worktree(
+    cwd: Path,
+    *arguments: str,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Add a worktree using the explicit caller-provided arguments."""
+    return runner(cwd, "worktree", "add", *arguments, check=False)
+
+
+def remove_worktree(
+    cwd: Path,
+    path: Path,
+    *,
+    force: bool = False,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Remove a registered worktree, optionally forcing cleanup."""
+    return runner(
+        cwd,
+        "worktree",
+        "remove",
+        *(('--force',) if force else ()),
+        str(path),
+        check=False,
+    )
+
+
+def create_branch(
+    cwd: Path,
+    branch: str,
+    start_point: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Create a local branch at ``start_point``."""
+    return runner(cwd, "branch", branch, start_point, check=False)
+
+
+def delete_branch(
+    cwd: Path,
+    branch: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Delete a local branch."""
+    return runner(cwd, "branch", "-D", branch, check=False)
+
+
+def reset_hard(
+    cwd: Path,
+    revision: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Reset the checkout and worktree to ``revision``."""
+    return runner(cwd, "reset", "--hard", revision, check=False)
 
 
 def resolve_commit(

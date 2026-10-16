@@ -45,6 +45,72 @@ def test_run_git_preserves_command_and_result_options(monkeypatch, tmp_path):
     }
 
 
+def test_typed_ref_operations_keep_create_cas_and_unconditional_distinct(tmp_path):
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    git.create_ref_if_absent(tmp_path, "refs/a", "a", runner=fake_runner)
+    git.compare_and_swap_ref(tmp_path, "refs/b", "b", "old", runner=fake_runner)
+    git.update_ref(tmp_path, "refs/c", "c", runner=fake_runner)
+
+    assert calls == [
+        (tmp_path, ("update-ref", "refs/a", "a", ""), False),
+        (tmp_path, ("update-ref", "refs/b", "b", "old"), False),
+        (tmp_path, ("update-ref", "refs/c", "c"), False),
+    ]
+
+
+def test_typed_transport_and_worktree_operations_preserve_effectful_trace(tmp_path):
+    calls = []
+
+    def fake_runner(cwd, *args, check, input_text=None):
+        calls.append((cwd, args, check, input_text))
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    git.fetch_ref(tmp_path, "origin", "main", prune=True, runner=fake_runner)
+    git.push_refs(
+        tmp_path,
+        "origin",
+        "HEAD:main",
+        options=("--force-with-lease=refs/heads/main:old",),
+        runner=fake_runner,
+    )
+    git.add_worktree(
+        tmp_path, "--orphan", "-b", "control", "control", runner=fake_runner
+    )
+    git.remove_worktree(tmp_path, tmp_path / "control", force=True, runner=fake_runner)
+
+    assert calls == [
+        (tmp_path, ("fetch", "--prune", "origin", "main"), False, None),
+        (
+            tmp_path,
+            (
+                "push",
+                "--force-with-lease=refs/heads/main:old",
+                "origin",
+                "HEAD:main",
+            ),
+            False,
+            None,
+        ),
+        (
+            tmp_path,
+            ("worktree", "add", "--orphan", "-b", "control", "control"),
+            False,
+            None,
+        ),
+        (
+            tmp_path,
+            ("worktree", "remove", "--force", str(tmp_path / "control")),
+            False,
+            None,
+        ),
+    ]
+
+
 def test_resolve_commit_normalizes_success_and_missing_revision(tmp_path):
     calls = []
 
