@@ -1,0 +1,29 @@
+{
+  "code_base_head": "f91d66902b4602f061afbbaab9f28e1873730af9",
+  "conclusion": "completed",
+  "control_head": "35cb2ec2c5f6946d53de9ebc7662d2b2e562976f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-077",
+  "execution_id": "4a2852be423842bda3a3ae4ac77b1d1d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-077",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-077/4a2852be423842bda3a3ae4ac77b1d1d.md",
+  "report_sha256": "9edcc54efabbec6044e170fb053a1be2777fb0f60188497f1e1b655869b95756",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-077",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Placement: focused `execution_provenance.py`, because accepted-generation resolution and exact Git-history proof are broader than report storage; `ExecutionReportStore` remains unchanged. The module reuses the existing exact lifecycle semantics and is now also called by recovery's `_lifecycle_commit_is_exact`; runtime shrank from 8957 to 8861 LOC, with 226 LOC added in the provenance module and no resolver algorithm or Markdown interpretation added to runtime. Added read-only Git observations are one history scan for the ticket's executions directory, followed by bounded exact-proof observations per candidate; no fetch, push, ref update, worktree mutation, or network operation is performed. Focused integration, recovery, execution-report tests, compilation, Ruff, and diff checks pass.",
+    "summary": "Added read-only execution provenance resolution in `execution_provenance.py` and delegated accepted execution lookup from `runtime.py`. The resolver identifies exact report-plus-`todo -> review` lifecycle commits, supports only explicitly marked append-only curator notes, and rejects altered review content with an actionable diagnostic. Added regressions for the TASK-071 curator-note history and unclassified review edits."
+  },
+  "workspace_head": "2f5de60094cf553774e52a6b260ea6cd45d36076"
+}
