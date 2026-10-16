@@ -83,3 +83,30 @@ Reviewed exact feature checkpoint `d11380674977e246209353b22c8b627ae02c1dda`, ex
 The original requirements of TASK-072 remain authoritative. Maintain `TASK-073` as the independent final architecture gate. Preserve all historical execution reports and source checkpoints. Perform the next implementation via ordinary Devlegate worker execution and atomic `todo → review` lifecycle publication.
 
 **Disposition:** return this **same** ticket `review → todo` for focused hardening; no acceptance and no manual product integration.
+
+## Reviewer decision — 2026-10-16, execution bde4e1eecf76: REWORK REQUIRED
+
+**Reviewed execution:** `bde4e1eecf764dc1b668a7a2ce816200`, checkpoint `4156b70fab5c04622502150180a7249258d79741`, product base `dbff0d65fbf27ead55a6acd7fb17bea4abc8622c`. The atomic `todo → review` publication is control commit `4cb2baa4cbe7064da621630a80e522c9fb208658`. [Exact-checkpoint CI #38955800816](https://github.com/ranmasao/devlegate/actions/runs/38955800816) is **green**, including pytest+coverage and Ruff. Preserve this code and validation baseline.
+
+**Reviewed and satisfactory:** the EUPL SPDX header has been corrected; `control_git_workflow.attach_existing_control()`, `bootstrap_control()`, and `sync_control()` are now the actual owners called by `ServiceEngine`. The old `runtime.py` attach/bootstrap command sequences have been removed, with thin owner/error-policy delegation and focused ordering tests. Do not reimplement or rewrite these flows to satisfy this review.
+
+### One remaining blocker: the inventory miscounts *executed* Git subprocesses
+
+`docs/GIT_COMMAND_INVENTORY.md` currently claims:
+
+- Control sync, already current: `F, R, R` (two Tier-1 reads).
+- Control sync, fast-forward: `F, R, R, R, M, R` (four Tier-1 reads).
+
+These are **not whole-workflow executed-command traces**. The real `ServiceEngine._sync_control() → control_git_workflow.sync_control()` call path includes Git subprocesses inside callback implementations before and after `fetch`:
+
+1. `_validate_control_worktree()`: `worktree_paths`, `worktree_root`, and `branch_name` — **three Git invocations**;
+2. `_git_observation()`: `branch_name`, two `resolve_commit` calls (local and remote), and `working_tree_status` — **four Git invocations**;
+3. `sync_control()`: `fetch_ref` plus two further `resolve_commit` calls — one fetch and **two further Git reads**; and for fast-forward, `is_ancestor`, `merge_fast_forward`, and a final `resolve_commit`.
+
+Thus even the already-current path executes **at least nine** local Git observations, not two; the fast-forward path adds ancestry and post-merge observations. Trace tests in `tests/test_control_git_workflow.py` currently fake `validate_worktree`, `observe_worktree`, `resolve`, and `ancestor`, so their recorded `("fetch", ...)` / `("merge", ...)` list necessarily **omits** these subprocesses. The actual executed-command/effect accounting required by TASK-072 is therefore not yet verified, although the command wrappers and extracted domain boundaries now look appropriate.
+
+**Required narrow fix:** instrument a representative **full call path** through the existing test harness or a single spy on the established Git runner, preserving the real validation/observation callbacks; count every executed Git subprocess, including nested helper calls, in ordinary-current and fast-forward control sync and the moved attach/bootstrap paths. Show correct before/after command order and Tier-1/Tier-2/Tier-3 counts (including local vs remote writes, `fetch` as Tier 3), and revise `docs/GIT_COMMAND_INVENTORY.md` so it accurately states whether each row is a full executed trace or only a subset; provide defensible parity explanations for unchanged publication/recovery flows. Validate error/CAS and owner/shutdown semantics without adding new transport effects or artificial reads. No new tracing framework, additional wrapper layers, speculative refactor, or new ticket is needed.
+
+**Acceptance gate:** retain the current module placement, use a focused integration/trace regression rather than cosmetic mocks, and obtain green exact-checkpoint pytest+coverage and Ruff. Keep TASK-073 as the independent final curator architecture gate.
+
+**Disposition:** return the SAME TASK-072 `review → todo` for this documentation/evidence correction, preserving prior execution reports, checkpoint history and the actual product branch. Do not change this ticket again after the worker resumes execution.
