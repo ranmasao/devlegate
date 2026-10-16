@@ -91,10 +91,85 @@ callbacks, owner runner, control-init admission, state decisions, and error
 translation. Existing recovery/reconciliation modules account for the replay
 and rewrite sequences moved by the preceding TASK-070/071 work.
 
-At this checkpoint the extracted module is 279 lines including its module
-documentation, while `runtime.py` is 8,573 lines. The sync method itself fell
+At this checkpoint the extracted module is 281 lines including its module
+documentation, while `runtime.py` is 8,577 lines. The sync method itself fell
 from 63 lines to 22 lines, and the control-init attach/bootstrap sequences no
 longer have duplicate runtime implementations. The executed Git count is
 unchanged because the workflows pass the same owner-bound runner and preserve
 the same ordering. No direct subprocess call sites were added; the new module
 calls the existing named Git operations only.
+
+## TASK-073 Curator Audit
+
+This audit is against integrated HEAD `a30447295d6423da442aab23dbb00623090e91ad`
+(`release/0.5.7`), including TASK-077. It is evidence for curator review, not an
+approval. The audit result is `incomplete` because the required story-wide
+ownership and executed-trace proof is not present.
+
+### Criteria Matrix
+
+| # | Result | Evidence and gap |
+| --- | --- | --- |
+| 1 | PASS | `runtime.py::_git_runtime` (around lines 2568-2588) is the only raw `_git(repo, *args)` seam; runtime has 2 literal `_git(` occurrences, no direct subprocess call, and no command-specific argv construction outside that seam. |
+| 2 | PARTIAL / FAIL FOR ACCEPTANCE | `control_git_workflow.py` and recovery modules are real boundaries, but `execution_workspace.py`, `recovery_transactions.py`, `recovery_workspace.py`, and `reconciliation_transactions.py` still construct commands through raw `run_git`/`_git` calls. `reconciliation_transactions._git` is explicitly a low-level forwarding wrapper. |
+| 3 | PARTIAL / FAIL FOR ACCEPTANCE | `git.py` distinguishes missing objects, malformed output, negative ancestry, and observation errors in typed helpers. `recovery_transactions.py:60-71` still treats every failed evidence `rev-parse` as permission to attempt `update-ref`, so repository/read errors are not distinguished at that entrypoint. |
+| 4 | UNVERIFIED | Named CAS and re-observation operations exist, but direct unbound runners in the four modules above have not been proven owner/shutdown-bound for every mutation. The `_git_runtime` `merge_pending` retry can repeat an arbitrary command after `ShutdownInterrupted`, including a mutating command. |
+| 5 | PASS (CI evidence only) | Prior exact integrated HEAD CI was green for pytest/coverage and Ruff. This does not waive the missing architectural evidence in criteria 2-4 and 6-7. |
+| 6 | FAIL | Baseline `release/0.5.5` had 183 `_git(`/`run_git(` tokens in `runtime.py`, 1 direct subprocess call, and 8,605 lines. Integrated HEAD has 2 runtime tokens, 0 runtime direct subprocess calls, and 8,577 lines. Remaining raw invocation expressions are: execution workspace 33, reconciliation transactions 19, recovery workspace 10, recovery transactions 4, plus CLI 2, locator 2, and runtime seam 2. These are source counts, not process counts. Git-related runtime import edges changed from 0 direct `devlegate.git` edges to 4 import statements (one logical module edge), while 9 Git-related modules now import `devlegate.git`; no complete module-edge graph was recorded. |
+| 7 | FAIL | Full runner traces prove parity only for current/fast-forward control sync, existing attach, and bootstrap: respectively T1/T2/T3 `9/0/1 -> 9/0/1`, `11/0/2 -> 11/0/2`, `2/1/2 -> 2/1/2`, and `1/1/5 -> 1/1/5`. Publication, evidence pin, accepted replay, interrupted recovery, and reconciliation remain operation subsets, so nested invocation counts and every added-command justification are not proven. No added command is demonstrated in the full traces; subset rows cannot establish that claim. |
+| 8 | NOT SATISFIED | No explicit human curator `APPROVE` exists. A worker or green CI cannot close this story. |
+
+### Direct Git Inventory
+
+| Group | Integrated source locations | Count / effect |
+| --- | --- | --- |
+| Transport | `git.py:30-40` | 1 `subprocess.run` implementation; 16 total subprocess API matches in `src/devlegate`, most of which are worker/CLI process management and not Git. |
+| Runtime seam | `runtime.py::_git_runtime` | 2 raw forwarding call expressions; owner and shutdown checks plus conditional `merge_pending` retry. |
+| Workspace domain | `execution_workspace.py` | 33 `_git`/`run_git` expressions including alias; worktree, branch, submodule, checkpoint, and status effects. |
+| Recovery domain | `recovery_transactions.py`, `recovery_workspace.py` | 14 expressions including imports/aliases; evidence resolve/create, reset, worktree removal, and CAS repair. |
+| Reconciliation domain | `reconciliation_transactions.py` | 19 expressions including `_git` forwarding helper; lineage reads, reset/rebase/abort, status, and recovery reads. |
+| Other callers | `cli.py`, `runtime_locator.py` | 4 expressions; CLI status display and repository-root discovery. |
+
+### Effect-Tier Trace Status
+
+| Representative path | Tier 1 local read | Tier 2 remote read | Tier 3 local mutation | Tier 3 remote mutation | Status |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Control sync current | 9 -> 9 | 0 -> 0 | 1 -> 1 (`fetch` writes local state) | 0 -> 0 | Full runner trace |
+| Control sync fast-forward | 11 -> 11 | 0 -> 0 | 2 -> 2 (`fetch`, `merge`) | 0 -> 0 | Full runner trace |
+| Existing attach | 2 -> 2 | 1 -> 1 | 1 -> 1 (`worktree add`) | 0 -> 0 | Full runner trace |
+| Bootstrap | 1 -> 1 | 1 -> 1 | 4 -> 4 | 1 -> 1 | Full runner trace |
+| Checkpoint publication | not captured | not captured | not captured | not captured | Existing row is a subset only |
+| Evidence pin | not captured | not captured | not captured | not captured | CAS retry count not captured |
+| Accepted replay | not captured | not captured | not captured | not captured | Nested fetch/publication sequence not captured |
+| Interrupted recovery | not captured | not captured | not captured | not captured | `_git_runtime` retry condition not captured |
+| Reconciliation | not captured | not captured | not captured | not captured | Direct raw calls and N+1 lineage reads not traced |
+
+Every named helper in `git.py` documents its command and effect at its function
+docstring, but the remaining direct calls do not have a unified command/effect
+contract. No command may be called justified merely by extraction: the missing
+rows must be captured from the real owner runner, including nested helper calls.
+
+### Bounded Follow-up Handoff
+
+1. Audit or refactor direct Git calls in `execution_workspace.py`,
+   `recovery_transactions.py`, `recovery_workspace.py`, and
+   `reconciliation_transactions.py`; preserve owner lock, shutdown interruption,
+   CAS, WAL ordering, and re-observation. Specifically fix the unchecked
+   evidence-ref failure path at `recovery_transactions.py:60-71`.
+2. Decide and document whether `_git_runtime` may retry arbitrary commands after
+   `ShutdownInterrupted`. If retained, classify the possible duplicate mutation;
+   if moved, retain owner-bound interruption semantics.
+3. Add runner-level traces for publication, evidence pin, accepted replay,
+   interrupted recovery, and reconciliation. Report observed Tier 1/2/3 counts,
+   local versus remote mutations, conditional retries, and a command-level reason
+   for every delta. Do not infer parity from helper call counts.
+4. Re-run the matrix on the resulting exact integrated HEAD and obtain explicit
+   curator `APPROVE`; this worker cannot provide that approval.
+
+### Remaining Risk
+
+The highest risks are arbitrary-command retry in `_git_runtime`, error-to-absence
+conversion around `resolve_commit` and direct `rev-parse`, and untraced CAS and
+publication paths. The current source reduction proves less raw Git in
+`runtime.py`, not fewer Git processes or preserved behavior for all recovery and
+reconciliation paths.
