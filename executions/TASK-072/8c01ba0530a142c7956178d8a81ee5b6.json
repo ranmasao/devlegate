@@ -1,0 +1,33 @@
+{
+  "code_base_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c",
+  "conclusion": "incomplete",
+  "control_head": "e84501aa40a4866e1bc992f3b299597fd4d8061f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-072",
+  "execution_id": "8c01ba0530a142c7956178d8a81ee5b6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-072",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the full pytest suite within the available execution window."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-072",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the full pytest suite within the available execution window."
+    ],
+    "report": null,
+    "summary": "Added a real ServiceEngine._sync_control runner trace covering validation, nested observations, fetch, ancestry, merge, and post-merge resolution for current and fast-forward paths. Corrected the Git inventory to report full control-sync traces with tier counts and explicitly label other rows as operation subsets."
+  },
+  "workspace_head": "474381240bc5e3cea2df78ff4b68ee1facef421c"
+}
