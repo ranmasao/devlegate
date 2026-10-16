@@ -1,0 +1,33 @@
+{
+  "code_base_head": "f91d66902b4602f061afbbaab9f28e1873730af9",
+  "conclusion": "completed",
+  "control_head": "b23d916b9397e029e930dccdc2afddbf6459f63a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-077",
+  "execution_id": "1740c86964d945669ceb67c15868e9e7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-077",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Full exact-checkpoint pytest with coverage and Ruff was not run because pytest/ruff executables were unavailable in the environment; focused pytest suites and compile/diff checks passed."
+  ],
+  "report_artifact": "executions/TASK-077/1740c86964d945669ceb67c15868e9e7.md",
+  "report_sha256": "af7c25d66ce34dd9dd19396d7d9e227795385bfdc0da9df3489d431999e1b19f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-077",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [
+      "Full exact-checkpoint pytest with coverage and Ruff was not run because pytest/ruff executables were unavailable in the environment; focused pytest suites and compile/diff checks passed."
+    ],
+    "report": "Placement: existing execution_provenance.py, reusing lifecycle_commit_is_exact semantics and git.py for Git observations. Added git.py history_changes (+46 LOC) and a 38-LOC parser/command regression; execution_provenance.py changed by 20 LOC, runtime.py LOC/dependencies unchanged, and the only new dependency edge is execution_provenance -> git.history_changes. Candidate discovery is one local-only git log --format=%H%x00 --name-status --no-renames revision -- executions/TICKET process, independent of old report count; exact proof retains its bounded local reads including commit_parents, commit_range, merge-base, report/path reads, and one diff-tree for the selected candidate. No remote-only or state-changing Git command was added.",
+    "summary": "Kept execution_provenance.py as the resolver owner and replaced per-history diff-tree discovery with one indexed Git history observation that selects only the newest report-path generation before applying the existing exact lifecycle proof. Added a focused Git-wrapper regression; runtime.py and execution report schema remain unchanged."
+  },
+  "workspace_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c"
+}
