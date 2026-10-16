@@ -39,3 +39,35 @@ All conditions must be verified on the **integrated product HEAD**, not inferred
 Prepare a concise evidence-based table for criteria 1–8: PASS/FAIL, source references and numeric before/after inventory, including executed-command counts **per effect tier** and a justification for **every added command, even local read-only**. Include a short remaining-risk section, especially around `_git_runtime`, `resolve_commit`, CAS and publication. Audit only; do not self-authorize acceptance or introduce broad code changes.
 
 **Human curator's explicit APPROVE is the only completion signal for this parent story.**
+
+## Reviewer decision — 2026-10-16: STORY AUDIT INCOMPLETE; return to todo
+
+**Reviewed execution:** `9ada49c1cd904f18b90e63c0b5be7b02`, zero-delta checkpoint `a30447295d6423da442aab23dbb00623090e91ad`, exact integrated product HEAD `release/0.5.7`. Atomic report-and-review admission: control commit `657165952213c5500d3eb0e2ef8fc38ba15bfb68`. Execution result is `incomplete` with five remaining items and one curator question. No adjacent MD audit artifact was published (`report_artifact=null`); the execution claim is NOT a complete criteria 1–8 evidence table.
+
+### Correct audit scope (resolve worker question deterministically)
+
+Audit the exact **integrated product HEAD**, including previously integrated TASK-077 provenance hardening and TASK-071/072. Do **not** audit an invented TASK-071/TASK-072-only branch/range or exclude an integrated fix. This follows the normative story gate and requires no separate curator choice.
+
+### Independent acceptance matrix
+
+| # | Finding | Source / evidence |
+| --- | --- | --- |
+| 1 | **PASS** for the narrow runtime argv criterion. No scattered raw Git argv construction remains in `runtime.py`; the one `_git_runtime()` seam calls `_git(repo, *args)` and contains a retry. | `src/devlegate/runtime.py::_git_runtime`, lines ~2568–2588 |
+| 2 | **PARTIAL / NOT PROVEN story-wide.** Cohesive `control_git_workflow` and recovery modules are real architectural improvements, but several domain helpers still construct raw Git commands and have no demonstrated unified runner/error ownership. | `src/devlegate/execution_workspace.py`, `recovery_transactions.py`, `recovery_workspace.py`, `reconciliation_transactions.py` |
+| 3 | **PARTIAL.** `git.py` has typed ancestry/observation helpers, but remaining raw calls need individual error-semantic review. For instance, `recovery_transactions.reconcile_control_lineage` treats any nonzero `run_git(..., "rev-parse", ..., check=False)` as an absent evidence ref without distinguishing an unreadable/corrupt repository. | `src/devlegate/recovery_transactions.py` lines ~60–76; `git.py` |
+| 4 | **UNVERIFIED** across remaining direct Git entrypoints. Some transactions enforce locks and CAS themselves, but their direct unbound `run_git` paths have not been traced for full owner/shutdown/interrupt semantics. Do not assert that all invariant failures are real bugs without focused reproduction. | `recovery_transactions.py`, `recovery_workspace.py`, `reconciliation_transactions.py`, `execution_workspace.py` |
+| 5 | **PASS** for existing exact-SHA CI, not a waiver of architectural proof. Pytest+coverage and Ruff succeeded on the integrated HEAD. | [GitHub Actions #38965620567](https://github.com/ranmasao/devlegate/actions/runs/38965620567) |
+| 6 | **FAIL** as an acceptance deliverable. The audit did not supply a complete baseline→integrated call-site and module-edge inventory or the required numeric executed-command comparison. Textual `_git(...)`/`run_git(...)` occurrences in `runtime.py` are ~183 at `release/0.5.5` versus 2 in the current product; **this is a source-text count, not subprocess execution cost**. The module's size is ~8606 vs ~8578 lines. | `src/devlegate/runtime.py` at `release/0.5.5` and integrated `release/0.5.7`; `docs/GIT_COMMAND_INVENTORY.md` |
+| 7 | **FAIL** for complete trace/effect proof. `docs/GIT_COMMAND_INVENTORY.md` has validated full runner traces for current/fast-forward control sync and control attach/bootstrap; publication, evidence pin, accepted integration replay and interrupted recovery are explicitly labeled **operation subsets**, not complete executed-command traces. More downstream direct-Git processes are not yet inventoried, nor is the `merge_pending` retry's conditional extra invocation. | `docs/GIT_COMMAND_INVENTORY.md`; `tests/test_daemon_cross_layer.py`; `runtime.py::_git_runtime` |
+| 8 | **NOT SATISFIED.** This is a curator-only architecture gate, and there is no explicit human `APPROVE`. Do not promote a worker's audit or green CI to approval. | This ticket's normative acceptance policy |
+
+### Specific architectural blockers for curator decision
+
+1. **Transport policy:** `_git_runtime()` mixes owner/shutdown checks with a `merge_pending`-dependent retry of the *same arbitrary Git command* after `ShutdownInterrupted`. This can execute a mutating command twice and must be classified and justified or factored into the appropriate domain policy without weakening interruption safety.
+2. **Semantics and ownership:** Audit remaining direct `run_git`/`_git` sites in `recovery_transactions.py`, `reconciliation_transactions.py`, `recovery_workspace.py`, and `execution_workspace.py`. Distinguish cases safely covered by the caller's owner/lock from any actual bypass; do not infer that every raw call is automatically a security defect. Identify concrete fixes for unchecked error/absence distinctions.
+3. **Evidence:** Provide complete executed-command traces, including nested invocation counts and Tier 1/2/3 effect classifications, for representative read, publication, evidence pin, recovery and reconciliation paths, not just partial operation sequences. Any additional Tier-1, Tier-2 or Tier-3 commands require explicit justification. Clearly separate observed counts from inferred parity.
+4. **Human authority:** Only an explicit curator `APPROVE` can close TASK-073. Curator must decide whether the architecture gaps should be addressed by focused implementation work before repeating the final story acceptance audit.
+
+**Scope control:** TASK-073 remains an **audit/report task**, not authorization for a worker to implement the above refactors silently. Its next attempt must produce the missing referenced criteria matrix and a concrete, bounded implementation-gap handoff, or remain `incomplete`. Do not edit existing execution evidence, rewrite product history, or automatically self-approve. Preserve `TASK-073` ID and all earlier accepted child work.
+
+**Reviewer disposition:** move this same ticket `kanban/review/TASK-073.md → kanban/todo/TASK-073.md` with these audit findings. No accepted/done transition.
