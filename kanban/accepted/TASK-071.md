@@ -131,3 +131,13 @@ This checkpoint extracts essentially all formerly direct `rev-parse`, `rev-list`
 ### Disposition
 
 **Implementation appears ready for joint human review, not automatically accepted.** Remain in `kanban/review/TASK-071.md`; await explicit human decision before any `review → accepted` transition or product integration. QA integration remains deferred.
+
+## Final curator disposition — 2026-10-16: ACCEPTED (read-only Git extraction)
+
+**Human review completed after fifth checkpoint.** Approve exact product checkpoint `f91d66902b4602f061afbbaab9f28e1873730af9` from execution `05f571e21f9e4e26932ec7491da1fad6` for normal accepted integration. Exact [CI #38826585503](https://github.com/ranmasao/devlegate/actions/runs/38826585503): **1223 passed, 1 skipped, Ruff passed**. The worker's `incomplete` was due to unavailable local coverage/`.venv` commands; the authoritative exact-checkpoint CI completes this verification requirement.
+
+Curator confirmed the source-side acceptance boundary: `runtime.py` explicit direct read-only Git command construction **105 → 0** since TASK-070, counting nested `worktree list`; total direct `_git()`/`_git_runtime()` call sites **164 → 59**. Remaining 59 are mutation/transport (including effectful `fetch`, ref CAS/update, push, worktree, branch, commit, merge and reset), specifically scoped to TASK-072. These are source call-site counts, **not** measured Git subprocess savings. Shared semantic Git inspection correctly distinguishes negative/missing observations from failures at the relevant callers; owner/shutdown runner and domain ownership stay in place. Previous critical `drop` evidence regression was fixed and crash/replay/IPC regressions are green in CI.
+
+**Nonblocking follow-up observations:** `git.worktree_paths()` and `ExecutionWorkspaceManager._parse_worktree_porcelain()` both parse worktree porcelain for distinct consumers; consider deduplication only as justified focused work, not a reopening of TASK-071. The former excludes bare-repository records without `HEAD`; the supported configuration uses regular checkout/worktrees. Actual executed-command/effect-tier before/after traces and final whole-story verification belong to TASK-072/073, without weakening checks or silently adding Git subprocesses.
+
+**Action:** `kanban/review/TASK-071.md → kanban/accepted/TASK-071.md`. Keep the immutable execution evidence and feature branch intact. This is **not** approval of TASK-073 or permission to bypass normal accepted integration and post-integration checks.
