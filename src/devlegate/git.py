@@ -453,6 +453,52 @@ def history_commits(
     return values
 
 
+def history_changes(
+    cwd: Path,
+    revision: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return path changes for each revision touching ``path``."""
+    result = runner(
+        cwd,
+        "log",
+        "--format=%H%x00",
+        "--name-status",
+        "--no-renames",
+        revision,
+        "--",
+        path,
+        check=False,
+    )
+    if result.returncode:
+        raise GitObservationError(
+            f"cannot inspect history for {path!r}: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    records: list[tuple[str, tuple[str, ...]]] = []
+    commit: str | None = None
+    changes: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        if "\x00" in line:
+            if commit is not None:
+                records.append((commit, tuple(changes)))
+            commit, marker, remainder = line.partition("\x00")
+            if marker != "\x00" or not _is_object_id(commit):
+                raise GitObservationError("Git returned malformed history output")
+            changes = [remainder] if remainder else []
+        else:
+            if commit is None or "\t" not in line:
+                raise GitObservationError("Git returned malformed change output")
+            changes.append(line)
+    if commit is not None:
+        records.append((commit, tuple(changes)))
+    return tuple(records)
+
+
 def ref_exists(
     cwd: Path,
     revision: str,

@@ -108,6 +108,44 @@ def test_resolve_commit_distinguishes_missing_revision_from_git_failure(tmp_path
         raise AssertionError("Git observation failures must not look like missing refs")
 
 
+def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
+    calls = []
+    first = "a" * 40
+    second = "b" * 40
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        return subprocess.CompletedProcess(
+            [],
+            0,
+            f"{first}\x00\nA\texecutions/T-1/one.json\n\n"
+            f"{second}\x00\nM\texecutions/T-1/two.json\n",
+            "",
+        )
+
+    assert git.history_changes(
+        tmp_path, "HEAD", "executions/T-1", runner=fake_runner
+    ) == (
+        (first, ("A\texecutions/T-1/one.json",)),
+        (second, ("M\texecutions/T-1/two.json",)),
+    )
+    assert calls == [
+        (
+            tmp_path,
+            (
+                "log",
+                "--format=%H%x00",
+                "--name-status",
+                "--no-renames",
+                "HEAD",
+                "--",
+                "executions/T-1",
+            ),
+            False,
+        )
+    ]
+
+
 def test_is_ancestor_distinguishes_negative_answer_from_git_error(tmp_path):
     calls = []
 

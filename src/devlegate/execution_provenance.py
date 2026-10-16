@@ -17,7 +17,7 @@ from devlegate.git import (
     commit_changes,
     commit_parents,
     commit_range,
-    history_commits,
+    history_changes,
     is_ancestor,
     path_object,
     read_path,
@@ -167,25 +167,19 @@ def resolve_accepted_execution_report(
         for report in reports
     }
     try:
-        history = history_commits(
+        history = history_changes(
             repo, accepted_parent, f"executions/{reports[0].ticket_id}", runner=runner
         ) if reports else ()
     except GitObservationError as error:
         raise ExecutionProvenanceError(
             "execution admission history is unavailable"
         ) from error
-    # `history` is newest-first.  Indexing report-path changes first keeps
-    # candidate association linear in history size instead of proving every
-    # report against every commit.  It also makes the first valid addition the
-    # only admission generation considered for the accepted transition.
+    # `history` is newest-first and already contains name-status data.  The
+    # single history observation keeps candidate discovery bounded in Git
+    # processes as old retries accumulate.  The first touched report is the
+    # only admission generation considered for this accepted transition.
     candidates: list[tuple[str, ExecutionReport]] = []
-    for commit in history:
-        try:
-            changes = commit_changes(repo, commit, runner=runner)
-        except GitObservationError as error:
-            raise ExecutionProvenanceError(
-                "execution admission history is unavailable"
-            ) from error
+    for commit, changes in history:
         touched = [
             by_path[path]
             for change in changes
