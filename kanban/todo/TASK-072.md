@@ -110,3 +110,15 @@ Thus even the already-current path executes **at least nine** local Git observat
 **Acceptance gate:** retain the current module placement, use a focused integration/trace regression rather than cosmetic mocks, and obtain green exact-checkpoint pytest+coverage and Ruff. Keep TASK-073 as the independent final curator architecture gate.
 
 **Disposition:** return the SAME TASK-072 `review → todo` for this documentation/evidence correction, preserving prior execution reports, checkpoint history and the actual product branch. Do not change this ticket again after the worker resumes execution.
+
+## Reviewer decision — 2026-10-16, execution 8c01ba05: FINAL TRACE EVIDENCE REWORK
+
+**Reviewed:** execution `8c01ba0530a142c7956178d8a81ee5b6`, checkpoint `474381240bc5e3cea2df78ff4b68ee1facef421c`. [Exact-SHA CI #38959457627](https://github.com/ranmasao/devlegate/actions/runs/38959457627) **passed: 1234 tests passed, 1 skipped, Ruff passed**. The worker's `incomplete` status reflects a local full-test timeout; CI satisfied this validation condition. Do **not** rerun or modify product implementation merely to reproduce local timeout.
+
+**Accepted for this review:** `tests/test_daemon_cross_layer.py::test_control_sync_trace_covers_runtime_observations` now intercepts the real ServiceEngine Git runner and proves the complete current-control (10 Git subprocesses) and fast-forward (13 subprocesses) flows, including nested validation, observations, ancestry and re-observation. `docs/GIT_COMMAND_INVENTORY.md` now reports their correct Tier 1/Tier 3 counts and explicitly labels the other rows as operation subsets. Preserve the existing extracted modules and green test baseline.
+
+**Remaining narrow proof requirement:** the preceding reviewer decision explicitly requested *full executed subprocess traces for the moved attach/bootstrap control-init paths*, not merely wrapper call ordering. Existing `tests/test_control_git_workflow.py` tests mock `fetch_ref`, `resolve_commit`, `ref_exists`, `add_worktree`, `commit`, `push` and related operations, and only assert the high-level sequence; they do not measure the nested actual Git invocations for `ServiceEngine.control_init_result()`. Add focused real-Git integration or runner-spy regressions for (a) attaching an existing remote control plane and (b) initializing a fresh control plane, validating total ordered Git commands and effect tiers, including nested reads, local mutations, remote publication and required re-observation. Account for them correctly in `docs/GIT_COMMAND_INVENTORY.md`, distinguishing full traces from subsets. Preserve owner/shutdown enforcement and failure/cleanup behavior. Verify exact-checkpoint full CI pytest+coverage and Ruff.
+
+**Scope:** Evidence/test/documentation correction only; no speculative workflow extraction, new frameworks, feature-branch rewrite, manual integration, or replacement ticket. Retain historical reports and the implementation checkpoint.
+
+**Disposition:** move SAME `TASK-072` from `review` to `todo` in this single commit. The service owns the next execution.
