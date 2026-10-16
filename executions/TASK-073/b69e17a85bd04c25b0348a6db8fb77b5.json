@@ -1,0 +1,43 @@
+{
+  "code_base_head": "a30447295d6423da442aab23dbb00623090e91ad",
+  "conclusion": "incomplete",
+  "control_head": "7657bd2a8e8ba628c53d5ea7fafb94ffe35c170b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-073",
+  "execution_id": "b69e17a85bd04c25b0348a6db8fb77b5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-073",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Should the curator require focused implementation work for the listed direct-runner and trace gaps before the next acceptance audit?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Audit or refactor direct Git calls in execution_workspace.py, recovery_transactions.py, recovery_workspace.py, and reconciliation_transactions.py while preserving ownership, CAS, WAL, and re-observation invariants.",
+    "Resolve and document _git_runtime merge_pending retry semantics for arbitrary mutating commands.",
+    "Capture complete owner-runner traces and Tier 1/2/3 counts for publication, evidence pin, accepted replay, interrupted recovery, and reconciliation.",
+    "Obtain explicit human curator APPROVE after re-running the audit on the final integrated HEAD."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-073",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Should the curator require focused implementation work for the listed direct-runner and trace gaps before the next acceptance audit?"
+    ],
+    "remaining": [
+      "Audit or refactor direct Git calls in execution_workspace.py, recovery_transactions.py, recovery_workspace.py, and reconciliation_transactions.py while preserving ownership, CAS, WAL, and re-observation invariants.",
+      "Resolve and document _git_runtime merge_pending retry semantics for arbitrary mutating commands.",
+      "Capture complete owner-runner traces and Tier 1/2/3 counts for publication, evidence pin, accepted replay, interrupted recovery, and reconciliation.",
+      "Obtain explicit human curator APPROVE after re-running the audit on the final integrated HEAD."
+    ],
+    "report": null,
+    "summary": "Added an evidence-based TASK-073 curator audit to docs/GIT_COMMAND_INVENTORY.md for integrated HEAD a30447295d6423da442aab23dbb00623090e91ad. The audit includes criteria 1-8 results, before/after source inventories, tiered trace status, direct Git call inventory, and bounded follow-up gaps without self-approval."
+  },
+  "workspace_head": "1ec3a1b705d4036137806c7a0f55275b3e48faca"
+}
