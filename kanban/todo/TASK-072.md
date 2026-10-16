@@ -35,3 +35,35 @@ A command can have mixed effects; classify by the **highest applicable tier**, n
 ## Acceptance
 
 Every original raw Git call in `runtime.py` is accounted for in a before/after inventory. Zero scattered raw Git command calls remain in the main runtime; if one owner-bound executor remains, justify that safety boundary explicitly. Report actual removed duplication, changed module edges, LOC and direct-call counts without mistaking renamed call sites for fewer subprocess executions. No workflow behavior or ownership weakening; per-tier before/after executed-command traces, no hidden effects and no automatic acceptance of extra calls at any tier; exact-checkpoint CI green.
+
+## Reviewer decision — 2026-10-16: REWORK REQUIRED (same-ticket hardening)
+
+**Reviewed execution:** `64453551b2974730b0124841bb3038c8`; exact feature checkpoint `fd0765ad2e792c8373577eb29bbe5d666557d120`; product base `dbff0d65fbf27ead55a6acd7fb17bea4abc8622c`. Worker claimed `completed` with no remaining items; this does not confer review acceptance. The atomic lifecycle evidence was published at control `150cfd7f5f8841ab60e5187b99baa1a817089ef9`.
+
+### Verified work to preserve
+
+- Direct raw Git subcommand construction has been removed from ordinary `runtime.py` call sites; `_git_runtime` remains the owner/shutdown-aware Git transport boundary.
+- `git.py` now provides named, explicit ref create-if-absent, compare-and-swap, and unconditional update operations, along with named transport/worktree helpers. Preserve their distinct semantics.
+- `docs/GIT_COMMAND_INVENTORY.md` lists effectful operations and existing WAL/admission checkpoints; the added `test_git.py` spies assert argument-level command construction.
+
+### Blocking gap A — actual domain decomposition, not renaming Git invocations
+
+Current `runtime.py` still owns the Git-specific *sequences* for control/product sync, accepted integration, publication, lifecycle replay, evidence pinning, drop, and reconciliation. Most of the diff replaces `_git(repo, "command", ...)` with one-line `git.some_command(repo, ..., runner=_git)` while leaving complete Git choreography at the original call site. `push_refs(remote, *specs, options=...)`, `add_worktree(*arguments)`, `fetch_ref`, `merge_fast_forward`, etc. are low-level typed command wrappers, **not proof that Git-domain workflows have been extracted**.
+
+The existing ticket explicitly requires meaningful responsibility boundaries and prohibits *cosmetic forwarding layers*. Identify real cohesive Git command sequences that should move into domain workflow modules (existing modules first, small dedicated modules only where justified) while keeping **ServiceEngine** responsible for workflow policy, owner locks, WAL/state transitions, authorization, retries and operator-visible errors. Extract these cohesive responsibilities rather than merely changing method names. Reuse established `git.py` primitives; do not invent a generic VCS interface, broad Protocol expansion, or a parallel owner/transaction framework.
+
+In the worker report, map *every* original runtime mutation site and remaining semantic operation to its final owner and explicitly distinguish cases where keeping orchestration in ServiceEngine is necessary. Demonstrate a **substantive** module boundary: source LOC, dependencies, eliminated duplication, and a before/after map of Git choreography remaining inside `runtime.py`. A zero count of literal raw Git commands alone does not satisfy acceptance.
+
+### Blocking gap B — missing executed-command/effect accounting
+
+The 41-line `docs/GIT_COMMAND_INVENTORY.md` is a useful qualitative catalog, but contains no exact before/after **executed Git command traces**, counts by Tier 1/2/3, changed calls, or quantitative validation of effects and duplicated invocations for representative workflows. The new tests in `tests/test_git.py` check wrapper command strings only; they do not verify whole-flow call parity, ordering, durability boundaries or hidden subprocess effects.
+
+Provide focused trace tests (small spies or existing harnesses, not a new instrumentation framework) and an audit table for control/product synchronization, checkpoint publication, accepted integration, lifecycle replay, evidence pins, and recovery/drop where applicable. Count *executed subprocess invocations*, including nested helpers. Classify actual effects (ordinary fetch is Tier 3), differentiate local/remote mutations, explain every added command (including Tier 1), and prove no new `N+1`, hidden network calls, unintended writes, or loss of necessary re-observation/CAS. The preferred outcome is equal or fewer commands, but do not remove required safety checks just to lower counts.
+
+### Required verification and boundaries
+
+- Regression coverage must exercise representative real workflow or cross-layer paths **before/after extraction**, including lease/CAS races, failed pushes, interrupted recovery, evidence-before-publication and owner/shutdown semantics. Preserve existing full test coverage; add only focused tests for genuinely new boundaries.
+- Exact-checkpoint full pytest with coverage and Ruff must be green. [CI #38952185189](https://github.com/ranmasao/devlegate/actions/runs/38952185189) was still running during this review and must not be represented as successful before it finishes.
+- Avoid expanding unrelated `runtime.py` logic; preserve `TASK-073` as the separate final architecture acceptance gate. Do not change execution reports, rewrite published Git history, integrate product manually or create a replacement ticket.
+
+**Reviewer disposition:** move the **same** `TASK-072` from `kanban/review` back to `kanban/todo` with this hardening specification. Existing implementation and evidence remain intact for the next worker attempt.
