@@ -1,0 +1,29 @@
+{
+  "code_base_head": "f91d66902b4602f061afbbaab9f28e1873730af9",
+  "conclusion": "completed",
+  "control_head": "e23614a44bb255dc0f6f2ed1a6e7cd2c46574440",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-077",
+  "execution_id": "575d6e3570ba402086cdb41d0ed5999d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-077",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-077/575d6e3570ba402086cdb41d0ed5999d.md",
+  "report_sha256": "360c89fe4095f285a995e1d74491d74103ef9922263383ddc9511f79b05699cc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-077",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The resolver performs one read-only `commit_changes` observation per execution-history commit, then runs the existing multi-observation exact proof only for the selected newest candidate, eliminating the history x reports subprocess cross-product. Existing curator-note and altered-review-content behavior remains covered.",
+    "summary": "Hardened `execution_provenance.py` to index report-path history changes, select only the newest accepted review-generation candidate, and fail closed on invalid or modified current evidence without falling back to stale executions. Reused the existing exact lifecycle proof and preserved the thin runtime seam; runtime dependencies and LOC are unchanged, with no new dependencies. Added a real-Git same-checkpoint retry regression covering newest-generation binding."
+  },
+  "workspace_head": "9796571aab47da7f1088961e0c8a86cff0dabe92"
+}
