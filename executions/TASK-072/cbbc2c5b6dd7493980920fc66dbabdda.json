@@ -1,0 +1,33 @@
+{
+  "code_base_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c",
+  "conclusion": "incomplete",
+  "control_head": "bc9c6ee928e08e448acc9fde6d54a21b3cbb3744",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-072",
+  "execution_id": "cbbc2c5b6dd7493980920fc66dbabdda",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-072",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the full pytest suite with coverage and Ruff in an environment where the declared development tools are installed."
+  ],
+  "report_artifact": "executions/TASK-072/cbbc2c5b6dd7493980920fc66dbabdda.md",
+  "report_sha256": "f400abf1ee81671dd5e5bbcbd98fd75119b7b6cb58a3549149e4d5405ed51260",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-072",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the full pytest suite with coverage and Ruff in an environment where the declared development tools are installed."
+    ],
+    "report": "The available environment completed compilation, imports, focused trace execution, and git diff checks. `pytest` and `ruff` are not installed on PATH, so exact-checkpoint full validation could not be executed.",
+    "summary": "Extracted the control synchronization Git choreography into `control_git_workflow.py`, with ServiceEngine retaining admission, owner-bound runner, state/WAL policy, and error translation. Added focused argument-level trace tests and expanded the Git inventory with mutation ownership, effect tiers, and before/after traces."
+  },
+  "workspace_head": "d11380674977e246209353b22c8b627ae02c1dda"
+}

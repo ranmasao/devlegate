@@ -1,0 +1,1 @@
+The available environment completed compilation, imports, focused trace execution, and git diff checks. `pytest` and `ruff` are not installed on PATH, so exact-checkpoint full validation could not be executed.
