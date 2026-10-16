@@ -110,3 +110,24 @@ This checkpoint extracts essentially all formerly direct `rev-parse`, `rev-list`
 ### Disposition
 
 **REWORK: `review → todo` (same TASK-071).** The code extraction is close but the current candidate fails durability and the strict structural acceptance criteria. QA remains deferred and is not introduced here. Preserve all checkpoints, prior execution reports, and the work branch. Human acceptance remains pending after the next review; do not promote the ticket to `accepted` automatically.
+
+## Curator review — 2026-10-16: READY FOR JOINT REVIEW (execution 05f571e21f9e4e26932ec7491da1fad6)
+
+**Exact checkpoint:** `f91d66902b4602f061afbbaab9f28e1873730af9`, one descendant commit after `91de5c30f4b46a89063fe325773b13df728cb31e`. **Keep ticket in review pending human joint verification; do not move to accepted, integrate, reset, or clean up the feature branch.**
+
+### Verified fixes
+
+- Authoritative [CI #38826585503](https://github.com/ranmasao/devlegate/actions/runs/38826585503) at this exact SHA: **1223 passed, 1 skipped; Ruff green**. In the worker's local environment the full suite was unavailable due to missing coverage and `.venv` executables; the immutable execution report declares `incomplete` only for this local verification requirement. Authoritative CI supplies full-suite and Ruff evidence.
+- In `_pin_drop_evidence()`, the incorrect `observed.returncode` access is replaced with `observed is None`; observed SHA mismatches still fail closed. Durable drop, crash boundary, IPC and restart tests pass in exact-checkpoint CI.
+- New `git.worktree_paths()` extracts and validates porcelain worktree registrations, with a `GitObservationError` failure contract, and existing owner-bound `_git_runtime` in the hosted checkout validation path. New tests cover positive and malformed output. New status-remote observation delegates to `remote_exists()`.
+- Static source audit: the previous checkpoint had three remaining explicit read-side calls in `runtime.py` (two `worktree list --porcelain`, one `remote get-url`); the current checkpoint has **zero** direct read-only Git command constructions. Direct `_git()`/`self._git_runtime()` call sites are about **59** now (vs 62 previously and 164 after TASK-070); remaining explicit raw operations concern effectful synchronization/publication and mutation (`fetch`, `push`, `update-ref`, `hash-object -w`, `worktree add/remove`, `branch -D`, `merge`, `reset`, `add`, `commit`). These are the TASK-072 boundary rather than unfinished read extraction. Compared with TASK-070's ~103 top-level read-command calls plus two nested `worktree list` calls, this is ~105 → 0 by the same source-call inventory convention. These figures are **static call-site counts**, not actual Git-process counts.
+
+### For joint verification (nonblocking observations)
+
+1. `git.worktree_paths()` is designed for regular registered checkout/worktree records. Actual Git bare-repository porcelain output has `worktree ...` and `bare` without `HEAD`; the new parser would reject that valid Git format. Devlegate's configured product repo is a regular checkout, so this is outside the supported service topology, but either document that precondition or handle the variant in a future narrow improvement.
+2. The new worktree paths parser and `ExecutionWorkspaceManager._parse_worktree_porcelain()` independently interpret the same Git porcelain format with different result shapes. No new runtime regression observed; decide together whether deduplication is worthwhile and within scope. Avoid expanding TASK-071 without a concrete need.
+3. No runtime subprocess-count measurement has been supplied. The read-call extraction and exactly green CI are demonstrated; changes to measured subprocess counts/performance remain a separate empirical question, not a basis for inventing acceptance failures.
+
+### Disposition
+
+**Implementation appears ready for joint human review, not automatically accepted.** Remain in `kanban/review/TASK-071.md`; await explicit human decision before any `review → accepted` transition or product integration. QA integration remains deferred.
