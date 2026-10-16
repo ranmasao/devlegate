@@ -53,30 +53,31 @@ performed there.
 The control-sync rows below are full executed orderings captured at the
 `ServiceEngine._sync_control()` runner seam. They include worktree validation
 and the observation callback, not only commands issued by
-`control_git_workflow.sync_control`. `R` means a Tier 1 local observation, `F`
-a Tier 3 fetch, `A` a Tier 1 ancestry check, `M` a Tier 3 local merge, `P` a
-Tier 3 remote push, `U` a Tier 3 local ref write, and `W` a Tier 3
-worktree/index/history mutation. Re-observations are included. The other rows
-are operation-level parity records unless explicitly marked as a full trace.
+`control_git_workflow.sync_control`. `R` means a Tier 1 local observation, `L`
+a Tier 2 remote observation via `ls-remote`, `F` a Tier 3 fetch, `A` a Tier 1
+ancestry check, `M` a Tier 3 local merge, `P` a Tier 3 remote push, `U` a Tier
+3 local ref write, and `W` a Tier 3 worktree/index/history mutation.
+Re-observations are included. The attach and bootstrap rows below are also full
+runner traces. The remaining rows are operation-level parity records unless
+explicitly marked as a full trace.
 
 | Workflow | Before subprocess trace | After subprocess trace | Tier counts before -> after |
 | --- | --- | --- | --- |
 | Control sync, already current (full runner trace) | `R, R, R, R, R, R, R, F, R, R` | `R, R, R, R, R, R, R, F, R, R` | T1 9 -> 9; T2 0 -> 0; T3 1 -> 1 |
 | Control sync, fast-forward (full runner trace) | `R, R, R, R, R, R, R, F, R, R, A, M, R` | `R, R, R, R, R, R, R, F, R, R, A, M, R` | T1 11 -> 11; T2 0 -> 0; T3 2 -> 2 |
-| Existing control attach (new worktree, operation subset) | `R, F, R, W` | `R, F, R, W` | subset only; no new invocation |
-| Control bootstrap (operation subset) | `R, W, W, W, P, F` | `R, W, W, W, P, F` | subset only; no new invocation |
+| Existing control attach, new worktree (full runner trace) | `L, F, R, R, W` | `L, F, R, R, W` | T1 2 -> 2; T2 1 -> 1; T3 2 -> 2 (local worktree write; fetch remote read plus local object/ref writes) |
+| Control bootstrap (full runner trace) | `L, R, W, W, W, P, F` | `L, R, W, W, W, P, F` | T1 1 -> 1; T2 1 -> 1; T3 5 -> 5 (local worktree/index/history writes; remote push; fetch remote read plus local object/ref writes) |
 | Checkpoint publication (operation subset) | `R, R, R, P, R` | `R, R, R, P, R` | subset only; no new invocation |
 | Evidence pin (operation subset) | `R, U, R` (CAS race adds `R`) | `R, U, R` (CAS race adds `R`) | subset only; no new invocation |
 | Accepted integration replay (operation subset) | `F, F, R, R, P, F` plus lifecycle commit sequence | unchanged; owned by `recovery_workflow` | subset only; no new invocation |
 | Interrupted recovery (operation subset) | `F, R, F, R, R, M` | unchanged; service retains fresh observations | subset only; no new invocation |
 
-The full control-sync traces are asserted through the real service runner in
-`tests/test_daemon_cross_layer.py`; the test covers both the current and
-fast-forward paths and records the ancestry check and nested observation
-calls. The attach/bootstrap sequence tests in
-`tests/test_control_git_workflow.py` assert workflow operation order, while
-the typed primitive argument traces are asserted in `tests/test_git.py`.
-Those rows are intentionally labeled subsets rather than being presented as
+The full control-sync and control-init traces are asserted through the real
+service runner in `tests/test_daemon_cross_layer.py`; these tests record nested
+observations, remote reads, mutations, publication, and refresh. The focused
+workflow tests in `tests/test_control_git_workflow.py` assert domain ordering,
+while the typed primitive argument traces are asserted in `tests/test_git.py`.
+The other rows are intentionally labeled subsets rather than presented as
 whole-process traces. Extraction changes ownership and module edges, not
 subprocess behavior. There are no new remote reads, no new state-changing
 commands, and no per-object or hidden N+1 loop introduced by this checkpoint.

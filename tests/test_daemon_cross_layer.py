@@ -5,6 +5,8 @@
 """Daemon tests outside host, lifecycle, and worker-loss ownership."""
 
 from _daemon_support import *  # noqa: F403,F405
+from _control_support import fresh_control_fixture
+
 
 def test_explicit_retry_intent_cannot_leak_to_next_iteration(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -96,6 +98,77 @@ def test_control_sync_trace_covers_runtime_observations(
             ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
             ("rev-parse", "--verify", "HEAD^{commit}"),
         ]
+
+
+def test_control_init_attach_trace_covers_full_runtime_path(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    control = engine.control_worktree
+    git(engine.repo, "worktree", "remove", "--force", control)
+    git(engine.repo, "branch", "-D", engine.control_branch)
+
+    original_git = runtime._git
+    trace: list[tuple[str, ...]] = []
+
+    def traced_git(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", traced_git)
+    result = engine.control_init_result()
+
+    assert result["result"] == "attached_existing_remote"
+    assert trace == [
+        ("ls-remote", "origin", "refs/heads/devlegate/control"),
+        ("fetch", "origin", "devlegate/control"),
+        ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
+        ("rev-parse", "--verify", "refs/heads/devlegate/control"),
+        (
+            "worktree",
+            "add",
+            "--track",
+            "-b",
+            "devlegate/control",
+            str(control),
+            "origin/devlegate/control",
+        ),
+    ]
+
+
+def test_control_init_bootstrap_trace_covers_full_runtime_path(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+
+    original_git = runtime._git
+    trace: list[tuple[str, ...]] = []
+
+    def traced_git(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", traced_git)
+    result = engine.control_init_result()
+
+    assert result["result"] == "initialized_new_control_plane"
+    assert trace == [
+        ("ls-remote", "origin", "refs/heads/devlegate/control"),
+        ("rev-parse", "--verify", "refs/heads/devlegate/control"),
+        (
+            "worktree",
+            "add",
+            "--orphan",
+            "-b",
+            "devlegate/control",
+            str(engine.control_worktree),
+        ),
+        ("add", "--all"),
+        ("commit", "-m", "Initialize Devlegate control plane"),
+        ("push", "origin", "HEAD:refs/heads/devlegate/control"),
+        ("fetch", "origin", "devlegate/control"),
+    ]
+
 
 def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
