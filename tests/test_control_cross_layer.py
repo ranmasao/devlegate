@@ -86,6 +86,11 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     assert run_test_iteration(devlegate) == 0
     control = next((state / "worktrees").glob("*/control"))
     review = control / "kanban/review/T-1.md"
+    review.write_text(
+        review.read_text() + "\n<!-- devlegate: curator-note -->\nLooks good.\n"
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "append curator review note")
     review.rename(control / "kanban/accepted/T-1.md")
     git(control, "add", "-A")
     git(control, "commit", "-m", "accept implementation")
@@ -107,6 +112,36 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
         git(working, "rev-parse", "HEAD").stdout.strip()
         == git(working, "rev-parse", "origin/main").stdout.strip()
     )
+
+
+def test_unclassified_review_edit_after_admission_fails_closed(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    review = control / "kanban/review/T-1.md"
+    review.write_text(review.read_text() + "\nChanged acceptance criteria.\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "alter review criteria")
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept altered implementation")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    with pytest.raises(DevlegateError, match="review content changed after admission"):
+        run_test_iteration(devlegate)
 
 def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
     tmp_path, monkeypatch

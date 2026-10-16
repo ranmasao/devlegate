@@ -25,6 +25,11 @@ from devlegate.agent_protocol import (
     render_project,
 )
 from devlegate.commit_messages import integration_message, lifecycle_message
+from devlegate.execution_provenance import (
+    ExecutionProvenanceError,
+    lifecycle_commit_is_exact,
+    resolve_accepted_execution_report,
+)
 from devlegate.execution_result import (
     ExecutionReport,
     ExecutionReportError,
@@ -5163,54 +5168,31 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted ticket transition parent is unavailable"
             )
-        exact_review_commit = file_history_commit(
-            self.control_worktree,
-            parent,
-            f"{self.review_path}/{ticket_id}.md",
-            runner=_git,
-        )
-        if exact_review_commit is None:
-            raise WorkflowBlockedError("review admission transition is unavailable")
-        reports = [
-            report
-            for report in reports
-            if file_history_commit(
-                self.control_worktree,
-                parent,
-                f"executions/{ticket_id}/{report.execution_id}.json",
-                runner=_git,
-            )
-            == exact_review_commit
-        ]
         expected_branch = f"devlegate/work/{ticket_id}"
         remote_head = self._execution_remote_head(expected_branch)
-        matches = [
-            report
-            for report in reports
-            if report.execution_branch == expected_branch
-            and isinstance(report.workspace_head, str)
-            and (
-                report.workspace_head == remote_head
-                or (
-                    remote_head is None
-                    and report.workspace_head == report.code_base_head
-                )
+        try:
+            report = resolve_accepted_execution_report(
+                self.control_worktree,
+                accepted_revision,
+                parent,
+                reports,
+                todo_path=self.todo_path,
+                review_path=self.review_path,
+                accepted_path=self.accepted_path,
+                expected_branch=expected_branch,
+                remote_head=remote_head,
+                runner=self._git_runtime,
             )
-        ]
-        if len(matches) != 1:
-            raise WorkflowBlockedError(
-                f"accepted ticket {ticket_id} has ambiguous or missing completed "
-                "execution evidence"
-            )
-        report = matches[0]
+        except ExecutionProvenanceError as error:
+            raise WorkflowBlockedError(str(error)) from error
         checkpoint = report.workspace_head
         assert checkpoint is not None
         if not all(
             len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
             for value in (
                 checkpoint,
-                matches[0].code_base_head,
-                matches[0].control_head,
+                report.code_base_head,
+                report.control_head,
             )
         ):
             raise WorkflowBlockedError(
@@ -6131,19 +6113,6 @@ class ServiceEngine:
         except WorkflowRecoveryError as error:
             raise WorkflowBlockedError(str(error)) from error
 
-    def _control_report_at(
-        self, commit: str, report: ExecutionReport
-    ) -> ExecutionReport | None:
-        path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        shown = read_path(self.control_worktree, commit, path, runner=_git)
-        if shown is None:
-            return None
-        try:
-            recovered = ExecutionReport.from_dict(json.loads(shown))
-        except (ExecutionReportError, json.JSONDecodeError):
-            return None
-        return recovered if recovered.as_dict() == report.as_dict() else None
-
     def _lifecycle_commit_is_exact(
         self,
         commit: str,
@@ -6151,80 +6120,15 @@ class ServiceEngine:
         *,
         apply_conclusion: bool = True,
     ) -> bool:
-        parents = commit_parents(self.control_worktree, commit, runner=_git)
-        if parents is None or len(parents) != 1:
-            return False
-        parent_head = parents[0]
-        try:
-            lineage = commit_range(
-                self.control_worktree,
-                f"{parent_head}..{commit}",
-                reverse=True,
-                runner=self._git_runtime,
-            )
-        except GitObservationError:
-            return False
-        if lineage != (commit,):
-            return False
-        try:
-            lineage_ancestor = is_ancestor(
-                self.control_worktree, report.control_head, parent_head, runner=_git
-            )
-        except GitAncestryError:
-            return False
-        if not lineage_ancestor:
-            return False
-        if self._control_report_at(commit, report) is None:
-            return False
-        names = commit_changes(self.control_worktree, commit, runner=self._git_runtime)
-        report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        expected = {f"A\t{report_path}"}
-        if report.report_artifact is not None:
-            expected.add(f"A\t{report.report_artifact}")
-        if apply_conclusion and report.result.conclusion != "failed":
-            expected.update(
-                {
-                    f"D\t{self.todo_path}/{report.ticket_id}.md",
-                    f"A\t{self.review_path}/{report.ticket_id}.md",
-                }
-            )
-        if set(names) != expected:
-            return False
-        report_path = f"executions/{report.ticket_id}/{report.execution_id}.json"
-        report_bytes = read_path(
-            self.control_worktree, commit, report_path, runner=self._git_runtime
+        return lifecycle_commit_is_exact(
+            self.control_worktree,
+            commit,
+            report,
+            todo_path=self.todo_path,
+            review_path=self.review_path,
+            runner=self._git_runtime,
+            apply_conclusion=apply_conclusion,
         )
-        if report_bytes is None or report_bytes != report.to_json():
-            return False
-        if report.report_artifact is not None:
-            artifact_bytes = read_path(
-                self.control_worktree,
-                commit,
-                report.report_artifact,
-                runner=self._git_runtime,
-            )
-            if (
-                artifact_bytes is None
-                or report.result.claim is None
-                or artifact_bytes != report.result.claim.report
-            ):
-                return False
-        if apply_conclusion and report.result.conclusion != "failed":
-            parent_blob = path_object(
-                self.control_worktree,
-                parent_head,
-                f"{self.todo_path}/{report.ticket_id}.md",
-                runner=self._git_runtime,
-            )
-            review_blob = path_object(
-                self.control_worktree,
-                commit,
-                f"{self.review_path}/{report.ticket_id}.md",
-                runner=self._git_runtime,
-            )
-            if parent_blob is None or review_blob is None or parent_blob != review_blob:
-                return False
-        return True
 
     def _prove_unpublished_lifecycle_lineage(
         self,
