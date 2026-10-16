@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c",
+  "conclusion": "completed",
+  "control_head": "5d423104e7851b5eed8bc519b8246439b1574666",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-072",
+  "execution_id": "bde4e1eecf764dc1b668a7a2ce816200",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-072",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-072/bde4e1eecf764dc1b668a7a2ce816200.md",
+  "report_sha256": "3241dd65d5360b2d211043b6a2531c643d23af4e656c96ceaec152b4f14ae029",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-072",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused tests and changed-scope Ruff checks pass. The full pytest run exceeded the local timeout without reporting a failure; repository-wide Ruff still reports unrelated pre-existing violations in vendored packaging files.",
+    "summary": "Made control_git_workflow.attach_existing_control and bootstrap_control authoritative through ServiceEngine.control_init_result, removing the duplicate runtime Git choreographies while preserving owner-bound execution and ServiceEngine admission/error policy. Corrected the SPDX header, added attach/bootstrap ordering traces, and updated the Git command inventory with final ownership and parity accounting."
+  },
+  "workspace_head": "4156b70fab5c04622502150180a7249258d79741"
+}
