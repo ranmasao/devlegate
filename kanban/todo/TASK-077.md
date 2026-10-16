@@ -45,3 +45,37 @@ Review-history separation is **not** an implementation requirement in this ticke
 ## Acceptance
 
 Curator verifies the real historical failure no longer confuses a curator edit with a worker admission, that altered requirements still fail closed, and that source responsibilities remain outside `runtime.py`. No automatic acceptance; report any unsupported post-review edit format explicitly rather than granting broad trust.
+
+## Reviewer decision — 2026-10-16: REWORK REQUIRED (return to todo)
+
+**Reviewed execution:** `4a2852be423842bda3a3ae4ac77b1d1d`, checkpoint `2f5de60094cf553774e52a6b260ea6cd45d36076`. Worker concluded `completed` and [exact-checkpoint CI #38923462350](https://github.com/ranmasao/devlegate/actions/runs/38923462350) succeeded. The dedicated `execution_provenance.py`, reuse of lifecycle proof, maintenance docstring and thin runtime boundary are **accepted as implementation direction**, but the current implementation does not yet satisfy all TASK-077 requirements. This is a same-ticket hardening iteration, **not acceptance**.
+
+### Blocking defect A — select the current admission generation
+
+In `resolve_accepted_execution_report()`, `history_commits(..., "executions/<ticket>")` is traversed against **every** stored report, and all qualifying executions are appended to `matches`; `len(matches) != 1` rejects an otherwise valid latest generation.
+
+**Required deterministic regression:**
+1. Execution A publishes exact report+ `todo → review` at checkpoint H.
+2. Curator returns the same ticket `review → todo` without changing the executed specification.
+3. Execution B publishes a second exact report+`todo → review` at the **same checkpoint H** (no new product delta).
+4. Curator performs `review → accepted`.
+5. Only B, the execution bound to the current review-admission generation, can authorize integration; A remains immutable historical evidence and must not cause spurious ambiguity.
+
+Identify the **latest valid admission belonging to the currently accepted review generation**, not merely the newest report by timestamp, the last edit to `review/T.md`, or all reports sharing a SHA. A tampered/invalid latest generation must fail closed; do not silently fall back to an earlier matching execution. Also cover a newer generation with a different checkpoint. Preserve the original exact-commit, report/artifact, branch/remote-checkpoint, ticket specification and curator-annotation checks.
+
+### Blocking defect B — eliminate the history × reports Git-process explosion
+
+The nested `for commit in history: for report in reports:` invokes `lifecycle_commit_is_exact()` for cross-products of unrelated history entries and execution reports. Each exact proof performs multiple Git observations, so static loop complexity can produce quadratic *executed Git subprocess calls* as a ticket accumulates retries.
+
+Resolve candidate commit/report association without this cross-product: use an indexed report lookup and proof of the relevant admission/generation, or another narrowly justified bounded approach. Do not add caching frameworks, a general history API, hidden network calls, or new mutation paths.
+
+**Required regression/measurement:** build Git histories with multiple prior executions (including at least two report+review generations), instrument the actual Git runner, and show command counts per candidate/history size and effect tier before/after. Prove no quadratic amplification, no hidden `N+1` calls, and no new `fetch`/`push`/`update-ref` or remote observations. Preserve necessary TOCTOU checks and fail-closed errors; document any unavoidable extra read command for curator review.
+
+### Completion of this hardening pass
+
+- Keep `execution_provenance.py` as the owner if it remains cohesive; do **not** move resolver logic into `runtime.py` or add a separate review-artifact system. Retain the explanatory docstring and the established review-note convention.
+- Add focused real-Git regressions for both defects, including stale generation versus current generation, identical checkpoint across two executions, tampering/invalid latest evidence, and command-count bounds. Retain existing tests for marked curator notes and rejected unclassified edits.
+- Verify accepted integration and recovery still use correct lifecycle proof semantics; full exact-checkpoint pytest with coverage and Ruff must pass. Report changed LOC, dependency edges, and actual Git subprocess traces, not only helper call counts.
+- Do not change historical `executions/` artifacts, rewrite existing feature/product/control history, or self-promote `todo → review`. Let the normal Devlegate worker lifecycle publish the new report and transition.
+
+**Reviewer disposition:** `kanban/review/TASK-077.md → kanban/todo/TASK-077.md`, preserving the same ticket ID and original specification.
