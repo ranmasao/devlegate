@@ -67,3 +67,5 @@ Provide focused trace tests (small spies or existing harnesses, not a new instru
 - Avoid expanding unrelated `runtime.py` logic; preserve `TASK-073` as the separate final architecture acceptance gate. Do not change execution reports, rewrite published Git history, integrate product manually or create a replacement ticket.
 
 **Reviewer disposition:** move the **same** `TASK-072` from `kanban/review` back to `kanban/todo` with this hardening specification. Existing implementation and evidence remain intact for the next worker attempt.
+
+**CI follow-up on rejected checkpoint `fd0765ad2e79`:** [run #38952185189](https://github.com/ranmasao/devlegate/actions/runs/38952185189) completed with **1228 passed, 1 skipped** in pytest+coverage, but **Ruff failed**: `I001` (unsorted import block) in `src/devlegate/runtime.py`. This is a deterministic source-formatting failure, not an infrastructure issue. Fix the imports as part of the rework, then verify exact-checkpoint CI pytest+coverage **and** Ruff green.
