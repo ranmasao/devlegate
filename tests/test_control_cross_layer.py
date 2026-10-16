@@ -4,6 +4,8 @@
 # ruff: noqa: F403, F405, I001
 """Cross-layer control probes; stronger service companions remain authoritative."""
 
+from dataclasses import replace
+
 from _control_support import *  # noqa: F403,F405
 
 def test_product_workflow_copy_fails_closed(tmp_path):
@@ -142,6 +144,47 @@ def test_unclassified_review_edit_after_admission_fails_closed(
 
     with pytest.raises(DevlegateError, match="review content changed after admission"):
         run_test_iteration(devlegate)
+
+
+def test_accepted_ticket_uses_newest_review_generation_at_same_checkpoint(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    review = control / "kanban/review/T-1.md"
+    first = ExecutionReportStore(control).list("T-1")[0]
+
+    review.rename(control / "kanban/todo/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "retry review generation")
+    retry_parent = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    second = replace(first, execution_id="retry-generation", control_head=retry_parent)
+    ExecutionReportStore(control).write(second)
+    (control / "kanban/todo/T-1.md").rename(review)
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "publish retry generation")
+
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept retry generation")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    assert run_test_iteration(devlegate) == 0
+    message = git(control, "log", "-1", "--format=%B").stdout
+    assert "Devlegate-Execution: retry-generation" in message
 
 def test_integrated_ticket_does_not_suppress_next_runnable_ticket(
     tmp_path, monkeypatch

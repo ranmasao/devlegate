@@ -174,53 +174,77 @@ def resolve_accepted_execution_report(
         raise ExecutionProvenanceError(
             "execution admission history is unavailable"
         ) from error
-    matches: list[ExecutionReport] = []
-    changed_after_admission = False
+    # `history` is newest-first.  Indexing report-path changes first keeps
+    # candidate association linear in history size instead of proving every
+    # report against every commit.  It also makes the first valid addition the
+    # only admission generation considered for the accepted transition.
+    candidates: list[tuple[str, ExecutionReport]] = []
     for commit in history:
-        for report in by_path.values():
-            try:
-                exact = lifecycle_commit_is_exact(
-                    repo,
-                    commit,
-                    report,
-                    todo_path=todo_path,
-                    review_path=review_path,
-                    runner=runner,
-                )
-                admitted = read_path(
-                    repo,
-                    commit,
-                    f"{review_path}/{report.ticket_id}.md",
-                    runner=runner,
-                )
-            except GitObservationError as error:
-                raise ExecutionProvenanceError(
-                    "execution admission history is unavailable"
-                ) from error
-            if not exact:
-                continue
-            if admitted is None or not _review_change_is_annotation(admitted, accepted):
-                changed_after_admission = True
-                continue
-            if (
-                report.execution_branch == expected_branch
-                and isinstance(report.workspace_head, str)
-                and (
-                    report.workspace_head == remote_head
-                    or (
-                        remote_head is None
-                        and report.workspace_head == report.code_base_head
-                    )
-                )
-            ):
-                matches.append(report)
-    if changed_after_admission and len(matches) != 1:
+        try:
+            changes = commit_changes(repo, commit, runner=runner)
+        except GitObservationError as error:
+            raise ExecutionProvenanceError(
+                "execution admission history is unavailable"
+            ) from error
+        touched = [
+            by_path[path]
+            for change in changes
+            if len(change) > 2
+            and change[1] == "\t"
+            and (path := change[2:]) in by_path
+        ]
+        if len(touched) > 1:
+            raise ExecutionProvenanceError(
+                "accepted ticket has ambiguous execution admission history"
+            )
+        if touched:
+            candidates.append((commit, touched[0]))
+
+    if not candidates:
+        raise ExecutionProvenanceError(
+            "accepted ticket has ambiguous or missing completed execution evidence"
+        )
+
+    # The newest report publication is the current review generation.  Do not
+    # fall back to an older retry when this generation fails any proof.
+    commit, report = candidates[0]
+    try:
+        exact = lifecycle_commit_is_exact(
+            repo,
+            commit,
+            report,
+            todo_path=todo_path,
+            review_path=review_path,
+            runner=runner,
+        )
+        admitted = read_path(
+            repo,
+            commit,
+            f"{review_path}/{report.ticket_id}.md",
+            runner=runner,
+        )
+    except GitObservationError as error:
+        raise ExecutionProvenanceError(
+            "execution admission history is unavailable"
+        ) from error
+    if not exact:
+        raise ExecutionProvenanceError(
+            "accepted ticket has ambiguous or missing completed execution evidence"
+        )
+    if admitted is None or not _review_change_is_annotation(admitted, accepted):
         raise ExecutionProvenanceError(
             "review content changed after admission; specification changes are "
             "not trusted"
         )
-    if len(matches) != 1:
+    if not (
+        report.execution_branch == expected_branch
+        and isinstance(report.workspace_head, str)
+        and (
+            report.workspace_head == remote_head
+            or (remote_head is None and report.workspace_head == report.code_base_head)
+        )
+    ):
         raise ExecutionProvenanceError(
             "accepted ticket has ambiguous or missing completed execution evidence"
         )
-    return matches[0]
+    return report
