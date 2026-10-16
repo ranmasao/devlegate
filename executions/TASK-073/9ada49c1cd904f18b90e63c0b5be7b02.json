@@ -1,0 +1,45 @@
+{
+  "code_base_head": "a30447295d6423da442aab23dbb00623090e91ad",
+  "conclusion": "incomplete",
+  "control_head": "96d26409ed22d72853b45095f029a5c6d5a70649",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-073",
+  "execution_id": "9ada49c1cd904f18b90e63c0b5be7b02",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-073",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Should the curator treat the current TASK-077 commits as part of the integrated acceptance HEAD, or require an audit against the TASK-071/TASK-072-only range?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Refactor _git_runtime so it is a transport-only owner/shutdown seam with no merge_pending command policy, and route ServiceEngine Git operations through the appropriate owner-bound semantic/workflow capability.",
+    "Audit and document all remaining raw run_git/_git calls in recovery_transactions.py, reconciliation_transactions.py, recovery_workspace.py, and execution_workspace.py, preserving owner authorization and interruption behavior.",
+    "Capture representative sync, publication, recovery, and read command traces before/after, classify every invocation by effect tier, explain every added invocation, and record local versus remote mutations.",
+    "Run full pytest and Ruff on the exact integrated product HEAD after the focused follow-up changes.",
+    "Obtain explicit human curator APPROVE; green CI is not sufficient."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-073",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Should the curator treat the current TASK-077 commits as part of the integrated acceptance HEAD, or require an audit against the TASK-071/TASK-072-only range?"
+    ],
+    "remaining": [
+      "Refactor _git_runtime so it is a transport-only owner/shutdown seam with no merge_pending command policy, and route ServiceEngine Git operations through the appropriate owner-bound semantic/workflow capability.",
+      "Audit and document all remaining raw run_git/_git calls in recovery_transactions.py, reconciliation_transactions.py, recovery_workspace.py, and execution_workspace.py, preserving owner authorization and interruption behavior.",
+      "Capture representative sync, publication, recovery, and read command traces before/after, classify every invocation by effect tier, explain every added invocation, and record local versus remote mutations.",
+      "Run full pytest and Ruff on the exact integrated product HEAD after the focused follow-up changes.",
+      "Obtain explicit human curator APPROVE; green CI is not sufficient."
+    ],
+    "report": null,
+    "summary": "Audited the integrated HEAD and found the Git extraction incomplete for story acceptance. runtime.py has zero direct Git argv construction, but its shutdown-aware seam contains merge_pending retry policy and many semantic operations still use the unbound run_git runner; the required command-trace and tiered before/after evidence is also absent."
+  },
+  "workspace_head": "a30447295d6423da442aab23dbb00623090e91ad"
+}
