@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dbff0d65fbf27ead55a6acd7fb17bea4abc8622c",
+  "conclusion": "completed",
+  "control_head": "b022b36a8052a05df8a20b1db442a1d6ca2e92bc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-072",
+  "execution_id": "64453551b2974730b0124841bb3038c8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-072",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-072/64453551b2974730b0124841bb3038c8.md",
+  "report_sha256": "43f7439647627022cba74907fea1b3d9d4b2e37375d7f918f7106542777effd6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-072",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Runtime now retains only the owner/shutdown-enforcing executor as its raw Git launch seam; mutation call sites use semantic operations and preserve existing leases, retries, and re-observation.",
+    "summary": "Extracted runtime Git mutation construction into explicit typed operations for create-if-absent refs, CAS refs, unconditional refs, transport, worktrees, lifecycle commits, merges, resets, and evidence objects. Preserved ServiceEngine ownership and interruption seams, added command-trace regression tests, and documented effect classes and WAL/re-observation boundaries in docs/GIT_COMMAND_INVENTORY.md."
+  },
+  "workspace_head": "fd0765ad2e792c8373577eb29bbe5d666557d120"
+}
