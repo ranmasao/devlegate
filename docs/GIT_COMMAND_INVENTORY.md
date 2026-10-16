@@ -39,8 +39,8 @@ performed there.
 | Original runtime sequence | Final owner | Why it remains or moved |
 | --- | --- | --- |
 | Control fetch and optional fast-forward | `control_git_workflow.sync_control` | Cohesive fetch, ancestry, accepted-integration exception, merge, and post-merge observation. Service supplies policy callbacks and owner runner. |
-| Existing control attach | `ServiceEngine._attach_existing_control` plus typed `git` primitives | Service owns CLI admission/result presentation; topology validation is still a pending follow-up boundary. No new subprocess is introduced. |
-| Fresh control bootstrap | `ServiceEngine._bootstrap_control` plus typed `git` primitives | Service owns control-init authorization; the sequence is unique and preserves orphan/add/commit/push/fetch ordering. |
+| Existing control attach | `control_git_workflow.attach_existing_control` | ServiceEngine owns remote-existence admission and result presentation; the workflow owns fetch, topology/ancestry validation, and conditional worktree creation. |
+| Fresh control bootstrap | `control_git_workflow.bootstrap_control` | ServiceEngine owns control-init authorization; the workflow owns orphan worktree/add/commit/push/fetch ordering. |
 | Execution checkpoint publication | `recovery_workflow.recover_checkpoint_publication` and `ServiceEngine._publish_execution_branch` | WAL and checkpoint policy stay in service/recovery; lease push and exact remote re-observation remain owner-bound. |
 | Accepted integration replay | `recovery_workflow.recover_accepted_integration` | Durable accepted-integration ordering and replay are transaction-owned; state mutation remains service capability. |
 | Control lineage reconciliation | `recovery_transactions.reconcile_control_lineage` | Repeated admission, evidence create-if-absent, reset, and post-reset validation are one recovery transaction. |
@@ -59,30 +59,34 @@ Tier 3 worktree/index/history mutation. Re-observations are included.
 | --- | --- | --- | --- |
 | Control sync, already current | `F, R, R` | `F, R, R` | T1 2 -> 2; T2 0 -> 0; T3 1 -> 1 |
 | Control sync, fast-forward | `F, R, R, R, M, R` | `F, R, R, R, M, R` | T1 4 -> 4; T2 0 -> 0; T3 2 -> 2 |
+| Existing control attach (new worktree) | `R, F, R, W` | `R, F, R, W` | T1 2 -> 2; T2 0 -> 0; T3 2 -> 2 |
 | Control bootstrap | `R, W, W, W, P, F` | `R, W, W, W, P, F` | T1 1 -> 1; T2 0 -> 0; T3 5 -> 5 |
 | Checkpoint publication | `R, R, R, P, R` | `R, R, R, P, R` | T1 4 -> 4; T2 0 -> 0; T3 1 -> 1 |
 | Evidence pin | `R, U, R` (CAS race adds `R`) | `R, U, R` (CAS race adds `R`) | T1 2 -> 2; T2 0 -> 0; T3 1 -> 1 |
 | Accepted integration replay | `F, F, R, R, P, F` plus lifecycle commit sequence | unchanged; owned by `recovery_workflow` | no added invocation |
 | Interrupted recovery | `F, R, F, R, R, M` | unchanged; service retains fresh observations | no added invocation |
 
-The control sync trace is asserted at argument level in
-`tests/test_control_git_workflow.py`. The typed primitive argument traces are
-asserted in `tests/test_git.py`. The remaining rows are intentionally parity
-accounting: extraction changes ownership and module edges, not subprocess
-behavior. There are no new remote reads, no new state-changing commands, and
-no per-object or hidden N+1 loop introduced by this checkpoint.
+The control sync, attach, and bootstrap sequence traces are asserted at
+operation-order level in `tests/test_control_git_workflow.py`. The typed
+primitive argument traces are asserted in `tests/test_git.py`. The remaining
+rows are intentionally parity accounting: extraction changes ownership and
+module edges, not subprocess behavior. There are no new remote reads, no new
+state-changing commands, and no per-object or hidden N+1 loop introduced by
+this checkpoint.
 
 ## Source Delta
 
-The new `control_git_workflow.py` contains the extracted control synchronization
-transaction and its traceable command effects. `runtime.py` now delegates that
-sequence and retains the policy callbacks, owner runner, WAL/state decisions,
-and error translation. Existing recovery/reconciliation modules account for
-the replay and rewrite sequences moved by the preceding TASK-070/071 work.
+The new `control_git_workflow.py` contains the extracted control
+synchronization, attach, and bootstrap transactions and their traceable command
+effects. `runtime.py` now delegates those sequences and retains the policy
+callbacks, owner runner, control-init admission, state decisions, and error
+translation. Existing recovery/reconciliation modules account for the replay
+and rewrite sequences moved by the preceding TASK-070/071 work.
 
 At this checkpoint the extracted module is 279 lines including its module
-documentation, while `runtime.py` is 8,723 lines. The sync method itself fell
-from 63 lines to 22 lines; the executed Git count is unchanged because the
-workflow passes the same runner and observations in the same order. No direct
-subprocess call sites were added; the new module calls the existing named Git
-operations only.
+documentation, while `runtime.py` is 8,573 lines. The sync method itself fell
+from 63 lines to 22 lines, and the control-init attach/bootstrap sequences no
+longer have duplicate runtime implementations. The executed Git count is
+unchanged because the workflows pass the same owner-bound runner and preserve
+the same ordering. No direct subprocess call sites were added; the new module
+calls the existing named Git operations only.

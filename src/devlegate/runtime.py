@@ -25,7 +25,12 @@ from devlegate.agent_protocol import (
     render_project,
 )
 from devlegate.commit_messages import integration_message, lifecycle_message
-from devlegate.control_git_workflow import ControlGitWorkflowError, sync_control
+from devlegate.control_git_workflow import (
+    ControlGitWorkflowError,
+    attach_existing_control,
+    bootstrap_control,
+    sync_control,
+)
 from devlegate.execution_provenance import (
     ExecutionProvenanceError,
     lifecycle_commit_is_exact,
@@ -48,37 +53,34 @@ from devlegate.execution_workspace import (
 from devlegate.git import (
     GitAncestryError,
     GitObservationError,
-    ahead_behind,
     add_all,
-    add_worktree,
+    ahead_behind,
     branch_name,
     commit_changes,
-    commit as git_commit,
     commit_parents,
     commit_range,
     common_dir,
     compare_and_swap_ref,
     create_ref_if_absent,
     delete_branch,
-    file_history_commit,
     fetch_ref,
+    file_history_commit,
     hash_object,
     history_commits,
     is_ancestor,
     merge_fast_forward,
     parent_commit,
     path_object,
+    push_refs,
     read_object,
     read_path,
-    ref_exists,
     remote_exists,
     remote_ref,
+    remove_worktree,
+    reset_hard,
     resolve_commit,
     resolve_object,
     run_git,
-    push_refs,
-    remove_worktree,
-    reset_hard,
     update_ref,
     working_tree_status,
     worktree_paths,
@@ -86,6 +88,9 @@ from devlegate.git import (
 )
 from devlegate.git import (
     changed_paths as git_changed_paths,
+)
+from devlegate.git import (
+    commit as git_commit,
 )
 from devlegate.git import (
     merge_base as git_merge_base,
@@ -2774,183 +2779,32 @@ class ServiceEngine:
                 f"cannot observe control branch {self.control_branch!r}: {error}"
             ) from error
 
-    def _attach_existing_control(self) -> dict[str, object]:
-        fetch = fetch_ref(
-            self.repo, self.remote_name, self.control_branch, runner=_git
-        )
-        if fetch.returncode:
-            raise DevlegateError(
-                f"cannot fetch existing control branch {self.control_branch!r}: "
-                f"{fetch.stderr.strip()}"
-            )
-        remote_head = resolve_commit(
-            self.repo,
-            f"{self.remote_name}/{self.control_branch}",
-            runner=_git,
-        )
-        if remote_head is None:
-            raise DevlegateError(
-                f"configured control branch {self.control_branch!r} is unavailable "
-                f"on remote {self.remote_name}"
-            )
-        if self.control_worktree.exists() or self.control_worktree.is_symlink():
-            try:
-                registered_paths = set(worktree_paths(self.repo, runner=_git))
-            except GitObservationError as error:
-                raise DevlegateError(str(error)) from error
-            if self.control_worktree.resolve() not in registered_paths:
-                raise DevlegateError(
-                    "existing control path is not a registered Git worktree"
-                )
-            root = common_dir(self.control_worktree, runner=_git)
-            expected_git = common_dir(self.repo, runner=_git)
-            if root != expected_git:
-                raise DevlegateError(
-                    "existing control worktree belongs to another repository"
-                )
-            if branch_name(self.control_worktree, runner=_git) != self.control_branch:
-                raise DevlegateError("existing control worktree is on the wrong branch")
-            for state, configured_path in self._workflow_paths().items():
-                if not (self.control_worktree / configured_path).is_dir():
-                    raise DevlegateError(
-                        f"managed workflow directory is unavailable: "
-                        f"{self.control_worktree / configured_path} ({state})"
-                    )
-            local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
-            if local_head is None:
-                raise DevlegateError("existing control worktree HEAD is unavailable")
-            try:
-                control_compatible = local_head == remote_head or is_ancestor(
-                    self.control_worktree, local_head, remote_head, runner=_git
-                )
-            except GitAncestryError as error:
-                raise DevlegateError(
-                    "existing control worktree history could not be observed"
-                ) from error
-            if not control_compatible:
-                raise DevlegateError(
-                    "existing control worktree is not compatible with the remote "
-                    "control branch"
-                )
-            return {
-                "result": "already_attached",
-                "control_worktree": str(self.control_worktree),
-            }
-        self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
-        local_branch = ref_exists(
-            self.repo, f"refs/heads/{self.control_branch}", runner=_git
-        )
-        if local_branch:
-            local_head = resolve_commit(self.repo, self.control_branch, runner=_git)
-            if local_head is None:
-                raise DevlegateError("local control branch HEAD is unavailable")
-            try:
-                control_compatible = local_head == remote_head or is_ancestor(
-                    self.repo, local_head, remote_head, runner=_git
-                )
-            except GitAncestryError as error:
-                raise DevlegateError(
-                    "local control history could not be observed"
-                ) from error
-            if not control_compatible:
-                raise DevlegateError(
-                    "local control branch diverges from the remote control branch"
-                )
-        args: list[str] = []
-        if not local_branch:
-            args += ["--track", "-b", self.control_branch]
-            args += [
-                str(self.control_worktree),
-                f"{self.remote_name}/{self.control_branch}",
-            ]
-        else:
-            args += [str(self.control_worktree), self.control_branch]
-        created = add_worktree(self.repo, *args, runner=_git)
-        if created.returncode:
-            raise DevlegateError(
-                f"cannot attach control worktree: {created.stderr.strip()}"
-            )
-        return {
-            "result": "attached_existing_remote",
-            "control_worktree": str(self.control_worktree),
-        }
-
-    def _bootstrap_control(self) -> dict[str, object]:
-        if self.control_worktree.exists() or self.control_worktree.is_symlink():
-            raise DevlegateError(
-                "expected control worktree path already exists: "
-                f"{self.control_worktree}"
-            )
-        local_branch = ref_exists(
-            self.repo, f"refs/heads/{self.control_branch}", runner=_git
-        )
-        if local_branch:
-            raise DevlegateError(
-                f"local control branch {self.control_branch!r} exists while the "
-                "remote branch is absent"
-            )
-        self.control_worktree.parent.mkdir(parents=True, exist_ok=True)
-        created = add_worktree(
-            self.repo,
-            "--orphan",
-            "-b",
-            self.control_branch,
-            str(self.control_worktree),
-            runner=_git,
-        )
-        if created.returncode:
-            raise DevlegateError(
-                f"cannot create fresh control worktree: {created.stderr.strip()}"
-            )
-        try:
-            for configured_path in self._workflow_paths().values():
-                directory = self.control_worktree / configured_path
-                directory.mkdir(parents=True, exist_ok=True)
-                (directory / ".gitkeep").touch()
-            added = add_all(self.control_worktree, runner=_git)
-            if added.returncode:
-                raise DevlegateError(
-                    f"cannot stage initial control state: {added.stderr.strip()}"
-                )
-            committed = git_commit(
-                self.control_worktree,
-                "Initialize Devlegate control plane",
-                runner=_git,
-            )
-            if committed.returncode:
-                raise DevlegateError(
-                    f"cannot commit initial control state: {committed.stderr.strip()}"
-                )
-            pushed = push_refs(
-                self.control_worktree,
-                self.remote_name,
-                f"HEAD:refs/heads/{self.control_branch}",
-                runner=_git,
-            )
-            if pushed.returncode:
-                raise DevlegateError(
-                    f"cannot publish initial control branch: {pushed.stderr.strip()}"
-                )
-            refreshed = fetch_ref(
-                self.repo, self.remote_name, self.control_branch, runner=_git
-            )
-            if refreshed.returncode:
-                raise DevlegateError(
-                    "cannot refresh published control branch: "
-                    f"{refreshed.stderr.strip()}"
-                )
-        except DevlegateError:
-            raise
-        return {
-            "result": "initialized_new_control_plane",
-            "control_worktree": str(self.control_worktree),
-        }
-
     def control_init_result(self) -> dict[str, object]:
         """Attach an existing control branch or bootstrap a fresh control plane."""
-        if self._control_remote_exists():
-            return self._attach_existing_control()
-        return self._bootstrap_control()
+        try:
+            if self._control_remote_exists():
+                return attach_existing_control(
+                    repo=self.repo,
+                    control_worktree=self.control_worktree,
+                    control_branch=self.control_branch,
+                    remote_name=self.remote_name,
+                    workflow_paths=self._workflow_paths(),
+                    runner=self._git_runtime,
+                )
+            return bootstrap_control(
+                repo=self.repo,
+                control_worktree=self.control_worktree,
+                control_branch=self.control_branch,
+                remote_name=self.remote_name,
+                workflow_paths=self._workflow_paths(),
+                runner=self._git_runtime,
+            )
+        except (
+            ControlGitWorkflowError,
+            GitObservationError,
+            GitAncestryError,
+        ) as error:
+            raise DevlegateError(str(error)) from error
 
     def control_init(self) -> int:
         result = self.control_init_result()

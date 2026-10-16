@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
-# SPDX-License-Identifier: EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
 """Git choreography for the control checkout.
 
 The service still decides when these transactions are admitted and supplies the
@@ -20,7 +20,6 @@ from devlegate.git import (
     add_all,
     add_worktree,
     branch_name,
-    commit as git_commit,
     common_dir,
     fetch_ref,
     is_ancestor,
@@ -29,6 +28,9 @@ from devlegate.git import (
     ref_exists,
     resolve_commit,
     worktree_paths,
+)
+from devlegate.git import (
+    commit as git_commit,
 )
 
 

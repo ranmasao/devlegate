@@ -1,8 +1,13 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
+
 from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
 
+import devlegate.control_git_workflow as control_git_workflow
 from devlegate.control_git_workflow import sync_control
 
 
@@ -62,3 +67,93 @@ def test_sync_control_does_not_merge_an_already_current_checkout() -> None:
 
     assert result == ("same-head", "same-head")
     assert trace == [("fetch", "--prune", "origin", "devlegate/control")]
+
+
+def test_attach_existing_control_owns_fetch_validation_and_worktree_add(
+    monkeypatch, tmp_path
+) -> None:
+    trace: list[str] = []
+    worktree = tmp_path / "control"
+    result = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        control_git_workflow,
+        "fetch_ref",
+        lambda *_args, **_kwargs: trace.append("fetch") or result,
+    )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "resolve_commit",
+        lambda *_args, **_kwargs: "remote-head",
+    )
+    monkeypatch.setattr(
+        control_git_workflow, "ref_exists", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "add_worktree",
+        lambda *_args, **_kwargs: trace.append("worktree-add") or result,
+    )
+
+    attached = control_git_workflow.attach_existing_control(
+        repo=tmp_path / "repo",
+        control_worktree=worktree,
+        control_branch="devlegate/control",
+        remote_name="origin",
+        workflow_paths={"ready": "workflow/ready"},
+        runner=lambda *_args, **_kwargs: result,
+    )
+
+    assert attached["result"] == "attached_existing_remote"
+    assert trace == ["fetch", "worktree-add"]
+
+
+def test_bootstrap_control_preserves_publish_and_refresh_order(
+    monkeypatch, tmp_path
+) -> None:
+    trace: list[str] = []
+    worktree = tmp_path / "control"
+    result = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        control_git_workflow, "ref_exists", lambda *_args, **_kwargs: False
+    )
+
+    def add_worktree(*_args, **_kwargs):
+        trace.append("worktree-add")
+        worktree.mkdir()
+        return result
+
+    monkeypatch.setattr(control_git_workflow, "add_worktree", add_worktree)
+    monkeypatch.setattr(
+        control_git_workflow,
+        "add_all",
+        lambda *_args, **_kwargs: trace.append("add") or result,
+    )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "git_commit",
+        lambda *_args, **_kwargs: trace.append("commit") or result,
+    )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "push_refs",
+        lambda *_args, **_kwargs: trace.append("push") or result,
+    )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "fetch_ref",
+        lambda *_args, **_kwargs: trace.append("refresh") or result,
+    )
+
+    initialized = control_git_workflow.bootstrap_control(
+        repo=tmp_path / "repo",
+        control_worktree=worktree,
+        control_branch="devlegate/control",
+        remote_name="origin",
+        workflow_paths={"ready": "workflow/ready"},
+        runner=lambda *_args, **_kwargs: result,
+    )
+
+    assert initialized["result"] == "initialized_new_control_plane"
+    assert trace == ["worktree-add", "add", "commit", "push", "refresh"]
