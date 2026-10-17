@@ -751,3 +751,33 @@ The worker explicitly reports the following as unfinished, confirming the prior 
 ### Disposition
 
 **REWORK REQUIRED.** Move the same `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on canonical `devlegate/control`, preserving this entire ticket and history. Keep `release/0.5.7` unchanged. Focus next execution on **positive owner crash/restart/convergence tests and race safety**, not further CLI redesign or unrelated standalone packaging modifications.
+
+## Reviewer decision — 2026-10-17, execution 73965b4a: REWORK REQUIRED
+
+**Worker execution:** `73965b4a33494ba18dae39143e5b1cdb`; **exact checkpoint:** `d7a8298b7f7728d183d3689b1c81af03f2f44493`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `62483242b1720c12a7da41ac296fa0f622a2bfed`. The worker claimed `completed` and reported no remaining work. **That claim alone does not satisfy the ticket's independent acceptance requirements.** Preserve all prior evidence and implementation improvements.
+
+### Verified progress — do not redo
+
+- [Exact-checkpoint Actions #39054461887](https://github.com/ranmasao/devlegate/actions/runs/39054461887) is **GREEN**: **1264 passed, 1 skipped; 78% coverage; Ruff all checks passed**. The prior standalone-download 403 is not present in this run.
+- `tests/test_control_cross_layer.py::test_accepted_ticket_is_fast_forward_integrated_and_completed` now genuinely exercises a **non-zero-delta accepted→done** integration and additionally asserts that the owned execution checkout, worktree registration, local `devlegate/work/T-1` ref and upstream ref all disappear. It retains its assertions for product and control publication. This is the first needed positive end-to-end integration proof: **credit it; do not ask for that same scenario again**.
+- `_validate_execution_ref_heads()` now checks the actual local/remote ref SHA before declaring a done candidate `eligible` for cleanup; a real-Git test covers a **remote branch already rewritten before observation**. Preserve SHA validation, `git branch -d` checkout occupancy guard, remote compare-and-delete lease, owner-driven maintenance and read-only `devlegate clean` surface.
+
+### Blocking gap 1 — no real crash/restart convergence proof
+
+All newly added tests in `d7a8298b` cover **normal completed integration**, a direct ref validation helper on an already-changed remote, and earlier tests cover synthetic snapshots. Nothing exercises a fresh hosted owner after crash **(a)** immediately after durable `done` before cleanup intent; **(b)** after checkout/registration removal with both local and remote worker refs remaining; **(c)** after local deletion with only remote ref left; or **(d)** after all disposable refs are gone while durable `accepted_integration` still indicates an interrupted publication transaction. The separate post-done report-recovery path `_published_accepted_execution_report()` exists but is unproven at precisely the critical branchless replay boundary. A worker that cleaned a ticket normally is not evidence that recovery will not get stuck after one of those interruptions.
+
+**Required:** one compact deterministic **real-Git, fresh-owner, actual execution state** test matrix for these transition points, asserting convergence **without operator cleanup RPC** and subsequent scheduling of another runnable ticket, while product/control/report evidence remains untouched. Exercise retry after remote outage and remote-only residual (not only a direct `_retire_execution_refs` call).
+
+### Blocking gap 2 — backlog and historic safety still unproven
+
+The existing `test_automatic_workspace_cleanup_rotates_past_blocked_candidate` only rotates a cursor between **two prepared non-done worktrees** and verifies neither deletion of a later eligible done ticket nor continued ordinary scheduling. The historical-control tests verify proof helpers, not **actual owner-driven deletion** on a trailerless legacy done generation. These are explicitly in the authoritative TASK-063 acceptance checklist.
+
+**Required:** a real-Git owner setup with unsafe earlier T-1 and proven eligible integrated later T-2 that is actually reclaimed (checkout, registration, local and remote) by bounded periodic passes despite blocked T-1; verify restart fairness. Add an independently provable trailerless historic done generation that really is reclaimed and an ambiguous historic generation that is refused with a truthful diagnostic. Retain unrelated project instances and dirty/foreign refs.
+
+### Remaining safety limitation — SHA check is not a delete CAS
+
+The local `delete_branch_if_unoccupied()` helper still performs `rev-parse expected_head` and then separately `git branch -d <name>`. A ref can change **between** those two Git subprocesses. The earlier test only moves it before the helper starts, and the new `_validate_execution_ref_heads` check is another earlier observation: neither makes deletion conditional on the final expected SHA. Git's `branch -d` correctly protects worktree occupancy but is not a ref-SHA CAS. Do not revert to bare `update-ref -d`, which bypasses worktree occupancy protection. The next checkpoint must demonstrate a defensible way to preserve both properties or explicitly fail closed when the exact identity cannot be guaranteed; supply an interleaving test, not another pre-observation SHA mismatch test. In particular, ordinary `git branch -d` by name should not be described as atomic compare-and-delete.
+
+### Disposition
+
+**REWORK REQUIRED:** return **the same** `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` in canonical `devlegate/control`, preserving every prior review and execution report. **No product integration** to `release/0.5.7` yet. Retain all proven positive progress and green CI. Next execution should concentrate on the missing **crash/restart + fair backlog + legacy-owner tests**, and the narrow remaining ref-race safety boundary, **not** on CLI or status redesign.
