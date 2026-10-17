@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "8c7ea245476318d6352bc7d50cca7d75cafe1f52",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "e479f3c531b54043add9fc7918418114",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the still-missing real hosted-owner crash/restart, partial-stage retry, fair backlog convergence, and legacy provenance acceptance scenarios required by TASK-063."
+  ],
+  "report_artifact": "executions/TASK-063/e479f3c531b54043add9fc7918418114.md",
+  "report_sha256": "629ad0fc1fe3cd9c638aaf0612a91a6ef814db2fcde2031c70ba07dba09af390",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the still-missing real hosted-owner crash/restart, partial-stage retry, fair backlog convergence, and legacy provenance acceptance scenarios required by TASK-063."
+    ],
+    "report": "Focused workspace tests and lint pass.",
+    "summary": "Hardened workspace cleanup against symlink substitution by validating the lexical managed work root before resolution and refusing ambiguous roots without traversing external directories. Improved unregistered checkout diagnostics to report missing Git registration and unproven execution generation, with focused regression coverage."
+  },
+  "workspace_head": "6dddf66d057d1228308c6cc81333e56f8c3e2d5d"
+}
