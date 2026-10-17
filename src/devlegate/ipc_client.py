@@ -298,6 +298,9 @@ def decode_status(value: dict[str, object]) -> StatusSnapshot:
                 execution.get("ticket_title"), "bound ticket title"
             ),
             lifecycle_integration=_lifecycle_integration(value.get("lifecycle")),
+            workspace_cleanup=_optional_mapping(
+                value.get("workspace_cleanup"), "workspace cleanup"
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IPCClientError(f"service IPC returned invalid status: {error}") from error

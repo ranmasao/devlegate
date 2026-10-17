@@ -71,6 +71,7 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
         }
     ]
     assert execution.is_dir()
+    assert engine._state.get("mutable_receipts", {}) == {}
 
 def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)

@@ -305,6 +305,7 @@ class StatusSnapshot:
     bound_ticket_title: str | None = None
     lifecycle_integration: tuple[str, str] | None = None
     eligible: tuple[tuple[str, str], ...] = ()
+    workspace_cleanup: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -353,6 +354,7 @@ class StatusSnapshot:
                 failure.as_dict() for failure in self.failed_executions
             ],
             "reconciliation": self.reconciliation,
+            "workspace_cleanup": self.workspace_cleanup,
             **(
                 {
                     "lifecycle": {
@@ -471,6 +473,7 @@ class OperatorCommand:
     execution_id: str | None = None
     rewrite_published: bool = False
     force: bool = False
+    mutable: bool = True
     resolution_class: str | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
@@ -1135,6 +1138,7 @@ class ServiceEngine:
             request_id=request_id,
             fingerprint=_cleanup_workspaces_request_fingerprint(apply, limit),
             force=apply,
+            mutable=apply,
         )
 
     def _submit_operator_command(
@@ -1148,6 +1152,7 @@ class ServiceEngine:
         execution_id: str | None = None,
         rewrite_published: bool = False,
         force: bool = False,
+        mutable: bool = True,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
@@ -1161,7 +1166,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "service is draining; runtime command was not admitted"
                 )
-            receipt = self._mutable_receipt(request_id)
+            receipt = self._mutable_receipt(request_id) if mutable else None
             if receipt is not None:
                 if (
                     receipt.get("method") != method
@@ -1171,13 +1176,23 @@ class ServiceEngine:
                     raise DevlegateError(
                         f"request id collision: {method} request semantics differ"
                     )
-                return self._operator_ack(
-                    method,
-                    ticket_id,
-                    receipt.get("onto", onto),
-                    execution_id,
-                    receipt.get("resolution_class"),
-                )
+                if method == "cleanup-workspaces" and isinstance(
+                    receipt.get("result"), dict
+                ):
+                    return dict(receipt["result"])
+                if method == "cleanup-workspaces":
+                    # Admission was durable, but the owner may have been lost
+                    # before the bounded sweep completed. Re-admit it so the
+                    # operation is conservatively re-observed and replay-safe.
+                    pass
+                else:
+                    return self._operator_ack(
+                        method,
+                        ticket_id,
+                        receipt.get("onto", onto),
+                        execution_id,
+                        receipt.get("resolution_class"),
+                    )
             existing = self._operator_command or self._operator_active_command
             if existing is not None:
                 if existing.request_id == request_id:
@@ -1204,6 +1219,7 @@ class ServiceEngine:
                     execution_id=execution_id,
                     rewrite_published=rewrite_published,
                     force=force,
+                    mutable=mutable,
                 )
                 self._operator_command = command
                 new_command = True
@@ -2120,37 +2136,11 @@ class ServiceEngine:
                         "execution_id",
                         "onto",
                         "resolution_class",
+                        "result",
                     }
                 )
-                or set(receipt)
-                not in (
-                    {"method", "fingerprint", "ticket_id", "accepted"},
-                    {"method", "fingerprint", "ticket_id", "accepted", "execution_id"},
-                    {"method", "fingerprint", "ticket_id", "accepted", "onto"},
-                    {
-                        "method",
-                        "fingerprint",
-                        "ticket_id",
-                        "accepted",
-                        "resolution_class",
-                    },
-                    {
-                        "method",
-                        "fingerprint",
-                        "ticket_id",
-                        "accepted",
-                        "onto",
-                        "resolution_class",
-                    },
-                    {
-                        "method",
-                        "fingerprint",
-                        "ticket_id",
-                        "accepted",
-                        "execution_id",
-                        "onto",
-                        "resolution_class",
-                    },
+                or not {"method", "fingerprint", "ticket_id", "accepted"}.issubset(
+                    receipt
                 )
             ):
                 raise DevlegateError("invalid mutable request receipt")
@@ -2172,9 +2162,14 @@ class ServiceEngine:
                 not isinstance(resolution_class, str) or not resolution_class
             ):
                 raise DevlegateError("invalid mutable request receipt resolution")
+            result = receipt.get("result")
+            if result is not None and not isinstance(result, dict):
+                raise DevlegateError("invalid mutable request receipt result")
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
+        if not command.mutable:
+            return
         if command.method == "drop":
             self._drop_owned(command.ticket_id, command.execution_id)
         with self._receipt_lock:
@@ -2282,9 +2277,37 @@ class ServiceEngine:
                 self._record_operator_admission(command)
                 if command.method == "cleanup-workspaces":
                     assert command.onto is not None
-                    command.admission_result = self.cleanup_workspaces(
+                    result = self.cleanup_workspaces(
                         apply=command.force, limit=int(command.onto)
                     )
+                    command.admission_result = result
+                    if command.mutable:
+                        self._state["workspace_cleanup"] = {
+                            "status": "applied",
+                            "limit": int(command.onto),
+                            "decisions": result.get("decisions", []),
+                        }
+                        with self._receipt_lock:
+                            receipts = self._state.get("mutable_receipts", {})
+                            if not isinstance(receipts, dict):
+                                raise DevlegateError(
+                                    "invalid mutable request receipt state"
+                                )
+                            receipt = receipts.get(command.request_id)
+                            if not isinstance(receipt, dict):
+                                raise DevlegateError(
+                                    "workspace cleanup admission receipt is missing"
+                                )
+                            updated = dict(receipts)
+                            updated[command.request_id] = {
+                                **receipt,
+                                "result": result,
+                            }
+                        self._save_state(
+                            str(self._state["phase"]),
+                            mutable_receipts=updated,
+                            workspace_cleanup=self._state["workspace_cleanup"],
+                        )
                     return
                 command.admission_result = self._operator_ack(
                     command.method,
@@ -5222,7 +5245,15 @@ class ServiceEngine:
         }
         try:
             self._retire_integrated_workspace(ticket_id, report, control_head)
-        except Exception as error:
+        except (
+            ExecutionWorkspaceError,
+            ExecutionReportError,
+            GitAncestryError,
+            GitObservationError,
+            OSError,
+            ValueError,
+            WorkflowBlockedError,
+        ) as error:
             # Publication is already durable. Workspace retention is optional and
             # must never make an accepted integration pending again.
             cleanup = {
@@ -7365,6 +7396,11 @@ class ServiceEngine:
             bound_ticket_title=bound_ticket_title,
             lifecycle_integration=lifecycle_integration,
             eligible=eligible,
+            workspace_cleanup=(
+                dict(state["workspace_cleanup"])
+                if isinstance(state.get("workspace_cleanup"), dict)
+                else None
+            ),
         )
 
     def _make_execution_plan(
