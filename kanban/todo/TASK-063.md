@@ -551,3 +551,29 @@ functional spec above now explicitly supersedes historical suggestions
 of `clean sweep` and user-visible limits. The automatic clean-up engine
 still needs end-to-end safety, progress and recovery proofs; a green
 checkpoint CI alone would not settle them.
+
+## Reviewer decision — 2026-10-17, execution 7e768457: REWORK REQUIRED
+
+**Exact execution:** `7e768457157043c187fcc8244e778196`; **checkpoint:** `fdfd664180dcf6e062265124a0ce40ca271ade55`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `93b61975cbc316becdaaeb2c6fe200ff3f430d0b`. Worker claimed `completed` / `remaining=[]`. Preserve every worker checkpoint and execution report. **Do not integrate** this checkpoint to the product branch yet.
+
+### Verified progress and CI
+
+- **The revised public CLI contract is implemented.** `devlegate clean` and `devlegate clean status` are read-only; public `cleanup-workspaces`, `clean sweep`, `--apply`, `--limit` and the `clean-sweep` IPC dispatcher are removed. Internal `cleanup_workspaces` and operator-receipt symbols are private implementation names, *not* themselves blockers. **Do not recreate a manual sweep.**
+- `workspace_cleanup_status()` now reads the published `StatusSnapshot.workspace_cleanup` under `_snapshot_lock`, rather than running fresh Git observations in a concurrent IPC thread. Owner-side `_reconcile_workspace_backlog()` refreshes the published view after one pass. This addresses the previous shared-observation-field race directionally; keep this owner-published read model.
+- Exact-checkpoint [GitHub Actions #39029700151](https://github.com/ranmasao/devlegate/actions/runs/39029700151) is **green**: **1255 passed, 1 skipped**, coverage **78%**, Ruff **All checks passed**. The previous unrelated worker-process JSON-file timing failure did not reproduce.
+
+### Blocker 1 — `devlegate clean` presents a one-item recent pass as global inventory and can falsely claim `clean`
+
+`workspace_cleanup_status()` returns `{"status": "clean", "decisions": []}` whenever `_published_status_snapshot.workspace_cleanup is None`. On service startup this state can precede **any** cleanup inventory; absence of a previous observation is *unknown / not yet scanned*, not proof of no residual branches or worktrees. More generally, `_reconcile_workspace_backlog()` processes `cleanup_workspaces(apply=True, limit=1)` then replaces `_state["workspace_cleanup"]` with `{"status":"reconciled","limit":1,"decisions":[last candidate]}`. After one `TASK-001` decision, 57 other outstanding work refs may exist, but `devlegate clean` will expose only that last candidate and no aggregate remainder, global completeness, per-resource status or inventory-progress indication. A pass with only `__remote__` blocked is also stored as outer `status:"reconciled"`. Conversely, an exception can leave a stale previously published projection if `_refresh_published_status` cannot complete.
+
+**Required:** owner-maintained, read-only, coherent **aggregate** status/inventory model separate from the bounded *mutation* batch. It may be materialized from an owner-owned full/batched inventory with scan generation, totals by worktree/local/upstream refs, blocked reasons, explicit partial/unknown and observation freshness. A status query need not force expensive Git I/O but MUST indicate `initializing` / `unknown` / `partial` until coverage is established, and MUST NOT label unobserved resources `clean`. A successful per-item removal is not proof the backlog is drained; report prior blocked items and unscanned candidates accurately. Do not reintroduce public `--limit` to mask incomplete status. Test early startup with residual refs and no previous cleanup state, after 1 of >=3 candidates, blocked and remote-unavailable cases, completion and subsequent restart. Demonstrate read-only IPC never mutates Git, state or receipts.
+
+### Blocker 2 — realistic automatic convergence / recovery remains unproven
+
+The checkpoint adds CLI/IPC/owner snapshot tests; it does **not** add the demanded positive real-Git owner scenario: a **published accepted→done** ticket whose exact worktree registration, local work ref and upstream work ref are automatically removed by service scheduling, with durable product/control/report evidence retained. The earlier `test_proven_execution_resource_retirement_removes_local_and_remote_refs` calls `manager.retire` and `_retire_execution_refs` directly on a merely prepared, **not integrated** worktree. The prior round-robin test merely advances a persisted cursor between two **blocked** prepared worktrees; it never demonstrates that a later safely accepted T-2 is actually reclaimed while earlier T-1 remains blocked.
+
+**Required targeted real-Git/service-owner tests** for (a) blocked old T-1 plus truly proven T-2 that actually loses checkout/registration/local/remote refs with round-robin and restarted owner; (b) crash immediately after published done **before cleanup intent**, restart automatic rediscovery without operator RPC; (c) failure between worktree, local and remote deletion steps, then restart to converge; (d) a legacy done with sufficient evidence versus an ambiguous historic generation; (e) refusal for dirty/foreign/currently-owned worktree or changed remote SHA and successful unrelated ticket scheduling. Keep these few integration tests narrow and deterministic; full CI on final SHA.
+
+### Disposition
+
+**REWORK REQUIRED.** Move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` with this review appended. Retain all real improvements, CI result and original historical reviews. **Do not** reintroduce `clean sweep` or user-visible limits and **do not** split the task. The next checkpoint should correct truthful global status and prove autonomous, crash-recovering end-to-end cleanup, not keep rearranging the CLI.
