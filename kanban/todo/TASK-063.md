@@ -907,3 +907,24 @@ For a legitimate unregistered leftover, the present `head=""` becomes `status="s
 Do not rework already verified CAS, normal lifecycle or full-retirement crash case. Do not change public read-only `devlegate clean` into a mutating interface. Keep `release/0.5.7` unchanged pending reviewer acceptance.
 
 **Disposition: REWORK REQUIRED.** Return the unchanged canonical ticket history, with this review appended, from `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`.
+
+## Reviewer decision — 2026-10-17, execution e479f3c5: REWORK REQUIRED
+
+**Execution:** `e479f3c531b54043add9fc7918418114`; **workspace checkpoint:** `6dddf66d057d1228308c6cc81333e56f8c3e2d5d`; **control admission:** `8c7ea245476318d6352bc7d50cca7d75cafe1f52`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker legitimately returned `incomplete`, with no transport/egress failure and the same unproven hosted-owner recovery/backlog/legacy acceptance scenarios.
+
+### Confirmed improvements — accepted, do not redo
+
+- [Exact-checkpoint GitHub Actions #39062777054](https://github.com/ranmasao/devlegate/actions/runs/39062777054): **GREEN, 1269 passed, 1 skipped, 78% coverage, Ruff all checks passed**.
+- `_workspace_cleanup_cohort` now detects a directly symlinked configured `work` root **before resolving it**. It refuses external direct-child enumeration and emits a `__work_root__` blocked reason; the focused real-path regression `test_workspace_cleanup_rejects_symlinked_work_root_without_traversal` verifies external files retained and no external ticket candidate. The prior reviewer finding about `resolve()` masking the direct work-root symlink is **addressed**.
+- An unregistered direct-child checkout is still retained without inventing a generation, now with a specific `workspace has no Git registration; execution generation is unproven` diagnostic. The existing focused regression is updated accordingly.
+- Retain prior accepted evidence: normal owner-hosted non-zero-delta full retirement, full-retirement crash replay with fresh instance, exact-SHA local ref CAS, pre/post foreign-worktree observation and conditional ref restoration. No reason to rebuild or regress these.
+
+### Remaining required acceptance — prioritize actual hosted-owner integration tests
+
+1. **Autonomous partial-stage restart** with real Git and real published `done` control/product/report evidence: crash before cleanup intent; crash after worktree/registration removal while local and remote refs remain; local-ref-absent / remote-only remnant; temporary remote outage followed by restored observation. Fresh owner startup/idle passes must delete eligible residuals without manual cleanup commands; verify product/control/report preserved and next runnable ticket proceeds.
+2. **Blocked-earliest / eligible-later fair convergence:** genuinely completed independent later ticket must have its checkout, worktree registration, local and remote refs removed by bounded owner passes, including across restart, despite an unsafe earlier candidate. Merely advancing the cleanup cursor among two non-done worktrees does not prove this.
+3. **Historical trailerless positive and ambiguous negative** through the same age-agnostic owner reconciler: independently provable old `accepted→done` generations should actually be reclaimed; genuinely ambiguous generations should remain with actionable diagnostics. No special legacy mode or public sweep.
+
+These are already specified in the authoritative ticket and worker's own `remaining`; concentrate on closing them. Do not introduce a new public mutating `devlegate clean` interface or modify `release/0.5.7` before acceptance.
+
+**Disposition: REWORK REQUIRED.** Preserve complete ticket history and this new reviewer note; move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on canonical control.
