@@ -781,3 +781,36 @@ The local `delete_branch_if_unoccupied()` helper still performs `rev-parse expec
 ### Disposition
 
 **REWORK REQUIRED:** return **the same** `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` in canonical `devlegate/control`, preserving every prior review and execution report. **No product integration** to `release/0.5.7` yet. Retain all proven positive progress and green CI. Next execution should concentrate on the missing **crash/restart + fair backlog + legacy-owner tests**, and the narrow remaining ref-race safety boundary, **not** on CLI or status redesign.
+
+## Reviewer decision — 2026-10-17, execution 33b2f6e2: REWORK REQUIRED
+
+**Execution:** `33b2f6e2561f4cd8a2657c58c8e2fe7c`; **exact checkpoint:** `e1ca1b9ab2cf520d300b5b65ac8965cdba37873b`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `797bf90fd76acb518ac54644ddc5ab7238d28a84`. The worker claimed `completed`, with valid egress and no remaining items; reviewer acceptance still requires the independently specified behaviors below. Preserve all reports, checkpoints and prior reviews.
+
+### Verified achievements — do not reimplement
+
+- [Exact SHA GitHub Actions #39055845962](https://github.com/ranmasao/devlegate/actions/runs/39055845962) **GREEN: 1265 passed, 1 skipped, coverage 78%, Ruff all checks passed**.
+- Prior checkpoint already proved **normal non-zero-delta accepted→done full disposal** (physical execution checkout, registered worktree, local work branch, upstream work branch, durable published product/control preserved). Credit it as covered.
+- New `test_done_cleanup_recovery_after_process_loss_before_state_clear` in `tests/test_control_cross_layer.py` now exercises **real product/control publication**, mocks process death *at* `_save_state(... accepted_integration=None ...)` after cleanup, verifies work refs are absent, constructs a **fresh Devlegate(config)** and replays successfully from published product/control/report evidence. This addresses the most critical **both-refs-absent, pending-accepted-integration** crash window. Credit it as covered; do not ask for the same case again.
+- Changed the safe `git branch -d` invocation to `git branch -d -- <branch>`, appropriately treating the branch as an operand and retaining Git's worktree-occupancy safety.
+
+### Remaining acceptance gap 1 — interrupted partial stages and autonomous restart
+
+The one added crash test starts with **all transient refs and checkout already removed**. It does not prove autonomous convergence after crash (1) immediately after published `done` **before any cleanup scheduling**; (2) after worktree/registration deletion but while both local and upstream refs exist; (3) after local ref deletion with a remote-only residual, or remote temporarily unavailable and later restored. Nor does it prove unrelated runnable tickets are not blocked by a stalled historical cleanup attempt.
+
+**Implement focused real-Git fresh-owner tests** for these distinct boundaries using actual published done/report/product evidence and the service-owned startup/idle reconciliation, not direct helper calls on a merely prepared unintegrated checkout. Verify each safely eligible residual resource disappears without public cleanup invocation, preserve canonical history, and verify subsequent work can be scheduled. Reuse and parametrize the new successful crash test where possible.
+
+### Remaining acceptance gap 2 — historic backlog/fairness
+
+No new test demonstrates **an actually eligible later done ticket being retired by owner maintenance** while an earlier candidate is dirty, foreign, mismatched or otherwise blocked. The prior round-robin test only advances a cursor across **two unintegrated non-done worktrees**. Also not proven is actual owner-pass reclamation for an independently provable **legacy done transition with no modern `Devlegate-Execution` / `Devlegate-Checkpoint` trailers**, paired with safe refusal on an ambiguous legacy generation. These are explicit requirements, motivated by dozens of old disposable refs, not optional regression coverage. Build a compact, deterministic real-Git owner/historical fixture for both positive convergence and refusal.
+
+### Remaining correctness defect — non-atomic checked-ref deletion
+
+`src/devlegate/git.py::delete_branch_if_unoccupied()` still does `git rev-parse <branch>^{commit}` followed by independent `git branch -d -- <branch>`. The new `--` changes argument parsing **only**, not atomicity.
+
+**Reproduced independently using real Git** in an isolated temporary repo: create branch `devlegate/work/T-1` at commit A; record `expected_head=A`; create merged/HEAD commit B and `git branch -f devlegate/work/T-1 B` **between** the identity check and branch-delete command; then `git branch -d -- devlegate/work/T-1` **succeeds and removes B**, even though the proven deletion target was A. Therefore a moved/reused ref can be deleted under an external interleaving, violating the authoritative exact-generation identity constraint. Tests that move a ref **before** `_retire_execution_refs()` / the helper only cover early mismatch, not this race. The remote ref correctly uses a fresh SHA lease; local deletion still does not.
+
+Address **both** Git occupancy guard and exact expected-old-SHA deletion semantics. Do not merely substitute raw `git update-ref -d`, which bypasses Git's checked-out-worktree guard. Provide a deterministic interleaving test where a branch changes after the last identity read but before deletion; moved target must survive. If no Git primitive can guarantee both properties against unconstrained external processes, explicitly characterize that limit and adopt/document a conservative, narrowly scoped safety protocol rather than claiming `git branch -d` is SHA-CAS.
+
+### Disposition
+
+**REWORK REQUIRED.** Move the same `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Preserve the **green CI, working normal-integration proof and working full-retirement crash-replay proof**; do not redo them. Keep `release/0.5.7` unchanged. Concentrate the next pass on **partial-stage restart, historical convergence/fairness and this demonstrable SHA race**, not further CLI/status redesign.
