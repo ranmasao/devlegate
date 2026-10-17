@@ -928,3 +928,24 @@ Do not rework already verified CAS, normal lifecycle or full-retirement crash ca
 These are already specified in the authoritative ticket and worker's own `remaining`; concentrate on closing them. Do not introduce a new public mutating `devlegate clean` interface or modify `release/0.5.7` before acceptance.
 
 **Disposition: REWORK REQUIRED.** Preserve complete ticket history and this new reviewer note; move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on canonical control.
+
+## Reviewer decision — 2026-10-18, execution 92c832b8: REWORK REQUIRED
+
+**Execution:** `92c832b884734f59bf83d817fc57103c`; **exact work checkpoint:** `bceca1fd52a7a38431300fdfcd824d059104256f`; **control admission:** `c779c669936ef6e46a94d7c3663bac06957a0471`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker reported `incomplete` with valid transport/egress and expressly retained the real-Git hosted-owner partial-stage/fairness/legacy proof items.
+
+### Verified progress — retain
+
+- [Exact-checkpoint CI #39064452987](https://github.com/ranmasao/devlegate/actions/runs/39064452987) is **green: 1270 passed, 1 skipped, coverage 78%, Ruff all checks passed**.
+- `src/devlegate/runtime.py` now catches `DevlegateError` in the bounded owner cleanup pass, status-inventory fallback, and per-candidate `cleanup_workspaces()` exception handler for a registered checkout. This makes an expected provenance/remote-observation failure reportable as a per-ticket `skipped`/blocked diagnostic rather than unhandled propagation.
+- New `test_workspace_cleanup_contains_remote_provenance_observation_failure` exercises a *real registered checkout* and verifies it remains intact when `_accepted_execution_report` raises `DevlegateError("upstream execution refs could not be observed")`. The ticket is mocked `done` using `SimpleNamespace`, the provenance helper is mocked to fail, and `cleanup_workspaces(limit=1)` is called directly: useful negative/error-containment unit regression, **not a hosted-owner recovery or completed-integration test**.
+- Preserve previously accepted work: exact-generation local CAS and foreign-worktree mitigation, symlink-safe direct-child discovery, explicit ambiguous/unregistered worktree diagnostics, normal accepted→done complete retirement and fresh-owner replay after all resources already disappeared.
+
+### Unresolved main acceptance: real autonomous convergence
+
+No tests in this checkpoint exercise fresh service-owner startup/idle scheduling with a genuinely published `done` candidate and partially remaining resources. The unchanged gaps remain the **top priority**, not further narrow exception-handler patches:
+
+1. Real-Git **fresh hosted-owner** partial recovery after `done` **before cleanup scheduling**, after checkout/registration removal with **both refs still present**, **remote-only** residual after local ref removal, and temporary remote read/write outage followed by restored upstream. Verify autonomous retries, full eligible resource retirement, preserved immutable report and product/control history, and ability to execute another runnable ticket. Existing full-retirement crash replay is already proven; do not repeat it.
+2. Real eligible-later `done` vs earlier unsafe/blocked candidate: subsequent bounded owner passes **actually retire eligible-later checkout, registration and local/upstream refs**, across restart, without manual cleanup RPC. The existing cursor-rotation test on two unintegrated worktrees does not satisfy this.
+3. **One universal age-agnostic owner reconciler**: safely reclaim a genuinely provable older accepted→done generation *without current message trailers* using its independent report/product/control/ref evidence; retain a genuinely ambiguous older candidate with explicit diagnostics. Do not introduce a separate legacy mode or weaken identity proof.
+
+Keep CLI `devlegate clean` read-only, previously verified safety guards intact, and `release/0.5.7` unchanged. **REWORK REQUIRED:** move the same complete ticket (no split or replacement) from `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on canonical `devlegate/control`, preserving all previous reviewer history and reports.
