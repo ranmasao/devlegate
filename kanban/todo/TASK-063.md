@@ -251,3 +251,33 @@ Add focused real-Git/engine and owner/IPC tests for: clean `done` checkout remov
 New exact checkpoint CI [run #39013150019](https://github.com/ranmasao/devlegate/actions/runs/39013150019) was **in_progress at review**. Full successful pytest/coverage and Ruff at the final rework SHA are mandatory, but alone cannot substitute for these safety tests. Worker should use the documented focused test commands; prepare `.venv` via `./dev setup` only if necessary to run them.
 
 **Disposition:** return the SAME TASK-063 from `review` to `todo`. Preserve checkpoint, all reports, previous rework, and Git history; do not integrate unsafe historical cleanup as-is.
+
+## Reviewer decision — 2026-10-17, execution 1d6cae0f: REWORK REQUIRED
+
+**Execution** `1d6cae0f6732455f88846a8049dd245e`, **checkpoint** `3310ca9f23185eadaf7f2e5a9cbf728c646b4a0c`, **product base** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker claim `completed`, `remaining=[]`, report in `executions/TASK-063/`. Preserve all existing checkpoints, receipts, Git history, reporting and the newly implemented cleanup functionality; this is **focused completion of the same ticket**, not a redesign.
+
+### Improvements preserved
+
+Third checkpoint separates dry-run from persistent mutable admission (`command.mutable=False`), persists apply results in mutable receipts and re-observes incomplete admitted apply, exposes `workspace_cleanup` through the status projection and IPC decoding, and narrows post-publication cleanup exception handling. Preserve those changes, including canonical-history/accepted-report checks and owner-serialized apply from preceding checkpoint.
+
+### Blocking exact-SHA CI regressions
+
+[GitHub Actions run #39013762950](https://github.com/ranmasao/devlegate/actions/runs/39013762950) on **exact SHA `3310ca9f2318`** finished **failure**: `1241 passed, 2 failed, 1 skipped`; Ruff was skipped, so cannot claim lint success based on this CI.
+
+1. `tests/test_ipc_client.py::test_status_round_trip_preserves_complete_view`: expected status keys now lack newly exposed `workspace_cleanup`. Update the contract test for the real new field and verify round-trip of nonempty status/cleanup decision, not merely weaken expected-key assertions.
+2. `tests/test_ipc_owner.py::test_reconcile_resume_admission_persists_receipt_with_resolving_state`: `src/devlegate/runtime.py::_record_operator_admission` now accesses `command.mutable`; existing test's `SimpleNamespace` fixture does not contain the newly introduced field. Adjust the fixture to the real operator protocol (or implement an explicit safe default if genuinely required for production compatibility). Preserve normal reconcile-resume receipt persistence; do not alter its semantics simply to appease the test.
+
+Require **full exact-checkpoint CI passing both pytest/coverage and Ruff** on the next worker SHA. Run only selected local tests and lint, not repetitive full local pytest.
+
+### Remaining essential cleanup safety proofs
+
+This checkpoint adds only one assertion to `test_workspace_cleanup_dry_run_retains_unintegrated_execution`. Across all three worker checkpoints the new tests chiefly cover negative dry-run plus mocked IPC dispatch; they **do not prove safe real-Git worktree deletion** or interrupted multi-target apply. Add focused and realistic integration tests using existing `control_fixture`, `git`, host/owner test harness and real `git worktree list/remove` as appropriate:
+
+- Accepted-to-done with a valid, clean owned worktree -> removed and unregistered, but exact execution report, work branch, control and product history remain intact. Retained or dirty/changed worktree -> cleanup refusal only, accepted integration still reaches `done` and next ticket is runnable. Include an injected `worktree remove` failure.
+- Operator `cleanup-workspaces` **dry-run through the live service owner** produces inventory without changes to SQLite receipts or filesystem. Explicit `--apply` removes only a proven historic done-worktree, never review/accepted/active execution, other project instance, or unowned/symlinked checkout; output distinguishes eligible, skipped, retired.
+- For multiple eligible worktrees, interrupt after partial apply / before durable result publication, then recover using the same request identity (and also a new explicit request). Re-observe actual Git registrations, never delete anything twice or return a fabricated completed outcome. Verify completed replay returns the saved decisions. Cover process owner authorization and service restart if the existing harness supports it without flaky sleeps.
+- Verify `workspace_cleanup` status projection/IPC round-trip with actual retired and blocked outcomes after persistence/restart. Identify unexpected Git observation failure as blocked/refused, not successful removal. Existing submodule and explicit-drop behavior must remain intact.
+
+Do not add a new generic cleanup scheduler, global prune/GC, or cross-project cleanup. Do not conflate validated but operator-skipped cleanup with accepted publication failure. Inspect effectful Git calls and make sure only expected registered worktree removals occur.
+
+**Disposition:** move TASK-063 from `review` to `todo`. Preserve all execution artifacts and the worker branch; no manual product integration. TASK-063 is not accepted until full CI and these material safety invariants are proven.
