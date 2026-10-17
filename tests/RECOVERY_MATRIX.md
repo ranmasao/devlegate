@@ -29,6 +29,29 @@ repositories, and worktrees.
 | accepted control push effect | ticket + H + R durable; remote=R--C | Recognize exact C as already published and clear intent | N/A | No | Remote contradiction blocks |
 | mutable receipt after ACK | Receipt is admission evidence only | Preserve receipt; do not dispatch it | N/A | No | New request id is required for liveness |
 
+## Interrupted Fast-Forward Command Traces
+
+The product and control paths intentionally have different interruption
+authority. `resolve` and status/identity commands below are local observations
+(Tier 1); `merge` is a local checkout mutation (Tier 2). No command in this
+recovery path writes a remote repository (Tier 3).
+
+| Path | Before interruption | After interruption | Decision |
+| --- | --- | --- | --- |
+| Product, normal | `rev-parse remote-ref` (observe target), `merge --ff-only expected-new`, then `branch`, `worktree root`, `status`, `rev-parse HEAD` | No retry | Complete only after exact target and clean checkout are re-observed |
+| Product, interrupted before effect | Same commands through interrupted `merge`; then `branch`, `worktree root`, `status`, `rev-parse HEAD`, WAL coordinate checks, `rev-parse remote-ref` | One bounded `merge --ff-only expected-new`, then the same identity/status/HEAD observations | Retry only for exact product `merge_pending` coordinates and unchanged target; never merge the tracking ref |
+| Product, interrupted after effect | Same commands through interrupted `merge`; then identity/status/HEAD observations | No merge retry | Complete from the observed exact target |
+| Control, normal | `fetch --prune origin/control`, resolve remote and HEAD, ancestry checks, `merge --ff-only origin/control`, then resolve HEAD | No retry | Control sync may complete normally |
+| Control, interrupted | Same commands through interrupted control `merge` | No merge retry in the product transport or WAL path | Propagate interruption; a later fresh control sync must establish its own admission |
+
+The eliminated invocation is the former generic control/product callback retry
+of `merge --ff-only <tracking-ref>`. The only newly added Git invocations are
+the product target resolution before mutation and the post-interruption
+branch, worktree-root, status, HEAD, and target observations. They are local
+proofs, not effects. The product retry, when authorized, invokes the exact
+admitted commit object once; it cannot follow a tracking ref advanced from B
+to C.
+
 The `pre-checkpoint` stage is an existing recovery input used by the engine's
 explicit interrupted-execution path; the normal worker path persists
 `post-worker` and then `checkpointing`. Its process-loss behavior remains the

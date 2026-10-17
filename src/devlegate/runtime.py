@@ -2580,25 +2580,79 @@ class ServiceEngine:
     def _merge_fast_forward_runtime(
         self, repo: Path, remote_ref: str, expected_old: str, expected_new: str
     ) -> subprocess.CompletedProcess[str]:
-        """Recover one durable fast-forward mutation at its owning workflow."""
+        """Recover one admitted product fast-forward at its owning workflow.
+
+        The merge target is the immutable commit admitted in the WAL, never the
+        mutable tracking ref.  Recovery is allowed only when the interrupted
+        command left the expected checkout identity and clean state intact.
+        """
         self._assert_repository_owner()
-        try:
-            return merge_fast_forward(repo, remote_ref, runner=self._git_runtime)
-        except ShutdownInterrupted:
+        expected_branch = self.current_branch
+        if repo.resolve() != self.repo.resolve():
+            raise DevlegateError(
+                "product fast-forward was requested for another checkout"
+            )
+
+        def observe_safe_checkout() -> str:
+            branch = self._branch_runtime(repo)
+            if branch != expected_branch:
+                raise DevlegateError(
+                    "interrupted fast-forward changed the product checkout branch"
+                )
+            if self._worktree_root_runtime(repo) != repo.resolve():
+                raise DevlegateError(
+                    "interrupted fast-forward changed the product worktree identity"
+                )
+            if self._status_runtime(repo):
+                raise DevlegateError(
+                    "interrupted fast-forward left the product checkout ambiguous"
+                )
             observed = self._resolve_commit_runtime(repo, "HEAD")
+            if observed is None:
+                raise WorkflowBlockedError("product HEAD could not be resolved")
+            return observed
+
+        # Resolve the tracking ref before the mutation so the admitted target is
+        # proven current, then merge the object id rather than the mutable ref.
+        resolved_target = self._resolve_commit_runtime(repo, remote_ref)
+        if resolved_target != expected_new:
+            raise DevlegateError(
+                "fast-forward target changed before the admitted mutation"
+            )
+        try:
+            result = merge_fast_forward(repo, expected_new, runner=self._git_runtime)
+            if result.returncode == 0 and observe_safe_checkout() != expected_new:
+                raise DevlegateError(
+                    "fast-forward completed without reaching the admitted target"
+                )
+            return result
+        except ShutdownInterrupted:
+            observed = observe_safe_checkout()
             if observed == expected_new:
                 return subprocess.CompletedProcess(
-                    ["git", "merge", "--ff-only", remote_ref], 0, "", ""
+                    ["git", "merge", "--ff-only", expected_new], 0, "", ""
                 )
             if observed != expected_old:
                 raise DevlegateError(
                     "interrupted fast-forward changed HEAD to an unexpected revision"
                 )
-            if self._state.get("phase") != "merge_pending":
+            if (
+                self._state.get("phase") != "merge_pending"
+                or self._state.get("local_head") != expected_old
+                or self._state.get("remote_head") != expected_new
+            ):
                 raise
-            # The durable merge_pending record proves this exact idempotent
-            # fast-forward is the admitted mutation, not an arbitrary retry.
-            return merge_fast_forward(repo, remote_ref, runner=self._git_runtime)
+            if self._resolve_commit_runtime(repo, remote_ref) != expected_new:
+                raise DevlegateError(
+                    "fast-forward target changed before interrupted continuation"
+                )
+            # Only the product WAL coordinates authorize this bounded retry.
+            result = merge_fast_forward(repo, expected_new, runner=self._git_runtime)
+            if result.returncode == 0 and observe_safe_checkout() != expected_new:
+                raise DevlegateError(
+                    "fast-forward continuation did not reach the admitted target"
+                )
+            return result
 
     def _resolve_commit_runtime(self, repo: Path, revision: str) -> str | None:
         """Resolve one commit through the runtime Git interruption seam."""
@@ -3352,7 +3406,6 @@ class ServiceEngine:
                 resolve=self._resolve_commit_runtime,
                 ancestor=self._is_ancestor_runtime,
                 accepted_integration=self._observe_accepted_control_integration,
-                merge=self._merge_fast_forward_runtime,
                 log=_log,
             )
         except ControlGitWorkflowError as error:

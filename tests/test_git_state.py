@@ -4,12 +4,14 @@
 # ruff: noqa: I001
 import json
 import sqlite3
+import subprocess
 
 import pytest
 from runtime_helpers import run_test_iteration
 from _cli_support import _ensure_publisher, git, invoke, publish_control, ticket
 
 from devlegate.cli import Devlegate, DevlegateError
+import devlegate.runtime as runtime_module
 
 
 def code_update(fixture, name="remote.txt", content="remote\n"):
@@ -101,6 +103,89 @@ def test_interrupted_pre_sync_merge_pending_recovers(git_fixture, monkeypatch):
     assert run_test_iteration(devlegate) == 0
     assert git(git_fixture["working"], "rev-parse", "HEAD").stdout.strip() == target
     assert state_payload(git_fixture)["phase"] == "idle"
+
+
+def _fake_merge_runtime(
+    tmp_path, monkeypatch, *, remote_after_interrupt="target", status_after_interrupt=""
+):
+    engine = object.__new__(Devlegate)
+    engine._host_owner_thread_id = None
+    engine.repo = tmp_path / "repo"
+    engine.repo.mkdir()
+    engine.current_branch = "main"
+    engine._state = {
+        "phase": "merge_pending",
+        "local_head": "old",
+        "remote_head": "target",
+    }
+    heads = {
+        "remote": iter(["target", remote_after_interrupt]),
+        "HEAD": iter(["old", "target"]),
+    }
+    calls = []
+
+    engine._resolve_commit_runtime = lambda _repo, revision: next(
+        heads["remote" if revision == "origin/main" else "HEAD"]
+    )
+    engine._branch_runtime = lambda _repo: "main"
+    engine._worktree_root_runtime = lambda repo: repo.resolve()
+    engine._status_runtime = lambda _repo: status_after_interrupt
+
+    def git_runtime(_repo, *args, check=True):
+        calls.append(args)
+        if len(calls) == 1:
+            raise runtime_module.ShutdownInterrupted
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    engine._git_runtime = git_runtime
+    monkeypatch.setattr(
+        runtime_module,
+        "merge_fast_forward",
+        lambda repo, reference, *, runner: runner(
+            repo, "merge", "--ff-only", reference
+        ),
+    )
+    return engine, calls
+
+
+def test_interrupted_merge_retries_only_the_admitted_commit(tmp_path, monkeypatch):
+    engine, calls = _fake_merge_runtime(tmp_path, monkeypatch)
+
+    result = engine._merge_fast_forward_runtime(
+        engine.repo, "origin/main", "old", "target"
+    )
+
+    assert result.returncode == 0
+    assert calls == [
+        ("merge", "--ff-only", "target"),
+        ("merge", "--ff-only", "target"),
+    ]
+
+
+def test_interrupted_merge_blocks_when_tracking_ref_advances(tmp_path, monkeypatch):
+    engine, calls = _fake_merge_runtime(
+        tmp_path, monkeypatch, remote_after_interrupt="third"
+    )
+
+    with pytest.raises(DevlegateError, match="target changed"):
+        engine._merge_fast_forward_runtime(
+            engine.repo, "origin/main", "old", "target"
+        )
+
+    assert calls == [("merge", "--ff-only", "target")]
+
+
+def test_interrupted_merge_blocks_on_ambiguous_checkout_state(tmp_path, monkeypatch):
+    engine, calls = _fake_merge_runtime(
+        tmp_path, monkeypatch, status_after_interrupt=" M file.txt"
+    )
+
+    with pytest.raises(DevlegateError, match="ambiguous"):
+        engine._merge_fast_forward_runtime(
+            engine.repo, "origin/main", "old", "target"
+        )
+
+    assert calls == [("merge", "--ff-only", "target")]
 
 
 def test_post_sync_crash_state_is_cleared_without_second_merge(
