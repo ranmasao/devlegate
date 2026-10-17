@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "963ea785267accb164168d368e8880c0def83081",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "bf41e82fc49c48b796b98da2a71f0021",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/bf41e82fc49c48b796b98da2a71f0021.md",
+  "report_sha256": "1f9ee0fc8227e3610c06fb2eb23adea398e017cfbe8cb64db7e171e36b70b875",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated src/devlegate/runtime.py and tests/test_control_workspace.py. Focused workspace, IPC, and cross-layer tests pass; lint passes.",
+    "summary": "Fixed workspace cleanup state validation so post-publication per-ticket retirement results persist safely across idle transitions and restart. Improved owner-published aggregate cleanup status to classify unsafe skips as blocked, expose blocked/remote observation diagnostics, and avoid claiming complete scans at the internal inventory cap; added focused regressions."
+  },
+  "workspace_head": "d357eb80fa7f898a042772cde031b83d87c781f4"
+}
