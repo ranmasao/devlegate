@@ -42,6 +42,36 @@ def test_once_prepares_exact_product_execution_workspace_without_cross_plane_cha
     assert git(control, "rev-parse", "HEAD").stdout.strip() != control_head
     assert not (execution / "kanban").exists()
 
+
+def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(
+            0, None, WorkerClaim("completed", "ready", (), ()), None
+        ),
+    )
+    assert run_test_iteration(engine) == 0
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+
+    result = engine.cleanup_workspaces()
+
+    assert result["dry_run"] is True
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "skipped",
+            "reason": "ticket is not durably done",
+        }
+    ]
+    assert execution.is_dir()
+
 def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

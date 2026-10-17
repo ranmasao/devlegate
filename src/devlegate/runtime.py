@@ -5174,7 +5174,165 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
             )
-        return self._complete_accepted(ticket_id, expected_head)
+        control_head = self._complete_accepted(ticket_id, expected_head)
+        self._retire_integrated_workspace(ticket_id, report, control_head)
+        return control_head
+
+    def _retire_integrated_workspace(
+        self, ticket_id: str, report: ExecutionReport, integration_head: str
+    ) -> None:
+        """Retire only the checkout proven by the accepted-to-done commit."""
+        if report.ticket_id != ticket_id or report.workspace_head is None:
+            raise WorkflowBlockedError(
+                "accepted execution workspace provenance is incomplete"
+            )
+        parents = commit_parents(self.control_worktree, integration_head, runner=_git)
+        if (
+            parents is None
+            or not parents
+            or not self._accepted_integration_commit_is_exact(
+                integration_head, ticket_id, parents[0]
+            )
+        ):
+            raise WorkflowBlockedError("accepted integration provenance is not exact")
+        ticket = self._ticket_store().by_id.get(ticket_id)
+        if ticket is None or ticket.state != "done":
+            raise WorkflowBlockedError("ticket is not durably done")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        expected_path = Path(report.execution_path).absolute()
+        if expected_path != manager.path:
+            raise WorkflowBlockedError("accepted execution workspace path is not exact")
+        if report.execution_branch != manager.branch:
+            raise WorkflowBlockedError(
+                "accepted execution workspace branch is not exact"
+            )
+        if self._state.get("worker_identity") is not None or self._state.get(
+            "reconciliation"
+        ) is not None or self._state.get("automatic_retry") is not None:
+            raise WorkflowBlockedError("accepted execution still has live dependencies")
+        pending = self._state.get("accepted_integration")
+        if isinstance(pending, dict) and pending.get("ticket_id") != ticket_id:
+            raise WorkflowBlockedError("another accepted integration is pending")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if registration is None:
+            if manager.path.exists() or any(
+                item.get("branch") == manager.branch for item in registrations.values()
+            ):
+                raise WorkflowBlockedError(
+                    "accepted execution workspace registration is ambiguous"
+                )
+            _log(f"workspace already retired: {ticket_id}")
+            return
+        workspace = manager._validate_existing(registration, report.workspace_head)
+        manager.retire(workspace, report.workspace_head)
+        _log(f"retired workspace {ticket_id} at {report.workspace_head[:12]}")
+
+    def cleanup_workspaces(
+        self, *, apply: bool = False, limit: int = 100
+    ) -> dict[str, object]:
+        """List, or apply, a bounded cleanup of proven done-ticket worktrees."""
+        if limit < 1:
+            raise ValueError("workspace cleanup limit must be positive")
+        registrations = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, "T-1"
+        )._registrations()
+        decisions: list[dict[str, object]] = []
+        candidates = 0
+        for path, registration in registrations.items():
+            try:
+                relative = path.relative_to(
+                    (self.execution_worktree_root / "work").resolve()
+                )
+            except ValueError:
+                continue
+            if len(relative.parts) != 1 or not is_canonical_ticket_name(
+                f"{relative.name}.md"
+            ):
+                continue
+            ticket_id = relative.name
+            if candidates >= limit:
+                break
+            candidates += 1
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, ticket_id
+            )
+            try:
+                ticket = self._ticket_store().by_id.get(ticket_id)
+                reports = [
+                    report
+                    for report in self.recovery_reports(ticket_id)
+                    if report.execution_branch == manager.branch
+                    and Path(report.execution_path).absolute() == manager.path
+                    and report.workspace_head == registration.get("head")
+                ]
+                if ticket is None or ticket.state != "done":
+                    raise WorkflowBlockedError("ticket is not durably done")
+                if len(reports) != 1:
+                    raise WorkflowBlockedError("workspace provenance is not unique")
+                report = reports[0]
+                integration = self._find_accepted_integration_commit(ticket_id)
+                if integration is None:
+                    raise WorkflowBlockedError("accepted integration is not proven")
+                if self._state.get("worker_identity") is not None or any(
+                    self._state.get(key) is not None
+                    for key in (
+                        "reconciliation",
+                        "automatic_retry",
+                        "accepted_integration",
+                    )
+                ):
+                    raise WorkflowBlockedError(
+                        "runtime still has execution dependencies"
+                    )
+                decision = {
+                    "ticket_id": ticket_id,
+                    "status": "eligible",
+                    "reason": "accepted integration proven",
+                }
+                if apply:
+                    manager.retire(
+                        manager._validate_existing(registration, report.workspace_head),
+                        report.workspace_head,
+                    )
+                    decision["status"] = "retired"
+                decisions.append(decision)
+            except (
+                ExecutionWorkspaceError,
+                OSError,
+                ValueError,
+                WorkflowBlockedError,
+            ) as error:
+                decisions.append(
+                    {"ticket_id": ticket_id, "status": "skipped", "reason": str(error)}
+                )
+        return {"dry_run": not apply, "limit": limit, "decisions": decisions}
+
+    def _find_accepted_integration_commit(self, ticket_id: str) -> str | None:
+        result = _git(
+            self.control_worktree,
+            "log",
+            "--format=%H",
+            "--all",
+            "--",
+            f"{self.done_path}/{ticket_id}.md",
+            check=False,
+        )
+        if result.returncode:
+            return None
+        for value in result.stdout.splitlines():
+            commit = value.strip()
+            parents = commit_parents(self.control_worktree, commit, runner=_git)
+            if (
+                parents
+                and self._accepted_integration_commit_is_exact(
+                    commit, ticket_id, parents[0]
+                )
+            ):
+                return commit
+        return None
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = self._resolve_commit_runtime(self.control_worktree, "HEAD")
