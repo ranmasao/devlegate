@@ -254,6 +254,45 @@ def test_local_execution_ref_move_during_delete_cas_is_preserved(tmp_path, monke
     assert resolve_commit(working, f"refs/heads/{manager.branch}") == moved
 
 
+def test_local_execution_ref_foreign_worktree_added_during_delete_is_preserved(
+    tmp_path, monkeypatch
+):
+    """A foreign registration racing the CAS must not be stranded."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    manager.retire(workspace, base)
+    foreign = tmp_path / "foreign-race-worktree"
+    original_runtime = engine._git_runtime
+    added = False
+
+    def interleave(repo, *args, **kwargs):
+        nonlocal added
+        if args[:3] == ("update-ref", "-d", f"refs/heads/{manager.branch}"):
+            assert git(
+                working, "worktree", "add", str(foreign), manager.branch
+            ).returncode == 0
+            added = True
+        return original_runtime(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", interleave)
+    with pytest.raises(WorkflowBlockedError, match="attached to a worktree"):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert added
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
+    assert foreign.is_dir()
+    assert any(
+        item.get("branch") == manager.branch
+        for item in manager._registrations().values()
+    )
+
+
 def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

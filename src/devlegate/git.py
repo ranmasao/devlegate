@@ -222,8 +222,11 @@ def delete_branch_if_unoccupied(
     Observe every registered worktree first, then use Git's compare-and-delete
     ref transaction.  Callers must treat a non-zero result as a refusal and
     re-observe before retrying.  The repository/service lock serializes normal
-    Devlegate mutations; the fresh occupancy observation also protects against
-    worktrees belonging to another instance.
+    Devlegate mutations; pre- and post-effect occupancy observations protect
+    against ordinary foreign-worktree races.  Git has no single primitive that
+    atomically combines worktree occupancy with an old-SHA ref lease, so an
+    unsynchronized writer that registers a worktree after the post-check is
+    outside this helper's threat model.
     """
     registrations = runner(cwd, "worktree", "list", "--porcelain", check=False)
     if registrations.returncode:
@@ -263,9 +266,41 @@ def delete_branch_if_unoccupied(
         if observed.returncode:
             return observed
         expected_head = observed.stdout.strip()
-    return runner(
+    removed = runner(
         cwd, "update-ref", "-d", branch_ref, expected_head, check=False
     )
+    if removed.returncode:
+        return removed
+
+    # update-ref has the required SHA lease, but unlike ``branch -d`` it does
+    # not protect a worktree registered by another process.  Recheck after the
+    # effect as well as before it.  If an occupancy race occurred, restore the
+    # exact ref only while it is still absent; this leaves the foreign checkout
+    # usable and makes the operation retryable instead of stranding it.
+    after = runner(cwd, "worktree", "list", "--porcelain", check=False)
+    if after.returncode:
+        restored = runner(
+            cwd, "update-ref", branch_ref, expected_head, "", check=False
+        )
+        detail = _stderr(after).strip() or "worktree occupancy could not be rechecked"
+        if restored.returncode:
+            detail = f"{detail}; ref restoration failed: {_stderr(restored).strip()}"
+        return subprocess.CompletedProcess(
+            after.args, 1, after.stdout, detail
+        )
+    occupied = any(
+        line.strip() == f"branch {branch_ref}"
+        for line in after.stdout.splitlines()
+    )
+    if occupied:
+        restored = runner(
+            cwd, "update-ref", branch_ref, expected_head, "", check=False
+        )
+        detail = f"local branch {branch} became attached to a worktree"
+        if restored.returncode:
+            detail = f"{detail}; ref restoration failed: {_stderr(restored).strip()}"
+        return subprocess.CompletedProcess(after.args, 1, after.stdout, detail)
+    return removed
 
 
 def reset_hard(
