@@ -1,0 +1,33 @@
+{
+  "code_base_head": "a30447295d6423da442aab23dbb00623090e91ad",
+  "conclusion": "incomplete",
+  "control_head": "30a8874efa43f095a0b2485d64f3f815378daf13",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-078",
+  "execution_id": "7a767939284e45bebb550f41e0178daa",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-078",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the full pytest suite; repeated runs exceeded the available execution timeout around the broader integration suite."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-078",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the full pytest suite; repeated runs exceeded the available execution timeout around the broader integration suite."
+    ],
+    "report": null,
+    "summary": "Hardened product fast-forward recovery to merge the admitted commit object only, with exact WAL coordinate checks and branch, worktree, cleanliness, and target re-observation. Removed product merge_pending retry authority from control sync, added focused regressions for target drift, ambiguous state, and control interruption, and documented affected command traces."
+  },
+  "workspace_head": "6ca7c6097f2786f54a2b1d376df85b2dc685f116"
+}
