@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "eb6fd1299e6bcc2db708f3f840ca65018ee1cb2d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "a83c955643704d35a748021caaedd0e2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add deterministic real-Git hosted-owner tests for automatic published done cleanup, crash recovery after each cleanup stage, remote-only recovery, fair progress past blocked candidates, and legacy provenance."
+  ],
+  "report_artifact": "executions/TASK-063/a83c955643704d35a748021caaedd0e2.md",
+  "report_sha256": "6d7c9f97c20edd8b7fb3a6157cacc79e18a5bdfed9878365ffbe593d46a5d120",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add deterministic real-Git hosted-owner tests for automatic published done cleanup, crash recovery after each cleanup stage, remote-only recovery, fair progress past blocked candidates, and legacy provenance."
+    ],
+    "report": "Focused control-workspace and accepted-integration lifecycle tests pass, and ./dev lint passes.",
+    "summary": "Added expected-head validation to local disposable-ref retirement while retaining Git's worktree-occupancy-safe branch deletion, and added regressions for ref movement and aggregate cleanup status preservation."
+  },
+  "workspace_head": "c030b8c5c4737d19b8b28a408500508ee64c27ab"
+}
