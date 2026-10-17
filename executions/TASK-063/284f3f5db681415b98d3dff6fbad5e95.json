@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "540541b736f865dcf57c299ab7cd745876ed64e8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "284f3f5db681415b98d3dff6fbad5e95",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add end-to-end owner-routed apply and accepted-to-done publication tests covering actual deletion, refusal after publication, partial apply replay, and persisted status projection."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add end-to-end owner-routed apply and accepted-to-done publication tests covering actual deletion, refusal after publication, partial apply replay, and persisted status projection."
+    ],
+    "report": null,
+    "summary": "Added published-product ancestry verification for historical workspace eligibility and durable bounded cleanup cohorts that constrain apply replays to the originally admitted registrations. Added focused real-Git regressions for unpublished checkpoints and non-expanding cleanup targets."
+  },
+  "workspace_head": "2961366529e10e36784518c46cf19b14122209d9"
+}
