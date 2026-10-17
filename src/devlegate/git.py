@@ -208,6 +208,16 @@ def delete_branch(
     return runner(cwd, "branch", "-D", branch, check=False)
 
 
+def delete_branch_if_unoccupied(
+    cwd: Path,
+    branch: str,
+    *,
+    runner: GitRunner = run_git,
+) -> subprocess.CompletedProcess[str]:
+    """Delete a local branch with Git's worktree-occupancy protection."""
+    return runner(cwd, "branch", "-d", branch, check=False)
+
+
 def reset_hard(
     cwd: Path,
     revision: str,

@@ -63,6 +63,7 @@ from devlegate.git import (
     compare_and_swap_ref,
     create_ref_if_absent,
     delete_branch,
+    delete_branch_if_unoccupied,
     fetch_ref,
     file_history_commit,
     hash_object,
@@ -5700,7 +5701,9 @@ class ServiceEngine:
         local_ref = f"refs/heads/{branch}"
         local_head = self._resolve_commit_runtime(self.repo, local_ref)
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, branch.removeprefix("devlegate/work/")
+            self.repo,
+            self.execution_worktree_root,
+            branch.removeprefix("devlegate/work/"),
         )
         try:
             registrations = manager._registrations()
@@ -5720,11 +5723,13 @@ class ServiceEngine:
         if local_head is not None:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
-            # Delete the exact observed ref, not merely the branch name.  A
-            # worker or operator can rewrite a ref outside the service lock;
-            # compare-and-swap must fail closed in that race.
-            removed = compare_and_swap_ref(
-                self.repo, local_ref, "", expected_head, runner=self._git_runtime
+            # Recheck the exact observed head before using Git's safe branch
+            # deletion command.  Unlike raw update-ref deletion, this refuses
+            # branches attached to any registered worktree.
+            if self._resolve_commit_runtime(self.repo, local_ref) != expected_head:
+                raise WorkflowBlockedError("local execution ref changed before removal")
+            removed = delete_branch_if_unoccupied(
+                self.repo, branch, runner=self._git_runtime
             )
             if removed.returncode:
                 raise WorkflowBlockedError(

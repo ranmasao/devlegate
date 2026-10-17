@@ -141,18 +141,41 @@ def test_local_execution_ref_cas_failure_retains_ref(tmp_path, monkeypatch):
     manager = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     )
-    manager.prepare(base)
+    workspace = manager.prepare(base)
+    manager.retire(workspace, base)
 
     def refuse(*_args, **_kwargs):
         return subprocess.CompletedProcess(
             args=("git", "update-ref"), returncode=1, stdout="", stderr="ref changed"
         )
 
-    monkeypatch.setattr(runtime_module, "compare_and_swap_ref", refuse)
-    with pytest.raises(WorkflowBlockedError, match="cannot retire local execution ref"):
+    monkeypatch.setattr(runtime_module, "delete_branch_if_unoccupied", refuse)
+    with pytest.raises(WorkflowBlockedError, match="ref changed"):
         engine._retire_execution_refs(manager.branch, base)
 
     assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
+
+
+def test_local_execution_ref_refuses_foreign_worktree_occupancy(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    manager.prepare(base)
+    registration = manager._registrations()[manager.path.resolve()]
+    manager.retire(manager._validate_existing(registration, base), base)
+    foreign = tmp_path / "foreign-worktree"
+    occupied = git(working, "worktree", "add", str(foreign), manager.branch)
+    assert occupied.returncode == 0
+
+    with pytest.raises(WorkflowBlockedError, match="attached to worktree"):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
+    assert foreign.is_dir()
 
 
 def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
