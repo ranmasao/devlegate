@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "175ee0f6c075e7b74ec8802fdeeead7f5580ec67",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "e3ed8fab841949d9bebcf0500206c8fd",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/e3ed8fab841949d9bebcf0500206c8fd.md",
+  "report_sha256": "ceeed7de12bac93233a74a25ae567b0f7f8a6d9bc34fff1e613126f531516b46",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented in src/devlegate/runtime.py and tests/test_control_workspace.py. Focused workspace, recovery, cross-layer acceptance, submodule/Git tests and Ruff checks passed; repository-provided ./dev lint could not run because the local .venv is not installed.",
+    "summary": "Added fail-closed retirement immediately after exact accepted-to-done integration, retaining execution reports and Git branch history while removing only the validated managed worktree. Added a bounded engine cleanup inventory with dry-run/apply decisions and regression coverage proving unintegrated workspaces remain retained."
+  },
+  "workspace_head": "b1d452e66e36cd692c72493f357ecf801ccd7ee2"
+}
