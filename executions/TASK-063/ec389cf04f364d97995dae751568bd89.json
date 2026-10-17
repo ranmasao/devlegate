@@ -1,0 +1,35 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "4b2facd92a9ba7a3d7e238557c8d640ce84b76c1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "ec389cf04f364d97995dae751568bd89",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the focused pytest and lint commands in an environment with the project virtualenv available.",
+    "Add the remaining hosted-owner end-to-end crash/restart and fair-convergence regressions for published done executions."
+  ],
+  "report_artifact": "executions/TASK-063/ec389cf04f364d97995dae751568bd89.md",
+  "report_sha256": "f34b8096f20dd2eea6ffe2e443f00ea3f4cd6a265070b4c9a210d9a688168cc8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the focused pytest and lint commands in an environment with the project virtualenv available.",
+      "Add the remaining hosted-owner end-to-end crash/restart and fair-convergence regressions for published done executions."
+    ],
+    "report": "Implementation changes are in the current workspace; no commit or branch integration was performed.",
+    "summary": "Hardened execution-ref retirement with atomic compare-and-swap deletion and exact-SHA failure handling. Tightened post-publication accepted-integration recovery so the canonical done commit must have the persisted control head as its exact parent, and added a regression preserving refs when CAS deletion fails."
+  },
+  "workspace_head": "8063d1e2cdb5fb97998b7fcd4aa6353ab32f72dc"
+}
