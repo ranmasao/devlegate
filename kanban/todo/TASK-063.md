@@ -849,3 +849,33 @@ Keep tests small and parametrized using existing real-Git fixture/harness. Neith
 ### Disposition
 
 **REWORK REQUIRED:** move the same ticket `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on canonical `devlegate/control`, preserving all previous reviews and run reports. **Do not integrate** `ea3940672a19` into `release/0.5.7`. Focus the next implementation on genuinely unproven automatic recovery/fairness and the foreign-worktree registration race, not broad refactoring, public cleanup commands or a separate historical cleanup service.
+
+## Reviewer decision — 2026-10-17, execution a57cb341: REWORK REQUIRED
+
+**Execution:** `a57cb3412fe945bcab2352d4411585fa`; **exact checkpoint:** `1988a67e07a2a2916ae08a27823397d585cc92a6`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `4d241527c162544091cb1a5e483cf85e279d836a`. The worker claimed `completed` with no remaining work. Independent review finds unproven core acceptance and a failing exact-SHA CI run. Preserve all checkpoints, tickets, reports and prior reviews.
+
+### Verified change: compensating repair for concurrent foreign worktree attachment
+
+- `src/devlegate/git.py::delete_branch_if_unoccupied()` keeps the exact expected-old-SHA `git update-ref -d` CAS. It now scans all registered worktrees **both before and after** the delete; if a foreign registration appears during deletion or the post-check cannot be performed, it attempts `git update-ref <ref> <expected_sha> ""`, conditional on the ref still being absent, and returns a blocked diagnostic. The new real-Git `test_local_execution_ref_foreign_worktree_added_during_delete_is_preserved` interleaves `git worktree add` immediately before delete and verifies that the worktree remains registered and the branch restored. **Credit this mitigation; do not re-request that exact interleaving test.**
+- The conditional-create-with-empty-old-ref argument was separately checked to be valid on Git 2.47.3. It avoids overwriting a concurrently recreated ref, though restoration may legitimately fail if another process has already recreated it.
+- This is **compensating mitigation, not an atomic Git occupancy+ref-SHA transaction**. The code explicitly acknowledges that external unsynchronized worktree registration **after the final occupancy observation** is outside its threat model. Do not claim an absolute safety guarantee against arbitrary concurrent external Git processes, and do not keep cycling between unsafe name-only deletion and unguarded `update-ref -d`. Preserve a clear, realistic concurrency boundary and the already covered SHA/occupancy regressions; prioritize the missing functional acceptance rather than demanding a nonexistent universal Git primitive.
+
+### Exact-checkpoint CI is red; diagnose rather than assume a cleanup regression
+
+[Actions #39059978711](https://github.com/ranmasao/devlegate/actions/runs/39059978711) **FAILED: 1 failed, 1266 passed, 1 skipped**; coverage/lint steps were skipped after pytest failure. The only failing case is `tests/test_cli_topology.py::test_real_service_transaction_stage_restart_preserves_execution[post-publication]`: after a simulated service restart, the test waited 15 s for the expected review state, but service status instead reported a retryable failure `worker identity persistence failed: [Errno 3] No such process`. The new diff only edits `src/devlegate/git.py` and `tests/test_control_workspace.py`; causal connection to this existing service-test failure is **not demonstrated**. Re-run this exact test under CI-like conditions and/or rerun the exact checkpoint workflow, investigate if reproducible, and achieve passing full CI plus Ruff before integration. Do not weaken the existing lifecycle test or rewrite unrelated worker handling on the basis of one unexplained failure.
+
+### Core gaps — the main next pass
+
+**No new owner-hosted partial-restart, backlog/fairness or old-provenance tests** were introduced by this checkpoint. Previous accepted proofs already cover (1) normal nonzero-delta `accepted→done` removal of owned checkout, registration and both refs, and (2) fresh-instance recovery after all disposable refs are removed while `accepted_integration` remains pending. Do **not** redo them.
+
+Required remaining real-Git, actual owner-driven tests and any production defects they reveal:
+
+1. Published canonical `done` before any cleanup intent; fresh-owner automatic discovery. Interrupted partial stage after worktree removal but before local/remote ref deletion, remote-only remnant, temporarily unreachable remote then restoration, and restart without manual cleanup RPC. Verify product, canonical control and durable reports unchanged and next runnable ticket can proceed.
+2. Earliest blocked candidate plus genuinely eligible later integrated `done` candidate: bounded repeated owner passes actually reclaim **the later candidate's** physical checkout, registration, local and remote refs, including after restarting the owner; cursor rotation on non-done worktrees alone does not count.
+3. **One universal age-agnostic owner reconciler** must evaluate old and current resources identically. Test an older `done` control transition without modern trailers for which independent exact evidence is sufficient and actual owner-pass reclamation succeeds; test missing/ambiguous evidence blocks the same path safely with specific diagnostics. These are coverage scenarios, **not authorization for a separate legacy cleanup service, migration, operator sweep or age filter**.
+
+The core contract is *attempt safe proof of all discovered owned resources, and retire any provably eligible candidate regardless of age; never speculate on ambiguous identity*. No special eligibility standards for old data.
+
+### Disposition
+
+**REWORK REQUIRED.** Move the existing `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on `devlegate/control`, preserving full history and all worker implementations. **Do not modify** `release/0.5.7`. Focus on owner crash-stage/backlog convergence and exact-SHA CI diagnosis, retaining current race mitigation and previously proven positive scenarios.
