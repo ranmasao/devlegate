@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "161325e86f22bcdff6badeee60ce78d6d4df9f47",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "ad4d571cc4534cad8df809768fdb290b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented owner-published aggregate workspace cleanup inventory separate from bounded reconciliation passes. Cleanup status now reports initializing, partial, blocked, or clean only after coherent scan coverage, preserves retry diagnostics, and remains read-only through the snapshot path. Added focused regressions for startup unknown state and multi-candidate aggregate reporting."
+  },
+  "workspace_head": "3560c105801aa11921b01a577345084798c9014d"
+}
