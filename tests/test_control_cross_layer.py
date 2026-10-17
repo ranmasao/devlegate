@@ -7,6 +7,7 @@
 from dataclasses import replace
 
 from _control_support import *  # noqa: F403,F405
+from devlegate.git import resolve_commit
 
 def test_product_workflow_copy_fails_closed(tmp_path):
     working, config, _state = control_fixture(tmp_path)
@@ -114,6 +115,18 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
         git(working, "rev-parse", "HEAD").stdout.strip()
         == git(working, "rev-parse", "origin/main").stdout.strip()
     )
+    execution_path = devlegate.execution_worktree_root / "work" / "T-1"
+    assert not execution_path.exists()
+    assert not any(
+        item.get("branch") == "devlegate/work/T-1"
+        for item in ExecutionWorkspaceManager(
+            devlegate.repo, devlegate.execution_worktree_root, "T-1"
+        )._registrations().values()
+    )
+    assert resolve_commit(devlegate.repo, "refs/heads/devlegate/work/T-1") is None
+    assert git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout == ""
 
 
 def test_unclassified_review_edit_after_admission_fails_closed(

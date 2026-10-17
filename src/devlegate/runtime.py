@@ -5776,6 +5776,26 @@ class ServiceEngine:
         ) is not None:
             raise WorkflowBlockedError("remote execution ref remains after removal")
 
+    def _validate_execution_ref_heads(self, branch: str, expected_head: str) -> None:
+        """Require every observed disposable ref to name the proven checkpoint."""
+        local_head = self._resolve_commit_runtime(
+            self.repo, f"refs/heads/{branch}"
+        )
+        if local_head is not None and local_head != expected_head:
+            raise WorkflowBlockedError(
+                "local execution ref does not match accepted checkpoint"
+            )
+        remote_head = remote_ref(
+            self.repo,
+            self.remote_name,
+            f"refs/heads/{branch}",
+            runner=self._git_runtime,
+        )
+        if remote_head is not None and remote_head != expected_head:
+            raise WorkflowBlockedError(
+                "remote execution ref does not match accepted checkpoint"
+            )
+
     def cleanup_workspaces(
         self,
         *,
@@ -5847,6 +5867,9 @@ class ServiceEngine:
                             raise WorkflowBlockedError(
                                 "execution ref does not match accepted checkpoint"
                             )
+                        self._validate_execution_ref_heads(
+                            report.execution_branch, report.workspace_head
+                        )
                         integration = self._find_accepted_integration_commit(
                             ticket_id, report
                         )
@@ -5906,6 +5929,9 @@ class ServiceEngine:
                     raise WorkflowBlockedError(
                         "workspace provenance does not match accepted evidence"
                     )
+                self._validate_execution_ref_heads(
+                    report.execution_branch, report.workspace_head
+                )
                 integration = self._find_accepted_integration_commit(ticket_id, report)
                 if integration is None:
                     raise WorkflowBlockedError("accepted integration is not proven")

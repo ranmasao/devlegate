@@ -211,6 +211,57 @@ def test_local_execution_ref_move_after_checkout_retirement_is_preserved(tmp_pat
     assert resolve_commit(working, f"refs/heads/{manager.branch}") == moved
 
 
+def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    assert git(
+        working,
+        "push",
+        "origin",
+        f"{manager.branch}:refs/heads/{manager.branch}",
+    ).returncode == 0
+    manager.retire(workspace, base)
+
+    (working / "remote-ref-moved.txt").write_text("moved\n")
+    git(working, "add", "remote-ref-moved.txt")
+    assert git(
+        working,
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "move remote disposable ref",
+    ).returncode == 0
+    moved = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "branch", "-f", manager.branch, moved).returncode == 0
+    assert git(
+        working,
+        "push",
+        "--force",
+        "origin",
+        f"{manager.branch}:refs/heads/{manager.branch}",
+    ).returncode == 0
+    assert git(working, "branch", "-f", manager.branch, base).returncode == 0
+
+    with pytest.raises(WorkflowBlockedError, match="remote execution ref"):
+        engine._validate_execution_ref_heads(manager.branch, base)
+
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
+    assert (
+        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
+        .split()[0]
+        == moved
+    )
+
+
 def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
