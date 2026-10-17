@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "fc41a0ff7b00d6a7ada2fd23de0af3b8d6186d73",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "1d6cae0f6732455f88846a8049dd245e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/1d6cae0f6732455f88846a8049dd245e.md",
+  "report_sha256": "2538b04daa49441285a902779e891f34cf7a901c70a9eea5a618d77af7edf893",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated runtime admission/receipt handling, cleanup status projection and IPC decoding, plus a regression assertion that dry-run inventory does not create mutable receipts. Focused workspace/IPC tests and lint pass.",
+    "summary": "Separated workspace cleanup dry-runs from mutable admission and persistence, while retaining service-owner serialization. Apply requests now persist completed bounded results for replay and re-observe admitted-but-incomplete requests; cleanup outcomes are exposed through durable status projection, and post-publication cleanup catches only expected workspace/Git refusal classes."
+  },
+  "workspace_head": "3310ca9f23185eadaf7f2e5a9cbf728c646b4a0c"
+}
