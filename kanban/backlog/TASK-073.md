@@ -1,12 +1,12 @@
 ---
 "type": "devlegate.ticket"
 "title": "STORY acceptance gate: isolate Git implementation from ServiceEngine"
-"depends_on": ["TASK-071", "TASK-072"]
+"depends_on": ["TASK-071", "TASK-072", "TASK-078", "TASK-079", "TASK-080", "TASK-081"]
 ---
 
 ## Purpose: parent story and final curator acceptance
 
-This is the **parent story and final acceptance gate** for the Git-layer refactor. It is intentionally represented as an ordinary Devlegate ticket: the current workflow does not support native Epic/Story metadata. The completed milestones TASK-061 and TASK-067 through TASK-070, plus the two active implementation tasks TASK-071 and TASK-072, are child work toward **one architectural outcome**. Passing individual ticket tests or reducing a command counter is not proof this story is done.
+This is the **parent story and final acceptance gate** for the Git-layer refactor. It is intentionally represented as an ordinary Devlegate ticket: the current workflow does not support native Epic/Story metadata. The completed milestones TASK-061 and TASK-067 through TASK-070, plus the completed TASK-071 and TASK-072 and follow-up implementation tasks TASK-078 through TASK-081, are child work toward **one architectural outcome**. Passing individual ticket tests or reducing a command counter is not proof this story is done.
 
 This ticket runs only after TASK-071 and TASK-072 reach `done`. It is an **audit/report task**, not permission to silently redesign the system. Return any remaining gaps for focused follow-up work. **Final acceptance requires an explicit human curator decision, not an automated self-approval or merely green CI.**
 
@@ -71,3 +71,9 @@ Audit the exact **integrated product HEAD**, including previously integrated TAS
 **Scope control:** TASK-073 remains an **audit/report task**, not authorization for a worker to implement the above refactors silently. Its next attempt must produce the missing referenced criteria matrix and a concrete, bounded implementation-gap handoff, or remain `incomplete`. Do not edit existing execution evidence, rewrite product history, or automatically self-approve. Preserve `TASK-073` ID and all earlier accepted child work.
 
 **Reviewer disposition:** move this same ticket `kanban/review/TASK-073.md → kanban/todo/TASK-073.md` with these audit findings. No accepted/done transition.
+
+## Curator scheduling decision — 2026-10-17: deferred follow-up gate
+
+The prior incomplete execution and reviewer audit above are retained as historical evidence, not deleted or rewritten. The curator has deferred this same TASK-073 to `kanban/backlog` while TASK-078 (transport interruption), TASK-079 (recovery observations), TASK-080 (execution workspace) and TASK-081 (reconciliation) are implemented. These tasks are strict prerequisites for any new final audit; their accepted/review states do not satisfy dependencies until `done`.
+
+When this story is explicitly promoted to `todo` after dependencies are complete, start a **new audit execution/generation**, bind it to the then-integrated product HEAD, and independently verify criteria 1–8. Never reuse or edit the prior execution result `9ada49c1cd904f18b90e63c0b5be7b02` as acceptance evidence for the new gate; only an explicit human curator APPROVE can close TASK-073. This scheduling deferral is not an implementation specification for automatic stale-execution invalidation or retry authorization.
