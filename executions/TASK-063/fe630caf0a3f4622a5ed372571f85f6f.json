@@ -1,0 +1,35 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "e4798e1e31c9923cea8ba2f1f96a9d4978cb3ba8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "fe630caf0a3f4622a5ed372571f85f6f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add deterministic fresh-owner real-Git coverage for autonomous convergence after each partial cleanup stage, remote-only outage/retry, and blocked-earliest versus eligible-later fairness.",
+    "Add owner-driven legacy trailerless historical cleanup and ambiguous-provenance refusal coverage."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add deterministic fresh-owner real-Git coverage for autonomous convergence after each partial cleanup stage, remote-only outage/retry, and blocked-earliest versus eligible-later fairness.",
+      "Add owner-driven legacy trailerless historical cleanup and ambiguous-provenance refusal coverage."
+    ],
+    "report": null,
+    "summary": "Reworked local disposable-branch retirement to use an exact expected-old-SHA compare-and-delete transaction after a fresh all-worktree occupancy check, preserving foreign checkout protection while closing the branch-name deletion race. Added a deterministic real-Git interleaving regression and retained the established owner cleanup behavior."
+  },
+  "workspace_head": "ea3940672a192086a84d164d2fe34b37d9632b98"
+}
