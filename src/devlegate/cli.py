@@ -318,6 +318,27 @@ def _retry_daemon(
     return 0
 
 
+def _cleanup_workspaces_daemon(
+    env_file: Path, *, apply: bool, limit: int, output_format: str
+) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        result = request(
+            locator.socket_path,
+            "cleanup-workspaces",
+            {"apply": apply, "limit": limit},
+            mutable=True,
+        )
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    emit(
+        result,
+        output_format,
+        "workspace cleanup applied" if apply else "workspace cleanup dry run",
+    )
+    return 0
+
+
 def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -2640,6 +2661,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="ticket to drop; omit it to choose from current candidates",
     )
     add_output_arguments(drop_parser)
+    cleanup_parser = commands.add_parser(
+        "cleanup-workspaces",
+        help="inspect or retire proven completed execution workspaces",
+        description=(
+            "Run a bounded, service-owner-authorized workspace cleanup. The "
+            "default is read-only; use --apply to retire eligible checkouts."
+        ),
+    )
+    cleanup_parser.add_argument(
+        "--apply", action="store_true", help="retire eligible workspaces"
+    )
+    cleanup_parser.add_argument(
+        "--limit", type=int, default=100, help="maximum registered worktrees to inspect"
+    )
+    add_output_arguments(cleanup_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3051,6 +3087,13 @@ def main() -> int:
             )
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
+        if args.command == "cleanup-workspaces":
+            return _cleanup_workspaces_daemon(
+                env_file,
+                apply=args.apply,
+                limit=args.limit,
+                output_format=args.output_format,
+            )
         if args.command == "recover":
             return _recover_daemon(
                 env_file,

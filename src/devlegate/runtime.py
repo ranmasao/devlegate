@@ -540,6 +540,13 @@ def _reconcile_auto_request_fingerprint(ticket_id: str, onto: str | None) -> str
     )
 
 
+def _cleanup_workspaces_request_fingerprint(apply: bool, limit: int) -> str:
+    return _mutation_fingerprint(
+        "cleanup-workspaces",
+        {"apply": "1" if apply else "0", "limit": str(limit)},
+    )
+
+
 def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
     return _mutation_fingerprint(
         "reconcile-control", {"from": from_head, "to": to_head}
@@ -1113,6 +1120,21 @@ class ServiceEngine:
             onto=to_head,
             request_id=request_id,
             fingerprint=_control_reconcile_request_fingerprint(from_head, to_head),
+        )
+
+    def submit_cleanup_workspaces(
+        self, *, apply: bool, limit: int, request_id: str
+    ) -> dict[str, object]:
+        """Submit bounded workspace cleanup to the serialized service owner."""
+        if limit < 1:
+            raise DevlegateError("workspace cleanup limit must be positive")
+        return self._submit_operator_command(
+            method="cleanup-workspaces",
+            ticket_id="__workspaces__",
+            onto=str(limit),
+            request_id=request_id,
+            fingerprint=_cleanup_workspaces_request_fingerprint(apply, limit),
+            force=apply,
         )
 
     def _submit_operator_command(
@@ -1972,6 +1994,16 @@ class ServiceEngine:
             )
 
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
+        if command.method == "cleanup-workspaces":
+            if command.ticket_id != "__workspaces__" or command.onto is None:
+                raise DevlegateError("workspace cleanup request identity is incomplete")
+            try:
+                limit = int(command.onto)
+            except ValueError as error:
+                raise DevlegateError("workspace cleanup limit is invalid") from error
+            if limit < 1:
+                raise DevlegateError("workspace cleanup limit must be positive")
+            return
         if command.method == "retry":
             self._validate_retry_admission(command.ticket_id, command.force)
             return
@@ -2013,6 +2045,8 @@ class ServiceEngine:
         execution_id: str | None = None,
         resolution_class: str | None = None,
     ) -> dict[str, object]:
+        if method == "cleanup-workspaces":
+            return {"accepted": True, "ticket_id": ticket_id}
         if method == "retry":
             return {"accepted": True, "ticket_id": ticket_id}
         if method == "drop":
@@ -2246,6 +2280,12 @@ class ServiceEngine:
                         "service busy; mutable request was not admitted"
                     )
                 self._record_operator_admission(command)
+                if command.method == "cleanup-workspaces":
+                    assert command.onto is not None
+                    command.admission_result = self.cleanup_workspaces(
+                        apply=command.force, limit=int(command.onto)
+                    )
+                    return
                 command.admission_result = self._operator_ack(
                     command.method,
                     command.ticket_id,
@@ -5175,7 +5215,25 @@ class ServiceEngine:
                 "accepted integration control identity is invalid"
             )
         control_head = self._complete_accepted(ticket_id, expected_head)
-        self._retire_integrated_workspace(ticket_id, report, control_head)
+        cleanup = {
+            "ticket_id": ticket_id,
+            "status": "retired",
+            "reason": "accepted integration proven",
+        }
+        try:
+            self._retire_integrated_workspace(ticket_id, report, control_head)
+        except Exception as error:
+            # Publication is already durable. Workspace retention is optional and
+            # must never make an accepted integration pending again.
+            cleanup = {
+                "ticket_id": ticket_id,
+                "status": "blocked",
+                "reason": str(error) or error.__class__.__name__,
+            }
+            _log(
+                f"workspace cleanup blocked for {ticket_id}: {cleanup['reason']}"
+            )
+        self._state["workspace_cleanup"] = cleanup
         return control_head
 
     def _retire_integrated_workspace(
@@ -5261,18 +5319,20 @@ class ServiceEngine:
             )
             try:
                 ticket = self._ticket_store().by_id.get(ticket_id)
-                reports = [
-                    report
-                    for report in self.recovery_reports(ticket_id)
-                    if report.execution_branch == manager.branch
-                    and Path(report.execution_path).absolute() == manager.path
-                    and report.workspace_head == registration.get("head")
-                ]
                 if ticket is None or ticket.state != "done":
                     raise WorkflowBlockedError("ticket is not durably done")
-                if len(reports) != 1:
-                    raise WorkflowBlockedError("workspace provenance is not unique")
-                report = reports[0]
+                # Re-run the same accepted-transition evidence proof used by
+                # normal integration. A report merely present on disk is not
+                # sufficient historical provenance.
+                report = self._accepted_execution_report(ticket_id)
+                if not (
+                    report.execution_branch == manager.branch
+                    and Path(report.execution_path).absolute() == manager.path
+                    and report.workspace_head == registration.get("head")
+                ):
+                    raise WorkflowBlockedError(
+                        "workspace provenance does not match accepted evidence"
+                    )
                 integration = self._find_accepted_integration_commit(ticket_id)
                 if integration is None:
                     raise WorkflowBlockedError("accepted integration is not proven")
@@ -5301,6 +5361,9 @@ class ServiceEngine:
                 decisions.append(decision)
             except (
                 ExecutionWorkspaceError,
+                ExecutionReportError,
+                GitAncestryError,
+                GitObservationError,
                 OSError,
                 ValueError,
                 WorkflowBlockedError,
@@ -5315,13 +5378,15 @@ class ServiceEngine:
             self.control_worktree,
             "log",
             "--format=%H",
-            "--all",
+            "HEAD",
             "--",
             f"{self.done_path}/{ticket_id}.md",
             check=False,
         )
         if result.returncode:
-            return None
+            raise WorkflowBlockedError(
+                "canonical control history could not be observed"
+            )
         for value in result.stdout.splitlines():
             commit = value.strip()
             parents = commit_parents(self.control_worktree, commit, runner=_git)
@@ -6605,8 +6670,12 @@ class ServiceEngine:
                 try:
                     if operator_command is not None:
                         self._admit_operator_command(operator_command)
-                        status = self._dispatch_operator_command(
-                            operator_command, stop_event
+                        status = (
+                            0
+                            if operator_command.method == "cleanup-workspaces"
+                            else self._dispatch_operator_command(
+                                operator_command, stop_event
+                            )
                         )
                     else:
                         status = self.run_iteration()

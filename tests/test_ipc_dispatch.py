@@ -65,6 +65,33 @@ def test_control_reconciliation_dispatch_preserves_both_identities(running_serve
     assert response == {"accepted": True, "from": from_head, "to": to_head}
     assert observed == [(from_head, to_head, "id")]
 
+
+def test_workspace_cleanup_dispatch_is_explicit_and_bounded(running_server):
+    engine, _state, _server = running_server
+    observed = []
+    engine.submit_cleanup_workspaces = lambda *, apply, limit, request_id: (
+        observed.append((apply, limit, request_id))
+        or {"dry_run": not apply, "decisions": []}
+    )
+
+    response = dispatch_mutation(
+        engine,
+        _request("cleanup-workspaces", {"apply": False, "limit": 3}),
+    )
+
+    assert response == {"dry_run": True, "decisions": []}
+    assert observed == [(False, 3, "id")]
+
+
+def test_workspace_cleanup_dispatch_rejects_unbounded_limit(running_server):
+    engine, _state, _server = running_server
+
+    with pytest.raises(IPCProtocolError, match="between 1 and 1000"):
+        dispatch_mutation(
+            engine,
+            _request("cleanup-workspaces", {"apply": True, "limit": 1001}),
+        )
+
 def test_dispatch_uses_service_views_without_persistence_access():
     class View:
         def as_dict(self):
