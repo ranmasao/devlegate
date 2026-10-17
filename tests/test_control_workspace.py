@@ -102,6 +102,55 @@ def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
     )
 
 
+def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    (workspace.path / "not-published.txt").write_text("not published\n")
+    git(workspace.path, "add", "not-published.txt")
+    git(
+        workspace.path,
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "unpublished",
+    )
+    unpublished = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+
+    engine._prove_published_product_checkpoint(base)
+    with pytest.raises(WorkflowBlockedError, match="not published"):
+        engine._prove_published_product_checkpoint(unpublished)
+    assert workspace.path.is_dir()
+
+
+def test_workspace_cleanup_targets_do_not_expand_after_registration_changes(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    first = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    cohort = engine._workspace_cleanup_cohort(1)
+    second = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-2"
+    ).prepare(base)
+
+    result = engine.cleanup_workspaces(targets=cohort)
+
+    assert [item["ticket_id"] for item in result["decisions"]] == ["T-1"]
+    assert first.path.is_dir()
+    assert second.path.is_dir()
+
+
 def test_historical_integration_lookup_is_bound_to_execution_generation(
     tmp_path,
 ):

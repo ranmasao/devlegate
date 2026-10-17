@@ -2137,6 +2137,7 @@ class ServiceEngine:
                         "onto",
                         "resolution_class",
                         "result",
+                        "cohort",
                     }
                 )
                 or not {"method", "fingerprint", "ticket_id", "accepted"}.issubset(
@@ -2165,6 +2166,20 @@ class ServiceEngine:
             result = receipt.get("result")
             if result is not None and not isinstance(result, dict):
                 raise DevlegateError("invalid mutable request receipt result")
+            cohort = receipt.get("cohort")
+            if cohort is not None and (
+                not isinstance(cohort, list)
+                or any(
+                    not isinstance(item, dict)
+                    or set(item) != {"ticket_id", "path", "branch", "head"}
+                    or not all(
+                        isinstance(item[field], str) and item[field]
+                        for field in ("ticket_id", "path", "branch", "head")
+                    )
+                    for item in cohort
+                )
+            ):
+                raise DevlegateError("invalid workspace cleanup cohort")
             return dict(receipt)
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
@@ -2196,6 +2211,18 @@ class ServiceEngine:
                 if command.resolution_class is None:
                     raise DevlegateError("automatic reconciliation was not classified")
                 receipt["resolution_class"] = command.resolution_class
+            if command.method == "cleanup-workspaces":
+                if command.onto is None:
+                    raise DevlegateError("workspace cleanup limit is missing")
+                previous = receipts.get(command.request_id)
+                if isinstance(previous, dict) and isinstance(
+                    previous.get("cohort"), list
+                ):
+                    receipt["cohort"] = previous["cohort"]
+                else:
+                    receipt["cohort"] = self._workspace_cleanup_cohort(
+                        int(command.onto)
+                    )
             if command.method == "retry" and command.force:
                 self._force_retry_transition(
                     command.ticket_id, command.request_id, receipt, updated
@@ -2258,6 +2285,40 @@ class ServiceEngine:
                 **({"reconciliation": reconciliation} if reconciliation else {}),
             )
 
+    def _workspace_cleanup_cohort(self, limit: int) -> list[dict[str, str]]:
+        """Capture the bounded registration set before an apply can mutate Git."""
+        registrations = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, "T-1"
+        )._registrations()
+        work_root = (self.execution_worktree_root / "work").resolve()
+        cohort: list[dict[str, str]] = []
+        for path, registration in sorted(
+            registrations.items(), key=lambda item: str(item[0])
+        ):
+            try:
+                relative = path.relative_to(work_root)
+            except ValueError:
+                continue
+            if len(relative.parts) != 1 or not is_canonical_ticket_name(
+                f"{relative.name}.md"
+            ):
+                continue
+            branch = registration.get("branch")
+            head = registration.get("head")
+            if not isinstance(branch, str) or not isinstance(head, str):
+                continue
+            cohort.append(
+                {
+                    "ticket_id": relative.name,
+                    "path": str(path),
+                    "branch": branch,
+                    "head": head,
+                }
+            )
+            if len(cohort) >= limit:
+                break
+        return cohort
+
     def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
             with self._operator_command_lock:
@@ -2278,7 +2339,11 @@ class ServiceEngine:
                 if command.method == "cleanup-workspaces":
                     assert command.onto is not None
                     result = self.cleanup_workspaces(
-                        apply=command.force, limit=int(command.onto)
+                        apply=command.force,
+                        limit=int(command.onto),
+                        targets=(
+                            self._mutable_receipt(command.request_id) or {}
+                        ).get("cohort"),
                     )
                     command.admission_result = result
                     if command.mutable:
@@ -5324,7 +5389,11 @@ class ServiceEngine:
         _log(f"retired workspace {ticket_id} at {report.workspace_head[:12]}")
 
     def cleanup_workspaces(
-        self, *, apply: bool = False, limit: int = 100
+        self,
+        *,
+        apply: bool = False,
+        limit: int = 100,
+        targets: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
         """List, or apply, a bounded cleanup of proven done-ticket worktrees."""
         if limit < 1:
@@ -5333,22 +5402,33 @@ class ServiceEngine:
             self.repo, self.execution_worktree_root, "T-1"
         )._registrations()
         decisions: list[dict[str, object]] = []
-        candidates = 0
-        for path, registration in registrations.items():
-            try:
-                relative = path.relative_to(
-                    (self.execution_worktree_root / "work").resolve()
-                )
-            except ValueError:
+        if targets is None:
+            targets = self._workspace_cleanup_cohort(limit)
+        for target in targets:
+            ticket_id = target["ticket_id"]
+            path = Path(target["path"]).absolute()
+            registration = registrations.get(path.resolve())
+            if registration is None:
+                if path.exists() or any(
+                    item.get("branch") == target["branch"]
+                    for item in registrations.values()
+                ):
+                    decisions.append(
+                        {
+                            "ticket_id": ticket_id,
+                            "status": "skipped",
+                            "reason": "workspace registration changed or is ambiguous",
+                        }
+                    )
+                else:
+                    decisions.append(
+                        {
+                            "ticket_id": ticket_id,
+                            "status": "retired",
+                            "reason": "workspace already retired",
+                        }
+                    )
                 continue
-            if len(relative.parts) != 1 or not is_canonical_ticket_name(
-                f"{relative.name}.md"
-            ):
-                continue
-            ticket_id = relative.name
-            if candidates >= limit:
-                break
-            candidates += 1
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket_id
             )
@@ -5363,7 +5443,9 @@ class ServiceEngine:
                 if not (
                     report.execution_branch == manager.branch
                     and Path(report.execution_path).absolute() == manager.path
-                    and report.workspace_head == registration.get("head")
+                    and report.workspace_head == target["head"]
+                    and registration.get("branch") == target["branch"]
+                    and registration.get("head") == target["head"]
                 ):
                     raise WorkflowBlockedError(
                         "workspace provenance does not match accepted evidence"
@@ -5371,6 +5453,7 @@ class ServiceEngine:
                 integration = self._find_accepted_integration_commit(ticket_id, report)
                 if integration is None:
                     raise WorkflowBlockedError("accepted integration is not proven")
+                self._prove_published_product_checkpoint(report.workspace_head)
                 if self._state.get("worker_identity") is not None or any(
                     self._state.get(key) is not None
                     for key in (
@@ -5408,6 +5491,31 @@ class ServiceEngine:
                     {"ticket_id": ticket_id, "status": "skipped", "reason": str(error)}
                 )
         return {"dry_run": not apply, "limit": limit, "decisions": decisions}
+
+    def _prove_published_product_checkpoint(self, checkpoint: str | None) -> None:
+        """Require the accepted checkpoint to be reachable from published product."""
+        if not isinstance(checkpoint, str) or not _is_git_identity(checkpoint):
+            raise WorkflowBlockedError("accepted product checkpoint is invalid")
+        try:
+            product_head = remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{self.remote_branch}",
+                runner=self._git_runtime,
+            )
+            if product_head is None or not (
+                product_head == checkpoint
+                or is_ancestor(
+                    self.repo, checkpoint, product_head, runner=self._git_runtime
+                )
+            ):
+                raise WorkflowBlockedError(
+                    "accepted product checkpoint is not published"
+                )
+        except (GitAncestryError, GitObservationError) as error:
+            raise WorkflowBlockedError(
+                "published product history could not be observed"
+            ) from error
 
     def _find_accepted_integration_commit(
         self, ticket_id: str, report: ExecutionReport | None = None
