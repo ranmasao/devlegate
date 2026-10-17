@@ -398,3 +398,29 @@ Add narrow, realistic end-to-end/integration proofs for: (1) real `accepted -> d
 ### Disposition
 
 **REWORK REQUIRED.** Move **TASK-063** from `review` back to `todo`. Preserve the fifth checkpoint and all historical artifacts; do **not** integrate it into `release/0.5.7` yet. Successful exact-final-SHA CI remains necessary but is not a replacement for the publication, bounded-replay and real-owner safety proofs above.
+
+## Reviewer decision — 2026-10-17, execution f023121c: REWORK REQUIRED — revised scope not implemented
+
+**Execution:** `f023121c7e7f49189d046e38bddd0677`; **exact checkpoint:** `bab5c5119359b7f745fdc4276ba05ca2de2bdd82`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `5d74ff521713cdf3a71c2ebe47f5408375cd4d93`. Worker claimed `completed` with `remaining=[]`, but the checkpoint implements **only two residual items from the obsolete narrower scope**, not the authoritative revised TASK-063 requirements at the top of this ticket. Preserve work branch/checkpoint and all prior reports; continue THIS ticket.
+
+**Exact-checkpoint CI:** [#39021265752](https://github.com/ranmasao/devlegate/actions/runs/39021265752), **success**: 1250 passed, 1 skipped, coverage 78%, Ruff all checks passed. CI success is real; acceptance scope is not met.
+
+### What was actually changed
+
+One commit on top of `2961366529e1` changes only `src/devlegate/runtime.py` (+48/-3) and `tests/test_control_workspace.py` (+49). It checks that a historical accepted integration commit explicitly names the published checkpoint, constrains/validates saved cleanup cohorts, and adds two narrow regressions. Retain useful product-lineage and idempotence safety improvements.
+
+### Blocking requirements absent from the checkpoint
+
+1. **End-state violates the core contract.** After `_complete_accepted()`, `_integrate_accepted()` calls only `_retire_integrated_workspace()`, which calls `ExecutionWorkspaceManager.retire()`: this removes the worktree but explicitly **keeps** local `devlegate/work/<ticket>` and upstream branches. `cleanup_workspaces()` likewise enumerates registered worktrees only and never retires either branch. There is no per-resource safe cleanup for a **remote-branch-only** or local-branch-only remnant. Must prove exact execution/checkpoint and published product/control ancestry, retire clean checkout/registration and then both local and remote work refs (remote compare-and-delete lease), retaining durable history and recovery refs. On ambiguous identities, retain and report. Handle previously completed ticket generations and, where provable, legacy integration messages.
+
+2. **No autonomous reconciliation on startup or while hosted.** The only historical sweep is `cleanup-workspaces` routed through operator IPC; no startup or periodic low-priority/background service-owned pass discovers residual refs after a crash right after published `done`, or recovers partial worktree/local/remote branch deletion. New product requirement is **automatic convergence without operator action or pre-recorded cleanup intent**. Reuse existing serialized owner and deterministic scopes; bounded per-pass fair scheduling; retry remote outages or blocked cases without preventing unrelated ticket execution.
+
+3. **CLI/IPC expose the wrong surface.** `src/devlegate/cli.py` still only registers `cleanup-workspaces [--apply] [--limit]`, and `ipc_server.py` still accepts the same RPC. The revised public UX is `devlegate clean status` (pure read-only), `devlegate clean sweep [--limit]` (owner-routed one pass), with optional `clean ticket <ID>` if practical. Update help, IPC, status and tests; avoid splitting deletion proof among unsafe independent branch/worktree commands. The current mutable-receipt cohort may remain an internal RPC implementation detail, but must not constrain automatic backlog convergence to a one-time cleanup request.
+
+4. **Acceptance tests are for the older feature.** New tests exercise a checkpoint string and cohort size, not real Git deletion of both work branches, owner restart after publication before intent recording, partial-stage restart, branch-only discovery, automatic background convergence, legacy safe/unsafe cases or new CLI. Add representative real-Git and live-owner tests for positive end-to-end cleanup; refusal/retry after remote/Git failures; proof that `review`, `accepted`, `todo`, active/unknown workers, foreign roots, modified refs, dirty trees are never deleted; and preserved reports/control/product history. Test that next runnable ticket is not blocked by cleanup refusal.
+
+### Observed upstream backlog (2026-10-17)
+
+Live GitHub inventory: 80 remote branches, 61 `devlegate/work/TASK-*` branches, **58** of those correspond to 59 current `done` tickets. Current checkpoint does not reduce this backlog. Historical local worktree count is not freshly observable from GitHub.
+
+**Disposition:** return `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` for implementation of the **revised authoritative scope**; do not accept/integrate or create a substitute follow-on ticket. This review does NOT require reverting the useful narrow fixes and does NOT mandate any immediate deletion of current remote branches without the proof machinery.
