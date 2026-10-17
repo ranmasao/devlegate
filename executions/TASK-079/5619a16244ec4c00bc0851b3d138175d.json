@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "51d52450d1663697f80788ed429f30947e769d21",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-079",
+  "execution_id": "5619a16244ec4c00bc0851b3d138175d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-079",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the requested targeted tests and lint after the repository .venv is provisioned; ./dev currently reports that .venv is missing."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-079",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run the requested targeted tests and lint after the repository .venv is provisioned; ./dev currently reports that .venv is missing."
+    ],
+    "report": null,
+    "summary": "Recovery evidence lookup now distinguishes absent refs from Git observation failures, and control-lineage repair fails closed on unreadable or conflicting evidence. Evidence creation uses guarded create-if-absent primitives and re-observes exact identity after races; workspace repair follows the same durability rule, with runner failures covered by a focused Git regression."
+  },
+  "workspace_head": "e1dff2e043911766c9955aed4e64474dc9f7deff"
+}
