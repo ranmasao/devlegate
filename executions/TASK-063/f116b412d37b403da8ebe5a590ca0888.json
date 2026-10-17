@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "3ea78732ee8f853be975155e76499a67a9b95154",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "f116b412d37b403da8ebe5a590ca0888",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/f116b412d37b403da8ebe5a590ca0888.md",
+  "report_sha256": "afa789afa78d510a5c5d7f75fc6b8234a3cce69dd006d2f46a3ecf2f19c8feee",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented in src/devlegate/runtime.py, src/devlegate/ipc_server.py, src/devlegate/cli.py, and tests/test_ipc_dispatch.py. Focused workspace, recovery, submodule/Git, IPC, and lint validation passed.",
+    "summary": "Post-publication workspace retirement is now best-effort and records blocked cleanup diagnostics without reopening accepted integration. Historical cleanup is exposed through the serialized service owner with a bounded `cleanup-workspaces` CLI/IPC operation, explicit dry-run/apply modes, and canonical accepted-transition provenance checks. Added focused IPC validation coverage."
+  },
+  "workspace_head": "963d47ae829a659ca0729bc66f5a7550b44b4a67"
+}
