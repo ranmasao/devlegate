@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "a84d00355ea97d4e891ed62cefd277aa6db18986",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "8088cc2fae604f82a9fb6bd795c08a09",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/8088cc2fae604f82a9fb6bd795c08a09.md",
+  "report_sha256": "56e7b26d91d5cc91e46d93f598d507274052008dc091a94b66d6c893e69f6975",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The implementation is complete in the assigned workspace. Existing accepted-integration cleanup remains nonfatal and retryable, while automatic bounded passes run through the existing service owner.",
+    "summary": "Implemented owner-serialized automatic workspace reconciliation that discovers registered worktrees and canonical local/upstream execution refs, proves done/report/control/product lineage, and retires worktrees followed by exact local and compare-and-delete remote refs. Replaced the public cleanup command with owner-routed `clean status` and `clean sweep`, added legacy evidence handling, durable cleanup diagnostics, and focused real-Git/IPC regressions."
+  },
+  "workspace_head": "bf2b5f2826766b9c5803e2abefbcf1f3ed44a67c"
+}
