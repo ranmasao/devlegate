@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "9fab6dffa40a964915d476901b55d725be8a7dab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "4ffd5ce514b84fe8a5373817e15f7168",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the broader real-Git hosted-owner crash/restart, partial-stage recovery, fair backlog convergence, and legacy provenance acceptance matrix required by TASK-063."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the broader real-Git hosted-owner crash/restart, partial-stage recovery, fair backlog convergence, and legacy provenance acceptance matrix required by TASK-063."
+    ],
+    "report": null,
+    "summary": "Extended workspace reconciliation discovery to include direct, canonical ticket directories left behind after registration loss, while retaining them as non-destructive blocked candidates without trusting directory names as execution identity. Added a regression covering safe retention and reporting of such an unregistered checkout."
+  },
+  "workspace_head": "3fce120e0fb42830b4cf0bdde2b0884f046d23c6"
+}
