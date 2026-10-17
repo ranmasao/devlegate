@@ -879,3 +879,31 @@ The core contract is *attempt safe proof of all discovered owned resources, and 
 ### Disposition
 
 **REWORK REQUIRED.** Move the existing `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on `devlegate/control`, preserving full history and all worker implementations. **Do not modify** `release/0.5.7`. Focus on owner crash-stage/backlog convergence and exact-SHA CI diagnosis, retaining current race mitigation and previously proven positive scenarios.
+
+## Reviewer decision — 2026-10-17, execution 4ffd5ce5: REWORK REQUIRED
+
+**Execution:** `4ffd5ce514b84fe8a5373817e15f7168`; **exact workspace checkpoint:** `3fce120e0fb42830b4cf0bdde2b0884f046d23c6`; **control admission:** `9fab6dffa40a964915d476901b55d725be8a7dab`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. The worker explicitly reported `incomplete` and identified unfinished hosted-owner/legacy acceptance coverage. Preserve all earlier decisions, source changes and immutable execution reports.
+
+### Newly verified progress
+
+- [Exact SHA GitHub Actions #39061241699](https://github.com/ranmasao/devlegate/actions/runs/39061241699) is **GREEN: 1268 passed, 1 skipped, coverage 78%, Ruff all checks passed**. The preceding failing CI is superseded; do not ask for another run solely on the old failure.
+- `src/devlegate/runtime.py::_workspace_cleanup_cohort` now discovers canonical direct-child directories under the configured `work` root even without a Git registration. Such candidates deliberately have `head=""` rather than a fabricated execution identity. New `test_workspace_cleanup_reports_unregistered_owned_checkout_without_deleting` proves an unregistered `T-1` directory is observed but its file is not removed. This is the correct fail-closed direction; **do not remove an unregistered directory by name alone**.
+- Previously verified (retain, do not recreate): normal hosted real-Git accepted→done full worktree/registration/local/remote ref retirement; fresh-instance replay after all disposable refs are gone but `accepted_integration` remains pending; exact-SHA local ref CAS, foreign-worktree race compensation and their deterministic tests.
+
+### New narrow defect in directory discovery — symlinked work root is followed
+
+`_workspace_cleanup_cohort()` evaluates `work_root = (self.execution_worktree_root / "work").resolve()`, then checks `not work_root.is_symlink()` before `work_root.iterdir()`. **The check cannot detect an originally symlinked `work` root:** `Path.resolve()` has already followed the link, so the resolved target is normally not a symlink. A foreign directory tree reachable via `<managed-root>/work -> <external-dir>` is therefore enumerated, contrary to the claimed "never walk arbitrary directories" boundary. This discovery currently emits an invalid-head candidate and refuses mutation; no arbitrary deletion is demonstrated. Nevertheless, discovery must retain and validate the **lexical** managed root before any resolution or iteration, refuse symlink substitution and report an actionable blocked condition. Add a focused regression creating a symlinked `work` root with a canonical-looking external child, verifying no external traversal/candidate admission and no data loss. Preserve manager's existing lexical symlink protections.
+
+For a legitimate unregistered leftover, the present `head=""` becomes `status="skipped", reason="workspace cleanup target identity is invalid"`. Since the new feature exists to diagnose lost registrations, improve the specific diagnostic to distinguish **missing Git registration / unproven execution generation** from a malformed request. Continue to retain the directory unless exact identity and safe ownership can genuinely be proven.
+
+### Remaining principal acceptance: autonomous owner convergence
+
+**Still not demonstrated by this checkpoint** (and explicitly listed incomplete by the worker):
+
+1. Real-Git **fresh hosted-owner** recovery from published `done` **before cleanup scheduling**, from partial stage after worktree/registration removal with both refs remaining, from **remote-only** remainder after local removal, and from a temporary remote observation/push outage followed by recovery. Exercise automatic startup/idle reconciliation, not manual `cleanup_workspaces()` calls. Verify each eligible resource is removed, durable report/product/control unchanged and another runnable ticket proceeds.
+2. **Fair backlog** with an earlier unsafe/blocked candidate and a later independently integrated, safely eligible `done` candidate: bounded subsequent owner passes must reclaim the later checkout, registration and both refs, including after owner restart. Cursor-only tests with two unintegrated worktrees are insufficient.
+3. **Universal historical provenance**, not a separate migration/mode: positive real-Git owner-pass retirement of an old trailerless `accepted→done` transition when independent generation, report, product and control evidence is sufficient, and explicit safe blockage for ambiguous legacy evidence.
+
+Do not rework already verified CAS, normal lifecycle or full-retirement crash case. Do not change public read-only `devlegate clean` into a mutating interface. Keep `release/0.5.7` unchanged pending reviewer acceptance.
+
+**Disposition: REWORK REQUIRED.** Return the unchanged canonical ticket history, with this review appended, from `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`.
