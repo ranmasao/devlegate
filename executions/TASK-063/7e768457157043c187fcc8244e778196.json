@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "93b61975cbc316becdaaeb2c6fe200ff3f430d0b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "7e768457157043c187fcc8244e778196",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced the public cleanup mutation surface with read-only `devlegate clean` and `clean status`, removing sweep, apply, and limit IPC/CLI paths. Cleanup status now reads an owner-published immutable projection, while autonomous reconciliation persists blocked diagnostics and refreshes the published view for fair retry and remote-observation safety. Updated focused CLI, IPC, workspace, and owner tests for the revised contract."
+  },
+  "workspace_head": "fdfd664180dcf6e062265124a0ce40ca271ade55"
+}
