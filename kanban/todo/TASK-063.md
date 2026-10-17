@@ -41,6 +41,12 @@ evidence safely proves eligibility; don't assume every old done transition
 has the current message format. Truly ambiguous cases stay blocked and are
 reported, not guessed or forcibly removed.
 
+### Interpretation clarification — universal cleanup, not a legacy mode (2026-10-17)
+
+**One age-agnostic reconciler is the requirement.** Discover and evaluate every owned disposable execution worktree, Git registration and local/upstream work branch regardless of when it was created, whether it came from an old or current Devlegate version, and whether the integration commit contains modern trailers. Historical/trailerless executions are **test fixtures for the same owner-driven reconciler**, not a separate cleanup subsystem, one-time migration, operator command, opt-in or weaker deletion policy. The owner must attempt to prove eligibility for all discovered resources, not prefilter by age/format or the presence of a cleanup receipt.
+
+**Attempted evaluation is not forced deletion.** If equivalent independent control/product/report/ref/ownership evidence proves the exact integrated execution and no current dependency remains, reclaim it automatically; otherwise retain the resource, report the concrete missing or conflicting evidence and retry later. A particular early ticket such as TASK-001 need not be deleted when its available evidence cannot establish identity; merely being old or lacking trailers must not itself rule out proof. Test both safely provable old data and genuinely ambiguous old data **through the same automatic path**.
+
 ## Required steady-state contract
 
 After Devlegate **proves** a particular execution's checkpoint was published
@@ -814,3 +820,32 @@ Address **both** Git occupancy guard and exact expected-old-SHA deletion semanti
 ### Disposition
 
 **REWORK REQUIRED.** Move the same `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Preserve the **green CI, working normal-integration proof and working full-retirement crash-replay proof**; do not redo them. Keep `release/0.5.7` unchanged. Concentrate the next pass on **partial-stage restart, historical convergence/fairness and this demonstrable SHA race**, not further CLI/status redesign.
+
+## Reviewer decision — 2026-10-17, execution fe630caf: REWORK REQUIRED
+
+**Execution:** `fe630caf0a3f4622a5ed372571f85f6f`; **checkpoint:** `ea3940672a192086a84d164d2fe34b37d9632b98`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `e4798e1e31c9923cea8ba2f1f96a9d4978cb3ba8`. Worker correctly reported `incomplete` with missing partial-stage hosted-owner recovery, remote-only/outage, blocked-earliest/eligible-later convergence and historical provenance tests. Preserve current work, all immutable reports and prior reviewer decisions.
+
+### Confirmed progress — retain and do not repeat
+
+- [Exact checkpoint CI #39056912558](https://github.com/ranmasao/devlegate/actions/runs/39056912558) **passed: 1266 tests passed, 1 skipped, coverage 78%, Ruff all checks passed**.
+- `delete_branch_if_unoccupied()` changed from name-based `git branch -d` to exact `git update-ref -d refs/heads/<branch> <expected-old-sha>` after observing worktree registrations. The new deterministic real-Git interleaving test changes the local ref immediately before CAS and verifies that the changed branch survives. **The prior ref-SHA check→delete race is addressed; do not re-request another moved-ref-only test.**
+- Earlier real-Git owner tests prove **normal accepted→done full retirement** and **fresh-instance recovery after all transient resources were retired while `accepted_integration` remained pending**. These are already accepted as regression evidence.
+
+### Remaining safety issue — worktree occupancy check is no longer at deletion
+
+The new helper observes `git worktree list --porcelain`, checks the branch has no registration, and then invokes `git update-ref -d`. Git's `update-ref -d` enforces the old-SHA condition, **but does not enforce the occupied-worktree refusal performed by `git branch -d`**. A foreign worktree can be attached *after* the registration snapshot but *before* the effectful CAS. The service lock serializes Devlegate owners, but does not stop an unrelated Git process. The code comment/claim that fresh observation preserves foreign checkout protection is therefore conditional, not a full guarantee.
+
+Independently verified with real Git 2.47.3: `git branch -d` refuses to delete the branch currently registered in a second worktree; `git update-ref -d <ref> <exact-SHA>` succeeds anyway and strands that worktree's symbolic HEAD. This is a **new narrow race**, not the old SHA race. Add a deterministic test that inserts foreign `git worktree add` after helper registration observation and before `update-ref -d`; explicitly specify realistic coordination guarantees / external-writer threat model and apply a conservative, justifiable mitigation. **Do not claim both properties are atomic if Git cannot provide them against unsynchronized external writers**, and do not regress the now-correct exact-SHA CAS.
+
+### Remaining central acceptance — automatic partial recovery and fair convergence
+
+The required proofs still absent at this checkpoint are positive, owner-hosted real-Git tests for:
+- Restart after a canonical `done` publication **before any cleanup intent is recorded**; and restart after checkout/registration are gone but local/upstream refs remain, or after local deletion with **remote-only residue**. Demonstrate autonomous retry after remote observation outage clears, preserving report/product/control and allowing another runnable ticket.
+- Earlier T-1 demonstrably blocked + later T-2 independently proven `done` and eligible: successive bounded owner maintenance passes **actually delete T-2 checkout, registration, local and upstream refs**; verify restart/fair scheduling. Cursor movement alone is insufficient.
+- Same age-agnostic owner reconciler processing old/trailerless integration evidence (one independently provable positive and one ambiguous blocked negative). **This is not a request for a separate `legacy cleanup` route or migration.** See the new authoritative interpretation clarification above. Verify actual resource reclamation where exact evidence suffices, and explicit blocked diagnostics where it does not.
+
+Keep tests small and parametrized using existing real-Git fixture/harness. Neither a green suite lacking these scenarios nor `completed` by the worker is enough to demonstrate their correct behavior.
+
+### Disposition
+
+**REWORK REQUIRED:** move the same ticket `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on canonical `devlegate/control`, preserving all previous reviews and run reports. **Do not integrate** `ea3940672a19` into `release/0.5.7`. Focus the next implementation on genuinely unproven automatic recovery/fairness and the foreign-worktree registration race, not broad refactoring, public cleanup commands or a separate historical cleanup service.
