@@ -9,6 +9,7 @@ import dataclasses
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
 from devlegate.execution_result import ExecutionReport, ExecutionResult
+from devlegate.git import resolve_commit
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -99,6 +100,34 @@ def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
     assert (
         git(working, "show-ref", "--verify", f"refs/heads/{manager.branch}").returncode
         == 0
+    )
+
+
+def test_proven_execution_resource_retirement_removes_local_and_remote_refs(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    pushed = git(
+        working,
+        "push",
+        "origin",
+        f"{manager.branch}:refs/heads/{manager.branch}",
+    )
+    assert pushed.returncode == 0
+
+    manager.retire(workspace, base)
+    engine._retire_execution_refs(manager.branch, base)
+
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") is None
+    assert (
+        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
+        == ""
     )
 
 

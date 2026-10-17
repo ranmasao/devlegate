@@ -1075,7 +1075,7 @@ def test_cleanup_dry_run_uses_live_owner_without_receipt_or_git_mutation(
         response = request(
             server.path,
             "cleanup-dry-run",
-            "cleanup-workspaces",
+                "clean-sweep",
             {"apply": False, "limit": 10},
         )
         assert response.ok

@@ -1141,6 +1141,12 @@ class ServiceEngine:
             mutable=apply,
         )
 
+    def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
+        """Return a read-only, owner-consistent cleanup inventory."""
+        if limit < 1:
+            raise DevlegateError("workspace cleanup limit must be positive")
+        return self.cleanup_workspaces(apply=False, limit=limit)
+
     def _submit_operator_command(
         self,
         *,
@@ -2286,12 +2292,12 @@ class ServiceEngine:
             )
 
     def _workspace_cleanup_cohort(self, limit: int) -> list[dict[str, str]]:
-        """Capture the bounded registration set before an apply can mutate Git."""
+        """Capture a bounded, independently observed execution-resource set."""
         registrations = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, "T-1"
         )._registrations()
         work_root = (self.execution_worktree_root / "work").resolve()
-        cohort: list[dict[str, str]] = []
+        candidates: dict[str, dict[str, str]] = {}
         for path, registration in sorted(
             registrations.items(), key=lambda item: str(item[0])
         ):
@@ -2305,19 +2311,76 @@ class ServiceEngine:
                 continue
             branch = registration.get("branch")
             head = registration.get("head")
-            if not isinstance(branch, str) or not isinstance(head, str):
+            if (
+                not isinstance(branch, str)
+                or not branch.startswith("devlegate/work/")
+                or not isinstance(head, str)
+            ):
                 continue
-            cohort.append(
+            candidates[relative.name] = {
+                "ticket_id": relative.name,
+                "path": str(path),
+                "branch": branch,
+                "head": head,
+            }
+        local = _git(
+            self.repo,
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/heads/devlegate/work",
+            check=False,
+        )
+        if local.returncode:
+            raise WorkflowBlockedError("local execution refs could not be observed")
+        for line in local.stdout.splitlines():
+            ref, _, head = line.partition(" ")
+            prefix = "refs/heads/devlegate/work/"
+            if not ref.startswith(prefix) or not _is_git_identity(head):
+                continue
+            ticket_id = ref[len(prefix) :]
+            if not is_canonical_ticket_name(f"{ticket_id}.md"):
+                continue
+            candidates.setdefault(
+                ticket_id,
                 {
-                    "ticket_id": relative.name,
-                    "path": str(path),
-                    "branch": branch,
+                    "ticket_id": ticket_id,
+                    "path": str(self.execution_worktree_root / "work" / ticket_id),
+                    "branch": f"devlegate/work/{ticket_id}",
                     "head": head,
-                }
+                },
             )
-            if len(cohort) >= limit:
-                break
-        return cohort
+        observed = _git(
+            self.repo,
+            "ls-remote",
+            self.remote_name,
+            "refs/heads/devlegate/work/*",
+            check=False,
+        )
+        if observed.returncode:
+            # A remote outage is a retryable observation, not proof of absence.
+            observed_lines: list[str] = []
+        else:
+            observed_lines = observed.stdout.splitlines()
+        for line in observed_lines:
+            fields = line.split()
+            if len(fields) != 2 or not _is_git_identity(fields[0]):
+                continue
+            prefix = "refs/heads/devlegate/work/"
+            if not fields[1].startswith(prefix):
+                continue
+            ticket_id = fields[1][len(prefix) :]
+            if not is_canonical_ticket_name(f"{ticket_id}.md"):
+                continue
+            candidates.setdefault(
+                ticket_id,
+                {
+                    "ticket_id": ticket_id,
+                    "path": str(self.execution_worktree_root / "work" / ticket_id),
+                    "branch": f"devlegate/work/{ticket_id}",
+                    "head": fields[0],
+                },
+            )
+        return [candidates[key] for key in sorted(candidates)[:limit]]
 
     def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
@@ -3606,6 +3669,8 @@ class ServiceEngine:
             if plan.action == "none":
                 _log(f"no worker scheduled: {plan.reason}")
             return self._recover_accepted_integration()
+        if self._state.get("phase") == "idle":
+            self._reconcile_workspace_backlog()
         reconciliation = self._state.get("reconciliation")
         if (
             self._state.get("phase") == "idle"
@@ -4643,6 +4708,42 @@ class ServiceEngine:
             return 0
         return 1 if report.result.conclusion == "failed" else 0
 
+    def _reconcile_workspace_backlog(self) -> None:
+        """Run one low-priority, owner-serialized cleanup pass.
+
+        Cleanup is deliberately best effort.  Its observations and refusals are
+        durable diagnostics, while a Git or remote failure must not prevent the
+        normal ticket scheduler from making progress.
+        """
+        try:
+            result = self.cleanup_workspaces(apply=True, limit=1)
+        except (
+            ExecutionWorkspaceError,
+            GitAncestryError,
+            GitObservationError,
+            OSError,
+            subprocess.SubprocessError,
+            ValueError,
+            WorkflowBlockedError,
+        ) as error:
+            self._state["workspace_cleanup"] = {
+                "status": "blocked",
+                "reason": str(error) or error.__class__.__name__,
+            }
+            _log(f"automatic workspace reconciliation deferred: {error}")
+            return
+        decisions = result.get("decisions", [])
+        if decisions:
+            self._state["workspace_cleanup"] = {
+                "status": "reconciled",
+                "limit": 1,
+                "decisions": decisions,
+            }
+            self._save_state(
+                str(self._state["phase"]),
+                workspace_cleanup=self._state["workspace_cleanup"],
+            )
+
     def _recover_accepted_integration(self) -> int:
         try:
             return recover_accepted_integration(self)
@@ -4724,29 +4825,6 @@ class ServiceEngine:
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, report.ticket_id
         )
-        remote = self._execution_remote_head(report.execution_branch)
-        if remote is not None:
-            if remote != checkpoint:
-                raise WorkflowBlockedError(
-                    "zero-delta execution branch changed before retirement"
-                )
-            retired = push_refs(
-                self.repo,
-                self.remote_name,
-                f":refs/heads/{report.execution_branch}",
-                options=(
-                    f"--force-with-lease=refs/heads/{report.execution_branch}:{remote}",
-                ),
-                runner=_git,
-            )
-            if (
-                retired.returncode
-                and self._execution_remote_head(report.execution_branch) is not None
-            ):
-                raise WorkflowBlockedError(
-                    retired.stderr.strip()
-                    or "cannot retire zero-delta execution branch"
-                )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is not None:
@@ -4763,19 +4841,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "zero-delta execution workspace topology is ambiguous"
             )
-        local_ref = f"refs/heads/{report.execution_branch}"
-        local_head = self._resolve_commit_runtime(self.repo, local_ref)
-        if local_head is not None and local_head != checkpoint:
-            raise WorkflowBlockedError(
-                "zero-delta execution branch changed before retirement"
-            )
-        if local_head is not None:
-            removed = delete_branch(self.repo, report.execution_branch, runner=_git)
-            if removed.returncode:
-                raise WorkflowBlockedError(
-                    removed.stderr.strip()
-                    or "cannot retire zero-delta execution branch"
-                )
+        self._retire_execution_refs(report.execution_branch, checkpoint)
 
     def _resolve_zero_delta_retry(self, report: ExecutionReport) -> int:
         retry = self._state.get("automatic_retry")
@@ -5156,6 +5222,10 @@ class ServiceEngine:
             )
         expected_branch = f"devlegate/work/{ticket_id}"
         remote_head = self._execution_remote_head(expected_branch)
+        if remote_head is None:
+            # A local-only interrupted removal is still provable from its exact
+            # branch SHA; absence of the upstream ref is not absence of evidence.
+            remote_head = self._resolve_commit_runtime(self.repo, expected_branch)
         try:
             report = resolve_accepted_execution_report(
                 self.control_worktree,
@@ -5383,10 +5453,66 @@ class ServiceEngine:
                     "accepted execution workspace registration is ambiguous"
                 )
             _log(f"workspace already retired: {ticket_id}")
+            self._retire_execution_refs(report.execution_branch, report.workspace_head)
             return
         workspace = manager._validate_existing(registration, report.workspace_head)
         manager.retire(workspace, report.workspace_head)
+        self._retire_execution_refs(report.execution_branch, report.workspace_head)
         _log(f"retired workspace {ticket_id} at {report.workspace_head[:12]}")
+
+    def _retire_execution_refs(self, branch: str, expected_head: str) -> None:
+        """Release only exact, already-published disposable execution refs."""
+        if not branch.startswith("devlegate/work/") or not _is_git_identity(
+            expected_head
+        ):
+            raise WorkflowBlockedError("execution ref identity is not canonical")
+        local_ref = f"refs/heads/{branch}"
+        local_head = self._resolve_commit_runtime(self.repo, local_ref)
+        if local_head is not None:
+            if local_head != expected_head:
+                raise WorkflowBlockedError("local execution ref changed before removal")
+            removed = _git(self.repo, "branch", "-d", branch, check=False)
+            if removed.returncode:
+                raise WorkflowBlockedError(
+                    removed.stderr.strip() or "cannot retire local execution ref"
+                )
+            if self._resolve_commit_runtime(self.repo, local_ref) is not None:
+                raise WorkflowBlockedError("local execution ref remains after removal")
+        remote_head = remote_ref(
+            self.repo,
+            self.remote_name,
+            f"refs/heads/{branch}",
+            runner=self._git_runtime,
+        )
+        if remote_head is None:
+            return
+        if remote_head != expected_head:
+            raise WorkflowBlockedError("remote execution ref changed before removal")
+        removed = push_refs(
+            self.repo,
+            self.remote_name,
+            f":refs/heads/{branch}",
+            options=(f"--force-with-lease=refs/heads/{branch}:{expected_head}",),
+            runner=self._git_runtime,
+        )
+        if removed.returncode:
+            observed = remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{branch}",
+                runner=self._git_runtime,
+            )
+            if observed is not None:
+                raise WorkflowBlockedError(
+                    removed.stderr.strip() or "cannot retire remote execution ref"
+                )
+        if remote_ref(
+            self.repo,
+            self.remote_name,
+            f"refs/heads/{branch}",
+            runner=self._git_runtime,
+        ) is not None:
+            raise WorkflowBlockedError("remote execution ref remains after removal")
 
     def cleanup_workspaces(
         self,
@@ -5442,13 +5568,52 @@ class ServiceEngine:
                         }
                     )
                 else:
-                    decisions.append(
-                        {
-                            "ticket_id": ticket_id,
-                            "status": "retired",
-                            "reason": "workspace already retired",
-                        }
-                    )
+                    try:
+                        ticket = self._ticket_store().by_id.get(ticket_id)
+                        if ticket is None or ticket.state != "done":
+                            raise WorkflowBlockedError("ticket is not durably done")
+                        report = self._accepted_execution_report(ticket_id)
+                        if report.workspace_head != target["head"]:
+                            raise WorkflowBlockedError(
+                                "execution ref does not match accepted checkpoint"
+                            )
+                        integration = self._find_accepted_integration_commit(
+                            ticket_id, report
+                        )
+                        if integration is None:
+                            raise WorkflowBlockedError(
+                                "accepted integration is not proven"
+                            )
+                        self._prove_published_product_checkpoint(
+                            report.workspace_head, integration=integration
+                        )
+                        if apply:
+                            self._retire_execution_refs(
+                                report.execution_branch, report.workspace_head
+                            )
+                        decisions.append(
+                            {
+                                "ticket_id": ticket_id,
+                                "status": "retired" if apply else "eligible",
+                                "reason": "workspace absent; execution refs proven",
+                            }
+                        )
+                    except (
+                        ExecutionReportError,
+                        GitAncestryError,
+                        GitObservationError,
+                        OSError,
+                        subprocess.SubprocessError,
+                        ValueError,
+                        WorkflowBlockedError,
+                    ) as error:
+                        decisions.append(
+                            {
+                                "ticket_id": ticket_id,
+                                "status": "skipped",
+                                "reason": str(error),
+                            }
+                        )
                 continue
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket_id
@@ -5498,6 +5663,9 @@ class ServiceEngine:
                         manager._validate_existing(registration, report.workspace_head),
                         report.workspace_head,
                     )
+                    self._retire_execution_refs(
+                        report.execution_branch, report.workspace_head
+                    )
                     decision["status"] = "retired"
                 decisions.append(decision)
             except (
@@ -5535,9 +5703,11 @@ class ServiceEngine:
                     "canonical integration checkpoint could not be observed"
                 )
             checkpoint_line = f"Devlegate-Checkpoint: {checkpoint}"
-            if checkpoint_line not in {
-                line.strip() for line in message.stdout.splitlines()
-            }:
+            lines = {line.strip() for line in message.stdout.splitlines()}
+            if (
+                any(line.startswith("Devlegate-") for line in lines)
+                and checkpoint_line not in lines
+            ):
                 raise WorkflowBlockedError(
                     "canonical integration does not name the accepted checkpoint"
                 )
@@ -5630,10 +5800,21 @@ class ServiceEngine:
                 "canonical integration commit message could not be observed"
             )
         lines = {line.strip() for line in shown.stdout.splitlines()}
-        return {
+        modern = {
             f"Devlegate-Execution: {report.execution_id}",
             f"Devlegate-Checkpoint: {report.workspace_head}",
-        }.issubset(lines)
+        }
+        if modern.issubset(lines):
+            return True
+        # TASK-001 and other early integrations predate trailers.  Exact parent
+        # identity plus the report's immutable checkpoint is the stronger
+        # equivalent proof available for those commits; a merely matching ticket
+        # name is never sufficient.
+        return (
+            not any(line.startswith("Devlegate-Execution:") for line in lines)
+            and not any(line.startswith("Devlegate-Checkpoint:") for line in lines)
+            and parents[0] == report.control_head
+        )
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = self._resolve_commit_runtime(self.control_worktree, "HEAD")

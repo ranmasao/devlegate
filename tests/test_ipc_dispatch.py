@@ -76,7 +76,7 @@ def test_workspace_cleanup_dispatch_is_explicit_and_bounded(running_server):
 
     response = dispatch_mutation(
         engine,
-        _request("cleanup-workspaces", {"apply": False, "limit": 3}),
+        _request("clean-sweep", {"apply": False, "limit": 3}),
     )
 
     assert response == {"dry_run": True, "decisions": []}
@@ -89,8 +89,40 @@ def test_workspace_cleanup_dispatch_rejects_unbounded_limit(running_server):
     with pytest.raises(IPCProtocolError, match="between 1 and 1000"):
         dispatch_mutation(
             engine,
-            _request("cleanup-workspaces", {"apply": True, "limit": 1001}),
+            _request("clean-sweep", {"apply": True, "limit": 1001}),
         )
+
+
+def test_clean_sweep_dispatch_routes_to_existing_owner_submission(running_server):
+    engine, _state, _server = running_server
+    observed = []
+    engine.submit_cleanup_workspaces = lambda *, apply, limit, request_id: (
+        observed.append((apply, limit, request_id))
+        or {"dry_run": False, "decisions": []}
+    )
+
+    response = dispatch_mutation(
+        engine,
+        _request("clean-sweep", {"apply": True, "limit": 2}),
+    )
+
+    assert response == {"dry_run": False, "decisions": []}
+    assert observed == [(True, 2, "id")]
+
+
+def test_clean_status_is_read_only_and_bounded(running_server):
+    engine, _state, _server = running_server
+    observed = []
+    engine.workspace_cleanup_status = lambda *, limit: (
+        observed.append(limit) or {"dry_run": True, "decisions": []}
+    )
+
+    response = dispatch_read_only(
+        engine, _request("clean-status", {"limit": 4})
+    )
+
+    assert response == {"dry_run": True, "decisions": []}
+    assert observed == [4]
 
 def test_dispatch_uses_service_views_without_persistence_access():
     class View:

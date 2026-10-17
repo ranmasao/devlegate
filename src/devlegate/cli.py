@@ -318,15 +318,15 @@ def _retry_daemon(
     return 0
 
 
-def _cleanup_workspaces_daemon(
+def _clean_daemon(
     env_file: Path, *, apply: bool, limit: int, output_format: str
 ) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         result = request(
             locator.socket_path,
-            "cleanup-workspaces",
-            {"apply": apply, "limit": limit},
+            "clean-sweep" if apply else "clean-status",
+            {"limit": limit, "apply": True} if apply else {"limit": limit},
             mutable=apply,
         )
     except (RuntimeLocatorError, IPCClientError) as error:
@@ -334,7 +334,7 @@ def _cleanup_workspaces_daemon(
     emit(
         result,
         output_format,
-        "workspace cleanup applied" if apply else "workspace cleanup dry run",
+        "workspace cleanup applied" if apply else "workspace cleanup status",
     )
     return 0
 
@@ -2661,21 +2661,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="ticket to drop; omit it to choose from current candidates",
     )
     add_output_arguments(drop_parser)
-    cleanup_parser = commands.add_parser(
-        "cleanup-workspaces",
-        help="inspect or retire proven completed execution workspaces",
-        description=(
-            "Run a bounded, service-owner-authorized workspace cleanup. The "
-            "default is read-only; use --apply to retire eligible checkouts."
-        ),
+    clean_parser = commands.add_parser(
+        "clean", help="inspect or reconcile completed execution resources"
     )
-    cleanup_parser.add_argument(
-        "--apply", action="store_true", help="retire eligible workspaces"
+    clean_commands = clean_parser.add_subparsers(
+        dest="clean_command", parser_class=DevlegateArgumentParser
     )
-    cleanup_parser.add_argument(
-        "--limit", type=int, default=100, help="maximum registered worktrees to inspect"
+    clean_status_parser = clean_commands.add_parser(
+        "status", help="show cleanup inventory without changing state"
     )
-    add_output_arguments(cleanup_parser)
+    clean_status_parser.add_argument("--limit", type=int, default=100)
+    add_output_arguments(clean_status_parser)
+    clean_sweep_parser = clean_commands.add_parser(
+        "sweep", help="request one bounded cleanup pass through the service owner"
+    )
+    clean_sweep_parser.add_argument("--limit", type=int, default=100)
+    add_output_arguments(clean_sweep_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3087,10 +3088,14 @@ def main() -> int:
             )
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
-        if args.command == "cleanup-workspaces":
-            return _cleanup_workspaces_daemon(
+        if args.command == "clean":
+            if args.clean_command is None:
+                DevlegateArgumentParser(prog="devlegate clean").error(
+                    "a clean command is required"
+                )
+            return _clean_daemon(
                 env_file,
-                apply=args.apply,
+                apply=args.clean_command == "sweep",
                 limit=args.limit,
                 output_format=args.output_format,
             )

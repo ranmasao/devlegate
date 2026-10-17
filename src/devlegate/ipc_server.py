@@ -68,6 +68,22 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
         return {"candidates": list(engine.published_retry_candidates_view())}
     if request.method == "drop-candidates":
         return {"candidates": list(engine.published_drop_candidates_view())}
+    if request.method == "clean-status":
+        limit = request.payload.get("limit", 100)
+        if (
+            set(request.payload) - {"limit"}
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+        ):
+            raise IPCProtocolError(
+                "invalid_request", "clean status limit is invalid"
+            )
+        if limit < 1 or limit > 1000:
+            raise IPCProtocolError(
+                "invalid_request",
+                "clean status limit must be between 1 and 1000",
+            )
+        return engine.workspace_cleanup_status(limit=limit)
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 
@@ -78,7 +94,7 @@ def dispatch_mutation(
     lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
-    if request.method == "cleanup-workspaces":
+    if request.method == "clean-sweep":
         if set(request.payload) not in ({"apply"}, {"apply", "limit"}):
             raise IPCProtocolError(
                 "invalid_request", "workspace cleanup payload fields are invalid"
