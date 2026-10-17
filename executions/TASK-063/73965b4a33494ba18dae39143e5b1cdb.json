@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "62483242b1720c12a7da41ac296fa0f622a2bfed",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "73965b4a33494ba18dae39143e5b1cdb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/73965b4a33494ba18dae39143e5b1cdb.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Added exact local and upstream execution-ref validation before cleanup eligibility is reported, preventing moved refs from being treated as safe. Extended real-Git coverage for remote ref movement and verified normal accepted-to-done integration removes the owned checkout, registration, local ref, and upstream ref while retaining published history."
+  },
+  "workspace_head": "d7a8298b7f7728d183d3689b1c81af03f2f44493"
+}
