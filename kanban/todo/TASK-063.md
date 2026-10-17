@@ -188,3 +188,31 @@ Add targeted positive/negative tests for new retirement and historical dry-run b
 - No migration machinery for unrelated historical runtime formats.
 - No cleanup of arbitrary Git worktree registrations outside the
   exact managed project execution root.
+
+## Reviewer decision — 2026-10-17, execution e3ed8fab: REWORK REQUIRED
+
+**Execution:** `e3ed8fab841949d9bebcf0500206c8fd`. **Checkpoint:** `b1d452e66e36cd692c72493f357ecf801ccd7ee2`. **Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker claimed `completed`; the implementation changes only `src/devlegate/runtime.py` and `tests/test_control_workspace.py`, adding one new dry-run negative regression. Keep these artifacts and worktree intact. The work is useful but **not acceptable yet**: the cleanup code crosses a published-transaction boundary unsafely and the historical sweep is not yet operator-accessible/authorized.
+
+### Blocker 1 — worktree cleanup must not turn successful accepted integration into a failure
+
+`_integrate_accepted()` now calls `_retire_integrated_workspace()` *synchronously after* `_complete_accepted()` has already created/pushed the canonical `accepted -> done` control commit (and after the product checkpoint was published). `_retire_integrated_workspace()` raises `WorkflowBlockedError` for any dirty, mismatched, missing/ambiguous or unexpected checkout, and `ExecutionWorkspaceManager._validate_existing()` / `.retire()` can raise `ExecutionWorkspaceError`. The existing integration caller catches only `DevlegateError`, `OSError`, `ExecutionReportError`; workspace-specific errors can escape the service loop. Worse, an optional cleanup failure leaves `accepted_integration` pending even though `done`/product publication already succeeded, potentially blocking unrelated tickets indefinitely.
+
+**Required:** make post-integration cleanup nonfatal and isolated from the already committed publication. Preserve and finalize the accepted-integration durable state regardless of an ordinary workspace retention/cleanup refusal; record an actionable skipped/blocked cleanup diagnostic. Do not try to undo published commits or force-delete unknown worktrees. On restart, re-prove eligibility before a separate safe retry; maintain exact checkpoint/report and Git evidence. Exercise success, dirty/mismatched checkout, Git remove failure, post-publication crash/replay, and a subsequent unrelated runnable ticket. The invariant is **integration succeeds and evidence persists even when cleanup fails**.
+
+### Blocker 2 — historical sweep has no operator-facing, owner-admitted interface
+
+The new `ServiceEngine.cleanup_workspaces(apply=False|True)` method is not wired into CLI/IPC dispatch, owner serialization or an operator-authorized workflow. Its `apply=True` branch can invoke mutating `git worktree remove` without a demonstrated owner/lock/admission gate. The task requires an operator-initiated or explicitly enabled initial historical sweep, read-only inventory/dry-run and a bounded apply surface. It must not create a second ad-hoc mutable engine from a CLI process.
+
+**Required:** provide a concrete supported operator UX that lists dry-run candidates and performs an explicit requested apply **through the existing service owner**, or a provably equivalent authorized operation, with safe bounded enumeration, precise status and repeated-run behavior. Apply must revalidate each target before effect; no arbitrary `rm -rf`, global prune or cleanup of external/different-project registrations. Preserve read-only operation when not applying; avoid a speculative framework.
+
+### Blocker 3 — historical evidence and coverage are not sufficient
+
+`_find_accepted_integration_commit()` scans `git log --all -- kanban/done/<ticket>.md` and checks that some exact accepted-to-done control commit exists. This alone does not establish that the commit belongs to the **current canonical control lineage** and corresponds to the specific execution report/checkpoint/registered HEAD being retired. Restrict historical eligibility to the authoritative integrated ticket history plus proven exact execution identity; preserve branch/ref history, reports, pins and all unsettled retries/reconciliation. Missing/unreadable Git history must fail closed, not look like absence eligible for deletion.
+
+Only **one** new test (`test_workspace_cleanup_dry_run_retains_unintegrated_execution`) was added. Add focused positive and negative tests for accepted-to-done retirement, cleanup refusal without blocking publication, clean/dirty/wrong/occupied/symlinked registrations, another instance, active/unknown worker, recovery and repeat/idempotent execution, operator dry-run/apply and historical integration provenance. Use existing `tests/TEST_BOUNDARIES.md` for engine, IPC-owner and selected process-topology proof as needed. Do not duplicate the full suite.
+
+### Worker verification and reviewer gate
+
+The worker report says `./dev lint` was unavailable because `.venv` was missing, despite other claimed focused lint results. When local tools are available, use `./dev setup` once and run the ticket's **selected** tests and `./dev lint`; otherwise report the exact environment limitation. **Full pytest/coverage and Ruff belong to GitHub Actions** on the exact new checkpoint; do not repeatedly run full local pytest. CI alone does not waive the blockers above. Track the current checkpoint CI: [GitHub Actions #39012520391](https://github.com/ranmasao/devlegate/actions/runs/39012520391).
+
+**Disposition:** return the SAME TASK-063 from `review` to `todo`, preserve the worker branch and all execution reports, and do not integrate the checkpoint until the cleanup publication boundary, authorization and regression proof are corrected.
