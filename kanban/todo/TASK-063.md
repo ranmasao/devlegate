@@ -281,3 +281,39 @@ This checkpoint adds only one assertion to `test_workspace_cleanup_dry_run_retai
 Do not add a new generic cleanup scheduler, global prune/GC, or cross-project cleanup. Do not conflate validated but operator-skipped cleanup with accepted publication failure. Inspect effectful Git calls and make sure only expected registered worktree removals occur.
 
 **Disposition:** move TASK-063 from `review` to `todo`. Preserve all execution artifacts and the worker branch; no manual product integration. TASK-063 is not accepted until full CI and these material safety invariants are proven.
+
+## Reviewer decision — 2026-10-17, execution c09d7653: REWORK REQUIRED
+
+**Execution:** `c09d7653487745a1bbe65eca7f97f58a`. **Exact worker checkpoint:** `569810312055be210fa4ab24c227a33c47666b53`. **Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. The worker reports `completed` with `remaining=[]`; preserve its checkpoint, branch, reports and all prior rework. This is a narrow continuation of TASK-063.
+
+### Improvements verified
+
+- `src/devlegate/cli.py` now sets IPC `mutable=apply` for `cleanup-workspaces`. A dry run no longer opts into mutable IPC replay semantics.
+- The status round-trip fixture includes an actual nonempty `workspace_cleanup` value, and the reconciliation admission fixture supplies the protocol's `mutable=True`.
+- The new real service-owner IPC dry-run test checks unchanged checkout, Git worktree registration and mutable receipts. These are genuine improvements, but they prove only a negative/nondeleting case.
+
+### Blocker 1 — ordinary Git observation refusal can still escape after done publication
+
+`_integrate_accepted()` catches selected cleanup failures after `_complete_accepted()`, but does **not** catch `subprocess.CalledProcessError`. During `_retire_integrated_workspace()`, `ExecutionWorkspaceManager._registrations()` invokes `git worktree list --porcelain` through `run_git(check=True)`. A nonzero Git exit thus escapes the optional cleanup guard **after** publication, potentially interrupting lifecycle finalization despite a durable `done` transition. Other checked Git observations inside the manager may exhibit the same behavior.
+
+Translate expected nonzero Git observation/registration errors into the narrow cleanup refusal boundary (or explicitly contain the appropriate subprocess error there), without restoring `except Exception` or hiding programmer bugs and genuine state corruption. Persist an actionable blocked diagnostic, finalize accepted integration, and allow a subsequent unrelated ticket. Prove this with injected checked-Git observation failure as well as `git worktree remove` refusal; verify crash/restart behavior when `done` has already published.
+
+### Blocker 2 — historical integration evidence is not bound to the same execution generation
+
+`cleanup_workspaces()` independently obtains the latest accepted execution report and calls `_find_accepted_integration_commit(ticket_id)`. That lookup accepts **any** exact `accepted -> done` commit for the ticket ID in canonical `HEAD` history. It does not prove that the returned transition integrates the accepted revision/report/checkpoint currently used to validate the registered worktree, nor explicitly prove that checkpoint reached the product branch as part of that specific transition.
+
+A prior legitimately integrated generation of a requeued/reused ticket ID may therefore satisfy the historical transition check for a later, not-integrated generation, including a later `done` state reached by a noncanonical/manual control move. Fail closed unless the canonical integration event, its accepted parent, report identity and product checkpoint form one exact verified lineage. Add a regression with an older accepted-to-done integration followed by a newer different execution/accepted generation without proven product integration; the newer worktree must be retained.
+
+### Blocker 3 — deletion, owner-authorized apply and partial recovery still lack required real-Git proofs
+
+The fourth checkpoint adds only a live-owner **dry-run of an unintegrated ticket** and fixes existing status/fixture tests. Across all checkpoints, targeted new tests do not yet establish the task's principal deletion and replay invariants. Add focused tests (reuse existing real Git and host harnesses):
+
+- Proven clean `accepted -> done`: registered worktree really removed, Git registration absent, branch/ref, execution report and control/product history intact; dirty/wrong-HEAD/occupied/symlinked checkout and Git refusal retain data without blocking finalized publication or the next ticket.
+- Actual owner-authorized `cleanup-workspaces --apply` of a historical proven `done` ticket; negative cases for review/accepted, mismatched provenance, foreign instance and unowned checkout. Verify operator dry-run causes no persistent receipts.
+- Two eligible historical worktrees with a deliberately interrupted partial apply and re-observation/restart: same request ID replay, new explicit request, completed receipt replay and accurate durable `eligible/retired/skipped/blocked` status. No duplicate deletion, premature completed acknowledgement, or outside-root effect. Preserve submodule and drop regressions.
+
+### Exact-checkpoint CI
+
+[GitHub Actions #39014536885](https://github.com/ranmasao/devlegate/actions/runs/39014536885), for **`569810312055`**, completed **failure**: **1243 passed, 1 failed, 1 skipped**. Its sole failure is `tests/test_standalone_builder.py::test_standalone_assets_match_pinned_science_reference_mirror` because the external `astral-sh/python-build-standalone` release API returned HTTP 403 `rate limit exceeded` to `science`. This is an external infrastructure/rate-limit failure, **not evidence of a TASK-063 functional regression**. Ruff was skipped; do not claim the full CI gate passed. Rerun exact-final-SHA CI after the targeted rework; avoid unrelated changes to standalone packaging merely to mask rate limiting.
+
+**Disposition:** return the SAME TASK-063 from `review` to `todo`. Do not integrate the checkpoint yet. Preserve all prior work and focus on the three blockers above; full CI success (pytest/coverage and Ruff) is still required on the final SHA.
