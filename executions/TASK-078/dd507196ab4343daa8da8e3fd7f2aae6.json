@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a30447295d6423da442aab23dbb00623090e91ad",
+  "conclusion": "completed",
+  "control_head": "86c271bf60d904a37a25a8794f7465e960643b09",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-078",
+  "execution_id": "dd507196ab4343daa8da8e3fd7f2aae6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-078",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-078",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated the stale control merge recovery regression to assert one interrupted merge, preserved pre-effect HEAD, and successful fresh control synchronization without borrowed product WAL retry authority. Corrected recovery and Git command inventory documentation to classify local merges as Tier 3 and distinguish product-only retry traces from control no-retry traces."
+  },
+  "workspace_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db"
+}
