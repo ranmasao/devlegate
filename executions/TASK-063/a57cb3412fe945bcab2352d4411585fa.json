@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "4d241527c162544091cb1a5e483cf85e279d836a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "a57cb3412fe945bcab2352d4411585fa",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/a57cb3412fe945bcab2352d4411585fa.md",
+  "report_sha256": "5225230f024d75234010730264f1c32724a0efaeaf6e56814d331bde362ca379",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused workspace and cross-layer cleanup/recovery tests passed, including the new foreign-worktree race test. Ruff and diff checks passed for the changed files.",
+    "summary": "Added conservative foreign-worktree race handling to exact-SHA local execution-ref deletion: occupancy is rechecked after CAS and the exact ref is restored when a concurrent registration appears. Added a real-Git regression covering this interleaving while preserving the existing CAS and occupancy protections."
+  },
+  "workspace_head": "1988a67e07a2a2916ae08a27823397d585cc92a6"
+}
