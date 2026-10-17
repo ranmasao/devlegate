@@ -12,6 +12,21 @@ Git architecture hardening: reconciliation semantics and executed-command proof 
 
 Align reconciliation Git observations and mutations with the established typed/owner-aware layer without changing published-lineage, WAL, evidence or replay guarantees.
 
+## Worker test scope — targeted verification, full suite in CI
+
+Use the current proof map `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md`. Start with Git history/error semantics and transaction proof cases, then narrowly selected end-to-end reconciliation scenarios:
+
+```sh
+./dev test -q tests/test_git.py tests/test_recovery_boundaries.py
+./dev test -q tests/test_control_recovery.py -k "reconcil or update_base or rewrite or lineage or evidence"
+./dev test -q tests/test_control_workspace.py -k "update_base or lineage or rebase"
+./dev lint
+```
+
+If publication/restart behavior at the real-service boundary is changed, add **selected named** tests from `tests/test_cli_topology.py` using `-k "reconciliation_from_real_cli or product_movement_during_downtime"`, not an unfiltered run. Keep required rebase conflict, abort and restore proofs; do not replace stateful Git tests solely with mocked return values.
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, all topology tests, or unrelated packaging suites. The worker records selected tests/command traces; GitHub Actions owns full exact-commit pytest with coverage and Ruff. Reviewer acceptance requires green CI, but not a local full-suite run by the worker.
+
 ## Context
 
 `reconciliation_transactions.py` uses direct `run_git` through a local `_git` wrapper and owns domain-specific Git choreography. `prove_workspace_lineage()` performs a `rev-list` history observation and per-commit parent observations; this may be a preexisting N+1 pattern, not an established regression.
@@ -31,7 +46,7 @@ Align reconciliation Git observations and mutations with the established typed/o
 - WAL transitions, evidence-before-publication, lease/CAS, rebase/abort and recovery semantics are preserved across failures and restarts.
 - No unproven mutation under missing authority or after an ambiguous interruption.
 - Actual executed-command/effect accounting proves no hidden new N+1, network access or state changes; any added invocation is individually justified.
-- Full pytest, coverage and Ruff pass at the exact checkpoint.
+- Exact-checkpoint full pytest with coverage and Ruff passes in GitHub Actions; the worker executes the focused transaction and lineage regressions rather than a mandatory full-suite local run.
 
 ## Required regressions
 

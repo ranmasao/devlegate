@@ -11,6 +11,29 @@ Git architecture hardening: complete TASK-073's transport/ownership findings wit
 
 Make Git execution a predictable owner/shutdown-aware transport, and move command-specific retry decisions to the workflow that can prove whether a previous mutation took effect.
 
+## Worker test scope — targeted verification, full suite in CI
+
+This current instruction governs future worker executions; historical reviewer notes requiring exact-checkpoint full pytest mean **green GitHub Actions on the checkpoint**, not a requirement that the worker rerun the entire suite locally. Before editing or introducing tests, consult `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md`.
+
+Preferred local edit-loop commands, from the source checkout with `./dev setup` already completed:
+
+```sh
+./dev test -q tests/test_git.py tests/test_control_git_workflow.py tests/test_git_state.py
+./dev test -q tests/test_daemon_cross_layer.py -k "merge_pending or control_sync_trace"
+./dev test -q tests/test_daemon_lifecycle.py -k "merge_pending or shutdown or stop_before_merge"
+./dev lint
+```
+
+Run the relevant single production-topology restart proof only if behavior at that boundary changes or focused evidence leaves a real process-level gap:
+
+```sh
+./dev test -q tests/test_cli_topology.py -k "merge_pending_restart"
+```
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, all of `tests/test_cli_topology.py`, or the complete suite simply to establish CI parity. Do not rerun an expensive full suite after a timeout; report targeted results and the missing proof honestly. Do not use `-x` or `--maxfail=1` to claim the targeted selection is fully green.
+
+The GitHub Actions workflow already runs `./dev coverage -n 4 --dist=worksteal` and then `./dev lint` on the pushed checkpoint. Reviewer checks the **exact commit SHA**, failed test identities, coverage and Ruff; a red CI remains a blocker for acceptance, but completion of full local pytest is **not** a worker exit criterion. Preserve owner/recovery cross-layer scenarios with targeted tests rather than weakening test scope to purely mocked helpers.
+
 ## Context
 
 At integrated product `release/0.5.7`, `ServiceEngine._git_runtime()` runs `_git(repo, *args, check=False)` and, after `ShutdownInterrupted` under persisted `merge_pending`, repeats the same arbitrary command. This is a structural risk, not proof that a particular mutation has already been corrupted. Existing WAL, CAS, shutdown and reconciliation checks are authoritative and must be preserved.
@@ -30,7 +53,7 @@ At integrated product `release/0.5.7`, `ServiceEngine._git_runtime()` runs `_git
 - Read-only and mutation paths enforce the existing owner and shutdown authority. An ambiguous mutation never silently executes twice.
 - Normal control sync, publication and recovery behavior stays compatible, including existing durable replay paths and legitimate `merge_pending` completion.
 - Focused tests demonstrate commands actually executed, no hidden network/write effects and preserved CAS/TOCTOU checks; any new Git invocation of any tier is itemized and justified.
-- Complete pytest, coverage and Ruff pass on the exact implementation checkpoint.
+- GitHub Actions completes full pytest with coverage and Ruff successfully on the exact pushed implementation checkpoint; the worker demonstrates the focused regressions described in the Worker test scope without a mandatory local full-suite run.
 
 ## Required regressions
 

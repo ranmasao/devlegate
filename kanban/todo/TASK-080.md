@@ -12,6 +12,21 @@ Git architecture hardening: execution worktree boundaries for TASK-073.
 
 Finish the execution-workspace Git boundary without weakening worktree identity, ownership, topology, or preflight safety.
 
+## Worker test scope — targeted verification, full suite in CI
+
+Follow `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md`; select workspace-specific semantic tests and only the stronger host/recovery cases changed by the implementation:
+
+```sh
+./dev test -q tests/test_execution_workspace_submodules.py tests/test_git.py
+./dev test -q tests/test_control_workspace.py -k "worktree or workspace or branch or checkpoint"
+./dev test -q tests/test_daemon_recovery.py -k "workspace or interruption"
+./dev lint
+```
+
+If the changed behavior reaches a production-process crash/restart invariant, select a matching named `tests/test_cli_topology.py` test by `-k`; do not run that entire module by habit. Test both positive worktree reuse and negative wrong/dirty/occupied identity with actual Git worktrees in the focused selection.
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, the complete production-topology suite, or unrelated distribution tests. The worker reports focused test and Ruff results; GitHub Actions performs complete exact-SHA pytest/coverage and Ruff and the reviewer verifies that evidence.
+
 ## Context
 
 `execution_workspace.py` legitimately owns execution branch/worktree lifecycle but still constructs many raw `_git()` calls. Raw command count alone does not establish a bug; the task is to prove which calls need typed error semantics or owner/shutdown-aware routing and to correct those specific gaps.
@@ -31,7 +46,7 @@ Finish the execution-workspace Git boundary without weakening worktree identity,
 - Correct absence and valid negative topology findings remain distinct from Git observation or OS failures.
 - Existing execution preparation, checkpoint creation, cleanup and interrupted recovery preserve exact branch/worktree ownership guarantees.
 - The report maps old raw commands to justified retained domain operations or typed helpers and includes quantitative subprocess accounting; all extra invocations are explicitly justified.
-- Full pytest, coverage and Ruff succeed on the integrated implementation checkpoint.
+- Full pytest with coverage and Ruff succeeds in GitHub Actions on the exact implementation checkpoint; focused workspace and authority regressions are run by the worker.
 
 ## Required regressions
 

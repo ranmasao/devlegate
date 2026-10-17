@@ -34,6 +34,20 @@ All conditions must be verified on the **integrated product HEAD**, not inferred
 7. **No hidden Git executions or effects; tiered cost.** For representative read, sync, publication and recovery paths, compare *executed Git command traces* before and after, including every invocation internal to newly factored helpers and any subprocess spawned outside `run_git`. Each new helper must have a documented command/effect contract; a semantic read helper may not silently fetch or mutate. Classify every executed command as (1) local-only read, (2) remote read without mutation, or (3) local/remote state-changing operation, using the highest applicable tier for mixed-effect commands (ordinary `fetch` counts as a write because it updates local Git state). The tiers define **priority of removing newly introduced invocations**, not permission to create a priced number of them: eliminate new tier-3 writes first, tier-2 remote reads next, tier-1 local reads last. Every new invocation, including a cheap local read, is a potential regression requiring a command-level explanation. Neither latency arguments nor a clean abstraction automatically justify increases. Only truly necessary new safety checks may remain, explicitly disclosed for the curator's decision; do not remove required CAS/TOCTOU checks to force a lower count. Track local vs remote mutations separately. No hidden subprocesses, network/write effects, background operations, or repeated `N+1` Git reads. Preserve intentional TOCTOU re-observation and CAS. Tier labels represent priorities, not fixed numerical performance weights.
 8. **No premature closure.** The story cannot be accepted merely because TASK-071/072 are accepted, because CI is green, or because individual subprocess patterns were deduplicated. If ANY criterion is unmet, report precisely which, cite relevant paths/functions, mark worker result `incomplete` with actionable remaining work, and leave final acceptance to the curator.
 
+## Audit verification scope — reuse CI, avoid duplicate full suite
+
+This parent story is an **audit/report task** after TASK-078 through TASK-081 are `done`, not an implementation worker pass. Read `tests/TEST_BOUNDARIES.md`, `tests/TEST_PLACEMENT.md`, `tests/FOCUSED_TEST_AUDIT.md` and the integrated code and CI evidence. Verify the full-suite GitHub Actions coverage and Ruff result for the **exact integrated product SHA**; do not rerun all pytest merely to restate an already-proven CI result.
+
+For a missing Git command trace or a disputed isolated invariant, prefer narrowly selected checks such as:
+
+```sh
+./dev test -q tests/test_git.py tests/test_control_git_workflow.py
+./dev test -q tests/test_daemon_cross_layer.py -k "control_sync_trace or merge_pending"
+./dev test -q tests/test_recovery_boundaries.py -k "lineage or evidence or rewrite"
+```
+
+Do not run unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, or `./dev coverage` as routine audit work; do not rerun unrelated production-topology and packaging suites. Targeted tests may supplement the requested executed-command accounting but **cannot substitute for the complete audit table or green exact-SHA CI**. A failed/missing CI run is a curator-visible blocker, not a mandate for an agent to exhaust its time budget on repeated full local suites. Human curator `APPROVE` remains mandatory.
+
 ## Acceptance audit deliverable
 
 Prepare a concise evidence-based table for criteria 1–8: PASS/FAIL, source references and numeric before/after inventory, including executed-command counts **per effect tier** and a justification for **every added command, even local read-only**. Include a short remaining-risk section, especially around `_git_runtime`, `resolve_commit`, CAS and publication. Audit only; do not self-authorize acceptance or introduce broad code changes.
