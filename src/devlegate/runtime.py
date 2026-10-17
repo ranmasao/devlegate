@@ -2571,21 +2571,34 @@ class ServiceEngine:
         """Run Git under the foreground shutdown policy for this runtime region."""
         self._assert_repository_owner()
         result = _git(repo, *args, check=False)
-        state = getattr(self, "_state", {})
-        if (
-            result.returncode
-            and isinstance(state, dict)
-            and state.get("phase") == "merge_pending"
-        ):
-            try:
-                self._raise_on_shutdown_interruption(result)
-            except ShutdownInterrupted:
-                result = _git(repo, *args, check=False)
         if result.returncode:
             self._raise_on_shutdown_interruption(result)
         if check:
             result.check_returncode()
         return result
+
+    def _merge_fast_forward_runtime(
+        self, repo: Path, remote_ref: str, expected_old: str, expected_new: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Recover one durable fast-forward mutation at its owning workflow."""
+        self._assert_repository_owner()
+        try:
+            return merge_fast_forward(repo, remote_ref, runner=self._git_runtime)
+        except ShutdownInterrupted:
+            observed = self._resolve_commit_runtime(repo, "HEAD")
+            if observed == expected_new:
+                return subprocess.CompletedProcess(
+                    ["git", "merge", "--ff-only", remote_ref], 0, "", ""
+                )
+            if observed != expected_old:
+                raise DevlegateError(
+                    "interrupted fast-forward changed HEAD to an unexpected revision"
+                )
+            if self._state.get("phase") != "merge_pending":
+                raise
+            # The durable merge_pending record proves this exact idempotent
+            # fast-forward is the admitted mutation, not an arbitrary retry.
+            return merge_fast_forward(repo, remote_ref, runner=self._git_runtime)
 
     def _resolve_commit_runtime(self, repo: Path, revision: str) -> str | None:
         """Resolve one commit through the runtime Git interruption seam."""
@@ -3339,6 +3352,7 @@ class ServiceEngine:
                 resolve=self._resolve_commit_runtime,
                 ancestor=self._is_ancestor_runtime,
                 accepted_integration=self._observe_accepted_control_integration,
+                merge=self._merge_fast_forward_runtime,
                 log=_log,
             )
         except ControlGitWorkflowError as error:
@@ -3590,8 +3604,8 @@ class ServiceEngine:
                         changed_paths=changed_paths,
                         control_head=control_head,
                     )
-                    merge = merge_fast_forward(
-                        self.repo, remote_ref, runner=self._git_runtime
+                    merge = self._merge_fast_forward_runtime(
+                        self.repo, remote_ref, local_head, target_head
                     )
                     if merge.returncode:
                         self._log_sync_failure(local_head, remote_ref, merge.stderr)
@@ -3639,8 +3653,8 @@ class ServiceEngine:
                     changed_paths=changed_paths,
                     control_head=control_head,
                 )
-                merge = merge_fast_forward(
-                    self.repo, remote_ref, runner=self._git_runtime
+                merge = self._merge_fast_forward_runtime(
+                    self.repo, remote_ref, local_head, remote_head
                 )
                 if merge.returncode:
                     self._log_sync_failure(local_head, remote_ref, merge.stderr)

@@ -82,6 +82,25 @@ whole-process traces. Extraction changes ownership and module edges, not
 subprocess behavior. There are no new remote reads, no new state-changing
 commands, and no per-object or hidden N+1 loop introduced by this checkpoint.
 
+## Interrupted `merge_pending` Traces
+
+The transport seam no longer repeats an arbitrary command. Before this
+checkpoint, any nonzero command in `merge_pending` followed this trace when the
+return code matched the shutdown signal: `X(command), X(command)`; this also
+applied to a read observation or `fetch`. After the change the transport trace
+is only `X(command)`, followed by the original interruption. No nested
+invocation is added for read, fetch, push, ref-update, or other mutation calls.
+
+The owning fast-forward transaction has an explicit, evidence-backed branch.
+For a product or control merge with durable `merge_pending` state, the normal
+trace remains `F, R, A, M, R`. If `M` is interrupted, the recovery trace is
+`F, R, A, M(interrupted), R(HEAD), [M(retry), R(HEAD)]`: the retry is present
+only when fresh HEAD is exactly the persisted old revision; if HEAD is exactly
+the target, the transaction continues without a second merge; any other HEAD
+fails closed. The bracketed `M(retry)` is the only newly retained invocation.
+This proves the prior effect or its absence and does not infer absence from the
+interrupted subprocess alone.
+
 ## Source Delta
 
 The new `control_git_workflow.py` contains the extracted control

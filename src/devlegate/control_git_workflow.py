@@ -51,6 +51,7 @@ def sync_control(
     ancestor: Callable[[Path, str, str], bool],
     accepted_integration: Callable[[str, str, str, str], tuple[str, str]],
     log: Callable[[str], None],
+    merge: Callable[[Path, str, str, str], Any] | None = None,
 ) -> tuple[str, str]:
     """Fetch and fast-forward an initialized control checkout.
 
@@ -96,7 +97,10 @@ def sync_control(
             raise ControlGitWorkflowError(
                 "control branch cannot be fast-forwarded; histories diverged"
             )
-        merged = merge_fast_forward(control_worktree, remote_ref, runner=runner)
+        if merge is None:
+            merged = merge_fast_forward(control_worktree, remote_ref, runner=runner)
+        else:
+            merged = merge(control_worktree, remote_ref, local_head, remote_head)
         if merged.returncode:
             raise ControlGitWorkflowError(
                 f"control fast-forward failed: {merged.stderr.strip()}"

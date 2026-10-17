@@ -566,7 +566,7 @@ def test_merge_pending_repeated_matching_git_interrupt_is_bounded(
                 engine.remote_name,
                 engine.control_branch,
             )
-    assert fetch_calls == 2
+    assert fetch_calls == 1
 
 @pytest.mark.parametrize(
     ("kind", "returncode"),

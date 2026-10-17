@@ -489,7 +489,7 @@ def test_committed_merge_pending_drains_before_stop(tmp_path, monkeypatch):
         ("operator_abort", -signal.SIGINT),
     ],
 )
-def test_merge_pending_retries_matching_shutdown_fetch(
+def test_merge_pending_does_not_retry_shutdown_fetch(
     tmp_path, monkeypatch, capsys, kind, returncode
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -529,9 +529,9 @@ def test_merge_pending_retries_matching_shutdown_fetch(
     with host._signal_ownership(stop_intent, lambda _intent, _request_id: {}):
         result = host._serve_engine(stop_intent)
     assert result == expected_result
-    assert fetch_calls == 3
-    assert engine._state["phase"] == "idle"
-    assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
+    assert fetch_calls == 1
+    assert engine._state["phase"] == "merge_pending"
+    assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == local
     output = capsys.readouterr().out
     assert "workflow blocked" not in output
     assert "execution failed" not in output
