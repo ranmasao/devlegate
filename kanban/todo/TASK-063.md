@@ -642,3 +642,34 @@ Add a small set of representative *positive* real-Git service-owner tests for ca
 ### Disposition
 
 **REWORK REQUIRED.** Move the **same TASK-063** from `review` back to `todo`; retain every checkpoint, execution report and review. Keep `release/0.5.7` unchanged. Prioritize crash-after-complete-ref-retirement recovery and state-schema separation, then add end-to-end tests rather than more narrow unit tests or CLI redesign.
+
+## Reviewer decision — 2026-10-17, execution 55cbdfe2: REWORK REQUIRED (worker-reported incomplete)
+
+**Execution:** `55cbdfe2f0ff451f9996924b91b387f6`; **exact checkpoint:** `fdd1e6f6d10736a3f2c5f73f4d275d896bf6079a`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `4987e9bc0524b8016a4c104694ce363b4f800f7f`.
+
+**The worker explicitly returned `outcome: incomplete`**, with remaining: "Add deterministic real-Git owner tests for crash recovery after worktree/local/upstream ref retirement, partial-stage restart, and blocked-earliest versus eligible-later convergence." This is not an acceptance-ready worker claim even though CI passes.
+
+### Confirmed code progress (retain)
+
+- `_published_accepted_execution_report()` reconstructs the completed generation from canonical done commit, durable report and published product when both disposable work refs are absent; `_integrate_accepted()` selects it for pending post-done replay. This addresses the earlier branch-deletion/recovery dependency **in implementation**, but the crash boundary is not yet tested.
+- Post-integration per-ticket retirement is written to `workspace_cleanup_event` instead of replacing the aggregate `workspace_cleanup` snapshot. The read-only `devlegate clean` projection is retained; do not reintroduce public `clean sweep`, `cleanup-workspaces`, `--limit`, `--apply` or a mutating cleanup IPC.
+- [Exact GitHub Actions #39042740103](https://github.com/ranmasao/devlegate/actions/runs/39042740103) **passed**: 1259 tests passed, 1 skipped, coverage 78%, Ruff all checks passed.
+- This checkpoint adds no new tests and itself acknowledges the missing cross-layer/real-Git owner verification. Do not regress existing accepted-to-done, safety and state-schema tests.
+
+### Remaining acceptance blocker: prove autonomous end-to-end convergence and crash recovery
+
+The current `test_proven_execution_resource_retirement_removes_local_and_remote_refs` drives `manager.retire()` + `_retire_execution_refs()` directly against a merely prepared checkout; `test_automatic_workspace_cleanup_rotates_past_blocked_candidate` asserts only cursor advancement with two **non-done** worktrees. These do **not** verify any real service-owned cleanup of a proven published `done` generation.
+
+Implement a **small deterministic real-Git owner test matrix using existing control fixture / hosted owner / process-restart harness**:
+
+1. **Normal full integration:** publish a non-zero-delta accepted→done ticket, verify the real `ExecutionWorkspaceManager` checkout and registration, the exact local `devlegate/work/<ticket>` ref and the upstream ref are all gone; control done commit, report and product checkpoint remain.
+2. **Hard crash after all four cleanup effects but before `accepted_integration=None`:** preserve the durable pending state while Git has already removed both refs and the worktree; start a **fresh** owner, demonstrate recovery via `_published_accepted_execution_report` from independent canonical published evidence, clear `accepted_integration`, and let a subsequent runnable ticket start. Do not synthesize a `retired` state dictionary in lieu of proving the transaction.
+3. **Crash between effects:** restart when checkout/registration are absent but both branches remain; restart again when local ref is absent but upstream ref remains; re-observe and retire only safely proven remnants. Include a **remote-only residual** and remote temporarily unobservable, then restored. Preserve wrong-SHA, reused generation, dirty/foreign worktree refusal.
+4. **Fair historical backlog:** leave first registered candidate unsafe and later already integrated ticket proven safe; run bounded, owner-serialized automatic passes **without operator requests** and verify the safe later ticket really loses checkout/registration/local/upstream refs despite the blocked first. Verify restart retains fair progress.
+5. **Historical provenance:** demonstrate actual automated removal for a legacy done generation with sufficiently strong trailerless control/report/product/ref evidence and refusal when identity is ambiguous. This is part of the original ticket's historic-backlog objective; do not substitute a synthetic helper-only test.
+
+Keep these focused, reuse fixtures and existing tests, avoid unrelated runtime redesign, and run exact-SHA CI. If evidence is genuinely insufficient for a specific historical item, retain it with a precise blocked diagnostic rather than weakening identity checks.
+
+### Disposition
+
+**REWORK REQUIRED**: move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Preserve all previous worker checkpoints, evidence, reviews and the current implementation; **do not integrate to `release/0.5.7` yet**. Next pass is principally real-Git owner tests and any precise defects they uncover, not another broad CLI/status redesign.
