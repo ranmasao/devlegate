@@ -317,3 +317,36 @@ The fourth checkpoint adds only a live-owner **dry-run of an unintegrated ticket
 [GitHub Actions #39014536885](https://github.com/ranmasao/devlegate/actions/runs/39014536885), for **`569810312055`**, completed **failure**: **1243 passed, 1 failed, 1 skipped**. Its sole failure is `tests/test_standalone_builder.py::test_standalone_assets_match_pinned_science_reference_mirror` because the external `astral-sh/python-build-standalone` release API returned HTTP 403 `rate limit exceeded` to `science`. This is an external infrastructure/rate-limit failure, **not evidence of a TASK-063 functional regression**. Ruff was skipped; do not claim the full CI gate passed. Rerun exact-final-SHA CI after the targeted rework; avoid unrelated changes to standalone packaging merely to mask rate limiting.
 
 **Disposition:** return the SAME TASK-063 from `review` to `todo`. Do not integrate the checkpoint yet. Preserve all prior work and focus on the three blockers above; full CI success (pytest/coverage and Ruff) is still required on the final SHA.
+
+## Reviewer decision — 2026-10-17, execution 0d446b19: REWORK REQUIRED
+
+**Execution:** `0d446b19a673464a92f512d3b9d4ed07`. **Worker checkpoint:** `d48221206a8f8bc08f60b1c3557ce4366aa22b18`. **Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. The worker reports `completed`, `remaining=[]`; retain all work, Git refs, execution reports, receipts and earlier review notes. Continue the SAME TASK-063 narrowly.
+
+### Verified progress and CI
+
+- Exact-checkpoint [GitHub Actions #39019074743](https://github.com/ranmasao/devlegate/actions/runs/39019074743) is **success**: **1246 passed, 1 skipped**, coverage **78%**, Ruff **All checks passed**. The prior standalone-download HTTP 403 no longer blocks CI.
+- Post-publication `_integrate_accepted()` now catches `subprocess.SubprocessError` from checked Git invocations during optional workspace cleanup, preserving a blocked diagnostic rather than failing normal accepted integration. Keep this correction.
+- The historical integration lookup now compares `Devlegate-Execution` and `Devlegate-Checkpoint` lines in the exact control integration commit with the selected report, plus control ancestry. This closes the prior mismatch of report ID versus an arbitrary earlier integration message. Keep this improvement.
+- New real-Git `ExecutionWorkspaceManager.retire()` test verifies a clean checkout disappears from Git registration while its branch survives. The second new test checks exact message-generation mismatch. They are useful **unit/primitive proofs**, not the full task acceptance gates.
+
+### Blocker 1 — historical sweep does not prove product publication of the checkpoint
+
+In `cleanup_workspaces()`, eligibility now proves a canonical `accepted -> done` control commit whose message names the selected report's execution ID and checkpoint. **It never independently verifies that the named checkpoint is present in the actual published product history.** `_accepted_execution_report()` proves the execution branch/report and control transition, not product publication. A correctly shaped (but externally/manual-created) `accepted -> done` commit with matching trailers can therefore authorize deletion of an execution checkout whose changes were not actually integrated into the product branch.
+
+Use an authoritative published-product ref plus exact ancestry/checkpoint observation, or equivalent durable proven publication transaction evidence; fail closed on ambiguous/unavailable evidence. Keep this read-only and respect the historical integration boundary. Add a real-Git test where a matching control done transition exists but the product branch is still at the pre-execution base: dry-run must report `skipped/blocked`, `--apply` must retain the registered checkout, and the true integrated case must succeed.
+
+### Blocker 2 — partially completed apply can delete beyond the request's bounded target set
+
+The mutable receipt is persisted before `cleanup_workspaces(apply=True)`, but it records no stable target set or progress. An incomplete-receipt replay invokes `cleanup_workspaces()` anew, which enumerates **only currently registered** worktrees with the original `limit`. Concrete example: eligible A, B, C, `--limit 2`; A is removed, the process crashes before the result receipt is saved; replay of the **same request ID** sees B, C and may remove both. Three distinct worktrees have then been removed by a request limited to two, and the eventual returned decisions omit A.
+
+Bind the bounded cohort/progress to a durable admission before any removal (or establish an equivalent conservative replay rule that cannot enlarge the request's effect). On replay, re-observe registrations and report previously removed targets truthfully; never fabricate a completed result. Keep the existing single-owner protocol, avoid a generic jobs framework. Add a deterministic multi-target real-Git regression for partial apply, restart, same-ID replay, new-ID request and completed receipt replay, asserting exact deletion count and accurate results.
+
+### Blocker 3 — actual integrated cleanup and owner-authorized apply remain unproven
+
+The fifth checkpoint changes only `runtime.py` and two tests in `test_control_workspace.py`. The clean-workspace test calls `manager.retire()` directly on a merely prepared checkout **without** an accepted-to-done event. The integration-message test constructs synthetic control commits without exercising publication, report binding, worktree validation or cleanup. Previous IPC tests cover only a nonmutating dry-run of an unintegrated ticket.
+
+Add narrow, realistic end-to-end/integration proofs for: (1) real `accepted -> done` publication and automatic checkout retirement with report/product/control/branch evidence retained; (2) checked Git observation failure and `worktree remove` refusal **after** published `done`, still finalizing integration and allowing unrelated scheduling; (3) historical owner-routed `cleanup-workspaces --apply` actually removing one proven eligible registered worktree, while preserving unowned/foreign, review/accepted, dirty/mismatched and active/uncertain workspaces. Verify status persistence/IPC projection for successful and blocked cases. Reuse existing fixture/service-owner tests; do not rerun the full suite locally.
+
+### Disposition
+
+**REWORK REQUIRED.** Move **TASK-063** from `review` back to `todo`. Preserve the fifth checkpoint and all historical artifacts; do **not** integrate it into `release/0.5.7` yet. Successful exact-final-SHA CI remains necessary but is not a replacement for the publication, bounded-replay and real-owner safety proofs above.
