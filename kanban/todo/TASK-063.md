@@ -603,3 +603,42 @@ The only new tests in this checkpoint assert aggregate status before scan and wi
 ### Disposition
 
 **REWORK REQUIRED.** Move `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on canonical `devlegate/control`. Keep checkpoint `3560c105801a` and all progress. Fix the published-state invariant and red CI **first**, then finish truthful aggregate diagnostics and real crash-recovery/convergence tests. No manual cleanup CLI, new ticket, 0.5.6 changes, or integration to `release/0.5.7`.
+
+## Reviewer decision — 2026-10-17, execution bf41e82f: REWORK REQUIRED
+
+**Execution:** `bf41e82fc49c48b796b98da2a71f0021`; **exact worker checkpoint:** `d357eb80fa7f898a042772cde031b83d87c781f4`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `963ea785267accb164168d368e8880c0def83081`.
+
+### Verified achievements
+
+- The deterministic post-publication `workspace_cleanup.status="retired"` invariant failure from the preceding checkpoint has been addressed. [Exact SHA CI #39040517533](https://github.com/ranmasao/devlegate/actions/runs/39040517533) is **green**: **1259 passed, 1 skipped, coverage 78%, Ruff all checks passed**.
+- The last patch recognizes unsafe `skipped` decisions as blocked, marks capped scans incomplete and exposes remote-observation failure. Preserve automatic owner-driven cleanup, exact SHA/CAS protection, cursor progress, owner-published status and the **read-only** `devlegate clean` / `devlegate clean status` interface. Do not restore public sweep/apply/limit.
+- New direct test checks that a persisted per-ticket `retired` event survives restart, but this is **not** a crash-after-retirement transaction test.
+
+### Blocker 1 — proven restart deadlock after successfully removing both execution branches
+
+The requested crash boundary is still unsafe for a **non-zero-delta** completed ticket:
+
+1. `_integrate_accepted()` durably publishes the product checkpoint and canonical `accepted -> done`, then `_retire_integrated_workspace()` removes the worktree and `_retire_execution_refs()` deletes **both** `refs/heads/devlegate/work/<ticket>` local and upstream refs.
+2. Process dies **after those Git effects but before** `_run_iteration_body()` saves `accepted_integration=None`. The existing persisted transaction therefore remains pending, despite the product and control `done` being published and disposable refs correctly gone.
+3. On restart, `recovery_workflow.recover_accepted_integration()` calls `owner.recovery_integrate_accepted()`, which invokes `_integrate_accepted()`. That calls `_accepted_execution_report()` **before** seeing the already-integrated status. After cleanup, `_execution_remote_head()` and the local-ref fallback are both `None`.
+4. `execution_provenance.resolve_accepted_execution_report()` accepts the report only when `workspace_head == remote_head`, or, for `remote_head is None`, when `workspace_head == code_base_head`. An ordinary execution has `workspace_head != code_base_head`; report resolution therefore fails as ambiguous even though exact durable control integration trailers, product ancestry and immutable report still exist. Recovery cannot clear `accepted_integration`, and scheduling remains fenced.
+
+**Required:** recovery of a *previously proven, already published* accepted→done generation must be possible with **both disposable work refs absent**, using independent exact canonical published control/product/report evidence without weakening checks for not-yet-published or mismatched/newer generations. Separate pre-publication proof from post-publication replay proof; do not make preservation of temporary branches a prerequisite for recovery. Make post-done cleanup best-effort and fenced only by necessary durable control facts, not a mutable transaction that requires a deleted disposable ref to replay.
+
+**Mandatory deterministic real-Git owner test:** publish non-zero-delta product and control `done`, retire worktree + local + upstream work ref, simulate abrupt process loss **before** clearing `accepted_integration`, then construct a fresh owner. It must clear the pending integration, leave `done` and durable report/product unchanged, not recreate disposable refs, and schedule the next runnable ticket. Also test partial effects (worktree gone; local gone but remote present; both gone) and a mismatched/ref-reused generation.
+
+### Blocker 2 — a per-ticket event is still masquerading as global `devlegate clean` inventory
+
+The quick fix only adds `"retired"` to the allowed states. `_integrate_accepted()` still sets `self._state["workspace_cleanup"] = {"ticket_id": ticket_id, "status": "retired", ...}`, replacing the **aggregate** state published by `_publish_workspace_cleanup_inventory()`. Until a subsequent owner inventory pass, `workspace_cleanup_status()` exposes the last ticket's event as the whole `devlegate clean` response. It has no `scan_complete`, counts, blocked backlog or per-resource evidence. Thus one freshly integrated ticket can hide dozens of old remaining work refs, and the status schema changes unpredictably between a one-ticket event and a global inventory.
+
+**Required:** retain retirement events in their own durable field/diagnostic, but publish one consistent global cleanup inventory schema from startup through after integration/restart, with explicit unknown/stale/partial when not fully observed. Add an integration test with an existing blocked/eligible backlog and a new successful `done`; assert `devlegate clean` does NOT become `{"status":"retired","ticket_id":...}` or falsely appear drained.
+
+### Blocker 3 — critical autonomous convergence proofs are still missing
+
+The **only new tests** in `d357eb80` validate a synthetic persisted `retired` dictionary and a mocked blocked-decision status. The prior test `test_proven_execution_resource_retirement_removes_local_and_remote_refs` deletes branches via direct helpers on a merely prepared, unintegrated worktree. The round-robin regression advances a cursor between *two unintegrated blocked* worktrees, but never verifies actual deletion of an eligible later ticket while an earlier ticket is blocked.
+
+Add a small set of representative *positive* real-Git service-owner tests for canonical `accepted→done` publication, actual removal of registration/checkout/local/upstream refs, branch-only rediscovery, crash/restart after each stage, legacy provenance with and without enough evidence, and progress on safe T-2 despite blocked T-1. Preserve reports/product/control and existing safety protections. An exact-green CI is necessary but cannot substitute these behavior proofs.
+
+### Disposition
+
+**REWORK REQUIRED.** Move the **same TASK-063** from `review` back to `todo`; retain every checkpoint, execution report and review. Keep `release/0.5.7` unchanged. Prioritize crash-after-complete-ref-retirement recovery and state-schema separation, then add end-to-end tests rather than more narrow unit tests or CLI redesign.
