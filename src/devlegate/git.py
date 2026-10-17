@@ -235,7 +235,9 @@ def delete_branch_if_unoccupied(
             return subprocess.CompletedProcess(
                 observed.args, 1, observed.stdout, detail
             )
-    return runner(cwd, "branch", "-d", branch, check=False)
+    # Keep Git's worktree-occupancy guard.  ``--`` also makes the canonical
+    # branch name an operand, not an option, if this helper is reused.
+    return runner(cwd, "branch", "-d", "--", branch, check=False)
 
 
 def reset_hard(

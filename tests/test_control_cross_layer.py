@@ -129,6 +129,61 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
     ).stdout == ""
 
 
+def test_done_cleanup_recovery_after_process_loss_before_state_clear(
+    tmp_path, monkeypatch
+):
+    """Published evidence must recover after all disposable resources are gone."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    review = control / "kanban/review/T-1.md"
+    review.write_text(review.read_text() + "\n<!-- devlegate: curator-note -->\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept review")
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept implementation")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    original_save = engine._save_state
+
+    def crash_before_clear(phase, **kwargs):
+        if kwargs.get("accepted_integration") is None and kwargs.get(
+            "handled_control_head"
+        ):
+            raise RuntimeError("simulated process loss after cleanup")
+        return original_save(phase, **kwargs)
+
+    monkeypatch.setattr(engine, "_save_state", crash_before_clear)
+    with pytest.raises(RuntimeError, match="simulated process loss"):
+        run_test_iteration(engine)
+
+    assert engine._state.get("accepted_integration", {}).get("ticket_id") == "T-1"
+    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") is None
+    assert (
+        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1").stdout
+        == ""
+    )
+
+    restarted = Devlegate(config)
+    assert restarted._state.get("accepted_integration", {}).get("ticket_id") == "T-1"
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state.get("accepted_integration") is None
+    assert (working / "implementation.txt").is_file()
+    assert (control / "kanban/done/T-1.md").is_file()
+
+
 def test_unclassified_review_edit_after_admission_fails_closed(
     tmp_path, monkeypatch
 ):
