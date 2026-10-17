@@ -678,6 +678,70 @@ def test_workspace_cleanup_contains_remote_provenance_observation_failure(
     assert workspace.path.is_dir()
 
 
+def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    report = SimpleNamespace(
+        ticket_id="T-1",
+        execution_branch=workspace.branch,
+        execution_path=str(workspace.path),
+        workspace_head=workspace.head,
+    )
+    target = {
+        "ticket_id": "T-1",
+        "path": str(workspace.path),
+        "branch": workspace.branch,
+        "head": workspace.head,
+    }
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", lambda *_a, **_k: [target])
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+    )
+    monkeypatch.setattr(engine, "_accepted_execution_report", lambda _ticket_id: report)
+    monkeypatch.setattr(
+        engine,
+        "_find_accepted_integration_commit",
+        lambda _ticket_id, _report: "a" * 40,
+    )
+    monkeypatch.setattr(
+        engine, "_prove_published_product_checkpoint", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        engine,
+        "_retire_execution_refs",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            WorkflowBlockedError("upstream execution ref is unavailable")
+        ),
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "blocked",
+            "reason": "upstream execution ref is unavailable",
+            "resources": {
+                "worktree": "absent",
+                "local_ref": "present",
+                "upstream_ref": "absent",
+            },
+        }
+    ]
+    assert not workspace.path.exists()
+    assert (
+        resolve_commit(engine.repo, f"refs/heads/{workspace.branch}")
+        == workspace.head
+    )
+
+
 def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

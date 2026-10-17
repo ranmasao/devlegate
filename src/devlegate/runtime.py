@@ -5947,6 +5947,17 @@ class ServiceEngine:
                                 "ticket_id": ticket_id,
                                 "status": "retired" if apply else "eligible",
                                 "reason": "workspace absent; execution refs proven",
+                                **(
+                                    {
+                                        "resources": {
+                                            "worktree": "absent",
+                                            "local_ref": "absent",
+                                            "upstream_ref": "absent",
+                                        }
+                                    }
+                                    if apply
+                                    else {}
+                                ),
                             }
                         )
                     except (
@@ -5958,6 +5969,55 @@ class ServiceEngine:
                         ValueError,
                         WorkflowBlockedError,
                     ) as error:
+                        if apply:
+                            resources = {
+                                "worktree": "absent",
+                                "local_ref": "unknown",
+                                "upstream_ref": "unknown",
+                            }
+                            try:
+                                resources["local_ref"] = (
+                                    "present"
+                                    if self._resolve_commit_runtime(
+                                        self.repo,
+                                        f"refs/heads/{target['branch']}",
+                                    )
+                                    is not None
+                                    else "absent"
+                                )
+                            except (
+                                OSError,
+                                subprocess.SubprocessError,
+                                DevlegateError,
+                            ):
+                                pass
+                            try:
+                                resources["upstream_ref"] = (
+                                    "present"
+                                    if remote_ref(
+                                        self.repo,
+                                        self.remote_name,
+                                        f"refs/heads/{target['branch']}",
+                                        runner=self._git_runtime,
+                                    )
+                                    is not None
+                                    else "absent"
+                                )
+                            except (
+                                GitObservationError,
+                                OSError,
+                                subprocess.SubprocessError,
+                            ):
+                                pass
+                            decisions.append(
+                                {
+                                    "ticket_id": ticket_id,
+                                    "status": "blocked",
+                                    "reason": str(error),
+                                    "resources": resources,
+                                }
+                            )
+                            continue
                         decisions.append(
                             {
                                 "ticket_id": ticket_id,
@@ -6020,6 +6080,11 @@ class ServiceEngine:
                     self._retire_execution_refs(
                         report.execution_branch, report.workspace_head
                     )
+                    decision["resources"] = {
+                        "worktree": "absent",
+                        "local_ref": "absent",
+                        "upstream_ref": "absent",
+                    }
                     decision["status"] = "retired"
                 decisions.append(decision)
             except (
@@ -6033,6 +6098,64 @@ class ServiceEngine:
                 DevlegateError,
                 WorkflowBlockedError,
             ) as error:
+                if apply:
+                    resources: dict[str, str] = {
+                        "worktree": "pending",
+                        "local_ref": "pending",
+                        "upstream_ref": "pending",
+                    }
+                    try:
+                        current_registrations = manager._registrations()
+                        resources["worktree"] = (
+                            "present"
+                            if manager.path.resolve() in current_registrations
+                            or manager.path.exists()
+                            else "absent"
+                        )
+                    except (OSError, subprocess.SubprocessError):
+                        resources["worktree"] = "unknown"
+                    try:
+                        resources["local_ref"] = (
+                            "present"
+                            if self._resolve_commit_runtime(
+                                self.repo, f"refs/heads/{target['branch']}"
+                            )
+                            is not None
+                            else "absent"
+                        )
+                    except (
+                        OSError,
+                        subprocess.SubprocessError,
+                        DevlegateError,
+                    ):
+                        resources["local_ref"] = "unknown"
+                    try:
+                        resources["upstream_ref"] = (
+                            "present"
+                            if remote_ref(
+                                self.repo,
+                                self.remote_name,
+                                f"refs/heads/{target['branch']}",
+                                runner=self._git_runtime,
+                            )
+                            is not None
+                            else "absent"
+                        )
+                    except (
+                        GitObservationError,
+                        OSError,
+                        subprocess.SubprocessError,
+                    ):
+                        resources["upstream_ref"] = "unknown"
+                    decisions.append(
+                        {
+                            "ticket_id": ticket_id,
+                            "status": "blocked",
+                            "reason": str(error),
+                            "resources": resources,
+                        }
+                    )
+                    continue
                 decisions.append(
                     {"ticket_id": ticket_id, "status": "skipped", "reason": str(error)}
                 )
