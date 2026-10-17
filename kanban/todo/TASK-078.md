@@ -79,3 +79,31 @@ A matching `HEAD` alone does not prove that the interrupted Git merge left the i
 6. Full exact-checkpoint pytest, coverage and Ruff green after hardening.
 
 **Reviewer disposition:** move the SAME `TASK-078` from `kanban/review` to `kanban/todo`; do not change work branch, execution report, product history or checkpoint. This is rework of the existing execution, not a new ticket. TASK-079 remains dependent on TASK-078 reaching `done`.
+
+## Reviewer decision — 2026-10-17, execution 7a767939: REWORK REQUIRED (CI + evidence)
+
+**Exact execution:** `7a767939284e45bebb550f41e0178daa`; checkpoint `6ca7c6097f2786f54a2b1d376df85b2dc685f116`; base `a30447295d6423da442aab23dbb00623090e91ad`; lifecycle control `d091ccaf7be483d45dc29d088b75ae7ebde3018c`. Worker claim is `incomplete`, with one remaining item: full pytest did not finish during worker runs. **Independent completed GitHub CI [#39007001890](https://github.com/ranmasao/devlegate/actions/runs/39007001890)** provides the exact failure: **1239 passed, 1 skipped, 1 failed** in 279.85 seconds. Ruff was **skipped**, not proven green.
+
+### Verified and retained
+
+- `_merge_fast_forward_runtime()` now validates the expected tracking ref, merges the immutable admitted `expected_new` commit object (not a mutable tracking ref), re-observes the product branch, worktree identity, clean status and exact HEAD, and only retries under matching product `merge_pending` WAL coordinates.
+- `_sync_control()` no longer injects the product fast-forward retry callback; an interrupted control merge propagates rather than borrowing product WAL authorization.
+- Focused new tests cover target drift between interruption and retry, dirty/ambiguous product worktree, and absence of hidden control workflow retries. Do not undo this work or implement a separate retry framework.
+
+### Blocking requirement 1 — update stale cross-layer test, preserving new semantics
+
+The only failing GitHub CI test is `tests/test_daemon_cross_layer.py::test_merge_pending_retries_matching_control_merge`, at line ~529. The test still asserts `merge_calls == 2`, but the correct new behavior for an interrupted control merge without a control-specific admission is **one call**, then propagate/retain safe recovery state. CI observed `merge_calls == 1` and failed exactly on the outdated assertion.
+
+**Required:** replace the old test's assertions, name and scenario expectations with the new safety invariant. Assert no second control merge in the same interrupted transaction; ensure the previous control HEAD is retained for a pre-effect interruption; prove the next *fresh* control sync can safely complete after normal shutdown/restart and re-observation, without silently continuing on borrowed product WAL authority. Do not simply change `2` to `1` without checking terminal state and recovery behavior.
+
+### Blocking requirement 2 — fix effect-tier documentation and honest trace claims
+
+`tests/RECOVERY_MATRIX.md` newly states that a local `merge --ff-only` is **Tier 2**, while `docs/GIT_COMMAND_INVENTORY.md` and TASK-078/TASK-073 define **Tier 3 for any repository/worktree mutation**, including local merges. Tier 2 means remote read with no mutation, *not* local mutation. Fix the classification and all adjacent text/tables; a fast-forward merge is **Tier 3 local ref/worktree write**, and fetch is Tier 3 remote read **plus local object/ref writes**. Distinguish a genuine full before/after executed-command trace from an illustrative per-operation command sequence. Itemize actual added local safety observations and verify no unintended remote/mutating calls.
+
+### Required verification
+
+1. Complete exact-checkpoint CI must run `./dev coverage -n 4 --dist=worksteal` (or the repository's equivalent full suite), report full pass with coverage, and proceed to **Ruff pass**. Do not infer success from the worker's focused tests or from a partial local timed-out run.
+2. Keep focused target-drift, dirty checkout, SIGINT, product WAL and control no-retry regressions. Include a positive *fresh subsequent control sync* proof and negative unexpected-HEAD/identity proof where missing; tests must preserve the deliberate no-duplicate-mutation contract.
+3. Preserve all prior WORKER reports, execution checkpoint and lifecycle evidence. This is **same-ticket review hardening**, not a new ticket or authorization to merge or change product/control history manually.
+
+**Reviewer disposition:** return `kanban/review/TASK-078.md` to `kanban/todo/TASK-078.md` with this specification. The proof is nearly complete, but exact-checkpoint green CI and correct effect accounting are mandatory. TASK-079 remains blocked until TASK-078 is integrated to `done`.
