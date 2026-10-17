@@ -4825,6 +4825,7 @@ class ServiceEngine:
             OSError,
             subprocess.SubprocessError,
             ValueError,
+            DevlegateError,
             WorkflowBlockedError,
         ) as error:
             self._publish_workspace_cleanup_inventory()
@@ -4922,6 +4923,7 @@ class ServiceEngine:
             OSError,
             subprocess.SubprocessError,
             ValueError,
+            DevlegateError,
             WorkflowBlockedError,
         ) as error:
             cleanup = {
@@ -6028,6 +6030,7 @@ class ServiceEngine:
                 OSError,
                 subprocess.SubprocessError,
                 ValueError,
+                DevlegateError,
                 WorkflowBlockedError,
             ) as error:
                 decisions.append(

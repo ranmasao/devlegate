@@ -6,6 +6,7 @@
 
 import dataclasses
 import subprocess
+from types import SimpleNamespace
 
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
@@ -633,6 +634,48 @@ def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypa
         }
     ]
     assert engine._state.get("mutable_receipts", {}) == {}
+
+
+def test_workspace_cleanup_contains_remote_provenance_observation_failure(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    target = {
+        "ticket_id": "T-1",
+        "path": str(workspace.path),
+        "branch": workspace.branch,
+        "head": workspace.head,
+    }
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", lambda *_a, **_k: [target])
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_accepted_execution_report",
+        lambda _ticket_id: (_ for _ in ()).throw(
+            DevlegateError("upstream execution refs could not be observed")
+        ),
+    )
+
+    result = engine.cleanup_workspaces(limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "skipped",
+            "reason": "upstream execution refs could not be observed",
+        }
+    ]
+    assert workspace.path.is_dir()
 
 
 def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
