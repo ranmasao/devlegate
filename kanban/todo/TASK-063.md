@@ -577,3 +577,29 @@ The checkpoint adds CLI/IPC/owner snapshot tests; it does **not** add the demand
 ### Disposition
 
 **REWORK REQUIRED.** Move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` with this review appended. Retain all real improvements, CI result and original historical reviews. **Do not** reintroduce `clean sweep` or user-visible limits and **do not** split the task. The next checkpoint should correct truthful global status and prove autonomous, crash-recovering end-to-end cleanup, not keep rearranging the CLI.
+
+## Reviewer decision — 2026-10-17, execution ad4d571c: REWORK REQUIRED
+
+**Execution:** `ad4d571cc4534cad8df809768fdb290b`; **exact checkpoint:** `3560c105801aa11921b01a577345084798c9014d`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `161325e86f22bcdff6badeee60ce78d6d4df9f47`. Keep every existing checkpoint and report; no new ticket and no product integration.
+
+### Verified progress
+
+The implementation now separates an owner-published aggregate inventory from the owner-serialized bounded mutating pass. `devlegate clean` / `clean status` remain read-only, with no public `sweep`, `--limit`, `--apply` or `cleanup-workspaces` commands. The owner status shows `initializing` before any scan and multiple candidates after a pass. The new tests cover startup unknown and three-candidate inventory. Preserve these improvements.
+
+### Blocker 1 — CI RED: post-integration state invariant breaks the published lifecycle
+
+[Exact GitHub Actions #39031213993](https://github.com/ranmasao/devlegate/actions/runs/39031213993) finished **5 FAILED, 1252 passed, 1 skipped**; Ruff was skipped because pytest failed. Three `test_control_cross_layer` tests hit a **deterministic** mismatch: `_integrate_accepted()` writes `self._state["workspace_cleanup"] = {"ticket_id": ticket_id, "status": "retired", ...}` **after product/control publication**, but `_validate_state_invariant()` added in this checkpoint permits only `initializing/clean/partial/blocked/reconciled/applied`. The next `_save_state()` rejects `retired` as `DevlegateError: invalid workspace cleanup status`. The remaining two `test_cli_cross_layer` failures expose the same lifecycle regression: published `done` retains `accepted_integration`, and a dependent worker never starts or integration finalization stalls. GitHub test diagnostics actually show "retired workspace T-1", followed by "workflow blocked: invalid workspace cleanup status".
+
+**Fix the contract, not just the assertion:** distinguish per-ticket integration/retirement **event** and aggregate cleanup **inventory** as separate fields or typed structures; ensure old persisted states can be loaded and upgraded/handled safely; ensure `accepted_integration` clears after durable publication even if cleanup or status publication fails. Add direct regression for post-done state persistence, restart, and continued dependent scheduling; check all callers that set `workspace_cleanup`, including zero-delta/legacy operator receipts.
+
+### Blocker 2 — aggregate `blocked` classification is inconsistent with real decisions
+
+`_publish_workspace_cleanup_inventory()` assigns top-level `blocked` only if an item has `status=="blocked"`. But the actual per-candidate proof/refusal paths of `cleanup_workspaces(apply=False)` emit `status:"skipped"` for unsafe/unproven `done`, dirty/foreign/mismatched refs and non-done tickets. With the 58 known historical worker-branch remnants, this distinction is actionable: the status can report `partial` with only `skipped` candidates and no explicit overall blocked classification. Separate `not yet eligible` (live review/todo) from `blocked unsafe proof`, and `pending/retry` from `eligible`; report by **worktree / local ref / upstream ref** as required by the authoritative scope. A complete scan must not be claimed merely because the arbitrary internal 10,000-candidate cap did not expose an omitted suffix; if capped, report partial coverage and continuation rather than `scan_complete:true`.
+
+### Blocker 3 — core automatic end-to-end convergence still lacks proof
+
+The only new tests in this checkpoint assert aggregate status before scan and with three **unintegrated** worktrees. Earlier deletion tests call `manager.retire` and `_retire_execution_refs` directly on prepared but unintegrated resources, while round-robin tests only verify cursor advancement between blocked resources. **No real-Git owner test** proves `accepted→done` publication followed by automatic worktree/registration/local/upstream ref removal, crash after durable `done` before any cleanup intent, restart after partial worktree/local/remote removal, and progress on safely eligible T-2 while T-1 is blocked. Add focused, deterministic owner/harness tests for these exact scenarios, preservation of product/control/reports, safe refusal on dirty/changed/foreign/reused refs, and no obstruction of unrelated scheduler work. This is the previously agreed primary TASK-063 acceptance requirement, not an optional enhancement.
+
+### Disposition
+
+**REWORK REQUIRED.** Move `kanban/review/TASK-063.md` → `kanban/todo/TASK-063.md` on canonical `devlegate/control`. Keep checkpoint `3560c105801a` and all progress. Fix the published-state invariant and red CI **first**, then finish truthful aggregate diagnostics and real crash-recovery/convergence tests. No manual cleanup CLI, new ticket, 0.5.6 changes, or integration to `release/0.5.7`.
