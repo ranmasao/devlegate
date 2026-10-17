@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "797bf90fd76acb518ac54644ddc5ab7238d28a84",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "33b2f6e2561f4cd8a2657c58c8e2fe7c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/33b2f6e2561f4cd8a2657c58c8e2fe7c.md",
+  "report_sha256": "71df64e276df81f2b93ec4979a8aacec0a37f883587a713c0efc9b6bf11b7565",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implemented and validated the focused TASK-063 recovery and ref-safety work in the current workspace.",
+    "summary": "Added a real service-owner crash-recovery regression covering published done state after checkout and both execution refs are retired, before accepted_integration state is cleared; a fresh owner now proves recovery from durable product/control/report evidence. Tightened canonical local branch deletion invocation to retain Git worktree occupancy protection while treating the branch name as an operand."
+  },
+  "workspace_head": "e1ca1b9ab2cf520d300b5b65ac8965cdba37873b"
+}
