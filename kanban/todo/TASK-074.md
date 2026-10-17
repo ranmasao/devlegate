@@ -17,6 +17,20 @@ TASK-066 was accepted and integrated with green CI and genuine bug fixes, but it
 - `follow_file()` (~421) is not currently invoked by CLI. Verify all call sites and either remove the unused entry point with appropriate test updates or justify why it is intentionally retained; avoid a third independent file-follow engine.
 - `journalctl` is a distinct backend. Shared command construction already exists; do not force journal subprocess streaming into file cursor semantics.
 
+## Worker test scope — focused verification, full CI afterward
+
+Use `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md`. The log reader and its CLI entrypoints are the primary domains; prefer:
+
+```sh
+./dev test -q tests/test_log_reader.py tests/test_output.py
+./dev test -q tests/test_cli_cross_layer.py -k "log or follow"
+./dev lint
+```
+
+Add/modify focused tests for the requested initial snapshot/follow parity, bounded polling, corrupt evidence and missing-line cases. If CLI/IPC behavior actually changes, select the relevant tests from `tests/test_cli_ipc.py` or `tests/test_cli_topology.py` by name/`-k`, rather than running those entire modules. Ensure measurements cover the complete duplicated resolution algorithm, not only the shared file cursor.
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, all of the topology suite or unrelated packaging tests. Full exact-SHA pytest with coverage and Ruff is supplied by GitHub Actions after push. The worker documents scoped tests and DRY evidence; the reviewer independently verifies CI and the actual consolidation.
+
 ## Required work
 
 1. Inventory before/after actual reuse, including each of the call paths above; distinguish *necessary* differences (snapshot vs follow, ticket vs execution lifetime) from duplicated resolution, validation and common initial-output logic.

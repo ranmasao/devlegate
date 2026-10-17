@@ -17,6 +17,21 @@ This ticket fixes **exception containment and accurate service state**, not the 
 3. Verify the same condition is represented consistently in `devlegate status`, service logs and one-shot / interactive operator commands. Avoid an unbounded hot retry loop and duplicate log spam while the blocking state remains unchanged. Permit normal resumption after an authorized correction without restarting the service.
 4. Audit adjacent pre-worker error translation boundaries for equivalent crash paths, but keep the code change narrowly scoped. Distinguish true infrastructure/owner failures from ordinary recoverable admission refusal; preserve shutdown cancellation semantics and intentional fatal invariants.
 
+## Worker test scope — focused verification, full CI afterward
+
+Use `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md`. Prefer the exact preparation/refusal tests and daemon recovery boundary:
+
+```sh
+./dev test -q tests/test_daemon_recovery.py -k "workspace_preparation or workspace or recoverable"
+./dev test -q tests/test_control_workspace.py -k "prepar or worktree or branch or binding"
+./dev test -q tests/test_daemon_lifecycle.py -k "shutdown or stop_before or lifecycle"
+./dev lint
+```
+
+Add focused hosted-service/IPC tests for the actual pre-worker `ExecutionWorkspaceError` containment and recovery scenario; only run specifically selected process-topology cases if the assertion genuinely requires an independent service process. Preserve status, plan, authority and fail-closed checks. The listed selectors are a starting point and do not waive the task-specific new regressions.
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, the whole `test_cli_topology.py` suite or unrelated packaging tests. GitHub Actions provides full exact-checkpoint pytest, coverage and Ruff; reviewer verifies that result. Do not interpret a worker local full-suite timeout as an implementation failure when targeted test evidence is complete.
+
 ## Acceptance
 
 - Regression reproduces the 2026-10-15 control-revision mismatch during workspace preparation, and a second non-conflict `ExecutionWorkspaceError`: hosted polling stays alive, publishes `blocked` with an actionable reason, and keeps status/IPC responsive.

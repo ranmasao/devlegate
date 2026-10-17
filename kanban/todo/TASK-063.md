@@ -10,11 +10,10 @@ Devlegate 0.5.7 — execution workspace lifecycle and bounded disk usage.
 
 ## Scheduling
 
-**Defer until the next development iteration (0.5.7).** This is not a
-release blocker for the ongoing 0.5.6 TASK-054 / TASK-062 work, and must
-not modify that release line. Implement after TASK-061 extracts the shared
-workflow recovery/reconciliation boundary; use that boundary rather than
-introducing independent cleanup authority.
+**Unblocked for the current 0.5.7 iteration.** The former 0.5.6 deferral
+has elapsed and TASK-061 is integrated. Reuse its workflow
+recovery/reconciliation boundary rather than introducing independent cleanup
+authority. Do not modify the historical 0.5.6 release line.
 
 ## Goal
 
@@ -127,6 +126,21 @@ startup.
 Do not discover or clean unrelated `/tmp/opencode` worktrees or other
 project instance keys. Any stale external Git registration is a separate
 ownership question.
+
+## Worker test scope — focused verification, full CI afterward
+
+This cleanup touches ownership-sensitive Git worktree retirement. Use `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md` to keep direct semantic proofs and required real-worktree/submodule companions. Preferred local commands:
+
+```sh
+./dev test -q tests/test_execution_workspace_submodules.py tests/test_git.py
+./dev test -q tests/test_control_workspace.py -k "worktree or branch or drop or cleanup"
+./dev test -q tests/test_control_recovery.py -k "integrat or retirement or accepted or drop"
+./dev lint
+```
+
+Add targeted positive/negative tests for new retirement and historical dry-run behavior in their narrow owning modules, including subprocess/host tests only where the actual service/restart boundary matters. These existing-file filters are initial regression selections, not substitutes for new behavior coverage.
+
+**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, full `test_cli_topology.py`, or unrelated packaging tests. GitHub Actions is responsible for full exact-checkpoint pytest with coverage and Ruff; the reviewer verifies its result. Report focused commands/results and any proof gaps without spending the worker execution budget repeatedly timing out on the entire suite. Do not modify/retire worktrees beyond the admitted project instance while testing.
 
 ## Required regressions
 
