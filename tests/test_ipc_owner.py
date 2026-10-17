@@ -6,6 +6,8 @@
 
 from _ipc_support import *  # noqa: F403,F405
 
+from devlegate.execution_workspace import ExecutionWorkspaceManager
+
 def test_stop_completed_receipt_cannot_overtake_accepted_receipt(
     tmp_path, monkeypatch, short_state_dir
 ):
@@ -1026,6 +1028,7 @@ def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
         fingerprint=_reconcile_resume_request_fingerprint("T-1"),
         ticket_id="T-1",
         onto=None,
+        mutable=True,
     )
     engine._record_operator_admission(command)
     restarted = ServiceEngine(engine.env_file)
@@ -1037,3 +1040,61 @@ def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
         "ticket_id": "T-1",
     }
     assert restarted._state["reconciliation"]["status"] == "resolving"
+
+
+def test_cleanup_dry_run_uses_live_owner_without_receipt_or_git_mutation(
+    tmp_path, monkeypatch
+):
+    engine, state = make_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        engine._workers,
+        "run",
+        lambda *_args, **_kwargs: WorkerRunResult(
+            0, None, WorkerClaim("completed", "not integrated", (), ()), None
+        ),
+    )
+    assert run_test_iteration(engine) == 0
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    before = dict(engine._state.get("mutable_receipts", {}))
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    registration_before = manager._registrations()
+
+    authority = engine._lock()
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    stop_event = threading.Event()
+    owner = threading.Thread(
+        target=engine.serve,
+        args=(stop_event,),
+        kwargs={"lock_handle": authority},
+    )
+    owner.start()
+    try:
+        response = request(
+            server.path,
+            "cleanup-dry-run",
+            "cleanup-workspaces",
+            {"apply": False, "limit": 10},
+        )
+        assert response.ok
+        assert response.result["dry_run"] is True
+        assert response.result["decisions"] == [
+            {
+                "ticket_id": "T-1",
+                "status": "skipped",
+                "reason": "ticket is not durably done",
+            }
+        ]
+    finally:
+        stop_event.set()
+        engine.wake()
+        owner.join(timeout=5)
+        server.stop()
+        authority.close()
+
+    assert not owner.is_alive()
+    assert execution.is_dir()
+    assert engine._state.get("mutable_receipts", {}) == before
+    assert manager._registrations() == registration_before

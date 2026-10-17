@@ -228,6 +228,11 @@ def test_status_round_trip_preserves_complete_view():
         execution_stage="worker-running",
         execution_id="execution-1",
         bound_ticket_title="Ticket",
+        workspace_cleanup={
+            "status": "blocked",
+            "ticket_id": "T-1",
+            "reason": "execution worktree is dirty",
+        },
     )
 
     payload = snapshot.as_dict()
@@ -238,6 +243,7 @@ def test_status_round_trip_preserves_complete_view():
         "plan",
         "failed_executions",
         "reconciliation",
+        "workspace_cleanup",
     }
     assert payload["execution"] == {
         "phase": "agent_running",
@@ -256,6 +262,11 @@ def test_status_round_trip_preserves_complete_view():
         "next",
     }
     assert payload["tickets"]["eligible"] == []
+    assert payload["workspace_cleanup"] == {
+        "status": "blocked",
+        "ticket_id": "T-1",
+        "reason": "execution worktree is dirty",
+    }
     assert decode_status(payload) == snapshot
 
 

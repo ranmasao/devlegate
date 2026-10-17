@@ -327,7 +327,7 @@ def _cleanup_workspaces_daemon(
             locator.socket_path,
             "cleanup-workspaces",
             {"apply": apply, "limit": limit},
-            mutable=True,
+            mutable=apply,
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
