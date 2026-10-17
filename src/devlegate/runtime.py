@@ -5404,7 +5404,28 @@ class ServiceEngine:
         decisions: list[dict[str, object]] = []
         if targets is None:
             targets = self._workspace_cleanup_cohort(limit)
+        else:
+            # An admitted apply carries its immutable cohort.  Never let a
+            # malformed or stale receipt turn one bounded pass into an
+            # unbounded sweep.
+            targets = list(targets)
+            if len(targets) > limit:
+                raise WorkflowBlockedError(
+                    "workspace cleanup cohort exceeds the admitted limit"
+                )
         for target in targets:
+            if not all(
+                isinstance(target.get(field), str) and target[field]
+                for field in ("ticket_id", "path", "branch", "head")
+            ):
+                decisions.append(
+                    {
+                        "ticket_id": str(target.get("ticket_id", "<unknown>")),
+                        "status": "skipped",
+                        "reason": "workspace cleanup target identity is invalid",
+                    }
+                )
+                continue
             ticket_id = target["ticket_id"]
             path = Path(target["path"]).absolute()
             registration = registrations.get(path.resolve())
@@ -5453,7 +5474,9 @@ class ServiceEngine:
                 integration = self._find_accepted_integration_commit(ticket_id, report)
                 if integration is None:
                     raise WorkflowBlockedError("accepted integration is not proven")
-                self._prove_published_product_checkpoint(report.workspace_head)
+                self._prove_published_product_checkpoint(
+                    report.workspace_head, integration=integration
+                )
                 if self._state.get("worker_identity") is not None or any(
                     self._state.get(key) is not None
                     for key in (
@@ -5492,10 +5515,32 @@ class ServiceEngine:
                 )
         return {"dry_run": not apply, "limit": limit, "decisions": decisions}
 
-    def _prove_published_product_checkpoint(self, checkpoint: str | None) -> None:
-        """Require the accepted checkpoint to be reachable from published product."""
+    def _prove_published_product_checkpoint(
+        self, checkpoint: str | None, *, integration: str | None = None
+    ) -> None:
+        """Require the exact integrated checkpoint to be in published product."""
         if not isinstance(checkpoint, str) or not _is_git_identity(checkpoint):
             raise WorkflowBlockedError("accepted product checkpoint is invalid")
+        if integration is not None:
+            message = _git(
+                self.control_worktree,
+                "show",
+                "-s",
+                "--format=%B",
+                integration,
+                check=False,
+            )
+            if message.returncode:
+                raise WorkflowBlockedError(
+                    "canonical integration checkpoint could not be observed"
+                )
+            checkpoint_line = f"Devlegate-Checkpoint: {checkpoint}"
+            if checkpoint_line not in {
+                line.strip() for line in message.stdout.splitlines()
+            }:
+                raise WorkflowBlockedError(
+                    "canonical integration does not name the accepted checkpoint"
+                )
         try:
             product_head = remote_ref(
                 self.repo,

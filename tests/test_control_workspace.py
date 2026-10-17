@@ -131,6 +131,36 @@ def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
     assert workspace.path.is_dir()
 
 
+def test_historical_cleanup_binds_product_proof_to_control_checkpoint(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    ticket = control / "kanban/todo/T-1.md"
+    accepted = control / "kanban/accepted/T-1.md"
+    ticket.rename(accepted)
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-1")
+    accepted.rename(control / "kanban/done/T-1.md")
+    git(control, "add", "-A")
+    git(
+        control,
+        "commit",
+        "-m",
+        "T-1: Control ticket (integrated)\n\n"
+        "Devlegate-Execution: execution-old\n"
+        "Devlegate-Checkpoint: " + base,
+    )
+    integration = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(WorkflowBlockedError, match="canonical integration"):
+        engine._prove_published_product_checkpoint(
+            "0" * 40, integration=integration
+        )
+    engine._prove_published_product_checkpoint(base, integration=integration)
+
+
 def test_workspace_cleanup_targets_do_not_expand_after_registration_changes(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -147,6 +177,25 @@ def test_workspace_cleanup_targets_do_not_expand_after_registration_changes(tmp_
     result = engine.cleanup_workspaces(targets=cohort)
 
     assert [item["ticket_id"] for item in result["decisions"]] == ["T-1"]
+    assert first.path.is_dir()
+    assert second.path.is_dir()
+
+
+def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    first = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    second = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-2"
+    ).prepare(base)
+    cohort = engine._workspace_cleanup_cohort(2)
+
+    with pytest.raises(WorkflowBlockedError, match="exceeds the admitted limit"):
+        engine.cleanup_workspaces(limit=1, apply=True, targets=cohort)
     assert first.path.is_dir()
     assert second.path.is_dir()
 
