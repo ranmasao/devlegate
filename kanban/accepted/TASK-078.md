@@ -107,3 +107,13 @@ The only failing GitHub CI test is `tests/test_daemon_cross_layer.py::test_merge
 3. Preserve all prior WORKER reports, execution checkpoint and lifecycle evidence. This is **same-ticket review hardening**, not a new ticket or authorization to merge or change product/control history manually.
 
 **Reviewer disposition:** return `kanban/review/TASK-078.md` to `kanban/todo/TASK-078.md` with this specification. The proof is nearly complete, but exact-checkpoint green CI and correct effect accounting are mandatory. TASK-079 remains blocked until TASK-078 is integrated to `done`.
+
+## Reviewer decision — 2026-10-17, execution dd507196: ACCEPTED
+
+**Exact execution:** `dd507196ab4343daa8da8e3fd7f2aae6`; **checkpoint:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; integrated product base `a30447295d6423da442aab23dbb00623090e91ad`; published lifecycle control `7871f435f5a964c252b8c10b8bea0e65d11f77b1`. Valid worker result: `completed`, `remaining=[]`, `questions=[]`; execution claim was checked against implementation and tests, not treated as sole proof.
+
+**Exact SHA CI evidence:** [GitHub Actions #39009902197, attempt 2](https://github.com/ranmasao/devlegate/actions/runs/39009902197): **1240 passed, 1 skipped; statement/branch coverage 78%; Ruff passed.** Attempt 1 failed once on `test_live_service_keeps_unsafe_recovery_authority_reachable`, with no source changes between the two attempts. This remains a potential test-timing/flakiness risk to monitor, not a confirmed TASK-078 correctness regression.
+
+**Review result:** Earlier targeted defects are corrected: arbitrary command replay removed from `_git_runtime`; product fast-forward continuation uses the exact admitted commit object, WAL coordinates and safe checkout/target re-observation; unrelated product `merge_pending` no longer authorizes control sync retries. The old cross-layer control test now proves one interrupted merge, unchanged pre-effect HEAD and subsequent independently observed fresh control sync. Git effect classification documents local merge as Tier 3; focused regression coverage and complete CI are green.
+
+**Disposition:** Move the SAME `TASK-078` from `review` to `accepted`. Preserve execution artifacts, work branch and product history. **Accepted is not done**: allow Devlegate to integrate the exact checkpoint through its ordinary accepted-integration machinery, then advance dependent TASK-079 only after TASK-078 reaches `done`. The historical REWORK decisions above remain as review history, superseded by this final acceptance decision.
