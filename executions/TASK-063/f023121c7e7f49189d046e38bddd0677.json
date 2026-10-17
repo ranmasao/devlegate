@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "5d74ff521713cdf3a71c2ebe47f5408375cd4d93",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "f023121c7e7f49189d046e38bddd0677",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/f023121c7e7f49189d046e38bddd0677.md",
+  "report_sha256": "b39e420011ec79fa1b7a335872a11d422393af4f2fc75073925717e958a54c6d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Updated runtime cleanup proof and cohort validation. Added tests for control-checkpoint binding and pass-limit enforcement.",
+    "summary": "Hardened historical workspace cleanup so retirement requires the exact control integration checkpoint to be present in the published product ancestry. Bounded apply requests now reject oversized or malformed cohorts, preventing replay or stale receipts from expanding a pass, with focused regression coverage."
+  },
+  "workspace_head": "bab5c5119359b7f745fdc4276ba05ca2de2bdd82"
+}
