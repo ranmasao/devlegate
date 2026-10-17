@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "2a7fba93f74c09e041dade56ae506baafa32e1ad",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "fdf98f4598e94bfe91f1bfd16d24c8b4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the still-missing hosted-owner crash/restart, remote-outage recovery, blocked-earliest versus eligible-later convergence, and legacy trailerless provenance integration tests required by TASK-063."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the still-missing hosted-owner crash/restart, remote-outage recovery, blocked-earliest versus eligible-later convergence, and legacy trailerless provenance integration tests required by TASK-063."
+    ],
+    "report": null,
+    "summary": "Improved automatic workspace cleanup observability for partial apply effects. Apply decisions now report blocked status with re-observed worktree, local-ref, and upstream-ref states, and successful retirement includes explicit resource absence; added a real registered-checkout regression for worktree-retired/ref-retention behavior."
+  },
+  "workspace_head": "a00ee0a4c65a60ccfbdc288e5dc6f83d1b786fe7"
+}
