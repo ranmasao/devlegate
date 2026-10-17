@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "163e7bbb5faba93dccb548257dcacc8e53a5a4c1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "0d446b19a673464a92f512d3b9d4ed07",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-063/0d446b19a673464a92f512d3b9d4ed07.md",
+  "report_sha256": "160e18adf3895721a9603d3c84973ec873376a49f1c213a861a94e256ea22a1b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused control workspace, Git, recovery, IPC, and lint checks pass.",
+    "summary": "Contained checked Git subprocess failures within optional post-publication workspace cleanup and preserved accepted-to-done finalization with blocked diagnostics. Bound historical integration eligibility to the accepted report's control lineage, execution ID, and checkpoint, and added real-Git retirement plus generation-mismatch regressions."
+  },
+  "workspace_head": "d48221206a8f8bc08f60b1c3557ce4366aa22b18"
+}
