@@ -783,6 +783,7 @@ class ServiceEngine:
         self._workflow_blocker_fingerprint: str | None = None
         self._foreground_diagnostic_fingerprint: str | None = None
         self._iteration_diagnostic: str | None = None
+        self._workspace_cleanup_observation_error: str | None = None
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.RLock()
@@ -2293,6 +2294,7 @@ class ServiceEngine:
 
     def _workspace_cleanup_cohort(self, limit: int) -> list[dict[str, str]]:
         """Capture a bounded, independently observed execution-resource set."""
+        self._workspace_cleanup_observation_error = None
         registrations = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, "T-1"
         )._registrations()
@@ -2358,6 +2360,10 @@ class ServiceEngine:
         )
         if observed.returncode:
             # A remote outage is a retryable observation, not proof of absence.
+            self._workspace_cleanup_observation_error = (
+                observed.stderr.strip()
+                or "upstream execution refs could not be observed"
+            )
             observed_lines: list[str] = []
         else:
             observed_lines = observed.stdout.splitlines()
@@ -2380,7 +2386,14 @@ class ServiceEngine:
                     "head": fields[0],
                 },
             )
-        return [candidates[key] for key in sorted(candidates)[:limit]]
+        keys = sorted(candidates)
+        if not keys:
+            return []
+        cursor = self._state.get("workspace_cleanup_cursor")
+        if isinstance(cursor, str) and cursor in keys:
+            start = (keys.index(cursor) + 1) % len(keys)
+            keys = keys[start:] + keys[:start]
+        return [candidates[key] for key in keys[:limit]]
 
     def _admit_operator_command(self, command: OperatorCommand) -> None:
         try:
@@ -4734,6 +4747,15 @@ class ServiceEngine:
             return
         decisions = result.get("decisions", [])
         if decisions:
+            selected = [
+                item.get("ticket_id")
+                for item in decisions
+                if isinstance(item, dict)
+                and isinstance(item.get("ticket_id"), str)
+                and item.get("ticket_id") != "__remote__"
+            ]
+            if selected:
+                self._state["workspace_cleanup_cursor"] = selected[-1]
             self._state["workspace_cleanup"] = {
                 "status": "reconciled",
                 "limit": 1,
@@ -4741,6 +4763,9 @@ class ServiceEngine:
             }
             self._save_state(
                 str(self._state["phase"]),
+                workspace_cleanup_cursor=self._state.get(
+                    "workspace_cleanup_cursor"
+                ),
                 workspace_cleanup=self._state["workspace_cleanup"],
             )
 
@@ -5539,6 +5564,14 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "workspace cleanup cohort exceeds the admitted limit"
                 )
+        if self._workspace_cleanup_observation_error:
+            decisions.append(
+                {
+                    "ticket_id": "__remote__",
+                    "status": "blocked",
+                    "reason": self._workspace_cleanup_observation_error,
+                }
+            )
         for target in targets:
             if not all(
                 isinstance(target.get(field), str) and target[field]

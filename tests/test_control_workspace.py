@@ -8,6 +8,7 @@ import dataclasses
 
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
+import devlegate.runtime as runtime_module
 from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
 
@@ -208,6 +209,56 @@ def test_workspace_cleanup_targets_do_not_expand_after_registration_changes(tmp_
     assert [item["ticket_id"] for item in result["decisions"]] == ["T-1"]
     assert first.path.is_dir()
     assert second.path.is_dir()
+
+
+def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    first = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    second = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-2"
+    ).prepare(base)
+
+    engine._reconcile_workspace_backlog()
+    assert first.path.is_dir() and second.path.is_dir()
+    assert engine._state["workspace_cleanup_cursor"] == "T-1"
+
+    engine._reconcile_workspace_backlog()
+    assert engine._state["workspace_cleanup_cursor"] == "T-2"
+    restarted = Devlegate(config)
+    assert restarted._state["workspace_cleanup_cursor"] == "T-2"
+
+
+def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    original_git = runtime_module._git
+
+    def unavailable_remote(cwd, *args, **kwargs):
+        result = original_git(cwd, *args, **kwargs)
+        if args and args[0] == "ls-remote":
+            result.returncode = 1
+            result.stderr = "remote unavailable"
+            result.stdout = ""
+        return result
+
+    monkeypatch.setattr(runtime_module, "_git", unavailable_remote)
+
+    result = engine.workspace_cleanup_status(limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "__remote__",
+            "status": "blocked",
+            "reason": "remote unavailable",
+        }
+    ]
+    assert engine._state.get("mutable_receipts", {}) == {}
 
 
 def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
