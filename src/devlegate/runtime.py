@@ -5442,6 +5442,11 @@ class ServiceEngine:
         integration = self._find_accepted_integration_commit(ticket_id)
         if integration is None:
             raise WorkflowBlockedError("published accepted integration is not proven")
+        parents = commit_parents(self.control_worktree, integration, runner=_git)
+        if parents is None or not parents or parents[0] != control_head:
+            raise WorkflowBlockedError(
+                "published accepted integration control lineage is not exact"
+            )
         self._prove_published_product_checkpoint(checkpoint, integration=integration)
         root = self.control_worktree / "executions" / ticket_id
         if not root.is_dir() or root.is_symlink():
@@ -5697,7 +5702,12 @@ class ServiceEngine:
         if local_head is not None:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
-            removed = _git(self.repo, "branch", "-d", branch, check=False)
+            # Delete the exact observed ref, not merely the branch name.  A
+            # worker or operator can rewrite a ref outside the service lock;
+            # compare-and-swap must fail closed in that race.
+            removed = compare_and_swap_ref(
+                self.repo, local_ref, "", expected_head, runner=self._git_runtime
+            )
             if removed.returncode:
                 raise WorkflowBlockedError(
                     removed.stderr.strip() or "cannot retire local execution ref"

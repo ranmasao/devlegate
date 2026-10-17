@@ -5,6 +5,7 @@
 """Execution workspace, checkpoint, branch, and publication semantics."""
 
 import dataclasses
+import subprocess
 
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
@@ -130,6 +131,28 @@ def test_proven_execution_resource_retirement_removes_local_and_remote_refs(tmp_
         git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
         == ""
     )
+
+
+def test_local_execution_ref_cas_failure_retains_ref(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    manager.prepare(base)
+
+    def refuse(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=("git", "update-ref"), returncode=1, stdout="", stderr="ref changed"
+        )
+
+    monkeypatch.setattr(runtime_module, "compare_and_swap_ref", refuse)
+    with pytest.raises(WorkflowBlockedError, match="cannot retire local execution ref"):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
 
 
 def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
