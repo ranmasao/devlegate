@@ -3195,6 +3195,14 @@ class ServiceEngine:
                 cleanup.get("decisions"), list
             ):
                 raise DevlegateError("invalid workspace cleanup decisions")
+        cleanup_event = state.get("workspace_cleanup_event")
+        if cleanup_event is not None:
+            if not isinstance(cleanup_event, dict) or cleanup_event.get(
+                "status"
+            ) not in {"retired", "blocked", "skipped"}:
+                raise DevlegateError("invalid workspace cleanup event")
+            if not isinstance(cleanup_event.get("ticket_id"), str):
+                raise DevlegateError("invalid workspace cleanup event identity")
         reconciliation = state.get("reconciliation")
         if reconciliation is not None:
             if not isinstance(reconciliation, dict) or reconciliation.get(
@@ -4117,7 +4125,11 @@ class ServiceEngine:
             pending_control_head = accepted_integration.get("control_head")
             if not isinstance(pending_control_head, str):
                 raise DevlegateError("invalid accepted integration control identity")
-            checkpoint = self._accepted_checkpoint(str(pending_ticket))
+            pending_state = self._ticket_store().by_id[str(pending_ticket)]
+            if pending_state.state == "done":
+                checkpoint = accepted_integration.get("checkpoint")
+            else:
+                checkpoint = self._accepted_checkpoint(str(pending_ticket))
             if checkpoint != accepted_integration.get("checkpoint"):
                 raise WorkflowBlockedError(
                     "accepted integration checkpoint changed during recovery"
@@ -5409,6 +5421,59 @@ class ServiceEngine:
             )
         return report
 
+    def _published_accepted_execution_report(
+        self, ticket_id: str, pending: dict[str, object]
+    ) -> ExecutionReport:
+        """Resolve a completed integration without disposable refs.
+
+        Cleanup can remove both worker refs before the owner records that the
+        accepted-integration transaction is complete. In that replay window,
+        the canonical done commit, its exact parent, and the immutable report
+        are the durable identity; temporary refs must not be required.
+        """
+        checkpoint = pending.get("checkpoint")
+        control_head = pending.get("control_head")
+        if not isinstance(checkpoint, str) or not _is_git_identity(checkpoint):
+            raise WorkflowBlockedError("accepted integration checkpoint is invalid")
+        if not isinstance(control_head, str) or not _is_git_identity(control_head):
+            raise WorkflowBlockedError(
+                "accepted integration control identity is invalid"
+            )
+        integration = self._find_accepted_integration_commit(ticket_id)
+        if integration is None:
+            raise WorkflowBlockedError("published accepted integration is not proven")
+        self._prove_published_product_checkpoint(checkpoint, integration=integration)
+        root = self.control_worktree / "executions" / ticket_id
+        if not root.is_dir() or root.is_symlink():
+            raise WorkflowBlockedError(
+                f"accepted ticket {ticket_id} has no durable execution evidence"
+            )
+        try:
+            reports = [
+                report
+                for report in ExecutionReportStore(self.control_worktree).list(
+                    ticket_id
+                )
+                if report.result.conclusion != "failed"
+                and report.workspace_head == checkpoint
+            ]
+        except ExecutionReportError as error:
+            raise WorkflowBlockedError(
+                f"malformed execution evidence for accepted ticket {ticket_id}"
+            ) from error
+        matches = [
+            report
+            for report in reports
+            if self._accepted_integration_commit_matches_report(
+                integration, ticket_id, report
+            )
+        ]
+        if len(matches) != 1:
+            raise WorkflowBlockedError(
+                "published accepted integration evidence is missing or ambiguous"
+            )
+        return matches[0]
+
     def _accepted_checkpoint(self, ticket_id: str) -> str:
         checkpoint = self._accepted_execution_report(ticket_id).workspace_head
         assert checkpoint is not None
@@ -5425,7 +5490,12 @@ class ServiceEngine:
         self._validate_control_worktree()
         if not code.working_tree_clean or not control.working_tree_clean:
             raise WorkflowBlockedError("product or control working tree is dirty")
-        report = self._accepted_execution_report(ticket_id)
+        pending = self._state.get("accepted_integration")
+        ticket = self._ticket_store().by_id.get(ticket_id)
+        if isinstance(pending, dict) and ticket is not None and ticket.state == "done":
+            report = self._published_accepted_execution_report(ticket_id, pending)
+        else:
+            report = self._accepted_execution_report(ticket_id)
         checkpoint = report.workspace_head
         assert checkpoint is not None
         product_ref = f"refs/heads/{self.remote_branch}"
@@ -5553,7 +5623,10 @@ class ServiceEngine:
             _log(
                 f"workspace cleanup blocked for {ticket_id}: {cleanup['reason']}"
             )
-        self._state["workspace_cleanup"] = cleanup
+        # Keep this per-ticket event separate from the aggregate inventory
+        # consumed by `devlegate clean`; the next owner pass may still have a
+        # large backlog after this integration.
+        self._state["workspace_cleanup_event"] = cleanup
         return control_head
 
     def _retire_integrated_workspace(
