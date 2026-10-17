@@ -5729,7 +5729,10 @@ class ServiceEngine:
             if self._resolve_commit_runtime(self.repo, local_ref) != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
             removed = delete_branch_if_unoccupied(
-                self.repo, branch, runner=self._git_runtime
+                self.repo,
+                branch,
+                expected_head=expected_head,
+                runner=self._git_runtime,
             )
             if removed.returncode:
                 raise WorkflowBlockedError(

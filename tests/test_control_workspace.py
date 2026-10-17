@@ -178,6 +178,39 @@ def test_local_execution_ref_refuses_foreign_worktree_occupancy(tmp_path):
     assert foreign.is_dir()
 
 
+def test_local_execution_ref_move_after_checkout_retirement_is_preserved(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    manager.retire(workspace, base)
+
+    (working / "ref-moved.txt").write_text("moved\n")
+    git(working, "add", "ref-moved.txt")
+    committed = git(
+        working,
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "move disposable ref",
+    )
+    assert committed.returncode == 0
+    moved = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "branch", "-f", manager.branch, moved).returncode == 0
+
+    with pytest.raises(WorkflowBlockedError, match="changed before removal"):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == moved
+
+
 def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -329,6 +362,32 @@ def test_retired_workspace_event_survives_state_validation_and_restart(tmp_path)
     restarted = Devlegate(config)
 
     assert restarted._state["workspace_cleanup"] == event
+
+
+def test_retirement_event_does_not_replace_aggregate_inventory(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    inventory = {
+        "status": "partial",
+        "scan_complete": True,
+        "inventory": {"candidates": 2, "remaining": 1},
+        "blocked": 1,
+        "remote_observation": "observed",
+        "decisions": [{"ticket_id": "T-1", "status": "blocked"}],
+    }
+    event = {
+        "ticket_id": "T-2",
+        "status": "retired",
+        "reason": "accepted integration proven",
+    }
+    engine._save_state(
+        "idle", workspace_cleanup=inventory, workspace_cleanup_event=event
+    )
+    engine._refresh_published_status()
+
+    assert engine.workspace_cleanup_status() == inventory
+    assert engine._state["workspace_cleanup_event"] == event
 
 
 def test_workspace_cleanup_inventory_surfaces_unsafe_skip_as_blocked(

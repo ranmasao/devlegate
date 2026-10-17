@@ -212,9 +212,29 @@ def delete_branch_if_unoccupied(
     cwd: Path,
     branch: str,
     *,
+    expected_head: str | None = None,
     runner: GitRunner = run_git,
 ) -> subprocess.CompletedProcess[str]:
-    """Delete a local branch with Git's worktree-occupancy protection."""
+    """Delete a local branch with Git's occupancy protection and identity check.
+
+    ``git branch -d`` performs the final worktree occupancy check.  The
+    explicit identity observation closes the common stale-target case before
+    that effectful command; callers must still treat a non-zero result as a
+    refusal and re-observe the ref before retrying.
+    """
+    if expected_head is not None:
+        observed = runner(
+            cwd,
+            "rev-parse",
+            "--verify",
+            f"refs/heads/{branch}^{{commit}}",
+            check=False,
+        )
+        if observed.returncode or observed.stdout.strip() != expected_head:
+            detail = _stderr(observed).strip() or "local execution ref changed"
+            return subprocess.CompletedProcess(
+                observed.args, 1, observed.stdout, detail
+            )
     return runner(cwd, "branch", "-d", branch, check=False)
 
 
