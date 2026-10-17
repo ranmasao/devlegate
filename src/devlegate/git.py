@@ -63,7 +63,16 @@ def compare_and_swap_ref(
     *,
     runner: GitRunner = run_git,
 ) -> subprocess.CompletedProcess[str]:
-    """Update ``reference`` only if it still names ``expected_old``."""
+    """Update or delete ``reference`` only if it still names ``expected_old``.
+
+    Git uses a separate ``-d`` form for compare-and-delete.  Keep the empty
+    object ID as the caller-facing delete sentinel, but translate it here so
+    callers cannot accidentally invoke ``update-ref`` with an invalid SHA.
+    """
+    if object_id == "":
+        return runner(
+            cwd, "update-ref", "-d", reference, expected_old, check=False
+        )
     return runner(
         cwd, "update-ref", reference, object_id, expected_old, check=False
     )

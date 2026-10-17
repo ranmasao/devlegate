@@ -5699,6 +5699,24 @@ class ServiceEngine:
             raise WorkflowBlockedError("execution ref identity is not canonical")
         local_ref = f"refs/heads/{branch}"
         local_head = self._resolve_commit_runtime(self.repo, local_ref)
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, branch.removeprefix("devlegate/work/")
+        )
+        try:
+            registrations = manager._registrations()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise WorkflowBlockedError(
+                f"cannot verify worktree occupancy before retiring {branch}: {error}"
+            ) from error
+        occupied = [
+            path
+            for path, registration in registrations.items()
+            if registration.get("branch") == branch
+        ]
+        if occupied:
+            raise WorkflowBlockedError(
+                f"execution ref {branch} is attached to worktree {occupied[0]}"
+            )
         if local_head is not None:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
