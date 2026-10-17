@@ -673,3 +673,40 @@ Keep these focused, reuse fixtures and existing tests, avoid unrelated runtime r
 ### Disposition
 
 **REWORK REQUIRED**: move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Preserve all previous worker checkpoints, evidence, reviews and the current implementation; **do not integrate to `release/0.5.7` yet**. Next pass is principally real-Git owner tests and any precise defects they uncover, not another broad CLI/status redesign.
+
+## Reviewer decision — 2026-10-17, execution ec389cf0: REWORK REQUIRED
+
+**Execution:** `ec389cf04f364d97995dae751568bd89`; **exact checkpoint:** `8063d1e2cdb5fb97998b7fcd4aa6353ab32f72dc`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `4b2facd92a9ba7a3d7e238557c8d640ce84b76c1`. Preserve checkpoint, all durable reports and review history. **Do not integrate** this SHA into `release/0.5.7`.
+
+**Worker claim:** `incomplete`, with explicit remaining items for hosted-owner crash/restart + fair-convergence tests and local test/lint validation. [Exact GitHub Actions #39044330437](https://github.com/ranmasao/devlegate/actions/runs/39044330437) **FAILED: 11 failed, 1249 passed, 1 skipped**. Ruff was skipped due to pytest failure.
+
+### Positive changes worth preserving
+
+- New `_published_accepted_execution_report()` verifies that the accepted→done integration commit's **first parent equals persisted `accepted_integration.control_head`**, in addition to proving the published checkpoint and immutable report identity; strengthens post-publication recovery.
+- Intention to use exact-SHA atomic deletion for the local ref is appropriate, but its current implementation is incorrect and drops a safety guarantee. Keep the required SHA-CAS and lifecycle ownership constraints, not the exact implementation.
+- Existing separation between `workspace_cleanup_event` and aggregate `devlegate clean` inventory and the read-only public CLI is correct. Do not reintroduce public `sweep`, `--apply` or `--limit`.
+
+### Blocker 1 — the local branch deletion command is invalid (CI regression)
+
+In `src/devlegate/runtime.py::_retire_execution_refs()`, the new
+`compare_and_swap_ref(self.repo, local_ref, "", expected_head, ...)`
+passes an empty string as the **new object ID**. But `src/devlegate/git.py::compare_and_swap_ref()` directly invokes
+`git update-ref <ref> <new-oid> <old-oid>`, not `git update-ref -d`.
+Git therefore fails with **`fatal: : not a valid SHA1`**. The error is observed in all 11 failed tests, including zero-delta retry/recovery, control cross-layer and work-ref retirement. Merely changing test expectations would be incorrect. Implement a **real deletion operation** with exact expected-old SHA, correct argument shape, clear race handling and idempotence; confirm in local and CI tests on real Git.
+
+The new `test_local_execution_ref_cas_failure_retains_ref` also expects a generic error text although its injected failed subprocess returns `stderr="ref changed"`; make assertions validate the actual preservation and diagnostic contract, not mismatched error wording.
+
+### Blocker 2 — raw `git update-ref -d` bypasses Git's checked-out-branch safety
+
+This was independently **reproduced with real Git** in an isolated temporary repo:
+`git branch -d case` refuses to delete a branch used by another registered worktree; `git update-ref -d refs/heads/case <exact-SHA>` **succeeds**, leaving the worktree registration pointing at a missing branch. Therefore, simply replacing the empty-OID call with `git update-ref -d` fixes the syntax but can silently regress the previously provided `git branch -d` guard.
+
+**Requirement:** no deletion of a branch attached to **any** live worktree, including worktrees not owned by this Devlegate instance, regardless of an exact matching ref SHA. Check full Git worktree registrations/branch occupancy and preserve the intended Git branch-delete safety; handle adversarial movement/reuse of refs and external worktree attachment conservatively. Do not accept a check only for `manager.path` or an unlocked stale snapshot if Git could change between observation and deletion. Maintain per-ref SHA CAS where safely possible. Add a real Git regression with a branch checked out in a foreign/external worktree: attempted cleanup must refuse and preserve ref, directory, registration and reported reason. Add a positive test of exact local and remote deletion after proven safe retirement.
+
+### Blocker 3 — the core TASK-063 end-to-end acceptance is still absent
+
+The worker explicitly reports the following as unfinished, confirming the prior reviewer disposition: real-Git **hosted owner** tests for (1) published non-zero-delta accepted→done resource cleanup; (2) hard crash after full/partial worktree/local/remote ref deletion but before `accepted_integration=None`, followed by **fresh-owner** recovery without recreating temporary refs or blocking the next task; (3) round-robin clearing a **proven eligible later** ticket with an earlier blocked candidate; (4) legacy trailerless done evidence when sufficient and safe refusal when ambiguous, remote-outage re-observation and branch-only leftovers. Do not substitute direct helper calls on unintegrated prepared worktrees, mock-only tests or a persisted synthetic `retired` dict.
+
+### Disposition
+
+**REWORK REQUIRED.** Move the same TASK-063 `review → todo` on `devlegate/control`. Fix **real Git deletion syntax and occupancy safety first**, obtain green exact-checkpoint CI, then add focused positive hosted-owner recovery/convergence tests. Retain existing improvements; do not redesign CLI, create a follow-on ticket or modify the release branch.
