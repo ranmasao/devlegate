@@ -710,3 +710,24 @@ The worker explicitly reports the following as unfinished, confirming the prior 
 ### Disposition
 
 **REWORK REQUIRED.** Move the same TASK-063 `review → todo` on `devlegate/control`. Fix **real Git deletion syntax and occupancy safety first**, obtain green exact-checkpoint CI, then add focused positive hosted-owner recovery/convergence tests. Retain existing improvements; do not redesign CLI, create a follow-on ticket or modify the release branch.
+
+## Reviewer decision — 2026-10-17, execution 5f6b18cd: REWORK REQUIRED (incomplete claim)
+
+**Exact execution:** `5f6b18cdfa6a4c76bd3cc4fff29b2b2b`; **worker checkpoint:** `551cd8926d009778450885b28215c7fcaa73e73f`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `e025a3ac0b52fd5d86b150ff5b6cf08c9ebbb996`. The prior execution `608b0343b8f84e7bbace8eb078823838` failed its egress protocol, but its checkpoint `c6c73db8a6ebd57eccd5a623bb96372bfd3c2cd7` was successfully retained and reused by this execution. Do not delete these checkpoints or reports.
+
+### What was fixed
+
+- This retry **produced a valid `devlegate_report`** (`egress_ok=true`, process return 0), unlike the prior failed attempt. It reported `outcome=incomplete`, not `completed`.
+- The prior `git update-ref` empty new-OID failure was addressed in `c6c73db8` by translating empty new OID to `update-ref -d`. The current checkpoint replaces raw low-level deletion in `_retire_execution_refs()` with `delete_branch_if_unoccupied()` using `git branch -d`; this reinstates Git's checked-out-worktree safety. A real-Git test now creates a foreign registered checkout and confirms deletion is refused; keep it.
+- The per-ticket `workspace_cleanup_event` remains separate from the aggregate read-only `devlegate clean` inventory. Do not revert or redesign the CLI.
+- [Exact checkpoint CI #39051939287](https://github.com/ranmasao/devlegate/actions/runs/39051939287) was **in_progress** at reviewer inspection; do not report it as green before completion. Resolve all failures on this exact or subsequent checkpoint and run full Ruff.
+
+### Remaining blockers
+
+1. **Explicitly unfinished core acceptance.** The worker itself listed: `Add the broader hosted-owner end-to-end crash/restart, autonomous convergence, and legacy provenance tests required by TASK-063.` Existing helper tests, mock refusal and worktree occupancy alone do not prove owner-driven success. Implement focused **real Git + service owner** scenarios: a nonzero-delta published accepted→done ticket automatically loses worktree, registration, local and upstream refs while preserving product/control/report; crash after published done but before cleanup intent; restart after each partial deletion stage, including no disposable refs but persisted `accepted_integration`; safely eligible later T-2 actually cleaned while earlier T-1 blocked; remote-only leftover; legacy done without modern trailers when independently provable; refusal for ambiguous/dirty/foreign/reused refs and remote outages. Demonstrate next ticket remains schedulable. See the authoritative existing checklist; do not create a new ticket.
+2. **SHA race not fully resolved.** The current implementation resolves `local_ref`, checks that it equals `expected_head`, re-resolves just before calling `git branch -d`, then deletes by *name*. Git's `branch -d` protects checked-out worktrees, but there is no atomic expected-old-SHA condition on that deletion: another actor could move the ref after the check. This is a narrower remaining race than the previous unsafe `update-ref -d` alternative. Do not simply return to raw `update-ref -d` (which ignores worktree occupancy). Work out a conservative deletion protocol that preserves **both** exact identity and registration/occupancy protection; regression-test a ref move in the recheck→delete window with actual Git where possible. A failed attempt must leave the new ref untouched and show a blocked diagnostic.
+3. **Do not accept `incomplete`.** Even a green CI on the existing tests is not evidence that these explicitly missing acceptance paths work. A future `completed` claim should include reproducible end-to-end proof and full exact-SHA CI.
+
+### Disposition
+
+**REWORK REQUIRED:** move the **same TASK-063** from `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Preserve all code progress and prior review history. Keep `release/0.5.7` unchanged, retain autonomous read-only CLI contract, and concentrate on safety + real hosted-owner verification rather than further CLI churn.
