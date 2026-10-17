@@ -233,6 +233,41 @@ def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
     assert restarted._state["workspace_cleanup_cursor"] == "T-2"
 
 
+def test_workspace_cleanup_status_is_aggregate_not_last_bounded_pass(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    for ticket_id in ("T-1", "T-2", "T-3"):
+        ExecutionWorkspaceManager(
+            engine.repo, engine.execution_worktree_root, ticket_id
+        ).prepare(base)
+
+    engine._reconcile_workspace_backlog()
+
+    status = engine.workspace_cleanup_status()
+    assert status["status"] == "partial"
+    assert status["scan_complete"] is True
+    assert status["inventory"] == {"candidates": 3, "remaining": 3}
+    assert {item["ticket_id"] for item in status["decisions"]} == {
+        "T-1",
+        "T-2",
+        "T-3",
+    }
+
+
+def test_workspace_cleanup_status_never_claims_clean_before_first_scan(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    engine.status_view()
+
+    status = engine.workspace_cleanup_status()
+
+    assert status["status"] == "initializing"
+    assert status["scan_complete"] is False
+
+
 def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

@@ -1156,7 +1156,12 @@ class ServiceEngine:
                 raise DevlegateError("service status view is not ready")
             cleanup = snapshot.workspace_cleanup
             if cleanup is None:
-                return {"status": "clean", "decisions": []}
+                return {
+                    "status": "initializing",
+                    "scan_complete": False,
+                    "decisions": [],
+                    "reason": "workspace inventory has not been observed yet",
+                }
             return json.loads(json.dumps(cleanup))
 
     def _submit_operator_command(
@@ -2303,7 +2308,9 @@ class ServiceEngine:
                 **({"reconciliation": reconciliation} if reconciliation else {}),
             )
 
-    def _workspace_cleanup_cohort(self, limit: int) -> list[dict[str, str]]:
+    def _workspace_cleanup_cohort(
+        self, limit: int, *, rotate: bool = True
+    ) -> list[dict[str, str]]:
         """Capture a bounded, independently observed execution-resource set."""
         self._workspace_cleanup_observation_error = None
         registrations = ExecutionWorkspaceManager(
@@ -2401,7 +2408,7 @@ class ServiceEngine:
         if not keys:
             return []
         cursor = self._state.get("workspace_cleanup_cursor")
-        if isinstance(cursor, str) and cursor in keys:
+        if rotate and isinstance(cursor, str) and cursor in keys:
             start = (keys.index(cursor) + 1) % len(keys)
             keys = keys[start:] + keys[:start]
         return [candidates[key] for key in keys[:limit]]
@@ -3166,6 +3173,25 @@ class ServiceEngine:
         }
         if phase not in valid_phases:
             raise DevlegateError(f"invalid state phase: {phase}")
+        cleanup = state.get("workspace_cleanup")
+        if cleanup is not None:
+            if not isinstance(cleanup, dict) or cleanup.get("status") not in {
+                "initializing",
+                "clean",
+                "partial",
+                "blocked",
+                "reconciled",
+                "applied",
+            }:
+                raise DevlegateError("invalid workspace cleanup status")
+            if "scan_complete" in cleanup and not isinstance(
+                cleanup.get("scan_complete"), bool
+            ):
+                raise DevlegateError("invalid workspace cleanup scan state")
+            if "decisions" in cleanup and not isinstance(
+                cleanup.get("decisions"), list
+            ):
+                raise DevlegateError("invalid workspace cleanup decisions")
         reconciliation = state.get("reconciliation")
         if reconciliation is not None:
             if not isinstance(reconciliation, dict) or reconciliation.get(
@@ -4750,16 +4776,27 @@ class ServiceEngine:
             ValueError,
             WorkflowBlockedError,
         ) as error:
-            self._state["workspace_cleanup"] = {
-                "status": "blocked",
-                "reason": str(error) or error.__class__.__name__,
-            }
-            self._save_state(
-                str(self._state["phase"]),
-                workspace_cleanup=self._state["workspace_cleanup"],
-                workspace_cleanup_cursor=self._state.get("workspace_cleanup_cursor"),
-            )
-            self._refresh_published_status()
+            self._publish_workspace_cleanup_inventory()
+            if not isinstance(self._state.get("workspace_cleanup"), dict):
+                self._state["workspace_cleanup"] = {
+                    "status": "blocked",
+                    "scan_complete": False,
+                    "decisions": [
+                        {
+                            "ticket_id": "__inventory__",
+                            "status": "blocked",
+                            "reason": str(error) or error.__class__.__name__,
+                        }
+                    ],
+                }
+                self._save_state(
+                    str(self._state["phase"]),
+                    workspace_cleanup=self._state["workspace_cleanup"],
+                    workspace_cleanup_cursor=self._state.get(
+                        "workspace_cleanup_cursor"
+                    ),
+                )
+                self._refresh_published_status()
             _log(f"automatic workspace reconciliation deferred: {error}")
             return
         decisions = result.get("decisions", [])
@@ -4773,17 +4810,73 @@ class ServiceEngine:
             ]
             if selected:
                 self._state["workspace_cleanup_cursor"] = selected[-1]
-            self._state["workspace_cleanup"] = {
-                "status": "reconciled",
-                "limit": 1,
+        self._publish_workspace_cleanup_inventory(decisions)
+
+    def _publish_workspace_cleanup_inventory(
+        self, last_decisions: list[object] | None = None
+    ) -> None:
+        """Publish a complete owner-side view after a bounded mutation pass.
+
+        The mutation pass is intentionally small for scheduler fairness.  The
+        read-only inventory is separate, so its result cannot be mistaken for
+        a global clean result merely because one candidate was processed.
+        """
+        previous = self._state.get("workspace_cleanup")
+        try:
+            targets = self._workspace_cleanup_cohort(10000, rotate=False)
+            result = self.cleanup_workspaces(
+                apply=False,
+                limit=max(1, len(targets)),
+                targets=targets,
+            )
+            decisions = result.get("decisions", [])
+            blocked = [
+                item
+                for item in decisions
+                if isinstance(item, dict) and item.get("status") == "blocked"
+            ]
+            status = "clean" if not decisions else ("blocked" if blocked else "partial")
+            cleanup: dict[str, object] = {
+                "status": status,
+                "scan_complete": not any(
+                    isinstance(item, dict) and item.get("ticket_id") == "__remote__"
+                    for item in decisions
+                ),
+                "inventory": {
+                    "candidates": len(targets),
+                    "remaining": len(decisions),
+                },
                 "decisions": decisions,
             }
+            if last_decisions:
+                cleanup["last_pass"] = last_decisions
+        except (
+            ExecutionWorkspaceError,
+            GitAncestryError,
+            GitObservationError,
+            OSError,
+            subprocess.SubprocessError,
+            ValueError,
+            WorkflowBlockedError,
+        ) as error:
+            cleanup = {
+                "status": "blocked",
+                "scan_complete": False,
+                "inventory": {"candidates": 0, "remaining": 0},
+                "decisions": [
+                    {
+                        "ticket_id": "__inventory__",
+                        "status": "blocked",
+                        "reason": str(error) or error.__class__.__name__,
+                    }
+                ],
+            }
+        if cleanup != previous:
+            self._state["workspace_cleanup"] = cleanup
             self._save_state(
                 str(self._state["phase"]),
-                workspace_cleanup_cursor=self._state.get(
-                    "workspace_cleanup_cursor"
-                ),
-                workspace_cleanup=self._state["workspace_cleanup"],
+                workspace_cleanup_cursor=self._state.get("workspace_cleanup_cursor"),
+                workspace_cleanup=cleanup,
             )
             self._refresh_published_status()
 
