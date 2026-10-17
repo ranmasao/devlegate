@@ -144,34 +144,42 @@ after published `done` and before queue/admission; the next run reconstructs
 remaining work by reconciliation. Avoid an oversized general-purpose
 cleanup scheduler.
 
-For scheduled automatic passes, `--limit N` is a **per-pass work budget**,
-not a lifetime cap on the number of candidates ever reclaimed. Continue
-later passes. For an operator RPC, keep request deduplication and truthful
-partial/replay reporting as applicable; a replay must not invent completed
-results or inadvertently touch an unauthorized new execution generation.
+For automatic passes, the **internal** bounded scan/processing budget is
+a per-pass fairness and latency control, never a lifetime cap. The owner
+must progress through all safely eligible resources, retry blocked resources
+later, and continue normal ticket scheduling. Do not expose internal pass
+budgets, cursor or candidate cohort as public cleanup CLI options.
 
-## CLI / owner IPC surface: `devlegate clean`
+## CLI / owner IPC surface: `devlegate clean` — user decision 2026-10-17
 
-Replace the provisional public `cleanup-workspaces` command with a small
-`clean` **command group**. The first-class UX is automatic service cleanup;
-CLI commands are optional for inspection and immediate maintenance:
+**Cleanup is autonomous. The CLI is for observation, NOT for manually
+advancing the reconciler.** Replace the provisional public
+`cleanup-workspaces` and `clean sweep` interfaces as follows:
 
-- `devlegate clean status`: read-only inventory of eligible, removed,
-  blocked and remaining **worktrees + local and remote branches**, with
-  reasons and JSON/machine output using existing CLI conventions.
-- `devlegate clean sweep [--limit N]`: request one bounded reconciliation
-  pass **through the live service owner**; it must not create a second
-  mutable engine or require prior operator opt-in for background cleanup.
-- `devlegate clean ticket <TICKET-ID>`: optional narrow per-ticket repair/
-  diagnosis if straightforward; reuse the exact same engine, proofs,
-  authority and output rather than a second deletion path.
+- `devlegate clean` (no arguments): show a **read-only** owner-consistent
+  inventory and summary of remaining owned worktrees/registrations, local
+  and upstream disposable work refs, eligible / pending / blocked work,
+  reclaimed resources and clear reasons why specific remnants remain.
+  Reuse existing table/JSON output conventions.
+- `devlegate clean status`: optional explicit alias of exactly the same
+  read-only status operation if retaining a `clean` subcommand group is
+  useful; do not require `status` when `clean` alone suffices.
 
-Do not create separate unsafe `clean worktrees` and `clean branches`
-commands that bypass stage ordering or integration proof. Remove the
-unreleased `cleanup-workspaces` public command and update CLI/IPC/status,
-help, tests and docs consistently. A private internal reconciliation
-method may retain an implementation-specific name. Preserve read-only
-status purity and existing owner admission/replay semantics.
+**Do NOT expose `devlegate clean sweep`, public `--limit`, `--apply`,
+or a public mutating `clean-sweep` IPC method.** The older public
+`cleanup-workspaces` command must remain absent. No `clean ticket`
+mutation is required by this task. Remove obsolete CLI/parser/IPC/dispatch
+paths and update help, tests, docs. Internal method names may remain if
+useful; retire or isolate now-unused operator mutation receipts without
+damaging historical receipt recovery or existing runtime safety.
+
+The service itself owns discovery, scheduling, retries and bounded work;
+manual cleanup should not be needed even after crashes. The status path
+must make no filesystem/Git/ref/receipt mutations, must not race the live
+service owner via shared mutable observation fields, and must not report a
+clean state if a remote cannot be observed or an internal reporting budget
+only covered a subset. Use a published owner-safe snapshot or equivalent
+coherent read-only mechanism. Preserve safe failure diagnostics.
 
 ## Verification and acceptance tests
 
@@ -204,11 +212,19 @@ should pass in exact-checkpoint GitHub Actions. Required real-Git proofs:
 6. Git observation error, remote outage and `worktree remove` refusal
    after published `done` cannot undo completion or block the next ticket;
    retry after restart resolves when conditions are restored.
-7. `clean status` does not mutate SQLite receipts, Git refs or filesystem.
-   `clean sweep` is owner-routed, bounded per pass and safely repeatable;
-   status/IPC reporting is accurate after partial effects and restart.
-   Preserve drop, zero-delta, recovery, submodules, and previous targeted
-   regressions.
+7. `devlegate clean` (and optional `clean status`) are complete,
+   coherent, strictly read-only inventory operations; no public sweep,
+   apply or limit survives. Verify CLI help and IPC unknown-method refusal
+   for retired public methods, and read-only status while the hosted
+   owner is simultaneously reconciling (no shared mutable-state race).
+   Status/IPC reporting is accurate after partial effects, unreachable
+   upstream, restart and internal pagination. Preserve drop, zero-delta,
+   recovery, submodules and previous targeted regressions.
+8. With a **blocked earliest candidate** and at least one **fully proven
+   later eligible candidate**, repeated owner-hosted automatic passes must
+   really remove the later worktree and both branches (not merely rotate a
+   cursor). A fresh hosted owner after restart must continue progressing
+   with no manual request; unchanged blocked work cannot monopolize it.
 
 **Acceptance means observable convergence:** on a safely proven completed
 execution there are no remaining `work/<ticket>` local/upstream branches,
@@ -231,9 +247,10 @@ global Git GC, log/cache cleanup or unbounded sweeping.
 
 The dated notes below explain past worker checkpoints and earlier reviewer
 decisions. Their instructions to preserve worker branches, require
-operator-only historical cleanup, expose `cleanup-workspaces`, or bind
-the aggregate lifetime deletion count to a manually admitted cleanup
-request are **obsolete under the 2026-10-17 user decision above**.
+operator-only historical cleanup, expose `cleanup-workspaces` / `clean
+sweep`, or bind the aggregate lifetime deletion count to a manually
+admitted cleanup request are **obsolete under the 2026-10-17 user decision
+above**.
 Preserve their technical observations as regression context, not as
 the current product requirements.
 
@@ -454,3 +471,83 @@ This checkpoint changes CLI/IPC/runtime and adds mostly primitive/dispatcher tes
 ### Disposition
 
 **REWORK REQUIRED**. Return TASK-063 from `review` to `todo` and preserve its exact worker checkpoint. **Do not integrate into `release/0.5.7` yet.** Treat the public CLI rename as COMPLETE; focus next pass on starvation-free autonomous convergence, truthful remote-unavailable status, and real owner/startup recovery tests. CI must pass on the final reworked SHA.
+
+## Reviewer decision — 2026-10-17, execution b7245538: REWORK + CLI CONTRACT CORRECTION
+
+**Execution:** `b724553841444ed5a26fd5d95325cf84`; **exact checkpoint:**
+`3b0d961fd8e961fc36485e9b9a241d6156d00bf4`; **product base:**
+`bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:**
+`692c8fdc56938336b03b6cc694c6f81f3d41ca6d`.
+Worker reported `completed`, `remaining=[]`. Preserve all checkpoint
+work, evidence, reports and prior reviews. Do not publish product.
+
+### Verified improvements worth retaining
+
+- New `workspace_cleanup_cursor` persists the last processed candidate;
+  `_workspace_cleanup_cohort` rotates the sorted registry/refs inventory
+  and can advance beyond a blocked earliest candidate after restart.
+- Failed `ls-remote` now produces an explicit
+  `{"ticket_id":"__remote__", "status":"blocked"}` diagnostic, rather
+  than silently claiming no remote branches exist.
+- The earlier checkpoint already removed the **public**
+  `cleanup-workspaces` CLI, introduced `clean status` and `clean sweep`,
+  and implemented basic exact-ref retirement. Preserve the safe worktree/ref
+  removal primitives and service-owner architecture.
+
+### Blocking review findings
+
+**1. Authoritative CLI contract revised by the user (above).**
+`clean sweep --limit N` is unnecessary: an autonomous reconciler should
+converge without operator-triggered mutation. Remove public `clean sweep`,
+`--limit`, `--apply` and public mutating `clean-sweep` IPC; implement
+`devlegate clean` as read-only status (optional `clean status` alias).
+Internal bounded/fair reconciliation must remain. Do not bring back
+`cleanup-workspaces` or expose low-level branch/worktree deletion commands.
+The existing mutating RPC/receipt machinery may be retired or isolated if
+not otherwise needed, without destroying historical receipts.
+
+**2. Round-robin regression proves cursor movement, NOT backlog convergence.**
+`test_automatic_workspace_cleanup_rotates_past_blocked_candidate` creates
+two *unintegrated* worktrees, verifies both remain, and checks only that
+cursor changes from T-1 to T-2 and survives `Devlegate` reconstruction.
+There is no positive case in which T-1 is blocked while an **integrated,
+proven, safe T-2** actually loses worktree + local/remote branches. Nor is
+there an owner restart after publication-before-cleanup or after partial
+ref deletion. Add focused real-Git/owner integration coverage required by
+the updated acceptance criteria: cleanup of a real published done
+generation, protected blocked neighbor, actual after-crash convergence
+without prior cleanup intent, accurate inventory after partial cleanup,
+and legacy provable/ambiguous history.
+
+**3. Read-only IPC `clean status` currently runs repository inventory via
+`dispatch_read_only -> engine.workspace_cleanup_status ->
+cleanup_workspaces(apply=False)` on the IPC connection path.**
+This reaches `_workspace_cleanup_cohort`, which writes the shared
+`_workspace_cleanup_observation_error` field and observes mutable Git
+state while the hosted scheduler also mutates/uses those facts. The
+docstring "owner-consistent" is not sufficient synchronization.
+Avoid status/owner races by publishing a coherent immutable owner snapshot
+or proper read-only synchronization with revalidation; do not persist
+receipts or mutate Git from status. Test concurrency, a remote outage,
+and no false 'clean' for partial/unobservable inventory.
+
+**4. Exact-checkpoint CI is RED.**
+[GitHub Actions #39028536778](https://github.com/ranmasao/devlegate/actions/runs/39028536778):
+**1254 passed, 1 failed, 1 skipped**, Ruff skipped after failed pytest.
+The single failure is
+`tests/test_worker_process.py::test_worker_process_group_isolated_and_interrupts_descendant[operator_abort]`:
+the test sees an existing but as-yet-empty `processes.json` then
+`json.loads` raises `JSONDecodeError`. The worker process-group module
+was not modified in this checkpoint; this appears consistent with a
+pre-existing test timing race, **not demonstrated cleanup regression**.
+Avoid unrelated redesign to satisfy this review; rerun full authoritative
+CI for the final revised SHA, report persistent failures transparently.
+
+### Disposition
+
+**REWORK REQUIRED.** Move this SAME TASK-063 `review -> todo`;
+do not accept/integrate `3b0d961fd8e9`. The revised authoritative
+functional spec above now explicitly supersedes historical suggestions
+of `clean sweep` and user-visible limits. The automatic clean-up engine
+still needs end-to-end safety, progress and recovery proofs; a green
+checkpoint CI alone would not settle them.
