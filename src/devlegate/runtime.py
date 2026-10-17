@@ -5723,9 +5723,9 @@ class ServiceEngine:
         if local_head is not None:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
-            # Recheck the exact observed head before using Git's safe branch
-            # deletion command.  Unlike raw update-ref deletion, this refuses
-            # branches attached to any registered worktree.
+            # Recheck the exact observed head before the helper's compare-
+            # and-delete transaction.  The helper also rechecks all Git
+            # worktree registrations so foreign checkouts are retained.
             if self._resolve_commit_runtime(self.repo, local_ref) != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
             removed = delete_branch_if_unoccupied(

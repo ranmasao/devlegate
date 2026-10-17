@@ -215,13 +215,28 @@ def delete_branch_if_unoccupied(
     expected_head: str | None = None,
     runner: GitRunner = run_git,
 ) -> subprocess.CompletedProcess[str]:
-    """Delete a local branch with Git's occupancy protection and identity check.
+    """Delete a local branch only when its identity and occupancy are safe.
 
-    ``git branch -d`` performs the final worktree occupancy check.  The
-    explicit identity observation closes the common stale-target case before
-    that effectful command; callers must still treat a non-zero result as a
-    refusal and re-observe the ref before retrying.
+    ``git branch -d`` protects checked-out branches, but it has no expected-old
+    object id and can therefore delete a moved branch between two observations.
+    Observe every registered worktree first, then use Git's compare-and-delete
+    ref transaction.  Callers must treat a non-zero result as a refusal and
+    re-observe before retrying.  The repository/service lock serializes normal
+    Devlegate mutations; the fresh occupancy observation also protects against
+    worktrees belonging to another instance.
     """
+    registrations = runner(cwd, "worktree", "list", "--porcelain", check=False)
+    if registrations.returncode:
+        return registrations
+    branch_ref = f"refs/heads/{branch}"
+    for line in registrations.stdout.splitlines():
+        if line.startswith("branch ") and line[7:].strip() == branch_ref:
+            return subprocess.CompletedProcess(
+                registrations.args,
+                1,
+                registrations.stdout,
+                f"local branch {branch} is attached to a worktree",
+            )
     if expected_head is not None:
         observed = runner(
             cwd,
@@ -235,9 +250,22 @@ def delete_branch_if_unoccupied(
             return subprocess.CompletedProcess(
                 observed.args, 1, observed.stdout, detail
             )
-    # Keep Git's worktree-occupancy guard.  ``--`` also makes the canonical
-    # branch name an operand, not an option, if this helper is reused.
-    return runner(cwd, "branch", "-d", "--", branch, check=False)
+    # This is the effectful operation.  Unlike ``branch -d``, update-ref can
+    # require the exact expected old SHA, so a moved/reused ref is preserved.
+    if expected_head is None:
+        observed = runner(
+            cwd,
+            "rev-parse",
+            "--verify",
+            f"{branch_ref}^{{commit}}",
+            check=False,
+        )
+        if observed.returncode:
+            return observed
+        expected_head = observed.stdout.strip()
+    return runner(
+        cwd, "update-ref", "-d", branch_ref, expected_head, check=False
+    )
 
 
 def reset_hard(

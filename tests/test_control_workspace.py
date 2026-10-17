@@ -211,6 +211,49 @@ def test_local_execution_ref_move_after_checkout_retirement_is_preserved(tmp_pat
     assert resolve_commit(working, f"refs/heads/{manager.branch}") == moved
 
 
+def test_local_execution_ref_move_during_delete_cas_is_preserved(tmp_path, monkeypatch):
+    """A ref moved after the final read must not be deleted by name."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    manager.retire(workspace, base)
+
+    (working / "cas-race.txt").write_text("moved\n")
+    git(working, "add", "cas-race.txt")
+    assert git(
+        working,
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "move disposable ref during delete",
+    ).returncode == 0
+    moved = git(working, "rev-parse", "HEAD").stdout.strip()
+    original_runtime = engine._git_runtime
+    moved_during_delete = False
+
+    def interleave(repo, *args, **kwargs):
+        nonlocal moved_during_delete
+        if args[:3] == ("update-ref", "-d", f"refs/heads/{manager.branch}"):
+            assert git(working, "branch", "-f", manager.branch, moved).returncode == 0
+            moved_during_delete = True
+        return original_runtime(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", interleave)
+    with pytest.raises(WorkflowBlockedError):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert moved_during_delete
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") == moved
+
+
 def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
