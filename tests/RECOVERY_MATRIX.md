@@ -33,8 +33,9 @@ repositories, and worktrees.
 
 The product and control paths intentionally have different interruption
 authority. `resolve` and status/identity commands below are local observations
-(Tier 1); `merge` is a local checkout mutation (Tier 2). No command in this
-recovery path writes a remote repository (Tier 3).
+(Tier 1); `merge` is a local checkout/ref mutation (Tier 3). No command in this
+recovery path writes a remote repository; a fetch, if present, is a Tier 3
+remote read that also writes local objects and tracking refs.
 
 | Path | Before interruption | After interruption | Decision |
 | --- | --- | --- | --- |
@@ -50,7 +51,8 @@ the product target resolution before mutation and the post-interruption
 branch, worktree-root, status, HEAD, and target observations. They are local
 proofs, not effects. The product retry, when authorized, invokes the exact
 admitted commit object once; it cannot follow a tracking ref advanced from B
-to C.
+to C. The control path has no retry invocation: its interrupted merge is
+propagated, and the next fresh sync re-observes and performs one normal merge.
 
 The `pre-checkpoint` stage is an existing recovery input used by the engine's
 explicit interrupted-execution path; the normal worker path persists

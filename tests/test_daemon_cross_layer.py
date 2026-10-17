@@ -486,7 +486,9 @@ def test_merge_pending_retries_product_merge_then_preserves_real_failure(
     assert merge_calls == 2
     assert engine._state["phase"] == "merge_pending"
 
-def test_merge_pending_retries_matching_control_merge(tmp_path, monkeypatch):
+def test_merge_pending_control_merge_is_not_retried_then_fresh_syncs(
+    tmp_path, monkeypatch
+):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     remote_url = git(
         engine.control_worktree, "remote", "get-url", "origin"
@@ -526,8 +528,14 @@ def test_merge_pending_retries_matching_control_merge(tmp_path, monkeypatch):
     stop_intent.request("operator_abort")
 
     assert engine.serve(stop_intent) == 0
-    assert merge_calls == 2
-    assert engine._state["phase"] == "idle"
+    assert merge_calls == 1
+    assert engine._state["phase"] == "merge_pending"
+    assert git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip() == control
+
+    monkeypatch.setattr(runtime, "_git", original_git)
+    fresh_control, fresh_remote = engine._sync_control()
+    assert fresh_control == target
+    assert fresh_remote == target
     assert git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip() == target
 
 def test_merge_pending_repeated_matching_git_interrupt_is_bounded(

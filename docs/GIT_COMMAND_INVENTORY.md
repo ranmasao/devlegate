@@ -91,15 +91,18 @@ applied to a read observation or `fetch`. After the change the transport trace
 is only `X(command)`, followed by the original interruption. No nested
 invocation is added for read, fetch, push, ref-update, or other mutation calls.
 
-The owning fast-forward transaction has an explicit, evidence-backed branch.
-For a product or control merge with durable `merge_pending` state, the normal
+The owning product fast-forward transaction has an explicit, evidence-backed
+branch. For a normal product merge with durable `merge_pending` state, the
 trace remains `F, R, A, M, R`. If `M` is interrupted, the recovery trace is
 `F, R, A, M(interrupted), R(HEAD), [M(retry), R(HEAD)]`: the retry is present
-only when fresh HEAD is exactly the persisted old revision; if HEAD is exactly
-the target, the transaction continues without a second merge; any other HEAD
-fails closed. The bracketed `M(retry)` is the only newly retained invocation.
-This proves the prior effect or its absence and does not infer absence from the
-interrupted subprocess alone.
+only when fresh HEAD is exactly the persisted old revision and the tracking
+ref still resolves to the admitted target; if HEAD is exactly the target, the
+transaction continues without a second merge; any other HEAD fails closed.
+The bracketed `M(retry)` is the only newly retained invocation. This proves
+the prior effect or its absence and does not infer absence from the interrupted
+subprocess alone. A control merge has no corresponding retry branch: its trace
+ends at `M(interrupted)`, and a later fresh control sync re-observes state
+before performing one normal merge.
 
 ## Source Delta
 
