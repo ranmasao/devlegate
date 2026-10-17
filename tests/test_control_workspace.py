@@ -439,10 +439,38 @@ def test_workspace_cleanup_reports_unregistered_owned_checkout_without_deleting(
         {
             "ticket_id": "T-1",
             "status": "skipped",
-            "reason": "workspace cleanup target identity is invalid",
+            "reason": (
+                "workspace has no Git registration; execution generation is unproven"
+            ),
         }
     ]
     assert (path / "unrelated.txt").read_text() == "retain\n"
+
+
+def test_workspace_cleanup_rejects_symlinked_work_root_without_traversal(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    external = tmp_path / "external-work"
+    external.mkdir()
+    (external / "T-1").mkdir()
+    (external / "T-1" / "retain.txt").write_text("retain\n")
+    work_root = engine.execution_worktree_root / "work"
+    work_root.parent.mkdir(parents=True, exist_ok=True)
+    work_root.symlink_to(external, target_is_directory=True)
+
+    result = engine.cleanup_workspaces(limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "__work_root__",
+            "status": "blocked",
+            "reason": (
+                "managed execution work root is symlinked; ownership is ambiguous"
+            ),
+        }
+    ]
+    assert (external / "T-1" / "retain.txt").read_text() == "retain\n"
 
 
 def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):

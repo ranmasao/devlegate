@@ -2317,11 +2317,20 @@ class ServiceEngine:
         registrations = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, "T-1"
         )._registrations()
-        work_root = (self.execution_worktree_root / "work").resolve()
+        # Check the configured path before resolving it. Resolving first would
+        # follow a substituted work root and make an external directory look
+        # like an owned execution tree.
+        work_root_path = self.execution_worktree_root / "work"
+        work_root_symlinked = work_root_path.is_symlink()
+        work_root = (
+            work_root_path if work_root_symlinked else work_root_path.resolve()
+        )
         candidates: dict[str, dict[str, str]] = {}
         for path, registration in sorted(
             registrations.items(), key=lambda item: str(item[0])
         ):
+            if work_root_symlinked:
+                continue
             try:
                 relative = path.relative_to(work_root)
             except ValueError:
@@ -2347,7 +2356,11 @@ class ServiceEngine:
         # A failed worktree removal can leave the owned checkout after Git has
         # already dropped its registration.  Only inspect direct children of
         # the configured work root; never walk or remove arbitrary directories.
-        if work_root.is_dir() and not work_root.is_symlink():
+        if work_root_symlinked:
+            self._workspace_cleanup_observation_error = (
+                "managed execution work root is symlinked; ownership is ambiguous"
+            )
+        elif work_root.is_dir():
             for path in sorted(work_root.iterdir(), key=str):
                 if not (path.is_dir() or path.is_symlink()):
                     continue
@@ -5846,12 +5859,33 @@ class ServiceEngine:
         if self._workspace_cleanup_observation_error:
             decisions.append(
                 {
-                    "ticket_id": "__remote__",
+                    "ticket_id": (
+                        "__work_root__"
+                        if self._workspace_cleanup_observation_error.startswith(
+                            "managed execution work root"
+                        )
+                        else "__remote__"
+                    ),
                     "status": "blocked",
                     "reason": self._workspace_cleanup_observation_error,
                 }
             )
         for target in targets:
+            if target.get("head") == "" and all(
+                isinstance(target.get(field), str) and target[field]
+                for field in ("ticket_id", "path", "branch")
+            ):
+                decisions.append(
+                    {
+                        "ticket_id": target["ticket_id"],
+                        "status": "skipped",
+                        "reason": (
+                            "workspace has no Git registration; execution "
+                            "generation is unproven"
+                        ),
+                    }
+                )
+                continue
             if not all(
                 isinstance(target.get(field), str) and target[field]
                 for field in ("ticket_id", "path", "branch", "head")
