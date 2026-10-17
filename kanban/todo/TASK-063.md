@@ -424,3 +424,33 @@ One commit on top of `2961366529e1` changes only `src/devlegate/runtime.py` (+48
 Live GitHub inventory: 80 remote branches, 61 `devlegate/work/TASK-*` branches, **58** of those correspond to 59 current `done` tickets. Current checkpoint does not reduce this backlog. Historical local worktree count is not freshly observable from GitHub.
 
 **Disposition:** return `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` for implementation of the **revised authoritative scope**; do not accept/integrate or create a substitute follow-on ticket. This review does NOT require reverting the useful narrow fixes and does NOT mandate any immediate deletion of current remote branches without the proof machinery.
+
+## Reviewer decision — 2026-10-17, execution 8088cc2f: REWORK REQUIRED
+
+**Execution:** `8088cc2fae604f82a9fb6bd795c08a09`; **exact worker checkpoint:** `bf2b5f2826766b9c5803e2abefbcf1f3ed44a67c`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`; **control admission:** `a84d00355ea97d4e891ed62cefd277aa6db18986`. Preserve all execution artifacts, previous checkpoints, and existing useful implementation; return the SAME TASK-063 to `todo`.
+
+### Verified achievements
+
+- The **public CLI command `cleanup-workspaces` is removed**, replaced with `devlegate clean status` (read-only) and `devlegate clean sweep --limit N` (mutable owner IPC). `ipc_server.py` no longer publicly dispatches the old method. Internal Python `cleanup_workspaces` / `submit_cleanup_workspaces` and receipt method strings are implementation details; they are **not** a reason to keep the ticket open by themselves. Do not reintroduce the old public command.
+- Code now discovers execution worktree registrations **and** local/upstream branch refs, removes a validated worktree and then exact local and leased upstream worker refs. A best-effort automatic `_reconcile_workspace_backlog()` runs within idle scheduler iterations. Reuse this implementation and safety boundaries, rather than reverting to the earlier checkout-only task.
+- Exact SHA [GitHub Actions #39023207453](https://github.com/ranmasao/devlegate/actions/runs/39023207453) succeeded: **1253 passed, 1 skipped, coverage 78%, Ruff all checks passed**. No CI blocker.
+
+### Blocker 1 — deterministic background starvation on first blocked ticket
+
+`_reconcile_workspace_backlog()` always calls `cleanup_workspaces(apply=True, limit=1)`. `_workspace_cleanup_cohort(1)` sorts all discovered resource IDs lexicographically and takes `[:1]` **before** proving that candidate eligible; there is no durable cursor, rotation, exclusion/backoff, or drain continuation. Any retained `TASK-001` resource with blocked provenance will be selected and skipped again on **every hosted poll**, so `TASK-002` through `TASK-078` never get cleaned autonomously even if individually safe. `_save_state` also persists the same skipped decision each iteration, and the full remote ref inventory is re-fetched each time.
+
+This is not theoretical for the recorded backlog: the original TASK-001 accepted→done commit `b53a714aed2a99519ca9be23261f4cc58cfc7832` has parent `93d6c80b2c12d69d96cab296f39096658a91c43c` and **no modern trailers**, while its only durable report `14043d5cb75248ba9cc5b34f89f6859d` records `control_head=df88cdfd43fbd53e68a6c3a13a2057eb45cf501a`. The legacy branch of `_accepted_integration_commit_matches_report()` requires `parents[0] == report.control_head`; it therefore cannot accept *that exact report + integration commit*. Whether some stronger alternate historic proof is available should be evaluated, but a permanently blocked first candidate must NEVER starve other tickets.
+
+**Required:** bounded fair scanning (stable cursor/rotation or equivalent, with lifecycle-safe re-observation), no repeated expensive mutations/writes for unchanged blocked candidates, retry blocked items later, and deterministic real-Git test: blocked earliest candidate + later proven eligible candidates; repeated autonomous passes must actually retire later candidates, including local/upstream refs; restart must preserve eventual fairness.
+
+### Blocker 2 — upstream observation failures are silently turned into empty inventory
+
+`_workspace_cleanup_cohort()` executes `git ls-remote` but on any nonzero status uses `observed_lines=[]`. For a **remote-branch-only** residual and temporarily unavailable upstream, `clean status` and automatic cleanup can return **zero decisions**, falsely indistinguishable from a fully clean repository. This directly conflicts with the requirement that an unobservable remote is *pending/blocked*, not proven absent. Preserve best-effort scheduling, but surface the observation failure as a retriable diagnostic in per-resource/overall status, and re-observe when connectivity returns. Add remote-branch-only offline/recovery test.
+
+### Blocker 3 — scope acceptance is still not proven end-to-end
+
+This checkpoint changes CLI/IPC/runtime and adds mostly primitive/dispatcher tests. The new real-Git deletion test calls `manager.retire(workspace, base)` and `engine._retire_execution_refs(...)` **directly on an unintegrated prepared checkout**; it does not test a published accepted→done event or the automatic scheduler. There is no demonstrated real-Git test of startup rediscovery after publication-before-cleanup, restart between worktree/local/remote deletions, historical legacy successful cleanup, owner-routed `clean sweep` actually retiring proven resources, or `clean status` reporting each residual resource accurately after partial cleanup. Add narrow integration tests rather than broad refactoring; preserve dirty, mismatched, foreign-instance, active-worker, evidence, submodule and refusal safeguards.
+
+### Disposition
+
+**REWORK REQUIRED**. Return TASK-063 from `review` to `todo` and preserve its exact worker checkpoint. **Do not integrate into `release/0.5.7` yet.** Treat the public CLI rename as COMPLETE; focus next pass on starvation-free autonomous convergence, truthful remote-unavailable status, and real owner/startup recovery tests. CI must pass on the final reworked SHA.
