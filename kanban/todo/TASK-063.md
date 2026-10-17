@@ -1,193 +1,241 @@
 ---
 "type": "devlegate.ticket"
-"title": "Retire completed execution worktrees without losing recovery evidence"
+"title": "Automatically retire integrated execution Git resources"
 "depends_on": ["TASK-061"]
 ---
 
-## Milestone
+## Milestone and authoritative scope — revised 2026-10-17
 
-Devlegate 0.5.7 — execution workspace lifecycle and bounded disk usage.
+Devlegate 0.5.7. TASK-061 is already integrated. **This section and all
+sections before the historical review archive supersede conflicting older
+TASK-063 instructions**, including the old prohibitions on deleting work
+branches, operator-only historical cleanup, and the mandatory public
+`cleanup-workspaces` command. Keep the existing worker code, execution
+checkpoints, tests and review history as recoverable inputs; redesign and
+complete this SAME TASK-063, not a follow-on ticket. Do not modify 0.5.6.
 
-## Scheduling
+### Actual accumulation and motivation
 
-**Unblocked for the current 0.5.7 iteration.** The former 0.5.6 deferral
-has elapsed and TASK-061 is integrated. Reuse its workflow
-recovery/reconciliation boundary rather than introducing independent cleanup
-authority. Do not modify the historical 0.5.6 release line.
+On 2026-10-17, live GitHub inspection of `ranmasao/devlegate` showed
+**80 remote branches**, including **61 `devlegate/work/TASK-*` branches**;
+**58** of those belong to the **59** tickets currently in canonical
+`kanban/done`. The other three worker branches belong to not-yet-done
+TASK-063, TASK-073, TASK-079. The control branch also contains **62**
+`executions/TASK-*` folders; the latter are durable execution evidence,
+**not** targets for deletion.
 
-## Goal
+The prior 2026-10-12 dogfood-host inventory recorded almost **2 GiB** in
+`~/.local/state/devlegate/worktrees`, 43 registered Devlegate execution
+checkouts and 62 checkouts for a *different project instance*, with real
+submodule checkouts. These host counts are historical, not a fresh filesystem
+measurement. A stale external `/tmp/opencode/devlegate-parent` Git
+registration is **outside** the owned workspace root and must remain outside
+automatic cleanup.
 
-Reclaim on-disk Git worktree checkouts for tickets whose final result has
-been demonstrably accepted and integrated into the product branch, without
-erasing the committed execution history, provenance, report, or any recovery
-state still needed by Devlegate.
+**Legacy evidence matters:** the original TASK-001 control integration commit
+is titled `Devlegate integrate TASK-001` and lacks modern
+`Devlegate-Execution` and `Devlegate-Checkpoint` message trailers; its
+execution report and remote worker branch do exist. New cleanup should reclaim
+historical artifacts whenever independent, exact product/control/report/ref
+evidence safely proves eligibility; don't assume every old done transition
+has the current message format. Truly ambiguous cases stay blocked and are
+reported, not guessed or forcibly removed.
 
-Preserve the distinction between a *ticket's isolated working checkout*
-and the *durable execution evidence*. A completed ticket need not retain
-another physical checkout of the same repository indefinitely.
+## Required steady-state contract
 
-## Observed accumulation — 2026-10-12
+After Devlegate **proves** a particular execution's checkpoint was published
+into the authoritative product branch and its exact `accepted -> done`
+transition was published to canonical control, AND proves no live or pending
+execution/recovery/retry/reconciliation depends on it, that execution must
+eventually leave **none** of these transient resources:
 
-The dogfood host's `~/.local/state/devlegate/worktrees` contains sibling
-execution worktree directories grouped by project-instance identifier:
+1. No physical owned execution worktree, including submodule checkouts.
+2. No Git worktree registration for that execution.
+3. No corresponding **local** `refs/heads/devlegate/work/<ticket>` branch.
+4. No corresponding **upstream** `refs/heads/devlegate/work/<ticket>` branch.
+5. No equivalent disposable per-execution refs/checkouts introduced by this
+   implementation merely to avoid deleting the four resources above.
 
-    worktrees/<instance-key>/control
-    worktrees/<instance-key>/work/TASK-001
-    worktrees/<instance-key>/work/TASK-054
-    worktrees/<other-instance-key>/work/LAB-106
-    ...
+This covers **already completed historic tickets** as well as all new
+integrations. Normal operation must **not** require a CLI invocation,
+operator approval, dry-run review or a previously persisted cleanup request.
+Cleanup does NOT delete the published product commits, canonical Kanban
+history, durable execution reports, necessary immutable proof records, or
+unrelated refs/branches/worktrees. Object database GC and generic cache/log
+retention are outside this ticket. Distinguish genuine recovery/evidence refs
+(such as a special authorized recovery ref) from disposable work branches;
+never delete permanent evidence by a broad namespace pattern.
 
-The user observed nearly **2 GiB** accumulated under worktrees.
+An ambiguous or changed identity is **blocked** (with an actionable
+diagnostic), not an invitation to force deletion. An unsafe checkout must
+not be deleted, even if the ticket is `done`. Once ownership/evidence is
+again safely provable, it should be retried automatically.
 
-The observed inventory shows:
+## Automatic reconciliation, not a one-shot deletion hook
 
-- Devlegate's project has 43 registered `work/TASK-*` checkouts,
-  including many tickets already in `kanban/done` (e.g. TASK-001);
-- a separate rslab2 project has 62 `work/{LAB,DOC}-*` directories;
-- the worktrees are **siblings**, not recursively nested repositories;
-- the additional Git worktree checkouts share the repository's object
-  database, but each contains a real filesystem checkout and initialized
-  submodules that consume disk space;
-- a separate `/tmp/opencode/devlegate-parent` registration is marked
-  prunable by Git, but lies outside Devlegate's managed execution root
-  and must not be treated as an owned cleanup target by default.
+Implement **one shared, idempotent reconciliation mechanism** for live and
+historical cleanup. Determine missing work from **durable published product
+and canonical control facts plus actual Git registrations, local refs and
+freshly observed remote refs**, not only a `cleanup_pending` marker.
 
-The current `ExecutionWorkspaceManager.retire()` validates a known
-workspace then removes the registered Git worktree, but ordinary successful
-ticket completion does not call it. Existing retirement paths mainly
-include explicit `drop` and zero-delta historical execution handling.
-Thus normal operation retains checkouts after completed integration.
+It must run:
 
-## Scope and authoritative decision
+- **Immediately after** the durable product/control integration completes
+  (best effort, independently of whether service finalization crashes).
+- **At each service startup/restart**, autonomously, including a crash
+  immediately after the `done` commit and **before any cleanup intention
+  could be recorded**.
+- **Periodically / opportunistically in the running hosted service**, with a
+  bounded low-priority pass and fair yielding to normal ticket execution.
+  Continue additional passes until safe backlog is drained, and revisit
+  blocked/remote-unavailable cases later without hot-looping.
 
-1. Define an explicit **eligible for workspace retirement** state based
-   on durable, reconciled facts. In particular, the ticket must have
-   reached `done` through a proven accepted-integration transaction, and
-   all associated current execution work/worker/reconciliation/continuation
-   dependencies on its checkout must have been conclusively discharged.
-   Worker result `completed` or control status `review`/ `accepted`
-   alone are **not** sufficient.
-2. Validate exact instance root, ticket ID, registered Git worktree
-   location, branch identity and expected HEAD/provenance before any
-   deletion. Never operate on guessed paths or on any other project
-   instance's checkout.
-3. Verify no live/indeterminate execution owner, pending worker admission,
-   unfinished execution, unresolved `failed`/interrupted operation,
-   publication/accepted-integration transaction, retry, forced retry, or
-   reconciliation could still rely on the checkout. Ambiguous state must
-   fail closed and retain the tree.
-4. Reuse the existing `ExecutionWorkspaceManager` registration/path,
-   clean-tree and submodule safety checks, and the single serialized
-   mutation-owner model. Use the existing verified worktree-retirement
-   operation or a narrow equivalent. Do not use bare `rm -rf`,
-   global `git worktree prune`, speculative orphan cleanup or a
-   second background actor with independent mutation authority.
-5. Do **not** delete committed history, execution report artifacts,
-   control history, evidence refs, or needed work branches as a side
-   effect of removing the physical checkout. Branch-ref retirement,
-   Git object garbage collection and retention policy are separate
-   decisions and must not be silently coupled to disk checkout cleanup.
-6. Skip dirty/unregistered/mismatched/symlinked/modified trees rather
-   than forcing deletion; surface the exact blocked reason. Be careful
-   that initialized submodules require proper Git-aware worktree
-   retirement, not recursive filesystem unlinking.
+Use the existing serialized service owner, instance lock and mutation
+authority; a background reconciliation job is logical service maintenance,
+**not** an independent process or actor mutating the same repository
+concurrently. Background failures cannot roll back a published integration,
+leave it perpetually pending, crash the hosted owner, or prevent another
+runnable ticket; record and retry them conservatively.
 
-## Lifecycle and crash consistency
+**Discover resource-only leftovers.** A branch can remain locally or remotely
+even after its worktree has already been removed; enumerate and evaluate
+those branches independently of live worktree registrations. Also detect
+stale registrations and interrupted partial removals without traversing or
+deleting arbitrary directories.
 
-- Trigger safe retirement after a committed/observable accepted-to-done
-  integration, not in the middle of the product/control Git transaction.
-- If a service restart or crash occurs between proving eligibility and
-  actually retiring the checkout, resume or re-evaluate safely under the
-  owner lock. Do not retire a checkout whose status or identity changed.
-- A completed retirement should be idempotent. Missing registration
-  and absent path for an already retired ticket are not a failure.
-- Pending, failed or stale cleanup attempts must not bring down a hosted
-  Devlegate service or block unrelated runnable tickets, but must never
-  conceal ownership/state corruption as a successful cleanup.
-- Keep explicit `drop`, zero-delta retirement and recovery semantics
-  intact. Do not turn `review` or interrupted work into disposable state.
-- Provide concise observability for retired/skipped/blocked decisions,
-  including evidence of bytes or worktrees reclaimed where practical.
+## Exact proof and deletion stages
 
-## Existing historical worktrees
+- Scope to the configured repository, authoritative product/control branches,
+  project instance and canonical `devlegate/work/<ticket>` identity. Prove
+  the exact execution generation, accepted-to-done control lineage,
+  checkpoint presence in the freshly observed **published** product
+  ancestry, immutable report identity, actual registered path and/or
+  branch SHA, and absence of unsettled owners. Do not infer ownership from
+  a matching name or age. Do not delete another project's instance.
+- Handle legacy done generations with stronger equivalent evidence where
+  available, rather than depending unconditionally on modern commit trailers.
+  If such evidence is insufficient, report exactly what is missing and retain
+  the resource. Never mistake an older done event for proof about a newer
+  execution of the same ticket ID.
+- Safely retire the **registered clean worktree first**, using existing
+  `ExecutionWorkspaceManager` / submodule and symlink protections; then
+  release its **local branch** after rechecking its exact SHA, that no
+  worktree still uses it and that its commit is proven integrated; then
+  release the **remote branch** with a fresh exact-ref observation and a
+  compare-and-delete lease against its expected SHA. The precise order of
+  the final two stages may vary, but each stage must be independently safe,
+  re-observed and retryable. No blind `git branch -D`, speculative
+  `git push --delete`, bare `rm -rf`, global `git worktree prune`,
+  arbitrary Git GC or broad remote namespace deletion.
+- Absent path/registration/local ref/remote ref is a **completed substep**,
+  provided no conflicting ownership evidence exists. A changed/mismatched
+  branch or dirty/unknown/occupied/symlinked checkout is **blocked**,
+  retains data and leaves other cleanup work runnable. A remote outage is
+  retriable, not evidence that a branch is absent.
+- Preserve accurate observability per *resource* and ticket: discovered,
+  eligible, removed, already absent, blocked with reason, pending retry.
+  Count reclaimed resources accurately; do not misreport completion just
+  because one substep succeeded.
 
-Provide a **conservative, bounded reconciliation sweep** for already
-completed tickets whose worktrees were never retired. It must use the
-same eligibility/provenance checks as new retirements and must not infer
-eligibility merely from a directory name, an old timestamp, or the
-presence of `kanban/done` without appropriate integration evidence.
+Git cannot atomically remove all these resources. A durable queue/progress
+receipt **may** help diagnostics, but must **not** be the only mechanism
+for rediscovery or resumption. A process may stop after any effect, including
+after published `done` and before queue/admission; the next run reconstructs
+remaining work by reconciliation. Avoid an oversized general-purpose
+cleanup scheduler.
 
-Expose a read-only list / dry-run summary of eligible and skipped
-worktrees before applying the historical cleanup. The initial historical
-sweep should be operator-initiated or explicitly enabled by an operator;
-do not silently attempt to delete the entire backlog on first service
-startup.
+For scheduled automatic passes, `--limit N` is a **per-pass work budget**,
+not a lifetime cap on the number of candidates ever reclaimed. Continue
+later passes. For an operator RPC, keep request deduplication and truthful
+partial/replay reporting as applicable; a replay must not invent completed
+results or inadvertently touch an unauthorized new execution generation.
 
-Do not discover or clean unrelated `/tmp/opencode` worktrees or other
-project instance keys. Any stale external Git registration is a separate
-ownership question.
+## CLI / owner IPC surface: `devlegate clean`
 
-## Worker test scope — focused verification, full CI afterward
+Replace the provisional public `cleanup-workspaces` command with a small
+`clean` **command group**. The first-class UX is automatic service cleanup;
+CLI commands are optional for inspection and immediate maintenance:
 
-This cleanup touches ownership-sensitive Git worktree retirement. Use `tests/TEST_BOUNDARIES.md` and `tests/TEST_PLACEMENT.md` to keep direct semantic proofs and required real-worktree/submodule companions. Preferred local commands:
+- `devlegate clean status`: read-only inventory of eligible, removed,
+  blocked and remaining **worktrees + local and remote branches**, with
+  reasons and JSON/machine output using existing CLI conventions.
+- `devlegate clean sweep [--limit N]`: request one bounded reconciliation
+  pass **through the live service owner**; it must not create a second
+  mutable engine or require prior operator opt-in for background cleanup.
+- `devlegate clean ticket <TICKET-ID>`: optional narrow per-ticket repair/
+  diagnosis if straightforward; reuse the exact same engine, proofs,
+  authority and output rather than a second deletion path.
 
-```sh
-./dev test -q tests/test_execution_workspace_submodules.py tests/test_git.py
-./dev test -q tests/test_control_workspace.py -k "worktree or branch or drop or cleanup"
-./dev test -q tests/test_control_recovery.py -k "integrat or retirement or accepted or drop"
-./dev lint
-```
+Do not create separate unsafe `clean worktrees` and `clean branches`
+commands that bypass stage ordering or integration proof. Remove the
+unreleased `cleanup-workspaces` public command and update CLI/IPC/status,
+help, tests and docs consistently. A private internal reconciliation
+method may retain an implementation-specific name. Preserve read-only
+status purity and existing owner admission/replay semantics.
 
-Add targeted positive/negative tests for new retirement and historical dry-run behavior in their narrow owning modules, including subprocess/host tests only where the actual service/restart boundary matters. These existing-file filters are initial regression selections, not substitutes for new behavior coverage.
+## Verification and acceptance tests
 
-**Do not run by default:** unfiltered `./dev test`, `./dev test-parallel`, `./dev check`, `./dev coverage`, full `test_cli_topology.py`, or unrelated packaging tests. GitHub Actions is responsible for full exact-checkpoint pytest with coverage and Ruff; the reviewer verifies its result. Report focused commands/results and any proof gaps without spending the worker execution budget repeatedly timing out on the entire suite. Do not modify/retire worktrees beyond the admitted project instance while testing.
+Use existing Git test fixtures, owner IPC and process-restart harnesses.
+Run focused local tests and lint; authoritative full tests/coverage/Ruff
+should pass in exact-checkpoint GitHub Actions. Required real-Git proofs:
 
-## Required regressions
+1. A properly published `accepted -> done` integration automatically
+   retires **worktree registration + checkout + local branch + upstream
+   branch**; durable report, product commit and canonical control history
+   remain and are queryable.
+2. Crash **right after `done` but before scheduling cleanup**; fresh
+   service startup discovers all leftovers and finishes without a recorded
+   pending cleanup. Also crash between worktree/local-ref/remote-ref
+   deletion, then restart. Exercise already-absent each-stage cases.
+3. After initial backlog discovery, autonomous bounded background passes
+   converge on old safe done tickets while normal execution remains
+   runnable. Include a remote-branch-only orphan and a
+   locally-registered-worktree-only remainder.
+4. For a historic done ticket, verify actual safely authorized deletion
+   in a live owner pass, not just a direct `manager.retire()` call. Test a
+   **legacy done transition without modern trailers** where equivalent
+   exact evidence suffices; and a legacy/foreign/mismatched case where
+   deletion must be refused.
+5. A completed but still-active/recoverable `review`/`accepted`/`todo`
+   execution, a requeued ticket ID with a different execution generation,
+   wrong or moved remote ref, dirty/unregistered/symlinked worktree,
+   ambiguous root or foreign project instance must be preserved with
+   actionable reason.
+6. Git observation error, remote outage and `worktree remove` refusal
+   after published `done` cannot undo completion or block the next ticket;
+   retry after restart resolves when conditions are restored.
+7. `clean status` does not mutate SQLite receipts, Git refs or filesystem.
+   `clean sweep` is owner-routed, bounded per pass and safely repeatable;
+   status/IPC reporting is accurate after partial effects and restart.
+   Preserve drop, zero-delta, recovery, submodules, and previous targeted
+   regressions.
 
-1. Ticket remains `todo` or `review` after a checkpoint: retained.
-2. Ticket in `accepted` awaiting integration: retained.
-3. Fully proven accepted-to-done integration with a clean owned
-   checkout: retirement succeeds and Git registration disappears.
-4. Ordinary successful execution without accepted integration:
-   not eligible.
-5. Dirty, symlinked, unregistered or mismatched branch/HEAD:
-   fail closed with preserved evidence.
-6. Active, indeterminate or still-owned worker boundary and any
-   pending retry/reconciliation/recovery: checkout retained.
-7. A different instance's registered worktree and external/prunable
-   Git registrations: never touched.
-8. Process restart/crash during retirement and repeated cleanup:
-   idempotent with no duplicate or unsafe effects.
-9. Historical `done` inventory: dry run reports candidates/skips;
-   authorized sweep frees only proven-safe checkouts.
-10. Preserved execution reports, control provenance, commit/branch
-    evidence and ability to inspect historical changes after cleanup.
-11. Existing submodule preparation, zero-delta and explicit-drop
-    regressions remain green.
+**Acceptance means observable convergence:** on a safely proven completed
+execution there are no remaining `work/<ticket>` local/upstream branches,
+registered worktrees or owned checkout directories; no manual cleanup is
+needed even if the process stopped before recording intent. Verify legacy
+backlog actually shrinks and report uncleared unsafe artifacts explicitly.
+Successful CI alone does not establish this contract.
 
-## Acceptance criteria
+## Test budget and non-goals
 
-- Newly integrated `done` tickets no longer accumulate permanent
-  physical execution worktrees solely because of normal completion.
-- The dogfood historical accumulation can be reduced through the
-  bounded, proven-safe sweep without disrupting still-recoverable work.
-- No running worker or unresolved Git/provenance state is destroyed.
-- Retention of Git history and report evidence is independent of
-  physical workspace lifetime.
-- Runtime/status diagnostics accurately distinguish eligible,
-  retired, skipped and blocked cleanup decisions.
-- Full authoritative CI with tests, coverage, licensing and Ruff
-  passes on the exact final checkpoint.
+Use `tests/TEST_BOUNDARIES.md`, `tests/TEST_PLACEMENT.md` and targeted
+real-Git + service-owner tests; prefer focused `./dev test` selections and
+`./dev lint`. Do **not** repeatedly run unfiltered local suites; full
+exact-checkpoint verification belongs to CI. Do not rewrite 0.5.6,
+redesign worker cgroups or Git workspace topology, delete arbitrary
+`/tmp/opencode` registrations or other project's workspaces, or perform
+global Git GC, log/cache cleanup or unbounded sweeping.
 
-## Non-goals
+## Historical reviewer decisions (preserved; superseded where conflicting)
 
-- No 0.5.6 release changes, including TASK-054 and TASK-062.
-- No generic GC of Git objects, work branches, logs, caches or
-  user-owned temporary files.
-- No new worktree isolation layout or redesign of worker cgroups.
-- No migration machinery for unrelated historical runtime formats.
-- No cleanup of arbitrary Git worktree registrations outside the
-  exact managed project execution root.
+The dated notes below explain past worker checkpoints and earlier reviewer
+decisions. Their instructions to preserve worker branches, require
+operator-only historical cleanup, expose `cleanup-workspaces`, or bind
+the aggregate lifetime deletion count to a manually admitted cleanup
+request are **obsolete under the 2026-10-17 user decision above**.
+Preserve their technical observations as regression context, not as
+the current product requirements.
 
 ## Reviewer decision — 2026-10-17, execution e3ed8fab: REWORK REQUIRED
 
