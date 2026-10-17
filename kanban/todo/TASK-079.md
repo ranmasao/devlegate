@@ -57,3 +57,27 @@ If a new invariant truly requires independent service/restart topology, select o
 - Setup: another writer creates evidence concurrently; action: guarded create loses the race; expected: re-observe exact ref and either prove identical success or stop.
 - Setup: evidence pinned but worktree reset interrupted or failed; action: restart recovery; expected: preserve pin, reprove exact target and recover or block safely.
 - Setup: unauthorized or interrupted recovery mutation; action: execute; expected: no authority bypass or unproven replay.
+
+## Reviewer decision — 2026-10-17, execution 5619a162: REWORK REQUIRED
+
+**Exact execution:** `5619a16244ec4c00bc0851b3d138175d`; **checkpoint:** `e1dff2e043911766c9955aed4e64474dc9f7deff`; product base `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker reported `incomplete` solely because source checkout lacked `.venv`; no local focused pytest or Ruff verification was produced. Preserve this checkpoint, previous execution report and code improvements rather than restarting the implementation.
+
+### Independent exact-SHA CI evidence
+
+[GitHub Actions #39011531062](https://github.com/ranmasao/devlegate/actions/runs/39011531062) ran the full suite: **1241 passed, 1 skipped; coverage 78%**. The overall result is **failure**, exclusively because `./dev lint` reports `E501` at **`src/devlegate/recovery_transactions.py:68`**: the `raise ValueError(f"cannot observe control recovery evidence: {error}") from error` line is 93 characters (88 max). Fix this line, run focused Ruff, and require CI green at the new exact SHA.
+
+### Work to retain
+
+- `git.resolve_commit()` maps Git process/OS launch exceptions into `GitObservationError` rather than treating an observation failure as absent.
+- `reconcile_control_lineage()` uses typed commit-ref observation and guarded create-if-absent, re-observes the exact pin after attempted create, and refuses conflicting/unreadable values before control reset.
+- `repair_bound_workspace()` uses the same guarded evidence-ref creation and re-observation before branch replacement.
+- No architectural expansion or new general-purpose recovery framework is required.
+
+### Remaining scoped proof requirements
+
+1. **Fix Ruff E501.** The changed source must pass `./dev lint`. If `.venv` is missing in the worker checkout and tooling is available, first run `./dev setup` (documented in `docs/DEVELOPMENT.md`), then the ticket's targeted test commands and lint. If provisioning cannot be completed, state the precise impediment; do **not** spend the execution budget rerunning the full pytest/coverage suite. Full test and coverage proof belongs to GitHub CI.
+2. **Focused negative/race regression evidence** for the affected recovery transactions, not merely the single new launcher-OSError test: absent evidence -> guarded creation; exactly matching existing pin -> no overwrite; conflicting pin -> refusal before reset; unreadable/malformed Git observation -> no create/reset; lost create-if-absent race -> re-observe exact winner, accept only same SHA; failed observation after creation -> fail closed. Cover the analogous workspace evidence path, ensuring evidence is pinned before branch/worktree effect and never overwritten. Existing tests can be reused if they actually exercise these cases; state the exact test names and add focused cases for genuine gaps. Do not duplicate costly independent-service tests.
+3. **Executed Git command/effect trace** before/after for `reconcile_control_lineage` and `repair_bound_workspace`, including helper-internal `rev-parse`, `update-ref`, `reset`, worktree operations and repeated reads. New exact-ref re-observations add **Tier 1 local observations**; guarded `update-ref` remains **Tier 3 local mutation**. Distinguish remote I/O and locally mutating effects. Itemize added invocations and why each is needed; document established upstream owner/lock/shutdown boundaries and any unaddressed limitation without broad refactoring.
+4. Preserve all original admission, WAL, leases/CAS, evidence-before-reset, worker/recovery guarantees. Do not replace guarded ref updates by unconditional updates. Full CI including Ruff must pass on the exact final checkpoint. Completion of the worker's local full pytest is **not** required.
+
+**Reviewer disposition:** move the SAME `TASK-079` from `review` back to `todo`. Do not edit the worker branch, existing report, checkpoint or product history. TASK-080 and TASK-081 remain dependent until this ticket reaches `done`.
