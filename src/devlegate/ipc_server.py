@@ -69,21 +69,11 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     if request.method == "drop-candidates":
         return {"candidates": list(engine.published_drop_candidates_view())}
     if request.method == "clean-status":
-        limit = request.payload.get("limit", 100)
-        if (
-            set(request.payload) - {"limit"}
-            or not isinstance(limit, int)
-            or isinstance(limit, bool)
-        ):
+        if request.payload:
             raise IPCProtocolError(
-                "invalid_request", "clean status limit is invalid"
+                "invalid_request", "clean status does not accept options"
             )
-        if limit < 1 or limit > 1000:
-            raise IPCProtocolError(
-                "invalid_request",
-                "clean status limit must be between 1 and 1000",
-            )
-        return engine.workspace_cleanup_status(limit=limit)
+        return engine.workspace_cleanup_status()
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 
@@ -94,26 +84,6 @@ def dispatch_mutation(
     lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
-    if request.method == "clean-sweep":
-        if set(request.payload) not in ({"apply"}, {"apply", "limit"}):
-            raise IPCProtocolError(
-                "invalid_request", "workspace cleanup payload fields are invalid"
-            )
-        apply = request.payload["apply"]
-        limit = request.payload.get("limit", 100)
-        if not isinstance(apply, bool) or not isinstance(limit, int) or isinstance(
-            limit, bool
-        ):
-            raise IPCProtocolError(
-                "invalid_request", "workspace cleanup apply and limit are invalid"
-            )
-        if limit < 1 or limit > 1000:
-            raise IPCProtocolError(
-                "invalid_request", "workspace cleanup limit must be between 1 and 1000"
-            )
-        return engine.submit_cleanup_workspaces(
-            apply=apply, limit=limit, request_id=request.request_id
-        )
     if request.method in {"stop", "restart"}:
         allowed = {"force"}
         if set(request.payload) - allowed:

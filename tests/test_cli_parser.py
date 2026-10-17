@@ -61,6 +61,16 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert build_parser().parse_args(["retry", "T-1", "--force"]).force is True
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
 
+
+def test_clean_is_read_only_and_has_no_public_sweep_options():
+    parser = build_parser()
+    assert parser.parse_args(["clean"]).clean_command is None
+    assert parser.parse_args(["clean", "status"]).clean_command == "status"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["clean", "sweep"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["clean", "--limit", "1"])
+
 def test_bare_invocation_prints_help_without_starting_or_resolving(
     monkeypatch, capsys
 ):

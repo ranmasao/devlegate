@@ -1143,10 +1143,21 @@ class ServiceEngine:
         )
 
     def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
-        """Return a read-only, owner-consistent cleanup inventory."""
-        if limit < 1:
-            raise DevlegateError("workspace cleanup limit must be positive")
-        return self.cleanup_workspaces(apply=False, limit=limit)
+        """Return the last owner-published cleanup inventory.
+
+        Read-only IPC must not perform repository observation beside the owner
+        thread. The owner publishes this projection with its normal status
+        snapshot after each reconciliation pass.
+        """
+        del limit
+        with self._snapshot_lock:
+            snapshot = self._published_status_snapshot
+            if snapshot is None:
+                raise DevlegateError("service status view is not ready")
+            cleanup = snapshot.workspace_cleanup
+            if cleanup is None:
+                return {"status": "clean", "decisions": []}
+            return json.loads(json.dumps(cleanup))
 
     def _submit_operator_command(
         self,
@@ -4743,6 +4754,12 @@ class ServiceEngine:
                 "status": "blocked",
                 "reason": str(error) or error.__class__.__name__,
             }
+            self._save_state(
+                str(self._state["phase"]),
+                workspace_cleanup=self._state["workspace_cleanup"],
+                workspace_cleanup_cursor=self._state.get("workspace_cleanup_cursor"),
+            )
+            self._refresh_published_status()
             _log(f"automatic workspace reconciliation deferred: {error}")
             return
         decisions = result.get("decisions", [])
@@ -4768,6 +4785,7 @@ class ServiceEngine:
                 ),
                 workspace_cleanup=self._state["workspace_cleanup"],
             )
+            self._refresh_published_status()
 
     def _recover_accepted_integration(self) -> int:
         try:

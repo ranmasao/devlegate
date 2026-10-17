@@ -66,63 +66,31 @@ def test_control_reconciliation_dispatch_preserves_both_identities(running_serve
     assert observed == [(from_head, to_head, "id")]
 
 
-def test_workspace_cleanup_dispatch_is_explicit_and_bounded(running_server):
-    engine, _state, _server = running_server
-    observed = []
-    engine.submit_cleanup_workspaces = lambda *, apply, limit, request_id: (
-        observed.append((apply, limit, request_id))
-        or {"dry_run": not apply, "decisions": []}
-    )
-
-    response = dispatch_mutation(
-        engine,
-        _request("clean-sweep", {"apply": False, "limit": 3}),
-    )
-
-    assert response == {"dry_run": True, "decisions": []}
-    assert observed == [(False, 3, "id")]
-
-
-def test_workspace_cleanup_dispatch_rejects_unbounded_limit(running_server):
+def test_clean_sweep_is_not_a_public_mutation(running_server):
     engine, _state, _server = running_server
 
-    with pytest.raises(IPCProtocolError, match="between 1 and 1000"):
-        dispatch_mutation(
-            engine,
-            _request("clean-sweep", {"apply": True, "limit": 1001}),
-        )
+    with pytest.raises(IPCProtocolError, match="unsupported method"):
+        dispatch_mutation(engine, _request("clean-sweep", {}))
 
 
-def test_clean_sweep_dispatch_routes_to_existing_owner_submission(running_server):
+def test_clean_status_is_read_only_and_unbounded(running_server):
     engine, _state, _server = running_server
-    observed = []
-    engine.submit_cleanup_workspaces = lambda *, apply, limit, request_id: (
-        observed.append((apply, limit, request_id))
-        or {"dry_run": False, "decisions": []}
-    )
+    engine.workspace_cleanup_status = lambda: {
+        "status": "blocked",
+        "decisions": [{"ticket_id": "T-1", "status": "blocked"}],
+    }
 
-    response = dispatch_mutation(
-        engine,
-        _request("clean-sweep", {"apply": True, "limit": 2}),
-    )
+    response = dispatch_read_only(engine, _request("clean-status", {}))
 
-    assert response == {"dry_run": False, "decisions": []}
-    assert observed == [(True, 2, "id")]
+    assert response["status"] == "blocked"
+    assert response["decisions"][0]["ticket_id"] == "T-1"
 
 
-def test_clean_status_is_read_only_and_bounded(running_server):
+def test_clean_status_rejects_options(running_server):
     engine, _state, _server = running_server
-    observed = []
-    engine.workspace_cleanup_status = lambda *, limit: (
-        observed.append(limit) or {"dry_run": True, "decisions": []}
-    )
 
-    response = dispatch_read_only(
-        engine, _request("clean-status", {"limit": 4})
-    )
-
-    assert response == {"dry_run": True, "decisions": []}
-    assert observed == [4]
+    with pytest.raises(IPCProtocolError, match="does not accept options"):
+        dispatch_read_only(engine, _request("clean-status", {"limit": 4}))
 
 def test_dispatch_uses_service_views_without_persistence_access():
     class View:

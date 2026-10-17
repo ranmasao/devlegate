@@ -249,7 +249,7 @@ def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypa
 
     monkeypatch.setattr(runtime_module, "_git", unavailable_remote)
 
-    result = engine.workspace_cleanup_status(limit=1)
+    result = engine.cleanup_workspaces(limit=1)
 
     assert result["decisions"] == [
         {

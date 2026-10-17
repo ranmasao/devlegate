@@ -318,23 +318,19 @@ def _retry_daemon(
     return 0
 
 
-def _clean_daemon(
-    env_file: Path, *, apply: bool, limit: int, output_format: str
-) -> int:
+def _clean_daemon(env_file: Path, *, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         result = request(
             locator.socket_path,
-            "clean-sweep" if apply else "clean-status",
-            {"limit": limit, "apply": True} if apply else {"limit": limit},
-            mutable=apply,
+            "clean-status",
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     emit(
         result,
         output_format,
-        "workspace cleanup applied" if apply else "workspace cleanup status",
+        "workspace cleanup status",
     )
     return 0
 
@@ -2662,21 +2658,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_arguments(drop_parser)
     clean_parser = commands.add_parser(
-        "clean", help="inspect or reconcile completed execution resources"
+        "clean", help="show completed execution resource inventory"
     )
+    add_output_arguments(clean_parser)
     clean_commands = clean_parser.add_subparsers(
         dest="clean_command", parser_class=DevlegateArgumentParser
     )
     clean_status_parser = clean_commands.add_parser(
         "status", help="show cleanup inventory without changing state"
     )
-    clean_status_parser.add_argument("--limit", type=int, default=100)
     add_output_arguments(clean_status_parser)
-    clean_sweep_parser = clean_commands.add_parser(
-        "sweep", help="request one bounded cleanup pass through the service owner"
-    )
-    clean_sweep_parser.add_argument("--limit", type=int, default=100)
-    add_output_arguments(clean_sweep_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3089,14 +3080,8 @@ def main() -> int:
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "clean":
-            if args.clean_command is None:
-                DevlegateArgumentParser(prog="devlegate clean").error(
-                    "a clean command is required"
-                )
             return _clean_daemon(
                 env_file,
-                apply=args.clean_command == "sweep",
-                limit=args.limit,
                 output_format=args.output_format,
             )
         if args.command == "recover":

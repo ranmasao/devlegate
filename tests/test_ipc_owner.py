@@ -1042,7 +1042,7 @@ def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
     assert restarted._state["reconciliation"]["status"] == "resolving"
 
 
-def test_cleanup_dry_run_uses_live_owner_without_receipt_or_git_mutation(
+def test_clean_status_uses_live_owner_without_receipt_or_git_mutation(
     tmp_path, monkeypatch
 ):
     engine, state = make_engine(tmp_path, monkeypatch)
@@ -1074,19 +1074,11 @@ def test_cleanup_dry_run_uses_live_owner_without_receipt_or_git_mutation(
     try:
         response = request(
             server.path,
-            "cleanup-dry-run",
-                "clean-sweep",
-            {"apply": False, "limit": 10},
+            "clean-status-request",
+            "clean-status",
         )
         assert response.ok
-        assert response.result["dry_run"] is True
-        assert response.result["decisions"] == [
-            {
-                "ticket_id": "T-1",
-                "status": "skipped",
-                "reason": "ticket is not durably done",
-            }
-        ]
+        assert response.result["status"] in {"clean", "reconciled", "blocked"}
     finally:
         stop_event.set()
         engine.wake()
