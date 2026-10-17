@@ -216,3 +216,38 @@ Only **one** new test (`test_workspace_cleanup_dry_run_retains_unintegrated_exec
 The worker report says `./dev lint` was unavailable because `.venv` was missing, despite other claimed focused lint results. When local tools are available, use `./dev setup` once and run the ticket's **selected** tests and `./dev lint`; otherwise report the exact environment limitation. **Full pytest/coverage and Ruff belong to GitHub Actions** on the exact new checkpoint; do not repeatedly run full local pytest. CI alone does not waive the blockers above. Track the current checkpoint CI: [GitHub Actions #39012520391](https://github.com/ranmasao/devlegate/actions/runs/39012520391).
 
 **Disposition:** return the SAME TASK-063 from `review` to `todo`, preserve the worker branch and all execution reports, and do not integrate the checkpoint until the cleanup publication boundary, authorization and regression proof are corrected.
+
+## Reviewer decision — 2026-10-17, execution f116b412: REWORK REQUIRED
+
+**Execution:** `f116b412d37b403da8ebe5a590ca0888`; **checkpoint:** `963d47ae829a659ca0729bc66f5a7550b44b4a67`; **base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker reports `completed`, with no remaining items. Retain the previous work and the current changes; make a **narrow follow-up** in the same TASK-063.
+
+### Improvements verified
+
+- `_integrate_accepted()` now treats post-publication workspace-retirement refusal as optional and continues to finalize the already published accepted-to-done lifecycle.
+- `devlegate cleanup-workspaces [--apply] [--limit N]` is exposed through CLI and IPC; the effect goes through the existing single service owner, not a second process independently mutating Git.
+- Historical candidate discovery now uses `HEAD` rather than `git log --all`, and `_accepted_execution_report()` provides acceptance-bound execution provenance rather than trusting an arbitrary matching report.
+- New IPC validation tests reject an oversized limit and verify request routing. Do not undo these changes.
+
+### Blocker 1 — dry-run is not read-only; receipt/effect replay is incomplete
+
+The CLI dry-run sends `cleanup-workspaces` with `mutable=True`. `_record_operator_admission()` persists a `mutable_receipts` entry in SQLite **before** `cleanup_workspaces()` performs even its dry-run. This violates the requirement for a genuinely read-only inventory. Furthermore a timeout/crash/error after the receipt is committed but before or during apply means replay of the same request ID returns only `{"accepted": true, "ticket_id": "__workspaces__"}`, **not the cleanup decisions or a durable in-progress/completed result**, and does not safely continue the unfinished sweep. That is not sufficient idempotency/observability for a mutation that may delete multiple worktrees.
+
+**Required:** make the dry-run nonmutating in both Git and runtime persistence while keeping serialization/consistent observations. For apply, define and test a narrow durable result/progress or conservative re-observation/retry protocol under the existing owner that never mistakes admission for completed cleanup; do not add a generic job engine. Demonstrate behavior after request-ID replay, timeout/process loss and partial removal. The CLI should accurately report actual completed results or explicit indeterminate/partial status.
+
+### Blocker 2 — cleanup refusal diagnostics are not an exposed verified operational state
+
+The post-publication wrapper catches **all `Exception`** and silently converts programming errors or unexpected corruption into ordinary `blocked` cleanup, despite the ticket's requirement not to conceal ownership/state corruption. It sets `self._state["workspace_cleanup"]`, but no `status`/projection code consumes that value, and no schema validation identifies a durable pending/skipped cleanup record or proven repeated cleanup after restart. A log line is useful but insufficient as the sole ongoing status/diagnostic surface. The outer `_save_state` eventually retains the field, but it is not inspectable via a documented user operation except resweeping.
+
+**Required:** contain expected checkout/Git/OS cleanup failures explicitly, without disguising unrelated programming failures as a normal refusal or endangering already-published integration. Publish clear actionable `retired/skipped/blocked` result status with exact ticket/evidence identity, and demonstrate it can be queried or safely re-observed after restart. Keep accepted integration finalized even if worktree removal refuses.
+
+### Blocker 3 — missing real ownership, deletion and crash-replay regression proof
+
+This checkpoint adds only two IPC tests using a **monkeypatched** `submit_cleanup_workspaces`. The prior checkpoint added one `test_workspace_cleanup_dry_run_retains_unintegrated_execution`. These do not prove the critical new behavior of `manager.retire()` / `git worktree remove --force` under the live service owner.
+
+Add focused real-Git/engine and owner/IPC tests for: clean `done` checkout removed with Git registration gone, exact report/Git evidence and branch retained; dirty/occupied/symlinked/wrong-HEAD tree skipped without destroying data; failed Git removal *after done publication* still completes integration and allows a subsequent ticket; historical dry-run and explicit apply with a proven eligible `done` ticket; mismatch between current accepted execution and historical checkout; different instance retained; idempotent repeat/partial apply and restart. Cover emitted result/status and real owner admission (a stub-only dispatch test is insufficient). Keep test scope narrow rather than repeating full local pytest.
+
+### CI and disposition
+
+New exact checkpoint CI [run #39013150019](https://github.com/ranmasao/devlegate/actions/runs/39013150019) was **in_progress at review**. Full successful pytest/coverage and Ruff at the final rework SHA are mandatory, but alone cannot substitute for these safety tests. Worker should use the documented focused test commands; prepare `.venv` via `./dev setup` only if necessary to run them.
+
+**Disposition:** return the SAME TASK-063 from `review` to `todo`. Preserve checkpoint, all reports, previous rework, and Git history; do not integrate unsafe historical cleanup as-is.
