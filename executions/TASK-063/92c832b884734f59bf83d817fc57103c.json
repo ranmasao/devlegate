@@ -1,0 +1,35 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "c779c669936ef6e46a94d7c3663bac06957a0471",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "92c832b884734f59bf83d817fc57103c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the outstanding real-Git hosted-owner tests for partial-stage restart, remote-only recovery, fair blocked-earliest convergence, and legacy provenance.",
+    "Complete autonomous owner convergence validation across startup/restart without manual cleanup requests."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the outstanding real-Git hosted-owner tests for partial-stage restart, remote-only recovery, fair blocked-earliest convergence, and legacy provenance.",
+      "Complete autonomous owner convergence validation across startup/restart without manual cleanup requests."
+    ],
+    "report": null,
+    "summary": "Contained expected DevlegateError failures during workspace cleanup so remote provenance outages become durable skipped/blocked decisions instead of escaping the owner pass. Added a real registered-worktree regression proving the checkout is retained and the diagnostic is preserved."
+  },
+  "workspace_head": "bceca1fd52a7a38431300fdfcd824d059104256f"
+}
