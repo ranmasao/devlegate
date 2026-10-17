@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a30447295d6423da442aab23dbb00623090e91ad",
+  "conclusion": "completed",
+  "control_head": "1e83588c7f56aeb22eeb7ec7361c73fc90449c55",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-078",
+  "execution_id": "60adf60d92a94577b0c43e9e9de9f1f3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-078",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-078/60adf60d92a94577b0c43e9e9de9f1f3.md",
+  "report_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-078",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "",
+    "summary": "Removed mutation-agnostic retries from the owner Git transport and moved fast-forward interruption handling into the owning synchronization workflow with durable-stage and exact-HEAD proofs. Added interrupted-command trace documentation and regressions covering no hidden fetch retry while preserving proven merge recovery."
+  },
+  "workspace_head": "d151f67b1327bfd8b4640fa489bdd6e166d20969"
+}
