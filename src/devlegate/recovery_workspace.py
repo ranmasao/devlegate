@@ -18,7 +18,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
     WorkspaceInspection,
 )
-from devlegate.git import resolve_commit, run_git
+from devlegate.git import create_ref_if_absent, resolve_commit, run_git
 from devlegate.recovery import validate_execution_binding
 
 
@@ -168,13 +168,10 @@ def repair_bound_workspace(
     if existing is not None and existing != old_head:
         raise ValueError("workspace recovery evidence ref has conflicting identity")
     if existing is None:
-        pinned = run_git(
-            owner.repo, "update-ref", evidence_ref, old_head, "", check=False
-        )
-        if pinned.returncode:
-            reread = resolve_commit(owner.repo, evidence_ref, runner=run_git)
-            if reread != old_head:
-                raise ValueError("cannot preserve conflicting execution checkpoint")
+        create_ref_if_absent(owner.repo, evidence_ref, old_head, runner=run_git)
+        reread = resolve_commit(owner.repo, evidence_ref, runner=run_git)
+        if reread != old_head:
+            raise ValueError("cannot preserve conflicting execution checkpoint")
 
     reobserved = resolve_commit(owner.repo, branch_ref, runner=run_git)
     if reobserved != old_head:

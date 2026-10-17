@@ -15,7 +15,12 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import Any, Protocol
 
-from devlegate.git import run_git
+from devlegate.git import (
+    GitObservationError,
+    create_ref_if_absent,
+    resolve_commit,
+    run_git,
+)
 from devlegate.recovery import classify_stranded_execution, interruption_kind
 
 
@@ -57,18 +62,30 @@ def reconcile_control_lineage(
         # Repeat admission before the evidence pin as well as before the
         # worktree move.  No recovery evidence is created for a stale remote.
         owner.validate_control_reconcile_admission(from_head, to_head)
-        existing = run_git(repo, "rev-parse", "--verify", evidence, check=False)
-        if existing.returncode == 0:
-            if existing.stdout.strip() != from_head:
-                raise ValueError(
-                    "control recovery evidence ref already points to another commit"
-                )
-        else:
-            created = run_git(
-                repo, "update-ref", evidence, from_head, "0" * 40, check=False
+        try:
+            existing = resolve_commit(repo, evidence, runner=run_git)
+        except GitObservationError as error:
+            raise ValueError(f"cannot observe control recovery evidence: {error}") from error
+        if existing is not None and existing != from_head:
+            raise ValueError(
+                "control recovery evidence ref already points to another commit"
             )
-            if created.returncode:
+        if existing is None:
+            created = create_ref_if_absent(repo, evidence, from_head, runner=run_git)
+            # A failed create may be a harmless concurrent winner.  Re-observe
+            # the exact ref before allowing the control reset in either case.
+            try:
+                adopted = resolve_commit(repo, evidence, runner=run_git)
+            except GitObservationError as error:
+                raise ValueError(
+                    f"cannot revalidate control recovery evidence: {error}"
+                ) from error
+            if adopted != from_head:
                 raise ValueError("control recovery evidence ref could not be created")
+            if created.returncode:
+                owner.recovery_log(
+                    f"adopted concurrent control recovery evidence under {evidence}"
+                )
 
         # The first admission can race with a remote update.  Re-prove the
         # exact source and target before changing the local control worktree.

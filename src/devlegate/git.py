@@ -217,9 +217,14 @@ def resolve_commit(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
     """Resolve a revision to its commit object name, or return ``None`` when absent."""
-    result = runner(
-        cwd, "rev-parse", "--verify", f"{revision}^{{commit}}", check=check
-    )
+    try:
+        result = runner(
+            cwd, "rev-parse", "--verify", f"{revision}^{{commit}}", check=check
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise GitObservationError(
+            f"cannot resolve Git revision {revision!r}: {error}"
+        ) from error
     if result.returncode:
         detail = _stderr(result).strip().lower()
         # Some lightweight test seams expose only returncode/stdout.  Preserve

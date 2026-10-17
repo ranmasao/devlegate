@@ -174,6 +174,18 @@ def test_resolve_commit_distinguishes_missing_revision_from_git_failure(tmp_path
         raise AssertionError("Git observation failures must not look like missing refs")
 
 
+def test_resolve_commit_distinguishes_runner_failure_from_absence(tmp_path):
+    def failing_runner(cwd, *args, check):
+        raise OSError("Git executable unavailable")
+
+    try:
+        git.resolve_commit(tmp_path, "evidence", runner=failing_runner)
+    except git.GitObservationError as error:
+        assert "executable unavailable" in str(error)
+    else:
+        raise AssertionError("runner failures must not look like missing refs")
+
+
 def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
     calls = []
     first = "a" * 40
