@@ -5251,6 +5251,7 @@ class ServiceEngine:
             GitAncestryError,
             GitObservationError,
             OSError,
+            subprocess.SubprocessError,
             ValueError,
             WorkflowBlockedError,
         ) as error:
@@ -5281,6 +5282,9 @@ class ServiceEngine:
             or not parents
             or not self._accepted_integration_commit_is_exact(
                 integration_head, ticket_id, parents[0]
+            )
+            or not self._accepted_integration_commit_matches_report(
+                integration_head, ticket_id, report
             )
         ):
             raise WorkflowBlockedError("accepted integration provenance is not exact")
@@ -5364,7 +5368,7 @@ class ServiceEngine:
                     raise WorkflowBlockedError(
                         "workspace provenance does not match accepted evidence"
                     )
-                integration = self._find_accepted_integration_commit(ticket_id)
+                integration = self._find_accepted_integration_commit(ticket_id, report)
                 if integration is None:
                     raise WorkflowBlockedError("accepted integration is not proven")
                 if self._state.get("worker_identity") is not None or any(
@@ -5396,6 +5400,7 @@ class ServiceEngine:
                 GitAncestryError,
                 GitObservationError,
                 OSError,
+                subprocess.SubprocessError,
                 ValueError,
                 WorkflowBlockedError,
             ) as error:
@@ -5404,7 +5409,9 @@ class ServiceEngine:
                 )
         return {"dry_run": not apply, "limit": limit, "decisions": decisions}
 
-    def _find_accepted_integration_commit(self, ticket_id: str) -> str | None:
+    def _find_accepted_integration_commit(
+        self, ticket_id: str, report: ExecutionReport | None = None
+    ) -> str | None:
         result = _git(
             self.control_worktree,
             "log",
@@ -5426,9 +5433,54 @@ class ServiceEngine:
                 and self._accepted_integration_commit_is_exact(
                     commit, ticket_id, parents[0]
                 )
+                and (
+                    report is None
+                    or self._accepted_integration_commit_matches_report(
+                        commit, ticket_id, report
+                    )
+                )
             ):
                 return commit
         return None
+
+    def _accepted_integration_commit_matches_report(
+        self, commit: str, ticket_id: str, report: ExecutionReport
+    ) -> bool:
+        """Bind a done transition to the exact accepted execution generation."""
+        if report.ticket_id != ticket_id or not _is_git_identity(report.control_head):
+            return False
+        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        if parents is None or not parents:
+            return False
+        try:
+            if not is_ancestor(
+                self.control_worktree,
+                report.control_head,
+                parents[0],
+                runner=self._git_runtime,
+            ):
+                return False
+        except (GitAncestryError, GitObservationError):
+            raise WorkflowBlockedError(
+                "accepted execution control lineage could not be observed"
+            )
+        shown = _git(
+            self.control_worktree,
+            "show",
+            "-s",
+            "--format=%B",
+            commit,
+            check=False,
+        )
+        if shown.returncode:
+            raise WorkflowBlockedError(
+                "canonical integration commit message could not be observed"
+            )
+        lines = {line.strip() for line in shown.stdout.splitlines()}
+        return {
+            f"Devlegate-Execution: {report.execution_id}",
+            f"Devlegate-Checkpoint: {report.workspace_head}",
+        }.issubset(lines)
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = self._resolve_commit_runtime(self.control_worktree, "HEAD")

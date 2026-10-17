@@ -4,8 +4,11 @@
 # ruff: noqa: F403, F405, I001
 """Execution workspace, checkpoint, branch, and publication semantics."""
 
+import dataclasses
+
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
+from devlegate.execution_result import ExecutionReport, ExecutionResult
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -72,6 +75,72 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
     ]
     assert execution.is_dir()
     assert engine._state.get("mutable_receipts", {}) == {}
+
+
+def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+
+    manager.retire(workspace, base)
+
+    assert not workspace.path.exists()
+    assert not any(
+        item.get("branch") == manager.branch
+        for item in manager._registrations().values()
+    )
+    assert (
+        git(working, "show-ref", "--verify", f"refs/heads/{manager.branch}").returncode
+        == 0
+    )
+
+
+def test_historical_integration_lookup_is_bound_to_execution_generation(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    ticket = control / "kanban/todo/T-1.md"
+    accepted = control / "kanban/accepted/T-1.md"
+    ticket.rename(accepted)
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-1")
+    accepted_parent = git(control, "rev-parse", "HEAD").stdout.strip()
+    done = control / "kanban/done/T-1.md"
+    accepted.rename(done)
+    git(control, "add", "-A")
+    git(
+        control,
+        "commit",
+        "-m",
+        "T-1: Control ticket (integrated)\n\n"
+        "Devlegate-Execution: execution-old\n"
+        "Devlegate-Checkpoint: " + accepted_parent,
+    )
+    integration = git(control, "rev-parse", "HEAD").stdout.strip()
+    report = ExecutionReport(
+        "execution-old",
+        "T-1",
+        accepted_parent,
+        accepted_parent,
+        "devlegate/work/T-1",
+        str(state / "worktrees" / "unused" / "work" / "T-1"),
+        accepted_parent,
+        ExecutionResult(0, None, None, None, "completed", (), (), "done"),
+    )
+
+    assert engine._find_accepted_integration_commit("T-1", report) == integration
+    newer = dataclasses.replace(report, execution_id="execution-new")
+    assert engine._find_accepted_integration_commit("T-1", newer) is None
 
 def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
