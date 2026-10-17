@@ -3182,6 +3182,9 @@ class ServiceEngine:
                 "blocked",
                 "reconciled",
                 "applied",
+                # A completed accepted integration records its per-ticket
+                # retirement result before the next idle snapshot is saved.
+                "retired",
             }:
                 raise DevlegateError("invalid workspace cleanup status")
             if "scan_complete" in cleanup and not isinstance(
@@ -4833,19 +4836,33 @@ class ServiceEngine:
             blocked = [
                 item
                 for item in decisions
-                if isinstance(item, dict) and item.get("status") == "blocked"
+                if isinstance(item, dict)
+                and (
+                    item.get("status") == "blocked"
+                    or (
+                        item.get("status") == "skipped"
+                        and item.get("reason")
+                        not in {
+                            "ticket is not durably done",
+                            "ticket is not durably done; execution refs are absent",
+                        }
+                    )
+                )
             ]
+            remote_unobserved = any(
+                isinstance(item, dict) and item.get("ticket_id") == "__remote__"
+                for item in decisions
+            )
             status = "clean" if not decisions else ("blocked" if blocked else "partial")
             cleanup: dict[str, object] = {
                 "status": status,
-                "scan_complete": not any(
-                    isinstance(item, dict) and item.get("ticket_id") == "__remote__"
-                    for item in decisions
-                ),
+                "scan_complete": not remote_unobserved and len(targets) < 10000,
                 "inventory": {
                     "candidates": len(targets),
                     "remaining": len(decisions),
                 },
+                "blocked": len(blocked),
+                "remote_observation": "blocked" if remote_unobserved else "observed",
                 "decisions": decisions,
             }
             if last_decisions:

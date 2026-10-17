@@ -268,6 +268,57 @@ def test_workspace_cleanup_status_never_claims_clean_before_first_scan(tmp_path)
     assert status["scan_complete"] is False
 
 
+def test_retired_workspace_event_survives_state_validation_and_restart(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+
+    event = {
+        "ticket_id": "T-1",
+        "status": "retired",
+        "reason": "accepted integration proven",
+    }
+    engine._save_state("idle", workspace_cleanup=event)
+
+    restarted = Devlegate(config)
+
+    assert restarted._state["workspace_cleanup"] == event
+
+
+def test_workspace_cleanup_inventory_surfaces_unsafe_skip_as_blocked(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    target = {
+        "ticket_id": "T-1",
+        "path": str(engine.execution_worktree_root / "work/T-1"),
+        "branch": "devlegate/work/T-1",
+        "head": "a" * 40,
+    }
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", lambda *_a, **_k: [target])
+    monkeypatch.setattr(
+        engine,
+        "cleanup_workspaces",
+        lambda **_kwargs: {
+            "decisions": [
+                {
+                    "ticket_id": "T-1",
+                    "status": "skipped",
+                    "reason": "workspace registration changed or is ambiguous",
+                }
+            ]
+        },
+    )
+
+    engine._publish_workspace_cleanup_inventory()
+
+    status = engine.workspace_cleanup_status()
+    assert status["status"] == "blocked"
+    assert status["blocked"] == 1
+
+
 def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
