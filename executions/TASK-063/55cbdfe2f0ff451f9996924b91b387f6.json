@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "4987e9bc0524b8016a4c104694ce363b4f800f7f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "55cbdfe2f0ff451f9996924b91b387f6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add deterministic real-Git owner tests for crash recovery after worktree/local/upstream ref retirement, partial-stage restart, and blocked-earliest versus eligible-later convergence."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add deterministic real-Git owner tests for crash recovery after worktree/local/upstream ref retirement, partial-stage restart, and blocked-earliest versus eligible-later convergence."
+    ],
+    "report": null,
+    "summary": "Added crash-safe accepted-integration recovery using exact durable done/control/report/product evidence when disposable execution refs have already been removed. Separated per-ticket workspace retirement diagnostics from the aggregate cleanup inventory and preserved owner-published status semantics."
+  },
+  "workspace_head": "fdd1e6f6d10736a3f2c5f73f4d275d896bf6079a"
+}
