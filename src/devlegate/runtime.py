@@ -2344,6 +2344,28 @@ class ServiceEngine:
                 "branch": branch,
                 "head": head,
             }
+        # A failed worktree removal can leave the owned checkout after Git has
+        # already dropped its registration.  Only inspect direct children of
+        # the configured work root; never walk or remove arbitrary directories.
+        if work_root.is_dir() and not work_root.is_symlink():
+            for path in sorted(work_root.iterdir(), key=str):
+                if not (path.is_dir() or path.is_symlink()):
+                    continue
+                ticket_id = path.name
+                if not is_canonical_ticket_name(f"{ticket_id}.md"):
+                    continue
+                candidates.setdefault(
+                    ticket_id,
+                    {
+                        "ticket_id": ticket_id,
+                        "path": str(path),
+                        "branch": f"devlegate/work/{ticket_id}",
+                        # A directory without a registration/ref has no
+                        # trustworthy execution generation.  Keep it visible
+                        # as blocked rather than treating its name as proof.
+                        "head": "",
+                    },
+                )
         local = _git(
             self.repo,
             "for-each-ref",

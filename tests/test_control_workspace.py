@@ -423,6 +423,28 @@ def test_workspace_cleanup_targets_do_not_expand_after_registration_changes(tmp_
     assert second.path.is_dir()
 
 
+def test_workspace_cleanup_reports_unregistered_owned_checkout_without_deleting(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    path = engine.execution_worktree_root / "work/T-1"
+    path.mkdir(parents=True)
+    (path / "unrelated.txt").write_text("retain\n")
+
+    result = engine.cleanup_workspaces(limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "skipped",
+            "reason": "workspace cleanup target identity is invalid",
+        }
+    ]
+    assert (path / "unrelated.txt").read_text() == "retain\n"
+
+
 def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
