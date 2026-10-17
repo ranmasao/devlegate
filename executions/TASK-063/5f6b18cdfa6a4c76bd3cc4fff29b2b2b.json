@@ -1,0 +1,35 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "e025a3ac0b52fd5d86b150ff5b6cf08c9ebbb996",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "5f6b18cdfa6a4c76bd3cc4fff29b2b2b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the broader hosted-owner end-to-end crash/restart, autonomous convergence, and legacy provenance tests required by TASK-063.",
+    "Resolve any remaining exact-CAS race semantics for local branch deletion if stronger atomic protection is required by review."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the broader hosted-owner end-to-end crash/restart, autonomous convergence, and legacy provenance tests required by TASK-063.",
+      "Resolve any remaining exact-CAS race semantics for local branch deletion if stronger atomic protection is required by review."
+    ],
+    "report": null,
+    "summary": "Replaced raw local execution-ref deletion with Git's occupancy-aware non-force branch deletion, while preserving exact-head checks and post-delete verification. Added a real foreign-worktree refusal regression and updated the local deletion failure test."
+  },
+  "workspace_head": "551cd8926d009778450885b28215c7fcaa73e73f"
+}
