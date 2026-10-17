@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "692c8fdc56938336b03b6cc694c6f81f3d41ca6d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "b724553841444ed5a26fd5d95325cf84",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added persisted round-robin workspace cleanup scheduling so blocked candidates cannot starve later backlog items, including cursor recovery after restart. Remote ls-remote failures now remain explicit blocked diagnostics instead of appearing as an empty inventory, while local candidates remain independently observable. Added focused fairness, restart, and remote outage regressions."
+  },
+  "workspace_head": "3b0d961fd8e961fc36485e9b9a241d6156d00bf4"
+}
