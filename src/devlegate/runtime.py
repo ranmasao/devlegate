@@ -781,6 +781,7 @@ class ServiceEngine:
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
         self._workflow_blocker_fingerprint: str | None = None
+        self._workspace_preparation_blocker: tuple[str, str] | None = None
         self._foreground_diagnostic_fingerprint: str | None = None
         self._iteration_diagnostic: str | None = None
         self._workspace_cleanup_observation_error: str | None = None
@@ -1760,6 +1761,7 @@ class ServiceEngine:
             execution_remote_head=current_remote_head,
             worker_identity=None,
         )
+        self._workspace_preparation_blocker = None
 
     def _drop_candidate_from_state(self) -> tuple[dict[str, str], ...]:
         state = self._state
@@ -2681,16 +2683,17 @@ class ServiceEngine:
             blocked_reason = snapshot.plan.reason
         service_snapshot = self.service_snapshot()
         worker_running = service_snapshot.worker_running
+        preparation_blocker = self._workspace_preparation_blocker
         if (
             blocked_reason is None
-            and service_snapshot.lifecycle == "blocked"
-            and service_snapshot.blocked_reason is not None
+            and preparation_blocker is not None
             and self._state.get("phase") == "agent_pending"
+            and self._state.get("execution_id") == preparation_blocker[0]
             and snapshot.plan.action == "run-worker"
         ):
-            # Preparation refusals are not persisted mutations. Retain the
-            # owner-published reason until a later scheduler attempt resolves it.
-            blocked_reason = service_snapshot.blocked_reason
+            # Preparation refusals leave durable execution identity unchanged.
+            # Retain only that owner-scoped diagnostic across read-only refreshes.
+            blocked_reason = preparation_blocker[1]
             snapshot = dataclasses.replace(
                 snapshot,
                 plan=dataclasses.replace(
@@ -4523,6 +4526,7 @@ class ServiceEngine:
             workspace = self._prepare_execution_workspace(execution_plan)
         except ExecutionWorkspaceError as error:
             raise WorkspacePreparationBlockedError(str(error)) from error
+        self._workspace_preparation_blocker = None
         _log(
             "execution workspace "
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
@@ -7721,6 +7725,12 @@ class ServiceEngine:
                     else:
                         workflow_blocked = True
                         message = str(error)
+                        execution_id = self._state.get("execution_id")
+                        if isinstance(execution_id, str):
+                            self._workspace_preparation_blocker = (
+                                execution_id,
+                                message,
+                            )
                         self._publish_service_snapshot(
                             lifecycle="blocked",
                             worker_running=False,
