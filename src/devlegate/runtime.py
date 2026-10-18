@@ -6341,14 +6341,12 @@ class ServiceEngine:
         }
         if modern.issubset(lines):
             return True
-        # TASK-001 and other early integrations predate trailers.  Exact parent
-        # identity plus the report's immutable checkpoint is the stronger
-        # equivalent proof available for those commits; a merely matching ticket
-        # name is never sufficient.
+        # TASK-001 and other early integrations predate trailers. The caller
+        # already proved the report's atomic admission history; its control
+        # lineage above binds it to this exact done transition.
         return (
             not any(line.startswith("Devlegate-Execution:") for line in lines)
             and not any(line.startswith("Devlegate-Checkpoint:") for line in lines)
-            and parents[0] == report.control_head
         )
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:

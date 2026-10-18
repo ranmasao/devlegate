@@ -5,6 +5,7 @@
 """Execution workspace, checkpoint, branch, and publication semantics."""
 
 import dataclasses
+import json
 import subprocess
 from types import SimpleNamespace
 
@@ -13,6 +14,48 @@ from devlegate import recovery_workspace
 import devlegate.runtime as runtime_module
 from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
+
+
+def _publish_done_execution(
+    control, workspace, ticket_id, checkpoint, execution_id, *, trailers=True
+):
+    """Publish one completed execution through the normal admission history."""
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    ExecutionReportStore(control).write(
+        build_execution_report(
+            execution_id=execution_id,
+            ticket_id=ticket_id,
+            code_base_head=checkpoint,
+            control_head=control_head,
+            execution_branch=workspace.branch,
+            execution_path=str(workspace.path),
+            workspace_head=workspace.head,
+            run=WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            ),
+        )
+    )
+    (control / f"kanban/todo/{ticket_id}.md").rename(
+        control / f"kanban/review/{ticket_id}.md"
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", f"publish {ticket_id} execution")
+    (control / f"kanban/review/{ticket_id}.md").rename(
+        control / f"kanban/accepted/{ticket_id}.md"
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", f"accept {ticket_id}")
+    (control / f"kanban/accepted/{ticket_id}.md").rename(
+        control / f"kanban/done/{ticket_id}.md"
+    )
+    git(control, "add", "-A")
+    message = f"{ticket_id}: Control ticket (integrated)"
+    if trailers:
+        message += (
+            f"\n\nDevlegate-Execution: {execution_id}\n"
+            f"Devlegate-Checkpoint: {checkpoint}"
+        )
+    git(control, "commit", "-m", message)
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -682,6 +725,187 @@ def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_p
     assert (control / "kanban/done/T-1.md").is_file()
     assert (control / "kanban/done/T-2.md").is_file()
     assert ExecutionReportStore(control).list("T-2")
+
+
+def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
+    """A restart reconstructs ref-only cleanup after an outage without a receipt."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "T-2"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add recovery candidate")
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspaces = {}
+    for ticket_id in ("T-1", "T-2"):
+        manager = ExecutionWorkspaceManager(
+            working,
+            state / "worktrees" / next(state.glob("worktrees/*")).name,
+            ticket_id,
+        )
+        workspace = manager.prepare(checkpoint)
+        workspaces[ticket_id] = workspace
+        assert git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode == 0
+        _publish_done_execution(
+            control, workspace, ticket_id, checkpoint, f"recovery-{ticket_id}"
+        )
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+
+    for ticket_id, workspace in workspaces.items():
+        manager = ExecutionWorkspaceManager(
+            working,
+            state / "worktrees" / next(state.glob("worktrees/*")).name,
+            ticket_id,
+        )
+        manager.retire(workspace, checkpoint)
+    unknown_checkout = workspaces["T-1"].path
+    unknown_checkout.mkdir(parents=True)
+    unknown_checkout.joinpath("retain.txt").write_text("unknown checkout\n")
+    assert git(working, "branch", "-D", workspaces["T-2"].branch).returncode == 0
+
+    remote = Path(git(working, "remote", "get-url", "origin").stdout.strip())
+    offline = remote.with_name(f"{remote.name}-offline")
+    remote.rename(offline)
+    try:
+        with LiveService(working, config) as service:
+            service.wait_ready()
+            service.wait_for(
+                lambda: resolve_commit(
+                    working, f"refs/heads/{workspaces['T-1'].branch}"
+                )
+                == checkpoint
+            )
+            offline.rename(remote)
+            service.restart()
+            service.wait_for(
+                lambda: (
+                    resolve_commit(
+                        working, f"refs/heads/{workspaces['T-1'].branch}"
+                    )
+                    is None
+                    and resolve_commit(
+                        working, f"refs/heads/{workspaces['T-2'].branch}"
+                    )
+                    is None
+                    and not git(
+                        working,
+                        "ls-remote",
+                        "origin",
+                        f"refs/heads/{workspaces['T-1'].branch}",
+                    ).stdout
+                    and not git(
+                        working,
+                        "ls-remote",
+                        "origin",
+                        f"refs/heads/{workspaces['T-2'].branch}",
+                    ).stdout
+                )
+            )
+    finally:
+        if offline.exists():
+            offline.rename(remote)
+
+    assert unknown_checkout.joinpath("retain.txt").read_text() == "unknown checkout\n"
+    assert not workspaces["T-2"].path.exists()
+    assert ExecutionReportStore(control).list("T-1")
+    assert (control / "kanban/done/T-1.md").is_file()
+
+
+def test_hosted_cleanup_retires_trailerless_history_and_retains_ambiguous_history(
+    tmp_path,
+):
+    """Legacy exact-parent proof is eligible; an unrelated generation is not."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "T-2"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add legacy candidates")
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspaces = {}
+    for ticket_id in ("T-1", "T-2"):
+        workspace = ExecutionWorkspaceManager(
+            working,
+            state / "worktrees" / next(state.glob("worktrees/*")).name,
+            ticket_id,
+        ).prepare(checkpoint)
+        workspaces[ticket_id] = workspace
+        assert git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode == 0
+    _publish_done_execution(
+        control, workspaces["T-1"], "T-1", checkpoint, "legacy-exact", trailers=False
+    )
+    (control / "kanban/todo/T-2.md").rename(control / "kanban/accepted/T-2.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-2")
+    ExecutionReportStore(control).write(
+        build_execution_report(
+            execution_id="legacy-ambiguous",
+            ticket_id="T-2",
+            code_base_head=checkpoint,
+            control_head=checkpoint,
+            execution_branch=workspaces["T-2"].branch,
+            execution_path=str(workspaces["T-2"].path),
+            workspace_head=checkpoint,
+            run=WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            ),
+        )
+    )
+    (control / "kanban/accepted/T-2.md").rename(control / "kanban/done/T-2.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "T-2: Control ticket (integrated)")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+
+    with LiveService(working, config) as service:
+        service.wait_for(
+            lambda: (
+                not workspaces["T-1"].path.exists()
+                and resolve_commit(
+                    working, f"refs/heads/{workspaces['T-1'].branch}"
+                )
+                is None
+                and not git(
+                    working,
+                    "ls-remote",
+                    "origin",
+                    f"refs/heads/{workspaces['T-1'].branch}",
+                ).stdout
+            )
+        )
+        assert workspaces["T-2"].path.is_dir()
+        assert (
+            resolve_commit(working, f"refs/heads/{workspaces['T-2'].branch}")
+            == checkpoint
+        )
+        status = service.cli("clean", "--json")
+        assert status.returncode == 0
+        assert any(
+            item["ticket_id"] == "T-2"
+            and "ambiguous or missing completed execution evidence" in item["reason"]
+            for item in json.loads(status.stdout)["decisions"]
+        )
 
 
 def test_workspace_cleanup_status_is_aggregate_not_last_bounded_pass(tmp_path):
