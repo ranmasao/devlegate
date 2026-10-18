@@ -2679,7 +2679,24 @@ class ServiceEngine:
         )
         if snapshot.lifecycle_integration is not None:
             blocked_reason = snapshot.plan.reason
-        worker_running = self.service_snapshot().worker_running
+        service_snapshot = self.service_snapshot()
+        worker_running = service_snapshot.worker_running
+        if (
+            blocked_reason is None
+            and service_snapshot.lifecycle == "blocked"
+            and service_snapshot.blocked_reason is not None
+            and self._state.get("phase") == "agent_pending"
+            and snapshot.plan.action == "run-worker"
+        ):
+            # Preparation refusals are not persisted mutations. Retain the
+            # owner-published reason until a later scheduler attempt resolves it.
+            blocked_reason = service_snapshot.blocked_reason
+            snapshot = dataclasses.replace(
+                snapshot,
+                plan=dataclasses.replace(
+                    snapshot.plan, action="blocked", reason=blocked_reason
+                ),
+            )
         lifecycle_intent = self.lifecycle_intent()
         lifecycle = (
             "restarting"
@@ -8238,6 +8255,7 @@ class ServiceEngine:
             dirty,
             branch_ok,
             observation=git_observation,
+            include_preparation_refusals=True,
         )
         admission_reason = (
             None if plan.action == "run-worker" and not plan.bound else plan.reason
@@ -8383,6 +8401,7 @@ class ServiceEngine:
         dirty: bool,
         branch_ok: bool = True,
         observation: dict[str, GitObservation | None] | None = None,
+        include_preparation_refusals: bool = False,
     ) -> ExecutionPlan:
         observation = observation or {}
         code = observation.get("code")
@@ -8477,6 +8496,23 @@ class ServiceEngine:
                     **identity,
                 )
             if state["phase"] == "agent_pending":
+                bound_control = state.get("execution_control_head")
+                if (
+                    include_preparation_refusals
+                    and isinstance(bound_control, str)
+                    and isinstance(control, GitObservation)
+                    and bound_control != control.local_head
+                ):
+                    return ExecutionPlan(
+                        "blocked",
+                        "control revision changed after execution was planned; "
+                        "refusing stale execution",
+                        ticket.id,
+                        ticket.title,
+                        ticket.state,
+                        True,
+                        **identity,
+                    )
                 inspection = self._inspect_bound_execution_workspace(state)
                 if inspection.classification != "REUSABLE":
                     return ExecutionPlan(

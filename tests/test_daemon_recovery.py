@@ -7,6 +7,8 @@
 from _daemon_support import *  # noqa: F403,F405
 
 from devlegate.execution_containment import DeterministicContainmentProvider
+from devlegate.ipc_protocol import IPCRequest
+from devlegate.ipc_server import dispatch_read_only
 from service_harness import compose_test_service_command
 
 @pytest.mark.parametrize(
@@ -159,6 +161,186 @@ def test_stale_control_binding_is_a_workspace_preparation_refusal(
         git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
         == branch_before
     )
+
+
+def test_hosted_stale_control_refusal_survives_status_refresh(
+    tmp_path, monkeypatch, capsys
+):
+    engine, _config, state = make_engine(tmp_path, monkeypatch)
+    base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(engine, state, workspace, base, "stale-control")
+    binding_before = {
+        key: engine._state[key]
+        for key in (
+            "execution_id",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+        )
+    }
+    branch_before = git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "control-advance.txt").write_text("advance\n")
+    git(control, "add", "control-advance.txt")
+    git(control, "commit", "-m", "advance control")
+    git(control, "push", "origin", "devlegate/control")
+
+    preparation_attempted = threading.Event()
+    second_attempted = threading.Event()
+    refreshed_after_refusal = threading.Event()
+    refreshed_after_second_refusal = threading.Event()
+    attempts = []
+    original_prepare = engine._prepare_execution_workspace
+    original_publish = engine._publish_status_snapshot
+
+    def prepare(plan):
+        attempts.append(plan)
+        preparation_attempted.set()
+        if len(attempts) == 2:
+            second_attempted.set()
+        return original_prepare(plan)
+
+    def publish(snapshot):
+        original_publish(snapshot)
+        if preparation_attempted.is_set():
+            refreshed_after_refusal.set()
+        if second_attempted.is_set():
+            refreshed_after_second_refusal.set()
+
+    monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
+    monkeypatch.setattr(engine, "_publish_status_snapshot", publish)
+    stop_event = threading.Event()
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
+    thread.start()
+    assert preparation_attempted.wait(2)
+    assert refreshed_after_refusal.wait(2)
+
+    snapshot = engine.service_snapshot()
+    status = dispatch_read_only(engine, IPCRequest(1, "status", "status", {}))
+    assert snapshot.lifecycle == "blocked"
+    assert snapshot.worker_running is False
+    assert "control revision changed" in str(snapshot.blocked_reason)
+    assert status["plan"]["action"] == "blocked"
+    assert "control revision changed" in status["plan"]["reason"]
+    assert {
+        key: engine._state[key]
+        for key in binding_before
+    } == binding_before
+    assert (
+        git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
+        == branch_before
+    )
+
+    engine.wake()
+    assert second_attempted.wait(2)
+    assert refreshed_after_second_refusal.wait(2)
+    stop_event.set()
+    engine.wake()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert len(attempts) == 2
+    assert capsys.readouterr().out.count("workflow blocked:") == 1
+
+
+def test_hosted_preparation_refusal_recovers_same_execution_without_restart(
+    tmp_path, monkeypatch
+):
+    engine, _config, state = make_engine(tmp_path, monkeypatch)
+    base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        engine, state, workspace, base, "recoverable-preparation"
+    )
+    binding_before = {
+        key: engine._state[key]
+        for key in (
+            "execution_id",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+        )
+    }
+    preparation_refused = threading.Event()
+    blocked_status_published = threading.Event()
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    prepare_calls = []
+    launched = []
+    original_prepare = engine._prepare_execution_workspace
+    original_publish = engine._publish_status_snapshot
+
+    def prepare(plan):
+        prepare_calls.append(plan)
+        if len(prepare_calls) == 1:
+            preparation_refused.set()
+            raise ExecutionWorkspaceError(
+                "submodule materialization temporarily failed"
+            )
+        return original_prepare(plan)
+
+    def publish(snapshot):
+        original_publish(snapshot)
+        if (
+            preparation_refused.is_set()
+            and engine.published_status_payload()["plan"]["action"] == "blocked"
+        ):
+            blocked_status_published.set()
+
+    def worker(_workspace, _prompt, **_kwargs):
+        launched.append(
+            {
+                key: engine._state[key]
+                for key in binding_before
+            }
+        )
+        worker_started.set()
+        assert release_worker.wait(2)
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
+    monkeypatch.setattr(engine, "_publish_status_snapshot", publish)
+    monkeypatch.setattr(engine._workers, "run", worker)
+    stop_event = threading.Event()
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
+    thread.start()
+    assert preparation_refused.wait(2)
+    assert blocked_status_published.wait(2)
+    assert engine.service_snapshot().lifecycle == "blocked"
+    assert (
+        "submodule materialization temporarily failed"
+        in engine.published_status_payload()["plan"]["reason"]
+    )
+    assert engine.service_snapshot().worker_running is False
+    assert {
+        key: engine._state[key]
+        for key in binding_before
+    } == binding_before
+
+    engine.wake()
+    assert worker_started.wait(2)
+    assert launched == [binding_before]
+    assert engine.service_snapshot().lifecycle == "worker"
+    assert engine.service_snapshot().blocked_reason is None
+    assert engine.service_snapshot().worker_running is True
+
+    stop_event.set()
+    release_worker.set()
+    engine.wake()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert len(prepare_calls) == 2
+    assert len(launched) == 1
 
 
 def test_actual_unrelated_execution_branch_keeps_hosted_service_available(
