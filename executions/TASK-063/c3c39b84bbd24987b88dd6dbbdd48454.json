@@ -1,0 +1,33 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "b1a67a61f08fa508a4771e1474e6e4f56882fe94",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "c3c39b84bbd24987b88dd6dbbdd48454",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the required hosted-owner crash/restart, remote-outage recovery, eligible-later fairness, and trailerless historical convergence tests and address any defects they expose."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the required hosted-owner crash/restart, remote-outage recovery, eligible-later fairness, and trailerless historical convergence tests and address any defects they expose."
+    ],
+    "report": null,
+    "summary": "Improved cleanup discovery so lost Git registrations retain exact local/upstream ref identity and can converge those independent ref stages without deleting an unregistered checkout. Added a focused regression for this resource separation."
+  },
+  "workspace_head": "4f79196819381cd10debcb75c2eb33cdb51f7e80"
+}
