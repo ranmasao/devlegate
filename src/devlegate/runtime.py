@@ -6283,22 +6283,27 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "canonical control history could not be observed"
             )
-        for value in result.stdout.splitlines():
-            commit = value.strip()
-            parents = commit_parents(self.control_worktree, commit, runner=_git)
-            if (
-                parents
-                and self._accepted_integration_commit_is_exact(
-                    commit, ticket_id, parents[0]
+        commits = result.stdout.splitlines()
+        if not commits:
+            return None
+        # The newest done-path change establishes the current done generation.
+        # Never fall back to an older integration after a requeue or edit made
+        # the current generation unprovable.
+        commit = commits[0].strip()
+        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        if (
+            parents
+            and self._accepted_integration_commit_is_exact(
+                commit, ticket_id, parents[0]
+            )
+            and (
+                report is None
+                or self._accepted_integration_commit_matches_report(
+                    commit, ticket_id, report
                 )
-                and (
-                    report is None
-                    or self._accepted_integration_commit_matches_report(
-                        commit, ticket_id, report
-                    )
-                )
-            ):
-                return commit
+            )
+        ):
+            return commit
         return None
 
     def _accepted_integration_commit_matches_report(
@@ -6341,13 +6346,63 @@ class ServiceEngine:
         }
         if modern.issubset(lines):
             return True
-        # TASK-001 and other early integrations predate trailers. The caller
-        # already proved the report's atomic admission history; its control
-        # lineage above binds it to this exact done transition.
-        return (
-            not any(line.startswith("Devlegate-Execution:") for line in lines)
-            and not any(line.startswith("Devlegate-Checkpoint:") for line in lines)
+        if any(line.startswith("Devlegate-") for line in lines):
+            return False
+        return self._trailerless_integration_matches_report(
+            ticket_id, report, parents[0]
         )
+
+    def _trailerless_integration_matches_report(
+        self,
+        ticket_id: str,
+        report: ExecutionReport,
+        accepted_commit: str,
+    ) -> bool:
+        """Require an uninterrupted legacy admission-to-done lineage.
+
+        A trailerless done commit cannot name its execution.  Its immediate
+        accepted parent must therefore have been created directly from this
+        report's exact atomic admission; an older report cannot cross a
+        completed/requeued generation merely by being an ancestor.
+        """
+        report_path = f"executions/{ticket_id}/{report.execution_id}.json"
+        try:
+            admission = file_history_commit(
+                self.control_worktree,
+                accepted_commit,
+                report_path,
+                runner=self._git_runtime,
+            )
+            accepted_parents = commit_parents(
+                self.control_worktree, accepted_commit, runner=_git
+            )
+            if (
+                admission is None
+                or accepted_parents is None
+                or len(accepted_parents) != 1
+                or accepted_parents[0] != admission
+                or not lifecycle_commit_is_exact(
+                    self.control_worktree,
+                    admission,
+                    report,
+                    todo_path=self.todo_path,
+                    review_path=self.review_path,
+                    runner=self._git_runtime,
+                )
+            ):
+                return False
+            return set(
+                commit_changes(
+                    self.control_worktree, accepted_commit, runner=self._git_runtime
+                )
+            ) == {
+                f"D\t{self.review_path}/{ticket_id}.md",
+                f"A\t{self.accepted_path}/{ticket_id}.md",
+            }
+        except GitObservationError:
+            raise WorkflowBlockedError(
+                "accepted execution control lineage could not be observed"
+            ) from None
 
     def _complete_accepted(self, ticket_id: str, expected_head: str) -> str:
         current = self._resolve_commit_runtime(self.control_worktree, "HEAD")

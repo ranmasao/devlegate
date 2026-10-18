@@ -908,6 +908,69 @@ def test_hosted_cleanup_retires_trailerless_history_and_retains_ambiguous_histor
         )
 
 
+def test_hosted_cleanup_retains_requeued_trailerless_generation(tmp_path):
+    """An older trailerless report cannot authorize a later done generation."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        working,
+        state / "worktrees" / next(state.glob("worktrees/*")).name,
+        "T-1",
+    ).prepare(checkpoint)
+    assert git(
+        working,
+        "push",
+        "origin",
+        f"{workspace.branch}:refs/heads/{workspace.branch}",
+    ).returncode == 0
+    _publish_done_execution(
+        control, workspace, "T-1", checkpoint, "legacy-old", trailers=False
+    )
+
+    # The second generation deliberately has no report. Before the stronger
+    # proof this could reuse legacy-old because its control head is ancestral.
+    (control / "kanban/done/T-1.md").rename(control / "kanban/todo/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "requeue T-1")
+    (control / "kanban/todo/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept requeued T-1")
+    (control / "kanban/accepted/T-1.md").rename(control / "kanban/done/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "T-1: Control ticket (integrated)")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+
+    with LiveService(working, config) as service:
+        service.wait_ready()
+        service.wait_for(
+            lambda: json.loads(service.cli("clean", "--json").stdout).get(
+                "scan_complete"
+            )
+            is True
+        )
+        assert workspace.path.is_dir()
+        assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+        assert git(
+            working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
+        ).stdout
+        status = service.cli("clean", "--json")
+        assert status.returncode == 0
+        assert any(
+            item["ticket_id"] == "T-1"
+            and (
+                "accepted integration is not proven" in item["reason"]
+                or "ambiguous or missing completed execution evidence" in item["reason"]
+            )
+            for item in json.loads(status.stdout)["decisions"]
+        )
+
+
 def test_workspace_cleanup_status_is_aggregate_not_last_bounded_pass(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
