@@ -184,6 +184,72 @@ def test_done_cleanup_recovery_after_process_loss_before_state_clear(
     assert (control / "kanban/done/T-1.md").is_file()
 
 
+def test_hosted_cleanup_recovers_after_published_done_before_retirement(
+    tmp_path, monkeypatch
+):
+    """Startup discovery retires resources left after a post-done interruption."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker change\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    review = control / "kanban/review/T-1.md"
+    review.write_text(review.read_text() + "\n<!-- devlegate: curator-note -->\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept review")
+    review.rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept implementation")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    def interrupt_before_retirement(*_args):
+        raise RuntimeError("simulated process loss before workspace retirement")
+
+    monkeypatch.setattr(
+        engine, "_retire_integrated_workspace", interrupt_before_retirement
+    )
+    with pytest.raises(RuntimeError, match="simulated process loss"):
+        run_test_iteration(engine)
+
+    execution_path = engine.execution_worktree_root / "work" / "T-1"
+    assert execution_path.is_dir()
+    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") is not None
+    assert git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout
+    assert (control / "kanban/done/T-1.md").is_file()
+
+    with LiveService(working, config) as service:
+        service.wait_for(
+            lambda: (
+                not execution_path.exists()
+                and resolve_commit(
+                    working, "refs/heads/devlegate/work/T-1"
+                )
+                is None
+                and not git(
+                    working,
+                    "ls-remote",
+                    "origin",
+                    "refs/heads/devlegate/work/T-1",
+                ).stdout
+            )
+        )
+
+    assert ExecutionReportStore(control).list("T-1")
+    assert (working / "implementation.txt").is_file()
+
+
 def test_unclassified_review_edit_after_admission_fails_closed(
     tmp_path, monkeypatch
 ):
