@@ -247,41 +247,26 @@ redesign worker cgroups or Git workspace topology, delete arbitrary
 `/tmp/opencode` registrations or other project's workspaces, or perform
 global Git GC, log/cache cleanup or unbounded sweeping.
 
-## Current reviewer decision — 2026-10-18: IMPLEMENTATION REVIEW PASSED; CI PENDING
+## Current reviewer decision — 2026-10-18: ACCEPTED
 
-**Reviewed execution:** `c9b0b628800d42dc81e30cdb362416dd`.
-**Checkpoint:** `6eee5894b83578c0fd9967c0be1d981feaa05bba`.
-**Admission:** `c33d9044f86a4faca743318f17464e32d64bab06`.
-**Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
+**Accepted checkpoint:** `6eee5894b83578c0fd9967c0be1d981feaa05bba`.
+**Latest execution:** `c9b0b628800d42dc81e30cdb362416dd`.
+**Product base at review:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
 
-### Established
+Implementation review is complete. The final owner-hosted real-Git regression
+covers an actual published `accepted -> done` transition interrupted before
+retirement and fresh service-owner automatic convergence. Earlier checkpoints
+cover registered resource deletion, blocked-earliest/eligible-later fairness,
+restart/remote-outage ref-only recovery, safe unregistered checkout handling,
+positive and ambiguous trailerless histories, and prevention of older-report
+reuse after a later same-ticket done transition.
 
-- Owner-hosted real-Git checks now cover published integration cleanup,
-  blocked-earliest/eligible-later fairness and subsequent retry,
-  ref-only partial-stage restart, remote outage and restoration,
-  preservation of unregistered checkouts, positive/ambiguous historical
-  trailerless cases, and a later same-ticket generation that must not reuse
-  an older report. The strict historical admission lineage change is
-  retained.
-- This checkpoint adds `test_hosted_cleanup_recovers_after_published_done_before_retirement`
-  in `tests/test_control_cross_layer.py`: after actual worker execution and
-  published accepted→done integration, a deliberately injected interruption
-  occurs at the retirement call; a newly started hosted owner autonomously
-  removes checkout/local/upstream refs while keeping durable report and
-  published product result. No production code is modified in this pass.
-- The last outstanding interruption boundary is now covered by a targeted
-  real-Git service restart test. No further implementation rework is
-  requested from the inspected diff.
+The earlier exact-checkpoint CI attempt failed four process-identity/timeout
+tests. The operator reports that CI is now **green** on rerun; the external
+GitHub Actions rerun details were not independently available through the
+reviewer's connector. No code changes were made to the checkpoint between
+the failed run and this report of success.
 
-### Final verification gate
-
-**Do not declare acceptance or integrate `release/0.5.7` yet.** An
-exact-checkpoint full GitHub Actions run (pytest, coverage, Ruff) for
-`6eee5894b83578c0fd9967c0be1d981feaa05bba` could not be verified.
-Obtain its CI result and review any actual failures. This is a CI/evidence
-step, **not a request to launch another worker execution or to generate a
-new checkpoint merely to restate this review**.
-
-Leave TASK-063 in `kanban/review` pending that gate. Once the exact
-checkpoint's required checks are confirmed green, move to `accepted`
-without unnecessary additional implementation iterations.
+**Decision:** accept TASK-063 for the normal Devlegate accepted-integration
+lifecycle. Preserve published reports, exact checkpoint provenance and
+historical Git evidence. No further worker execution is requested.
