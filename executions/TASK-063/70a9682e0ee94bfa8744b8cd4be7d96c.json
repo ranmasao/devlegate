@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "06b4a43d76662d1e53178a95ce9cc2196ec0e119",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "70a9682e0ee94bfa8744b8cd4be7d96c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated the owner-hosted workspace reconciler to inspect a bounded candidate cohort before mutation and select the first independently proven eligible execution. Blocked candidates no longer consume the pass when later safe work is available, while blocked-only scans retain durable diagnostics and cursor progression."
+  },
+  "workspace_head": "e66ca1fff210ed58c2be2d52abda49f2935c7004"
+}
