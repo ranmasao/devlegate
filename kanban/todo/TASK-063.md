@@ -249,65 +249,62 @@ global Git GC, log/cache cleanup or unbounded sweeping.
 
 ## Current reviewer decision — 2026-10-18: REWORK REQUIRED
 
-**Reviewed execution:** `bcb99ad130ee4995b453b228287a84cf`.
-**Checkpoint:** `0b205c9d326ef8c297e2fe7ea56e3a1d11e0bcba`.
-**Admission control:** `37881f9d9aee0a824a8aa2468de8d81784e9fd50`.
+**Execution:** `1275ee8af21f4dbfbc47f06d3b781c6e`.
+**Checkpoint:** `dc18f6c619ec40424a01322eb7cb961d9f64d1a1`.
+**Control admission:** `91d3dfdc2138fd486737f93e81edfd8b63513a16`.
 **Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
-The worker claimed `completed`; acceptance remains blocked by missing
-mandatory end-to-end recovery and historical provenance evidence. Preserve
-all existing execution work and checkpoints; do not integrate `release/0.5.7`.
+Worker claimed `completed`. Acceptance is withheld pending the exact
+checkpoint CI gate and resolution of the trailerless provenance concern below.
+Do not integrate `release/0.5.7`.
 
-### Established — retain existing implementation and evidence
+### Established — preserve
 
-- Previously tested: normal post-publication retirement; fully absent
-  disposable refs with pending accepted integration; exact-ref CAS,
-  remote deletion lease, foreign/unknown checkout safeguards and read-only
-  `devlegate clean`.
-- The previous checkpoint `e66ca1fff210` introduced bounded eligibility
-  preflight for owner-hosted cleanup fairness.
-- **New checkpoint `0b205c9d326e` adds a 103-line real-Git owner-hosted
-  integration test** `test_hosted_cleanup_retires_later_proven_execution_after_blocked_first`
-  in `tests/test_control_workspace.py`. It creates two durable report/control
-  done histories and remote work refs; `T-1` has a dirty checkout; the
-  `LiveService` owner must fully remove `T-2` checkout/local/upstream refs
-  while retaining `T-1`. It then restarts the service, removes the blocker,
-  and requires automatic eventual retirement of `T-1`, while preserving
-  canonical done tickets and durable report evidence. This materially
-  addresses the blocked-earliest/eligible-later requirement. No production
-  code was changed in this checkpoint.
-- The preceding unregistered-checkout test exercises real ref deletion and
-  safe directory retention, but mocks integrated publication/provenance.
-- **CI caveat:** no exact-checkpoint GitHub Actions run or status was
-  confirmed for `0b205c9d326e`; the new test's intended assertions have
-  been inspected, but its actual pass/fail result was not independently
-  observed. Do not mistake the worker's `completed` claim for acceptance.
+- Prior checkpoints implement normal post-publication cleanup, no-receipt
+  rediscovery, read-only `devlegate clean`, exact-ref/remote CAS, protections
+  for unsafe worktrees, and a real-Git owner-hosted blocked-first/eligible-later
+  fairness regression (`0b205c9d326e`).
+- This checkpoint adds two substantial `LiveService` real-Git scenarios:
+  `test_hosted_cleanup_recovers_partial_stages_after_remote_outage`
+  exercises a remote outage, owner restart, ref-only leftovers, and an
+  unregistered physical checkout retained while proven refs retire;
+  `test_hosted_cleanup_retires_trailerless_history_and_retains_ambiguous_history`
+  exercises automatic trailerless-history retirement and safe retention of an
+  ambiguous candidate with read-only status diagnostics.
+- A reusable `_publish_done_execution` test fixture builds report,
+  todo→review→accepted→done control history. Keep these substantial end-to-end
+  improvements, do not repeat already-covered scenarios.
 
-### Outstanding — remaining required proofs
+### Remaining acceptance gates
 
-1. **Partial-stage restart and remote outage:** owner-hosted real-Git
-   published `done` proof covering crash before cleanup intent,
-   worktree/registration absent while local+upstream refs remain, remote-only
-   leftover, remote outage followed by restoration and automatic retry.
-   Preserve durable publication and allow unrelated runnable tickets to
-   progress. Reuse the existing fully-retired pending-state recovery test.
-2. **Trailerless historical reconciliation:** through the *same* autonomous
-   age-agnostic owner reconciler, actually remove exact, safely provable old
-   `done` resources without modern trailers; separately demonstrate an
-   ambiguous historical identity is retained with an actionable explanation.
-   Exercise live owner passes, not only direct helper invocations.
-3. **Cross-layer unregistered checkout proof:** if not already included in
-   one of the preceding scenarios, use real published-done evidence to show
-   exact disposable refs retire while an unknown/unregistered directory
-   remains safely untouched and visibly blocked.
-4. **Validation:** run focused owner-hosted tests and lint, and obtain
-   exact-final-checkpoint full GitHub Actions CI (tests/coverage/Ruff)
-   before acceptance. Investigate any failures before claiming completion.
+1. **Safety of newly broadened trailerless matching:** production change to
+   `_accepted_integration_commit_matches_report` removes
+   `parents[0] == report.control_head` for trailerless done commits, accepting
+   *any* ancestor report control head with no modern trailers. The method
+   proves ancestry, not by itself unique execution generation binding.
+   Demonstrate why `_accepted_execution_report`, canonical done transition,
+   report publication history and product/ref evidence together prevent
+   binding an older report to a later trailerless done transition for the same
+   ticket ID, or strengthen exact-generation proof. Add a **negative real-Git
+   regression** with a valid older same-ticket report/ancestor and an
+   intervening later execution or requeue, where resource deletion must be
+   refused. Never weaken safety to make a positive legacy fixture pass.
+2. **Exact-checkpoint CI:** no observed GitHub Actions result for
+   `dc18f6c619ec` in the available commit checks. Run/confirm focused
+   owner-hosted tests, lint and exact-checkpoint full GitHub Actions
+   tests/coverage/Ruff before acceptance. Resolve failures, if any.
+3. **Scope check:** the partial-stage test begins after intentional
+   `manager.retire()` rather than inducing a live owner crash at every
+   deletion boundary, and temporarily simulates remote outage by renaming
+   the remote. Check against the original no-cleanup-intent/startup and
+   actual interrupted-stage acceptance requirements; add only the missing
+   focused proof if an equivalent test does not already exist. Also verify
+   remote unavailability does not stall unrelated runnable work.
 
 ### Next execution
 
-Prioritize the positive **owner-hosted partial-stage recovery** and
-**trailerless historical** acceptance proofs. Do not reimplement the now
-covered fairness scenario or spend another iteration on isolated mocks,
-diagnostic polish or unrelated CLI changes. Preserve no-force-delete,
-remote CAS, instance ownership, read-only `clean` and original ticket
-contract. Older reviews are recoverable from control Git history.
+Prioritize proving exact historical-generation identity and covering the
+negative same-ticket trailerless case; then final CI. Do not redo the
+already-implemented hosted fairness, staged ref cleanup, unrelated CLI
+behavior or test harness architecture. Preserve safe refusal diagnostics,
+remote deletion lease, registered-path protections and durable reports.
+All past reviews remain in control Git history, not this active context.
