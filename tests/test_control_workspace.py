@@ -581,6 +581,109 @@ def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
     assert restarted._state["workspace_cleanup_cursor"] == "T-2"
 
 
+def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_path):
+    """The serialized owner must not let an unsafe first checkout starve later work."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
+    control = next((state / "worktrees").glob("*/control"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    for ticket_id in ("T-1", "T-2"):
+        (control / f"kanban/todo/{ticket_id}.md").write_text(
+            '---\n"type": "devlegate.ticket"\n'
+            f'"title": "{ticket_id}"\n---\nwork\n'
+        )
+    git(control, "add", "kanban/todo")
+    git(control, "commit", "-m", "add cleanup candidates")
+    workspaces = {}
+    for ticket_id in ("T-1", "T-2"):
+        manager = ExecutionWorkspaceManager(
+            working,
+            state / "worktrees" / next(state.glob("worktrees/*")).name,
+            ticket_id,
+        )
+        workspace = manager.prepare(base)
+        workspaces[ticket_id] = workspace
+        assert git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode == 0
+        ExecutionReportStore(control).write(
+            build_execution_report(
+                execution_id=f"cleanup-{ticket_id}",
+                ticket_id=ticket_id,
+                code_base_head=base,
+                control_head=git(control, "rev-parse", "HEAD").stdout.strip(),
+                execution_branch=workspace.branch,
+                execution_path=str(workspace.path),
+                workspace_head=workspace.head,
+                run=WorkerRunResult(
+                    0, None, WorkerClaim("completed", "done", (), ()), None
+                ),
+            )
+        )
+        (control / f"kanban/todo/{ticket_id}.md").rename(
+            control / f"kanban/review/{ticket_id}.md"
+        )
+        git(control, "add", "-A")
+        git(control, "commit", "-m", f"publish {ticket_id} execution")
+    for ticket_id in ("T-1", "T-2"):
+        (control / f"kanban/review/{ticket_id}.md").rename(
+            control / f"kanban/accepted/{ticket_id}.md"
+        )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept cleanup candidates")
+    for ticket_id in ("T-1", "T-2"):
+        (control / f"kanban/accepted/{ticket_id}.md").rename(
+            control / f"kanban/done/{ticket_id}.md"
+        )
+        git(control, "add", "-A")
+        git(
+            control,
+            "commit",
+            "-m",
+            f"{ticket_id}: Control ticket (integrated)\n\n"
+            f"Devlegate-Execution: cleanup-{ticket_id}\n"
+            f"Devlegate-Checkpoint: {base}",
+        )
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    (workspaces["T-1"].path / "unsafe.txt").write_text("retain\n")
+
+    with LiveService(working, config) as service:
+        service.wait_for(
+            lambda: (
+                not workspaces["T-2"].path.exists()
+                and resolve_commit(working, "refs/heads/devlegate/work/T-2") is None
+                and not git(
+                    working, "ls-remote", "origin", "refs/heads/devlegate/work/T-2"
+                ).stdout
+            )
+        )
+        assert workspaces["T-1"].path.joinpath("unsafe.txt").read_text() == "retain\n"
+        assert resolve_commit(working, "refs/heads/devlegate/work/T-1") == base
+        service.restart()
+        service.wait_for(lambda: workspaces["T-1"].path.is_dir())
+        (workspaces["T-1"].path / "unsafe.txt").unlink()
+        service.wait_for(
+            lambda: (
+                not workspaces["T-1"].path.exists()
+                and resolve_commit(working, "refs/heads/devlegate/work/T-1") is None
+                and not git(
+                    working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+                ).stdout
+            )
+        )
+
+    assert (control / "kanban/done/T-1.md").is_file()
+    assert (control / "kanban/done/T-2.md").is_file()
+    assert ExecutionReportStore(control).list("T-2")
+
+
 def test_workspace_cleanup_status_is_aggregate_not_last_bounded_pass(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
