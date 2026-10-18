@@ -45,7 +45,6 @@ from devlegate.execution_result import (
 )
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
-    ExecutionWorkspaceConflict,
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
     WorkspaceInspection,
@@ -4505,7 +4504,7 @@ class ServiceEngine:
 
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
-        except ExecutionWorkspaceConflict as error:
+        except ExecutionWorkspaceError as error:
             raise WorkspacePreparationBlockedError(str(error)) from error
         _log(
             "execution workspace "

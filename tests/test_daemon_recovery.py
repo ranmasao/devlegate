@@ -123,6 +123,44 @@ def test_workspace_preparation_conflict_preserves_foreground_failure_status(
     assert daemon.run_service(engine, once=True) == 1
 
 
+def test_stale_control_binding_is_a_workspace_preparation_refusal(
+    tmp_path, monkeypatch
+):
+    engine, _config, state = make_engine(tmp_path, monkeypatch)
+    base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(engine, state, workspace, base, "stale-control")
+    engine._save_state("agent_pending", execution_control_head="stale-control-revision")
+    branch_before = git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
+    binding_before = {
+        key: engine._state[key]
+        for key in (
+            "execution_id",
+            "execution_base_head",
+            "execution_control_head",
+            "execution_branch",
+            "execution_path",
+        )
+    }
+
+    with pytest.raises(
+        WorkspacePreparationBlockedError, match="control revision changed"
+    ):
+        engine.run_iteration()
+
+    assert {
+        key: engine._state[key]
+        for key in binding_before
+    } == binding_before
+    assert (
+        git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
+        == branch_before
+    )
+
+
 def test_actual_unrelated_execution_branch_keeps_hosted_service_available(
     tmp_path, monkeypatch
 ):
@@ -161,20 +199,53 @@ def test_actual_unrelated_execution_branch_keeps_hosted_service_available(
     assert not thread.is_alive()
 
 
-def test_fatal_workspace_failure_is_not_reclassified_as_blocked(
+def test_workspace_preparation_error_keeps_hosted_service_blocked_and_alive(
     tmp_path, monkeypatch
 ):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.poll_interval = "1"
+    first_iteration = threading.Event()
+    allow_failure = threading.Event()
+    stop_event = threading.Event()
+    calls = []
+
+    def prepare(_plan):
+        calls.append(True)
+        first_iteration.set()
+        allow_failure.wait(2)
+        raise ExecutionWorkspaceError("submodule materialization failed")
+
     monkeypatch.setattr(
         engine,
         "_prepare_execution_workspace",
-        lambda _plan: (_ for _ in ()).throw(
-            ExecutionWorkspaceError("submodule materialization failed")
-        ),
+        prepare,
     )
+    thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
+    thread.start()
+    assert first_iteration.wait(2)
+    allow_failure.set()
+    engine.wake()
+    deadline = time.monotonic() + 2
+    while (
+        engine.service_snapshot().lifecycle != "blocked"
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
 
-    with pytest.raises(ExecutionWorkspaceError, match="submodule materialization"):
-        engine.serve(threading.Event())
+    assert engine.service_snapshot().lifecycle == "blocked"
+    assert (
+        "submodule materialization failed"
+        in engine.service_snapshot().blocked_reason
+    )
+    assert thread.is_alive()
+    assert engine._state["phase"] == "agent_pending"
+    assert engine.service_snapshot().worker_running is False
+    stop_event.set()
+    engine.wake()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert calls
 
 @pytest.mark.parametrize("kind", ["operator_abort"])
 def test_controlled_worker_interruption_is_persisted_and_preserves_workspace(
