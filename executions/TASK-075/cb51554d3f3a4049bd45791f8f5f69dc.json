@@ -1,0 +1,29 @@
+{
+  "code_base_head": "6eee5894b83578c0fd9967c0be1d981feaa05bba",
+  "conclusion": "completed",
+  "control_head": "e3329ecd9554451877075c98b6513a61fa79d767",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-075",
+  "execution_id": "cb51554d3f3a4049bd45791f8f5f69dc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-075",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-075",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Scoped preparation blockers to the admitted execution and retained them only across matching read-only status refreshes. Successful workspace preparation and authorized unsafe-workspace recovery now clear that diagnostic, allowing the live service plan to resume normally."
+  },
+  "workspace_head": "f41143132dd57ef2b1c976e0e6cbfef6268680b6"
+}
