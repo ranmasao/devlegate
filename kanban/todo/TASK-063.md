@@ -986,7 +986,7 @@ Keep CLI `devlegate clean` read-only, previously verified safety guards intact, 
 
 ### CI for this checkpoint
 
-[Exact-checkpoint GitHub Actions #39098020465](https://github.com/ranmasao/devlegate/actions/runs/39098020465) for **`4f7919681938` is GREEN: 1272 passed, 1 skipped, coverage 78%, Ruff all checks passed**. The previous `a00ee0a4c65a` run failed due to unrelated standalone-builder `science` download hitting GitHub API 403 rate limits, and that earlier CI block is superseded by this successful exact-checkpoint run. **Retain this CI credit; remaining rejection is functional owner-convergence proof, not CI.**
+At review time [GitHub Actions #39098020465](https://github.com/ranmasao/devlegate/actions/runs/39098020465) for exact `4f7919681938` was **in progress**; tests/Ruff had not reported a completed verdict. The prior `a00ee0a4c65a` run was red solely because the unrelated standalone-builder `science` download hit GitHub API 403 rate limits (1270 passed, 1 failed, 1 skipped); do not attribute that API outage to cleanup logic. **Verify the completed exact-SHA CI before acceptance.**
 
 ### Central acceptance still missing
 
