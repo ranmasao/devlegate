@@ -322,8 +322,12 @@ def ticket(title="Ticket", body="work", depends=None):
 def _worker_script(path):
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
+        "import json, os, pathlib, sys, time\n"
         "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "ack = os.environ.get('DEVLEGATE_TEST_IDENTITY_ACK')\n"
+        "while ack and not pathlib.Path(ack).exists():\n"
+        "    time.sleep(.01)\n"
+        "sys.stdin.buffer.read()\n"
         "(workspace / 'process-worker.txt').write_text('completed\\n')\n"
         "attempts = os.environ.get('DEVLEGATE_TEST_ATTEMPTS')\n"
         "if attempts:\n"

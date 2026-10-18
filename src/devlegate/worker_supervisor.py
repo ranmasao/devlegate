@@ -511,6 +511,11 @@ def _run_opencode(
                         getattr(containment, "identity", None),
                     )
                 )
+                acknowledge_identity = getattr(
+                    containment, "acknowledge_identity", None
+                )
+                if acknowledge_identity is not None:
+                    acknowledge_identity()
             except Exception as error:
                 if process.poll() is None:
                     identity_error = f"worker identity persistence failed: {error}"

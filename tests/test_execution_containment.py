@@ -93,6 +93,24 @@ def test_durable_provider_pid_handshake_is_complete(tmp_path):
         assert boundary.wait_empty(2) is True
 
 
+def test_durable_monitor_can_lag_kernel_process_completion(tmp_path, monkeypatch):
+    provider = DurableDeterministicContainmentProvider(tmp_path / "root")
+    gate = tmp_path / "completion-gate"
+    monkeypatch.setenv("DEVLEGATE_TEST_MONITOR_COMPLETION_GATE", str(gate))
+    boundary = provider.create("fast-exit")
+    process = boundary.spawn([sys.executable, "-c", "pass"])
+
+    deadline = time.monotonic() + 2
+    while not (tmp_path / "completion-gate.ready").exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert process.poll() is None
+    assert not os.path.exists(f"/proc/{process.pid}")
+
+    (tmp_path / "completion-gate.release").write_text("release\n")
+    assert process.wait(timeout=2) == 0
+
+
 def test_durable_provider_state_transitions_are_atomic(tmp_path):
     root = tmp_path / "root"
     provider = DurableDeterministicContainmentProvider(root)

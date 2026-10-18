@@ -257,7 +257,13 @@ _DURABLE_MONITOR = (
     "   parent=entry[0]\n"
     " return members\n"
     "def d(members): w(df,'\\n'.join(members)+'\\n' if members else '')\n"
-    "returncode=p.wait();time.sleep(0.01);reap();alive=g();d(alive)\n"
+    "returncode=p.wait();"
+    # A test can hold publication after the child has exited to prove that a
+    # monitor's completion record is not kernel process-liveness evidence.
+    "gate=os.environ.get('DEVLEGATE_TEST_MONITOR_COMPLETION_GATE');"
+    "w(gate+'.ready','ready\\n') if gate else None\n"
+    "while gate and not os.path.exists(gate+'.release'): time.sleep(0.01)\n"
+    "time.sleep(0.01);reap();alive=g();d(alive)\n"
     "if not alive: reap();w(s,'absent\\n')\n"
     "et=ef+'.tmp-'+str(os.getpid());"
     "f=open(et,'w',encoding='ascii');f.write(str(returncode)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
@@ -586,6 +592,7 @@ class DurableDeterministicContainmentProvider:
             self.identity = identity
             self._process = None
             self._diagnostic_file = None
+            self._identity_ack_file = state.with_suffix(".identity-ack")
 
         def spawn(self, command: Sequence[str], **kwargs):
             self.state.parent.mkdir(parents=True, exist_ok=True)
@@ -596,6 +603,12 @@ class DurableDeterministicContainmentProvider:
             pid_file.unlink(missing_ok=True)
             exit_file.unlink(missing_ok=True)
             diagnostic_file.unlink(missing_ok=True)
+            self._identity_ack_file.unlink(missing_ok=True)
+            worker_environment = dict(kwargs.get("env") or os.environ)
+            worker_environment["DEVLEGATE_TEST_IDENTITY_ACK"] = str(
+                self._identity_ack_file
+            )
+            kwargs = {**kwargs, "env": worker_environment}
             monitor = [
                 sys.executable,
                 "-I",
@@ -631,6 +644,10 @@ class DurableDeterministicContainmentProvider:
             )
             self._diagnostic_file = diagnostic_file
             return self._process
+
+        def acknowledge_identity(self) -> None:
+            """Release a cooperative test worker after durable registration."""
+            _atomic_write(self._identity_ack_file, "registered\n")
 
         def diagnostics(self) -> str:
             """Return concrete synthetic members when retirement is blocked."""
