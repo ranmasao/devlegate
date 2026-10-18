@@ -949,3 +949,26 @@ No tests in this checkpoint exercise fresh service-owner startup/idle scheduling
 3. **One universal age-agnostic owner reconciler**: safely reclaim a genuinely provable older accepted→done generation *without current message trailers* using its independent report/product/control/ref evidence; retain a genuinely ambiguous older candidate with explicit diagnostics. Do not introduce a separate legacy mode or weaken identity proof.
 
 Keep CLI `devlegate clean` read-only, previously verified safety guards intact, and `release/0.5.7` unchanged. **REWORK REQUIRED:** move the same complete ticket (no split or replacement) from `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on canonical `devlegate/control`, preserving all previous reviewer history and reports.
+
+## Reviewer decision — 2026-10-18, execution fdf98f45: REWORK REQUIRED
+
+**Execution:** `fdf98f4598e94bfe91f1bfd16d24c8b4`; **exact work checkpoint:** `a00ee0a4c65a60ccfbdc288e5dc6f83d1b786fe7`; **control admission:** `2a7fba93f74c09e041dade56ae506baafa32e1ad`; **product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. Worker explicitly reported `incomplete`, with hosted-owner partial restart, fair eligible-later cleanup and trailerless provenance acceptance still remaining.
+
+### New working improvement (keep)
+
+- `cleanup_workspaces(apply=True)` now re-observes worktree registration/path, local ref and upstream ref after a partial failure, returning `blocked` plus `resources` with `present/absent/unknown`. Successful retirement records all three resources `absent`. This improves per-resource diagnostics without blindly removing unproven resources.
+- `test_workspace_cleanup_reports_partial_apply_resources` creates a **real Git worktree**, arranges an effectful `manager.retire()`, injects a failure at `_retire_execution_refs()`, and verifies that the checkout is removed, the local ref remains and the decision reports a blocked partial state. Credit that narrow physical partial-effect and diagnostic regression.
+- **This is not an owner crash/restart proof:** the test monkeypatches the ticket state to `done`, the report, integration lookup, and published-product checkpoint proof; it directly calls `engine.cleanup_workspaces(apply=True, limit=1)` and never starts/restarts the hosted owner or verifies autonomous convergence after the residual ref. Do not mistake this valuable narrow test for the still-required acceptance suite.
+- Retain accepted work from previous rounds: normally integrated full cleanup; recovery after *all* resources disappear but pending accepted state remains; exact-SHA local CAS/foreign worktree mitigation; symlink and unregistered checkout protections; expected-error containment.
+
+### Exact-checkpoint CI: red for an external dependency download
+
+[GitHub Actions #39078902377](https://github.com/ranmasao/devlegate/actions/runs/39078902377) at **`a00ee0a4c65a`** ended **1 failed, 1270 passed, 1 skipped**. The sole failing `tests/test_standalone_builder.py::test_standalone_assets_match_pinned_science_reference_mirror` invoked `science ... download provider PythonBuildStandalone --version 3.12.14 --release 20260901` and received GitHub API HTTP **403 `rate limit exceeded`** from `https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/20260901`. This is a concrete external rate-limit failure, **not evidence of a cleanup code regression**. The Ruff step was skipped. Re-run/check the exact checkpoint once API access is available, or stabilize this unrelated network-dependent test with an appropriate authenticated/cached fixture; do not weaken it, rewrite cleanup code, or claim full CI green on this SHA.
+
+### Central required functional acceptance (unchanged)
+
+1. **Real hosted-owner autonomous cleanup** after published canonical `done` with no cleanup receipt, after checkout/registration have disappeared but both refs remain, after local ref disappears with remote-only remainder, after a remote observation/deletion outage and subsequent restoration. Test fresh-owner startup/idle passes and eventual retirement without manual cleanup calls, preserve report/control/product and show another runnable ticket can proceed. The previously proven post-full-retirement crash replay need not be repeated.
+2. **Blocked-earliest / eligible-later fairness** using two genuinely independent integrated `done` generations: owner bounded passes must remove the later eligible checkout, registration and both refs despite earlier unsafe/dirty/ambiguous candidate, and continue after restart. Existing non-done cursor test is not proof.
+3. **Old trailerless execution** with sufficient independent evidence must actually be retired by the *same* owner reconciler; ambiguous older candidate must be blocked with a specific reason. No migration, special legacy mode, speculative deletion, or public mutating cleanup API.
+
+**REWORK REQUIRED.** Move the existing canonical ticket `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md`, retain all history and immutable execution reports. Keep `release/0.5.7` unchanged until acceptance. Prioritize functional owner tests over incremental status-only polishing.
