@@ -76,3 +76,17 @@ After successful owner-authorized `recover T-1 current --observed-head <head>`, 
 4. Verify the existing test with a focused invocation (e.g. `./dev test -q tests/test_control_recovery.py -k live_service_keeps_unsafe_recovery_authority_reachable`), plus the relevant `tests/test_daemon_recovery.py` tests and Ruff. Use existing Python tooling if this workspace lacks `.venv`, and document the environment accurately. Do not replace the real-service test with a mock, disable it, broaden retries/timeouts, change the worker protocol, or implement TASK-076's revision adoption policy as a workaround. GitHub Actions must pass on the exact new checkpoint before acceptance.
 
 **Disposition:** keep TASK-075 in review until a narrower fix proves both sides of the blocker lifetime and achieves green exact-SHA CI. The complete second-admission ticket specification remains unchanged above; this new curator note is an appended annotation, not a rewrite of worker-admitted requirements.
+
+<!-- devlegate: curator-note -->
+
+## Curator final review — 2026-10-18: ACCEPTED
+
+Accepted worker execution `cb51554d3f3a4049bd45791f8f5f69dc`, exact product checkpoint `f41143132dd57ef2b1c976e0e6cbfef6268680b6`, admitted to review at control commit `c12be13cdca919ec7b4268bc33b56bfc10138313`. Exact-checkpoint [GitHub Actions #39151851691](https://github.com/ranmasao/devlegate/actions/runs/39151851691) **SUCCESS**: complete pytest with coverage and Ruff green.
+
+- The original broad `ExecutionWorkspaceError` preparation refusal is safely translated to the pre-existing blocked workflow path without broad exception catching or worker admission.
+- The second checkpoint's read-only stale-control binding detection remains intact; its deterministic hosted status/IPC and transient same-execution recovery tests pass in full CI.
+- The third checkpoint scopes the non-persisted preparation-blocker presentation to the exact `agent_pending` execution ID, rather than caching arbitrary historic service blockers. A successful preparation or owner-authorized `recover` clears that diagnostic.
+- The previously failing *real-service* test `tests/test_control_recovery.py::test_live_service_keeps_unsafe_recovery_authority_reachable` now passes in full exact-SHA CI, proving `blocked -> authorized recover -> run-worker` without a daemon restart and without rewriting the bound execution ID.
+- Third-pass diff is confined to `src/devlegate/runtime.py` (15 additions, 5 deletions), with no persistence schema change, branch reset, implicit retry authorization, or unrelated revision-adoption policy changes.
+
+**Disposition: ACCEPTED for normal product integration.** Preserve all three execution reports and this review history. This curator note is an append-only review annotation; it does not change the admitted worker assignment.
