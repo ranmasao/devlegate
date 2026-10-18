@@ -1,0 +1,37 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "incomplete",
+  "control_head": "1ab6910b0bab9a1a9791362f1a245b2414c929c6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "878bc599177844e78f03d5a51c37726d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Hosted-owner partial-stage restart and remote-outage recovery scenarios remain unproven.",
+    "Blocked-earliest versus eligible-later autonomous convergence remains unproven.",
+    "Trailerless historical positive and ambiguous provenance cases remain unproven."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Hosted-owner partial-stage restart and remote-outage recovery scenarios remain unproven.",
+      "Blocked-earliest versus eligible-later autonomous convergence remains unproven.",
+      "Trailerless historical positive and ambiguous provenance cases remain unproven."
+    ],
+    "report": null,
+    "summary": "Added a real-Git regression for proven done execution resources with an unregistered checkout. The test verifies exact local and upstream ref retirement while retaining the unknown checkout and reporting a blocked per-resource result."
+  },
+  "workspace_head": "e3c6637f54bd9ea9eec5c3b02a90d5ead1bda7a0"
+}
