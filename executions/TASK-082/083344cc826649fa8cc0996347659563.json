@@ -1,0 +1,29 @@
+{
+  "code_base_head": "f41143132dd57ef2b1c976e0e6cbfef6268680b6",
+  "conclusion": "completed",
+  "control_head": "9ac806d2529ad8e8a26f2b91f2ac878a825aed92",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-082",
+  "execution_id": "083344cc826649fa8cc0996347659563",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-082",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-082",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Synchronized cooperative short test workers with durable identity registration before report emission. Added a deterministic durable-monitor regression for the dead-PID/unpublished-completion boundary while preserving fail-closed identity persistence behavior."
+  },
+  "workspace_head": "412fca11d553b5537cb973ef8fa94b6ac6a041b1"
+}
