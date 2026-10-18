@@ -247,26 +247,52 @@ redesign worker cgroups or Git workspace topology, delete arbitrary
 `/tmp/opencode` registrations or other project's workspaces, or perform
 global Git GC, log/cache cleanup or unbounded sweeping.
 
-## Current reviewer decision — 2026-10-18: ACCEPTED
+## Current reviewer decision — 2026-10-18: REWORK REQUIRED (FINAL VALIDATION)
 
-**Accepted checkpoint:** `6eee5894b83578c0fd9967c0be1d981feaa05bba`.
-**Latest execution:** `c9b0b628800d42dc81e30cdb362416dd`.
-**Product base at review:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
+**Execution:** `9356fa69a9704394a6adb55e1ee0b77e`.
+**Checkpoint:** `01171639e6a73489c73dd375f76a9c4dd73954d5`.
+**Admission:** `39fe59069ea491316098c8cdf0d2cd0c1a4cfb2f`.
+**Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
+Worker reported `completed`. The substantive provenance concern from the
+prior review is addressed in code and a new owner-hosted real-Git regression.
+Do not integrate `release/0.5.7` before final verification.
 
-Implementation review is complete. The final owner-hosted real-Git regression
-covers an actual published `accepted -> done` transition interrupted before
-retirement and fresh service-owner automatic convergence. Earlier checkpoints
-cover registered resource deletion, blocked-earliest/eligible-later fairness,
-restart/remote-outage ref-only recovery, safe unregistered checkout handling,
-positive and ambiguous trailerless histories, and prevention of older-report
-reuse after a later same-ticket done transition.
+### Established — do not redo
 
-The earlier exact-checkpoint CI attempt failed four process-identity/timeout
-tests. The operator reports that CI is now **green** on rerun; the external
-GitHub Actions rerun details were not independently available through the
-reviewer's connector. No code changes were made to the checkpoint between
-the failed run and this report of success.
+- Existing implementation and tests cover ordinary automatic post-done
+  cleanup, exact ref/remote deletion leases, foreign or unregistered checkout
+  protection, read-only `devlegate clean`, recoverable ref-only leftovers,
+  hosted blocked-earliest/eligible-later fairness, remote outage/restart, and
+  positive/ambiguous trailerless historical reconciliation.
+- New `_trailerless_integration_matches_report` requires that the accepted
+  commit's sole parent be the exact atomic report-admission commit, with a
+  valid ticket lifecycle transition, and that the accepted commit only move
+  review→accepted. `_find_accepted_integration_commit` considers only the
+  newest done-path change, preventing fallback to an older done generation.
+- New owner-hosted `test_hosted_cleanup_retains_requeued_trailerless_generation`
+  constructs an older trailerless done/report, then a new same-ticket done
+  generation without a matching report. It verifies that the checkout and
+  local/upstream refs survive and `clean --json` explains refusal. Although
+  actual ticket reopening is not a current Devlegate feature, the synthetic
+  history is a valid safety regression against ambiguous historical data.
 
-**Decision:** accept TASK-063 for the normal Devlegate accepted-integration
-lifecycle. Preserve published reports, exact checkpoint provenance and
-historical Git evidence. No further worker execution is requested.
+### Remaining validation gates — keep narrow
+
+1. **Exact-checkpoint CI:** no GitHub Actions run/status for
+   `01171639e6a7` was observable through current commit checks. Obtain and
+   verify full exact-checkpoint tests, coverage and Ruff. Fix only actual
+   failures; do not accept a worker `completed` claim as test evidence.
+2. **Interruption proof:** compare maintained hosted tests against the ticket's
+   explicit crash-after-published-done/before-intent and partial-stage
+   interruption cases. Existing recovery tests pre-stage leftovers using
+   `manager.retire()` and a renamed remote; confirm that the owner recovers
+   correctly after the actual interrupted lifecycle boundary, or add one
+   focused fault-injection regression for the genuinely missing boundary.
+   Confirm remote failures do not stall unrelated eligible ticket work.
+
+### Next execution
+
+Perform the final focused verification/fault-injection proof, not another
+round of speculative refactoring or duplicated legacy/fairness tests.
+Retain all strict identity, instance ownership, read-only status, exact-CAS
+and historical evidence protections. Full past review history remains in Git.
