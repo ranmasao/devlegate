@@ -4824,7 +4824,40 @@ class ServiceEngine:
         normal ticket scheduler from making progress.
         """
         try:
-            result = self.cleanup_workspaces(apply=True, limit=1)
+            # Inspect a bounded cohort first. A blocked first candidate must
+            # not consume the pass when a later candidate is independently
+            # proven eligible. The apply still handles one ticket per pass.
+            cohort = self._workspace_cleanup_cohort(32)
+            dry_run = self.cleanup_workspaces(
+                apply=False,
+                limit=max(1, len(cohort)),
+                targets=cohort,
+            )
+            eligible = next(
+                (
+                    item
+                    for item in dry_run.get("decisions", [])
+                    if isinstance(item, dict) and item.get("status") == "eligible"
+                ),
+                None,
+            )
+            if isinstance(eligible, dict) and isinstance(
+                eligible.get("ticket_id"), str
+            ):
+                selected = [
+                    target
+                    for target in cohort
+                    if target.get("ticket_id") == eligible["ticket_id"]
+                ]
+                result = self.cleanup_workspaces(
+                    apply=True,
+                    limit=1,
+                    targets=selected,
+                )
+            else:
+                # Preserve one blocked/absent diagnostic and advance the
+                # durable cursor when no candidate is currently eligible.
+                result = self.cleanup_workspaces(apply=True, limit=1)
         except (
             ExecutionWorkspaceError,
             GitAncestryError,
