@@ -1,0 +1,29 @@
+{
+  "code_base_head": "bf393bc5193a3505cc96143dd51b5a5a0c1d88db",
+  "conclusion": "completed",
+  "control_head": "91d3dfdc2138fd486737f93e81edfd8b63513a16",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-063",
+  "execution_id": "1275ee8af21f4dbfbc47f06d3b781c6e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-063",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-063",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added owner-hosted recovery coverage for partial cleanup stages, remote outages, restart discovery, remote-only refs, and protected unregistered checkouts. Enabled trailerless historical done transitions to use verified atomic report admission lineage, with owner-hosted coverage for safe retirement and ambiguous-history retention."
+  },
+  "workspace_head": "dc18f6c619ec40424a01322eb7cb961d9f64d1a1"
+}
