@@ -972,3 +972,29 @@ Keep CLI `devlegate clean` read-only, previously verified safety guards intact, 
 3. **Old trailerless execution** with sufficient independent evidence must actually be retired by the *same* owner reconciler; ambiguous older candidate must be blocked with a specific reason. No migration, special legacy mode, speculative deletion, or public mutating cleanup API.
 
 **REWORK REQUIRED.** Move the existing canonical ticket `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md`, retain all history and immutable execution reports. Keep `release/0.5.7` unchanged until acceptance. Prioritize functional owner tests over incremental status-only polishing.
+
+## Reviewer decision — 2026-10-18, execution c3c39b84: REWORK REQUIRED
+
+**Execution:** `c3c39b84bbd24987b88dd6dbbdd48454`; **workspace checkpoint:** `4f79196819381cd10debcb75c2eb33cdb51f7e80`; **control admission:** `b1a67a61f08fa508a4771e1474e6e4f56882fe94`; **unchanged product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`. The worker accurately reported `incomplete`, retaining the hosted-owner crash/restart, remote-outage, fair-convergence and legacy trailerless acceptance work.
+
+### New progress — preserve
+
+- `_workspace_cleanup_cohort()` now reconciles an unregistered direct-child checkout candidate (`head=""`) with an **exact observed local ref SHA**, falling back to an observed upstream SHA if there is no local ref. This prevents a previously discovered checkout-only path from shadowing independent ref evidence.
+- `cleanup_workspaces()` now permits **separately proven local/upstream ref retirement** when the registered worktree is absent, even if an unregistered checkout directory remains. The directory is **retained**, the apply decision is `blocked` with `worktree: present` and refs `absent`, and a non-apply observation remains blocked instead of falsely reporting a clean checkout. Foreign branch registrations remain a refusal. Retain the cautious no-unregistered-directory-deletion policy.
+- New `test_unregistered_checkout_keeps_exact_ref_identity_for_independent_cleanup` uses real Git to establish an unregistered physical directory and exact local ref, verifies cohort identity and non-destructive observation. **Its ticket remains not-done, no integration evidence is published, and it calls `cleanup_workspaces(limit=1)` without `apply`.** This proves discovery and refusal, not actual safe branch retirement or autonomous owner convergence.
+- The prior 0.5.7 product branch, immutable reports and previous safety/normal-done/post-full-retirement tests must remain intact.
+
+### CI for this checkpoint
+
+At review time [GitHub Actions #39098020465](https://github.com/ranmasao/devlegate/actions/runs/39098020465) for exact `4f7919681938` was **in progress**; tests/Ruff had not reported a completed verdict. The prior `a00ee0a4c65a` run was red solely because the unrelated standalone-builder `science` download hit GitHub API 403 rate limits (1270 passed, 1 failed, 1 skipped); do not attribute that API outage to cleanup logic. **Verify the completed exact-SHA CI before acceptance.**
+
+### Central acceptance still missing
+
+1. **Real hosted-owner, published `done` and actual automatic startup/restart/idle recovery** from before cleanup admission, after worktree/registration deletion with both refs remaining, remote-only remnant and remote outage/restore. Assert eventual cleanup, history/report preservation and next runnable ticket proceeding; never substitute direct `cleanup_workspaces` or mocking product/control proof.
+2. **Fair owner backlog convergence:** first genuinely blocked candidate; later independently eligible integrated `done` candidate; bounded owner passes across restart actually retire later worktree/registration/local+upstream branches despite the earlier blockage.
+3. **Universal trailerless history:** same owner reconciler actually retires old `done` execution resources when independent report/control/product/ref evidence establishes the exact generation; ambiguous historical candidate remains with explicit blocked reason.
+4. For the **new unregistered-directory/ref separation**, add a focused **positive** published-done, real-Git proof where refs are independently reclaimed while the unregistered physical directory stays blocked/visible. Never delete an unknown checkout based on names or a ref match alone.
+
+The worker's last several passes have mostly refined diagnostics and non-destructive helper tests, rather than closing these core owner-driven acceptance cases. Prioritize the latter; no redesign of public read-only `devlegate clean` or previously accepted safety work.
+
+**REWORK REQUIRED:** append this review to the same canonical ticket and move `kanban/review/TASK-063.md` to `kanban/todo/TASK-063.md` on `devlegate/control`. Do not modify `release/0.5.7`.
