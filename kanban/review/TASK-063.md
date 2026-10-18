@@ -247,52 +247,41 @@ redesign worker cgroups or Git workspace topology, delete arbitrary
 `/tmp/opencode` registrations or other project's workspaces, or perform
 global Git GC, log/cache cleanup or unbounded sweeping.
 
-## Current reviewer decision — 2026-10-18: REWORK REQUIRED (FINAL VALIDATION)
+## Current reviewer decision — 2026-10-18: IMPLEMENTATION REVIEW PASSED; CI PENDING
 
-**Execution:** `9356fa69a9704394a6adb55e1ee0b77e`.
-**Checkpoint:** `01171639e6a73489c73dd375f76a9c4dd73954d5`.
-**Admission:** `39fe59069ea491316098c8cdf0d2cd0c1a4cfb2f`.
+**Reviewed execution:** `c9b0b628800d42dc81e30cdb362416dd`.
+**Checkpoint:** `6eee5894b83578c0fd9967c0be1d981feaa05bba`.
+**Admission:** `c33d9044f86a4faca743318f17464e32d64bab06`.
 **Product base:** `bf393bc5193a3505cc96143dd51b5a5a0c1d88db`.
-Worker reported `completed`. The substantive provenance concern from the
-prior review is addressed in code and a new owner-hosted real-Git regression.
-Do not integrate `release/0.5.7` before final verification.
 
-### Established — do not redo
+### Established
 
-- Existing implementation and tests cover ordinary automatic post-done
-  cleanup, exact ref/remote deletion leases, foreign or unregistered checkout
-  protection, read-only `devlegate clean`, recoverable ref-only leftovers,
-  hosted blocked-earliest/eligible-later fairness, remote outage/restart, and
-  positive/ambiguous trailerless historical reconciliation.
-- New `_trailerless_integration_matches_report` requires that the accepted
-  commit's sole parent be the exact atomic report-admission commit, with a
-  valid ticket lifecycle transition, and that the accepted commit only move
-  review→accepted. `_find_accepted_integration_commit` considers only the
-  newest done-path change, preventing fallback to an older done generation.
-- New owner-hosted `test_hosted_cleanup_retains_requeued_trailerless_generation`
-  constructs an older trailerless done/report, then a new same-ticket done
-  generation without a matching report. It verifies that the checkout and
-  local/upstream refs survive and `clean --json` explains refusal. Although
-  actual ticket reopening is not a current Devlegate feature, the synthetic
-  history is a valid safety regression against ambiguous historical data.
+- Owner-hosted real-Git checks now cover published integration cleanup,
+  blocked-earliest/eligible-later fairness and subsequent retry,
+  ref-only partial-stage restart, remote outage and restoration,
+  preservation of unregistered checkouts, positive/ambiguous historical
+  trailerless cases, and a later same-ticket generation that must not reuse
+  an older report. The strict historical admission lineage change is
+  retained.
+- This checkpoint adds `test_hosted_cleanup_recovers_after_published_done_before_retirement`
+  in `tests/test_control_cross_layer.py`: after actual worker execution and
+  published accepted→done integration, a deliberately injected interruption
+  occurs at the retirement call; a newly started hosted owner autonomously
+  removes checkout/local/upstream refs while keeping durable report and
+  published product result. No production code is modified in this pass.
+- The last outstanding interruption boundary is now covered by a targeted
+  real-Git service restart test. No further implementation rework is
+  requested from the inspected diff.
 
-### Remaining validation gates — keep narrow
+### Final verification gate
 
-1. **Exact-checkpoint CI:** no GitHub Actions run/status for
-   `01171639e6a7` was observable through current commit checks. Obtain and
-   verify full exact-checkpoint tests, coverage and Ruff. Fix only actual
-   failures; do not accept a worker `completed` claim as test evidence.
-2. **Interruption proof:** compare maintained hosted tests against the ticket's
-   explicit crash-after-published-done/before-intent and partial-stage
-   interruption cases. Existing recovery tests pre-stage leftovers using
-   `manager.retire()` and a renamed remote; confirm that the owner recovers
-   correctly after the actual interrupted lifecycle boundary, or add one
-   focused fault-injection regression for the genuinely missing boundary.
-   Confirm remote failures do not stall unrelated eligible ticket work.
+**Do not declare acceptance or integrate `release/0.5.7` yet.** An
+exact-checkpoint full GitHub Actions run (pytest, coverage, Ruff) for
+`6eee5894b83578c0fd9967c0be1d981feaa05bba` could not be verified.
+Obtain its CI result and review any actual failures. This is a CI/evidence
+step, **not a request to launch another worker execution or to generate a
+new checkpoint merely to restate this review**.
 
-### Next execution
-
-Perform the final focused verification/fault-injection proof, not another
-round of speculative refactoring or duplicated legacy/fairness tests.
-Retain all strict identity, instance ownership, read-only status, exact-CAS
-and historical evidence protections. Full past review history remains in Git.
+Leave TASK-063 in `kanban/review` pending that gate. Once the exact
+checkpoint's required checks are confirmed green, move to `accepted`
+without unnecessary additional implementation iterations.
