@@ -1,0 +1,29 @@
+{
+  "code_base_head": "6eee5894b83578c0fd9967c0be1d981feaa05bba",
+  "conclusion": "completed",
+  "control_head": "532c9a7ae3a918064d10afa232a187f28ca15caa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-075",
+  "execution_id": "d17be7a68696469b888132b5abc5cf04",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-075",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-075",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Translated all execution-workspace preparation refusals into the existing blocked workflow path without broad exception handling. Added daemon recovery coverage for stale control bindings and non-conflict workspace preparation errors, preserving pending execution state and worker admission safety."
+  },
+  "workspace_head": "241c8b46a3fd55695e91356a9bd52996b2f4889d"
+}
