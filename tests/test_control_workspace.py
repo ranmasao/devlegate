@@ -476,6 +476,63 @@ def test_unregistered_checkout_keeps_exact_ref_identity_for_independent_cleanup(
     assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") == base
 
 
+def test_proven_done_unregistered_checkout_retires_refs_but_retains_checkout(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    branch = "devlegate/work/T-1"
+    git(working, "branch", branch, base)
+    git(working, "push", "origin", f"{branch}:refs/heads/{branch}")
+
+    checkout = engine.execution_worktree_root / "work/T-1"
+    checkout.mkdir(parents=True)
+    (checkout / "retain.txt").write_text("unknown checkout\n")
+    report = SimpleNamespace(
+        ticket_id="T-1",
+        execution_branch=branch,
+        execution_path=str(checkout),
+        workspace_head=base,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+    )
+    monkeypatch.setattr(engine, "_accepted_execution_report", lambda _ticket_id: report)
+    monkeypatch.setattr(
+        engine,
+        "_find_accepted_integration_commit",
+        lambda _ticket_id, _report: "a" * 40,
+    )
+    monkeypatch.setattr(
+        engine, "_prove_published_product_checkpoint", lambda *_a, **_k: None
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "blocked",
+            "reason": (
+                "workspace registration is absent; checkout retained; "
+                "execution refs proven"
+            ),
+            "resources": {
+                "worktree": "present",
+                "local_ref": "absent",
+                "upstream_ref": "absent",
+            },
+        }
+    ]
+    assert (checkout / "retain.txt").read_text() == "unknown checkout\n"
+    assert resolve_commit(engine.repo, f"refs/heads/{branch}") is None
+    assert git(working, "ls-remote", "origin", f"refs/heads/{branch}").stdout == ""
+
+
 def test_workspace_cleanup_rejects_symlinked_work_root_without_traversal(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
