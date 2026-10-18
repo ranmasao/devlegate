@@ -2396,7 +2396,7 @@ class ServiceEngine:
             ticket_id = ref[len(prefix) :]
             if not is_canonical_ticket_name(f"{ticket_id}.md"):
                 continue
-            candidates.setdefault(
+            candidate = candidates.setdefault(
                 ticket_id,
                 {
                     "ticket_id": ticket_id,
@@ -2405,6 +2405,11 @@ class ServiceEngine:
                     "head": head,
                 },
             )
+            # A lost registration can be discovered first as a checkout-only
+            # candidate.  Preserve that path identity, but retain an exact ref
+            # head so the independently safe ref stages can still converge.
+            if not candidate.get("head"):
+                candidate["head"] = head
         observed = _git(
             self.repo,
             "ls-remote",
@@ -2431,7 +2436,7 @@ class ServiceEngine:
             ticket_id = fields[1][len(prefix) :]
             if not is_canonical_ticket_name(f"{ticket_id}.md"):
                 continue
-            candidates.setdefault(
+            candidate = candidates.setdefault(
                 ticket_id,
                 {
                     "ticket_id": ticket_id,
@@ -2440,6 +2445,8 @@ class ServiceEngine:
                     "head": fields[0],
                 },
             )
+            if not candidate.get("head"):
+                candidate["head"] = fields[0]
         keys = sorted(candidates)
         if not keys:
             return []
@@ -5904,9 +5911,12 @@ class ServiceEngine:
             path = Path(target["path"]).absolute()
             registration = registrations.get(path.resolve())
             if registration is None:
-                if path.exists() or any(
+                branch_is_registered_elsewhere = any(
                     item.get("branch") == target["branch"]
                     for item in registrations.values()
+                )
+                if branch_is_registered_elsewhere or (
+                    path.exists() and not target.get("head")
                 ):
                     decisions.append(
                         {
@@ -5942,22 +5952,36 @@ class ServiceEngine:
                             self._retire_execution_refs(
                                 report.execution_branch, report.workspace_head
                             )
+                        workspace_state = "present" if path.exists() else "absent"
+                        refs_state = (
+                            {
+                                "worktree": workspace_state,
+                                "local_ref": "absent",
+                                "upstream_ref": "absent",
+                            }
+                            if apply
+                            else None
+                        )
+                        reason = (
+                            "workspace registration is absent; checkout retained; "
+                            "execution refs proven"
+                            if path.exists()
+                            else "workspace absent; execution refs proven"
+                        )
                         decisions.append(
                             {
                                 "ticket_id": ticket_id,
-                                "status": "retired" if apply else "eligible",
-                                "reason": "workspace absent; execution refs proven",
-                                **(
-                                    {
-                                        "resources": {
-                                            "worktree": "absent",
-                                            "local_ref": "absent",
-                                            "upstream_ref": "absent",
-                                        }
-                                    }
+                                "status": (
+                                    "blocked"
+                                    if apply and path.exists()
+                                    else "retired"
                                     if apply
-                                    else {}
+                                    else "blocked"
+                                    if path.exists()
+                                    else "eligible"
                                 ),
+                                "reason": reason,
+                                **({"resources": refs_state} if refs_state else {}),
                             }
                         )
                     except (

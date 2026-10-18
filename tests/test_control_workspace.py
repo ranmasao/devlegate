@@ -448,6 +448,34 @@ def test_workspace_cleanup_reports_unregistered_owned_checkout_without_deleting(
     assert (path / "unrelated.txt").read_text() == "retain\n"
 
 
+def test_unregistered_checkout_keeps_exact_ref_identity_for_independent_cleanup(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    path = engine.execution_worktree_root / "work/T-1"
+    path.mkdir(parents=True)
+    (path / "retain.txt").write_text("retain\n")
+    git(working, "branch", "devlegate/work/T-1", base)
+
+    targets = engine._workspace_cleanup_cohort(1)
+
+    assert targets == [
+        {
+            "ticket_id": "T-1",
+            "path": str(path),
+            "branch": "devlegate/work/T-1",
+            "head": base,
+        }
+    ]
+    result = engine.cleanup_workspaces(limit=1)
+    assert result["decisions"][0]["reason"] == "ticket is not durably done"
+    assert path.joinpath("retain.txt").read_text() == "retain\n"
+    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") == base
+
+
 def test_workspace_cleanup_rejects_symlinked_work_root_without_traversal(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
