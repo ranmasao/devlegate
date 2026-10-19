@@ -713,6 +713,47 @@ def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path
     assert "eligibility" in result.stderr
 
 
+def test_running_worker_defers_clean_product_descendant_to_integration(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    admitted_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    publisher = tmp_path / "product-publisher"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (publisher / "parallel.txt").write_text("parallel\n")
+        git(publisher, "add", "parallel.txt")
+        git(publisher, "commit", "-m", "parallel product advance")
+        git(publisher, "push", "origin", "main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+
+    assert run_test_iteration(devlegate) == 0
+
+    payload = state_payload(state)
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    execution_remote = git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout.split()[0]
+    assert payload.get("reconciliation") is None
+    assert payload["execution_base_head"] == admitted_base
+    assert payload["execution_validated_product_head"] != admitted_base
+    assert execution_remote == checkpoint
+
+
 def test_public_recover_owner_admission_reaches_exact_matching_operation(
     tmp_path, monkeypatch
 ):
