@@ -1,0 +1,37 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "incomplete",
+  "control_head": "310b388d9391397bc2167b503e31fd669873ae98",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "1127610013ca4c49b2d750b129bd4a4c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the required product-head fast-forward transition and checkpoint/integration reconciliation semantics.",
+    "Add the remaining interleaved-generation, dirty/unowned workspace, interrupted replay, and running-worker product advancement coverage.",
+    "Run the focused pytest selection and full checkpoint suite in an environment with the project virtualenv."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the required product-head fast-forward transition and checkpoint/integration reconciliation semantics.",
+      "Add the remaining interleaved-generation, dirty/unowned workspace, interrupted replay, and running-worker product advancement coverage.",
+      "Run the focused pytest selection and full checkpoint suite in an environment with the project virtualenv."
+    ],
+    "report": null,
+    "summary": "Separated immutable admitted control provenance from mutable validated control observations. Pending executions now adopt only proven descendant control revisions after ticket identity and runnable eligibility revalidation, with focused scheduler regressions."
+  },
+  "workspace_head": "db8b640175b635114539aa1825d046238fb46420"
+}
