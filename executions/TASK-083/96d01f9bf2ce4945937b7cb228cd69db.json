@@ -1,0 +1,29 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "completed",
+  "control_head": "86b9bac14c58886ce019df325d798e952bb7be2c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "96d01f9bf2ce4945937b7cb228cd69db",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented an explicit rework admission boundary that rotates completed execution bindings, preserves prior checkpoint evidence, and uses a REWORK worker directive. Added safe single-checkpoint carry-forward onto the current product base with remote evidence-before-replacement handling and real-Git rework coverage."
+  },
+  "workspace_head": "66955a81347a252489f6e1881d4dd6f4f7cbf859"
+}
