@@ -1,0 +1,29 @@
+{
+  "code_base_head": "412fca11d553b5537cb973ef8fa94b6ac6a041b1",
+  "conclusion": "completed",
+  "control_head": "6aaa5246e0ebed06f09a4614bb6510318cef1c39",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-079",
+  "execution_id": "a82f6e886c864c4c8f8464264339fb79",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-079",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-079/a82f6e886c864c4c8f8464264339fb79.md",
+  "report_sha256": "32f7d09eea7396881f4e10d9b533d0af39a88d35a248291950b0a0587e90ac52",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-079",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused trace evidence is retained as executable assertions rather than an execution-report artifact, per the worker contract.\n\nControl trace: `test_control_lineage_command_trace_has_only_guarded_local_effects` records exact ordered commands. Absent evidence runs `show-ref`, guarded `update-ref`, `show-ref`, `rev-parse`, then `reset`; matching evidence has four Tier-1 reads followed by reset; conflict has four Tier-1 reads and no writes; unreadable initial lookup has one Tier-1 read and no writes. No `fetch`, `push`, or `ls-remote` command occurs.\n\nWorkspace trace: `test_prior_generation_is_repaired_with_evidence_and_same_execution_id` instruments runtime, recovery, and execution-workspace Git seams. The repaired fixture executes 54 commands: 49 local observations and five local effects, in order: guarded evidence `update-ref`, worktree removal, branch expected-old `update-ref`, worktree add, and submodule update. The assertion retains the complete ordered command shape and exact ref mutation arguments. It records no `fetch`, `push`, or `ls-remote` command.\n\nThe added `show-ref` and conditional evidence `rev-parse` reads are Tier-1 local observations needed to distinguish absence, corruption, and raw ref identity. Existing guarded `update-ref` operations remain Tier-3 local mutations. No new remote operation is present. These transaction functions execute under the existing caller-provided recovery owner/lock and admission boundaries; the test scope does not alter owner, shutdown, WAL, lease, or CAS behavior.\n\nValidation run:\n- `./dev test -q tests/test_git.py tests/test_recovery_boundaries.py` -> 29 passed\n- `./dev test -q tests/test_control_recovery.py -k 'reconcile or recovery or lifecycle or evidence'` -> 112 passed\n- `./dev test -q tests/test_control_workspace.py -k 'repair or evidence or branch or worktree'` -> 24 passed, 55 deselected\n- `./dev lint` -> all checks passed",
+    "summary": "Added deterministic recovery command-trace proofs for control reconciliation and workspace repair. The traces verify guarded evidence writes, ordered local effects, complete workspace command collection, and no remote Git commands."
+  },
+  "workspace_head": "82089591940db6ed4c7f76763892a8b5bc35860e"
+}
