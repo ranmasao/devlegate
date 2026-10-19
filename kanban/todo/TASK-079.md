@@ -283,3 +283,92 @@ or product/worker branch mutations authorized.
 Move the **same TASK-079** from `kanban/review` to `kanban/todo`;
 leave TASK-083 in todo unmodified. TASK-080 and TASK-081 continue to
 depend on accepted/integrated TASK-079.
+
+## Curator review — 2026-10-19, execution bf4d0b3a: EVIDENCE REWORK REQUIRED
+
+**Checkpoint:** `0e1011f0a20468da563ccc28b84dad02e1e53658`,
+parent `a68d2431680084845131f89bfca029a03b5efc72`;
+**execution:** `bf4d0b3addea448f91e40e4429ae97bf`;
+**admitted control:** `e3a731a47cf440685db60e6c29cd747316890d16`;
+**lifecycle control:** `3cabc6653e357869228165a5bbe7e255fbf9dfa6`.
+
+### Verified — functional rework now appears complete
+
+- [Exact-checkpoint GitHub Actions #39206148649](https://github.com/ranmasao/devlegate/actions/runs/39206148649)
+  passed: **1296 passed, 1 skipped, coverage 78%, Ruff success**.
+- `git.resolve_ref_commit` now rejects unequal raw
+  `show-ref --verify` OID and `rev-parse --verify <ref>^{commit}`
+  result. This closes the previous peeled annotated-tag/wrong-object
+  evidence acceptance bug. Existing absence/read-failure semantics,
+  guarded create-if-absent, exact post-create re-observation and
+  branch/reset mutation ordering are retained.
+- Focused **real Git** parameterized tests for both control and
+  workspace evidence reject dangling and annotated-tag refs before
+  `update-ref`, `reset --hard` or worktree removal. A deterministic
+  mismatched-observation test rejects a changed ref/OID pair.
+- The checkpoint is a single commit atop prior `a68d243`, itself
+  atop `52da1ec`, preserving all earlier scoped code and tests.
+  **No new functional code blocker was found in this pass.**
+
+### Remaining formal acceptance blocker — missing executed Git command/effect trace
+
+This is the sole remaining previously explicit deliverable, not a
+request for further speculative code changes. The newest worker's
+durable report `executions/TASK-079/bf4d0b3addea448f91e40e4429ae97bf.json`
+contains `report_artifact: null` and `worker_claim.report: null`,
+and its summary contains no **executed before/after counts**.
+The previous `4934f865` execution had a descriptive command-shape
+narrative but no numerical measured accounting. No retained artifact
+currently establishes the original ticket's required auditable
+command/effect before/after trace on control and workspace recovery.
+
+**Required to complete this same ticket, preferably without additional
+production-code modifications:**
+
+1. Add focused, deterministic command-collection instrumentation at
+   the test/capability runner seam for
+   `reconcile_control_lineage` and `repair_bound_workspace`, including
+   delegated `git.py` helpers. Run them for absent, matching-existing,
+   conflicting, and observation-error evidence conditions as meaningful.
+   Supply actual *ordered invoked commands*, counted Tier-1 local reads,
+   Tier-3 local writes, worktree effects, and remote operations. Cite
+   exact focused tests and invocations; an inferred source-code inventory
+   alone is **not** the executed trace.
+2. Compare against the original `412fca11` implementation (or a small
+   faithfully invoked baseline fixture) and separately identify the
+   `52da1ec`, `a68d243`, `0e1011f` changes. In particular,
+   account for `show-ref --verify` and conditional
+   `rev-parse --verify` on each observation; explain why added reads
+   are required to distinguish absence, corruption and wrong-object
+   identity and why Tier-3 mutation counts and remote I/O are not
+   increased. Include the authorization/lock/shutdown scope confirmed
+   by execution.
+3. Persist this compact trace as a **durable worker report artifact** in
+   control history, with exact test commands and observed output/counts;
+   do not leave it solely in a temporary worker terminal log. If a
+   trace shows unexpected Git mutations, address those narrowly and
+   retest. Do not broaden Git architecture, rewrite prior checkpoints,
+   or rerun the full local coverage suite repeatedly. The existing
+   exact-SHA CI already proves the functional checkpoint; if a new
+   commit is published, confirm CI green on that exact new SHA.
+
+As an audit aid, the source-level expected shape (***not*** a measured
+trace) is: a previously absent control evidence ref used one initial
+`rev-parse`, guarded `update-ref`, and `reset`; the current path
+uses an initial `show-ref`, guarded `update-ref`, then `show-ref`
+and `rev-parse` for the new proof before reset. Matching existing
+evidence now requires both `show-ref` and `rev-parse` *twice*
+versus the previous single initial `rev-parse`. The workspace
+evidence block has analogous additional reads before its unchanged
+worktree and branch-CAS effects. Measure complete paths, not just
+this narrow illustrative subsequence.
+
+### Disposition
+
+**NOT YET ACCEPTED because required auditable trace is absent.**
+Move the same TASK-079 **review -> todo atomically** with this note.
+This is a *verification/reporting* rework, not a mandate to implement
+another Git abstraction. Preserve `e1dff2e`, `52da1ec`,
+`a68d243`, `0e1011f`, all reports, existing code and prior curator
+instructions. TASK-083 stays unchanged; TASK-080/TASK-081 remain
+blocked on integrated TASK-079.
