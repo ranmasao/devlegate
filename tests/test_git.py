@@ -200,6 +200,24 @@ def test_resolve_ref_commit_distinguishes_absent_and_corrupt_refs(tmp_path):
         git.resolve_ref_commit(tmp_path, reference, runner=corrupt_runner)
 
 
+def test_resolve_ref_commit_refuses_peeled_or_changed_identity(tmp_path):
+    reference = "refs/devlegate/recovery/control/evidence"
+    raw_object = "a" * 40
+    resolved_commit = "b" * 40
+
+    def inconsistent_runner(_cwd, *args, **_kwargs):
+        if args[:2] == ("show-ref", "--verify"):
+            return subprocess.CompletedProcess(
+                [], 0, f"{raw_object} {reference}\n", ""
+            )
+        if args[:2] == ("rev-parse", "--verify"):
+            return subprocess.CompletedProcess([], 0, f"{resolved_commit}\n", "")
+        raise AssertionError(args)
+
+    with pytest.raises(git.GitObservationError, match="exact commit"):
+        git.resolve_ref_commit(tmp_path, reference, runner=inconsistent_runner)
+
+
 def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
     calls = []
     first = "a" * 40

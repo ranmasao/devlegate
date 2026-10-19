@@ -383,6 +383,10 @@ def resolve_ref_commit(
     resolved = resolve_commit(cwd, reference, runner=runner)
     if resolved is None:
         raise GitObservationError(f"Git ref {reference!r} became unreadable")
+    if resolved != fields[0]:
+        raise GitObservationError(
+            f"Git ref {reference!r} changed or does not name an exact commit"
+        )
     return resolved
 
 

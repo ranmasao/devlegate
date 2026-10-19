@@ -2303,7 +2303,10 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     assert devlegate._state["execution_id"] == "current"
 
 
-def test_workspace_repair_dangling_evidence_ref_never_mutates(tmp_path, monkeypatch):
+@pytest.mark.parametrize("invalid_evidence", ["dangling", "annotated-tag"])
+def test_workspace_repair_invalid_evidence_ref_never_mutates(
+    tmp_path, monkeypatch, invalid_evidence
+):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2339,9 +2342,14 @@ def test_workspace_repair_dangling_evidence_ref_never_mutates(tmp_path, monkeypa
     )
     evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
     git_dir = working / git(working, "rev-parse", "--git-dir").stdout.strip()
-    evidence_path = git_dir / evidence
-    evidence_path.parent.mkdir(parents=True)
-    evidence_path.write_text(f"{'1':0>40}\n")
+    if invalid_evidence == "dangling":
+        evidence_path = git_dir / evidence
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_text(f"{'1':0>40}\n")
+    else:
+        git(working, "tag", "-a", "invalid-evidence", "-m", "invalid evidence")
+        tag = git(working, "rev-parse", "refs/tags/invalid-evidence").stdout.strip()
+        git(working, "update-ref", evidence, tag)
     calls = []
     real_git = recovery_workspace.run_git
 

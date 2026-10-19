@@ -188,15 +188,23 @@ def test_control_lineage_initial_evidence_failure_never_creates_or_resets(
     assert not any(call[:2] == ("reset", "--hard") for call in calls)
 
 
-def test_control_lineage_dangling_evidence_ref_never_mutates(tmp_path, monkeypatch):
+@pytest.mark.parametrize("invalid_evidence", ["dangling", "annotated-tag"])
+def test_control_lineage_invalid_evidence_ref_never_mutates(
+    tmp_path, monkeypatch, invalid_evidence
+):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     source = git(working, "rev-parse", "HEAD").stdout.strip()
     evidence = f"refs/devlegate/recovery/control/{source}-{source}"
     git_dir = working / git(working, "rev-parse", "--git-dir").stdout.strip()
-    evidence_path = git_dir / evidence
-    evidence_path.parent.mkdir(parents=True)
-    evidence_path.write_text(f"{'1':0>40}\n")
+    if invalid_evidence == "dangling":
+        evidence_path = git_dir / evidence
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_text(f"{'1':0>40}\n")
+    else:
+        git(working, "tag", "-a", "invalid-evidence", "-m", "invalid evidence")
+        tag = git(working, "rev-parse", "refs/tags/invalid-evidence").stdout.strip()
+        git(working, "update-ref", evidence, tag)
     calls = []
     real_git = recovery_transactions.run_git
 
