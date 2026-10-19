@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "completed",
+  "control_head": "ec5e94203d1746d452d67bee5cb3bce80451e5f4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "abbe6768d44d46bbb7475d3917892da3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added deterministic accepted-integration crash replay coverage for persisted merge intent, product checkout fast-forward, merge creation, and publication acknowledgement. Added legacy accepted-integration replay coverage after an independently advanced product branch, proving a single proven merge and preserved worker attempt."
+  },
+  "workspace_head": "605f8dc8d1c7edd9fc7004a23ca6b0f066fb7091"
+}
