@@ -122,6 +122,28 @@ def inspect_bound_workspace(
         and report.execution_branch == manager.branch
         and report.workspace_head == old_head
     ]
+    # A current generation can recreate only its absent expected worktree.
+    # An attached worktree at another path remains an ownership conflict even
+    # when its branch happens to descend from the admitted base.
+    if not prior and topology.reason == "execution worktree is missing":
+        ancestry = run_git(
+            owner.repo,
+            "merge-base",
+            "--is-ancestor",
+            base_head,
+            old_head,
+            check=False,
+        )
+        if ancestry.returncode == 0:
+            return WorkspaceInspection(
+                "RECOVERABLE",
+                "persisted execution branch is a descendant of its admitted base",
+            )
+        if ancestry.returncode:
+            return WorkspaceInspection(
+                "UNSAFE",
+                "cannot prove persisted execution branch ancestry",
+            )
     if len(prior) != 1:
         return WorkspaceInspection(
             "UNSAFE",
@@ -170,6 +192,22 @@ def repair_bound_workspace(
         and report.execution_branch == manager.branch
         and report.workspace_head == old_head
     ]
+    if not prior:
+        topology = manager.inspect(base_head)
+        if topology.reason != "execution worktree is missing":
+            raise ValueError(topology.reason)
+        ancestry = run_git(
+            owner.repo,
+            "merge-base",
+            "--is-ancestor",
+            base_head,
+            old_head,
+            check=False,
+        )
+        if ancestry.returncode:
+            raise ValueError("cannot prove persisted execution branch ancestry")
+        manager.prepare(base_head)
+        return
     if len(prior) != 1:
         raise ValueError(
             "conflicting execution branch ownership cannot be proven; "

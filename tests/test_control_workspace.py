@@ -2049,6 +2049,8 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     (execution / "implementation.txt").write_text("checkpoint\n")
     git(execution, "add", "implementation.txt")
     git(execution, "commit", "-m", "execution checkpoint")
+    execution_head = git(execution, "rev-parse", "HEAD").stdout.strip()
+    original_base = state_payload(state)["execution_base_head"]
     product = control_publisher(tmp_path)
     git(product, "switch", "main")
     (product / "product-update.txt").write_text("product\n")
@@ -2076,8 +2078,9 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     )
 
     assert invoke(working, "--once", config=config).returncode == 1
-    assert not execution.exists()
-    assert state_payload(state)["reconciliation"]["status"] == "pending"
+    assert execution.exists()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
+    assert state_payload(state)["execution_base_head"] == original_base
 
 def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
     working, config, state = control_fixture(tmp_path)

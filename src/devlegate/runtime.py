@@ -4401,14 +4401,16 @@ class ServiceEngine:
                 authorization is None
                 and not pending_agent_execution
                 and isinstance(failed_for_ticket, dict)
-                and generation_is_same
                 and failed_for_ticket.get("execution_id")
             ):
                 _log(
                     f"execution failed for {selected_ticket.id}; automatic retry "
                     "suppressed; explicit retry is required"
                 )
-                return 0
+                # Product/control movement cannot turn an execution without a
+                # durable lifecycle into ordinary new work.  It is either an
+                # explicitly authorized retry or remains a failed generation.
+                return 0 if generation_is_same else 1
             if authorization is not None and authorization.is_explicit_retry:
                 if selected_ticket.id != authorization.ticket_id:
                     raise DevlegateError(
