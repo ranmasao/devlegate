@@ -1,0 +1,35 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "incomplete",
+  "control_head": "4f0a9d8f92689ecebacce43fc5c8f984f44ee48d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "ff56eddb922e413cb2d27fba125f09e5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve the remaining interrupted-execution recovery failures in tests/test_control_workspace.py::test_recreate_after_product_advance_uses_execution_head and tests/test_control_workspace.py::test_product_advance_does_not_rebind_execution_base.",
+    "Complete the broader required crash/replay and multi-generation rework regression coverage from the curator review."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve the remaining interrupted-execution recovery failures in tests/test_control_workspace.py::test_recreate_after_product_advance_uses_execution_head and tests/test_control_workspace.py::test_product_advance_does_not_rebind_execution_base.",
+      "Complete the broader required crash/replay and multi-generation rework regression coverage from the curator review."
+    ],
+    "report": null,
+    "summary": "Added a remote predecessor re-observation before any local rework workspace transition, blocking drift after evidence publication while retaining the prior checkout. Corrected reviewed-report selection to exclude failed and zero-delta retry attempts, fixed the product-lineage fixture, and added real-Git remote-drift coverage."
+  },
+  "workspace_head": "50fab54e71102488b562a0945cc9c2513d5ffd3b"
+}
