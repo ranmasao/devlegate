@@ -163,7 +163,7 @@ def test_stale_control_binding_is_a_workspace_preparation_refusal(
     )
 
 
-def test_hosted_stale_control_refusal_survives_status_refresh(
+def test_hosted_safe_control_descendant_adoption_survives_status_refresh(
     tmp_path, monkeypatch, capsys
 ):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
@@ -191,9 +191,7 @@ def test_hosted_stale_control_refusal_survives_status_refresh(
     git(control, "push", "origin", "devlegate/control")
 
     preparation_attempted = threading.Event()
-    second_attempted = threading.Event()
-    refreshed_after_refusal = threading.Event()
-    refreshed_after_second_refusal = threading.Event()
+    refreshed_after_adoption = threading.Event()
     attempts = []
     original_prepare = engine._prepare_execution_workspace
     original_publish = engine._publish_status_snapshot
@@ -201,16 +199,12 @@ def test_hosted_stale_control_refusal_survives_status_refresh(
     def prepare(plan):
         attempts.append(plan)
         preparation_attempted.set()
-        if len(attempts) == 2:
-            second_attempted.set()
         return original_prepare(plan)
 
     def publish(snapshot):
         original_publish(snapshot)
         if preparation_attempted.is_set():
-            refreshed_after_refusal.set()
-        if second_attempted.is_set():
-            refreshed_after_second_refusal.set()
+            refreshed_after_adoption.set()
 
     monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
     monkeypatch.setattr(engine, "_publish_status_snapshot", publish)
@@ -218,34 +212,31 @@ def test_hosted_stale_control_refusal_survives_status_refresh(
     thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
     thread.start()
     assert preparation_attempted.wait(2)
-    assert refreshed_after_refusal.wait(2)
+    assert refreshed_after_adoption.wait(2)
 
     snapshot = engine.service_snapshot()
-    status = dispatch_read_only(engine, IPCRequest(1, "status", "status", {}))
-    assert snapshot.lifecycle == "blocked"
-    assert snapshot.worker_running is False
-    assert "control revision changed" in str(snapshot.blocked_reason)
-    assert status["plan"]["action"] == "blocked"
-    assert "control revision changed" in status["plan"]["reason"]
+    dispatch_read_only(engine, IPCRequest(1, "status", "status", {}))
+    assert snapshot.lifecycle == "worker"
+    assert snapshot.worker_running is True
     assert {
         key: engine._state[key]
         for key in binding_before
     } == binding_before
+    assert engine._state["execution_validated_control_head"] == git(
+        control, "rev-parse", "HEAD"
+    ).stdout.strip()
     assert (
         git(engine.repo, "rev-parse", workspace.branch).stdout.strip()
         == branch_before
     )
 
-    engine.wake()
-    assert second_attempted.wait(2)
-    assert refreshed_after_second_refusal.wait(2)
     stop_event.set()
     engine.wake()
     thread.join(timeout=3)
 
     assert not thread.is_alive()
-    assert len(attempts) == 2
-    assert capsys.readouterr().out.count("workflow blocked:") == 1
+    assert len(attempts) == 1
+    assert "workflow blocked:" not in capsys.readouterr().out
 
 
 def test_hosted_preparation_refusal_recovers_same_execution_without_restart(

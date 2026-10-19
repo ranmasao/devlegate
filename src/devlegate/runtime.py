@@ -3459,15 +3459,54 @@ class ServiceEngine:
                 raise DevlegateError(
                     "accepted integration state is only valid while idle"
                 )
+            product_transition = (
+                accepted_integration.get("product_transition")
+                if isinstance(accepted_integration, dict)
+                else None
+            )
             if (
                 not isinstance(accepted_integration, dict)
                 or set(accepted_integration)
-                != {"ticket_id", "checkpoint", "control_head"}
+                not in (
+                    {"ticket_id", "checkpoint", "control_head"},
+                    {
+                        "ticket_id",
+                        "checkpoint",
+                        "control_head",
+                        "product_transition",
+                    },
+                )
                 or not (
                     isinstance(accepted_integration.get("ticket_id"), str)
                     and bool(accepted_integration["ticket_id"])
                     and _is_git_identity(accepted_integration.get("checkpoint"))
                     and _is_git_identity(accepted_integration.get("control_head"))
+                )
+                or (
+                    product_transition is not None
+                    and (
+                        not isinstance(product_transition, dict)
+                        or set(product_transition)
+                        not in (
+                            {"status", "admitted_base", "predecessor"},
+                            {
+                                "status",
+                                "admitted_base",
+                                "predecessor",
+                                "integration",
+                            },
+                        )
+                        or product_transition.get("status")
+                        not in {"merging", "merged", "published"}
+                        or not _is_git_identity(product_transition.get("admitted_base"))
+                        or not _is_git_identity(product_transition.get("predecessor"))
+                        or (
+                            product_transition.get("status") in {"merged", "published"}
+                            and not _is_git_identity(
+                                product_transition.get("integration")
+                            )
+                        )
+                    )
                 )
             ):
                 raise DevlegateError("invalid accepted integration state")
@@ -5685,7 +5724,8 @@ class ServiceEngine:
             )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
-                "control revision ancestry cannot be proven during preparation"
+                "control revision changed and ancestry cannot be proven "
+                "during preparation"
             ) from error
         if not descendant:
             raise ExecutionWorkspaceError(
@@ -7526,42 +7566,96 @@ class ServiceEngine:
                 "product history diverged from accepted checkpoint; "
                 "per-execution reconciliation is required"
             )
+        pending = self._state.get("accepted_integration")
+        if not isinstance(pending, dict):
+            raise WorkflowBlockedError("accepted integration state is unavailable")
+        transition = pending.get("product_transition")
+        if transition is None:
+            transition = {
+                "status": "merging",
+                "admitted_base": admitted_base,
+                "predecessor": product_head,
+            }
+            # Persist intent before mutating the shared product checkout. A
+            # restart can then distinguish our exact local merge from foreign work.
+            self._save_state(
+                "idle",
+                accepted_integration={**pending, "product_transition": transition},
+            )
+        if not isinstance(transition, dict) or (
+            transition.get("admitted_base") != admitted_base
+            or not isinstance(transition.get("predecessor"), str)
+        ):
+            raise WorkflowBlockedError("accepted product transition is inconsistent")
+        predecessor = transition["predecessor"]
+        if product_head != predecessor:
+            raise WorkflowBlockedError(
+                "product branch changed during descendant integration"
+            )
         current = self._resolve_commit_runtime(self.repo, "HEAD")
         branch_matches = self._branch_runtime(self.repo) == self.current_branch
         if not branch_matches or self._status_runtime(self.repo):
             raise WorkflowBlockedError("product checkout is not safely synchronized")
-        if current != product_head:
-            if current != admitted_base:
+        integrated: str | None = None
+        if current != predecessor:
+            parents = (
+                commit_parents(self.repo, current, runner=_git)
+                if isinstance(current, str)
+                else None
+            )
+            if parents == (predecessor, checkpoint):
+                integrated = current
+            elif current != admitted_base:
                 raise WorkflowBlockedError(
                     "product checkout changed before descendant integration"
                 )
-            merged = self._merge_fast_forward_runtime(
-                self.repo,
-                f"{self.remote_name}/{self.remote_branch}",
-                admitted_base,
-                product_head,
+            else:
+                merged = self._merge_fast_forward_runtime(
+                    self.repo,
+                    f"{self.remote_name}/{self.remote_branch}",
+                    admitted_base,
+                    predecessor,
+                )
+                if merged.returncode:
+                    raise WorkflowBlockedError(
+                        "product checkout cannot be synchronized"
+                    )
+        if integrated is None:
+            merge = self._git_runtime(
+                self.repo, "merge", "--no-ff", "--no-edit", checkpoint, check=False
             )
-            if merged.returncode:
-                raise WorkflowBlockedError("product checkout cannot be synchronized")
-        merge = self._git_runtime(
-            self.repo, "merge", "--no-ff", "--no-edit", checkpoint, check=False
-        )
-        if merge.returncode:
-            self._git_runtime(self.repo, "merge", "--abort", check=False)
-            raise WorkflowBlockedError(
-                "product descendant conflicts with accepted checkpoint; "
-                "per-execution reconciliation is required"
-            )
-        integrated = self._resolve_commit_runtime(self.repo, "HEAD")
+            if merge.returncode:
+                self._git_runtime(self.repo, "merge", "--abort", check=False)
+                raise WorkflowBlockedError(
+                    "product descendant conflicts with accepted checkpoint; "
+                    "per-execution reconciliation is required"
+                )
+            integrated = self._resolve_commit_runtime(self.repo, "HEAD")
         if integrated is None or not is_ancestor(
             self.repo, checkpoint, integrated, runner=_git
         ):
             raise WorkflowBlockedError("accepted checkpoint merge could not be proven")
+        if (
+            transition.get("status") in {"merged", "published"}
+            and transition.get("integration") != integrated
+        ):
+            raise WorkflowBlockedError("accepted product publication is inconsistent")
+        if transition.get("status") != "published":
+            transition = {
+                "status": "merged",
+                "admitted_base": admitted_base,
+                "predecessor": predecessor,
+                "integration": integrated,
+            }
+            self._save_state(
+                "idle",
+                accepted_integration={**pending, "product_transition": transition},
+            )
         pushed = push_refs(
             self.repo,
             self.remote_name,
             f"{integrated}:{product_ref}",
-            options=(f"--force-with-lease={product_ref}:{product_head}",),
+            options=(f"--force-with-lease={product_ref}:{predecessor}",),
             runner=_git,
         )
         if pushed.returncode:
@@ -7572,6 +7666,18 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "product branch changed during descendant integration"
                 )
+        self._save_state(
+            "idle",
+            accepted_integration={
+                **pending,
+                "product_transition": {
+                    "status": "published",
+                    "admitted_base": admitted_base,
+                    "predecessor": predecessor,
+                    "integration": integrated,
+                },
+            },
+        )
 
     def _persist_product_reconciliation(
         self,
