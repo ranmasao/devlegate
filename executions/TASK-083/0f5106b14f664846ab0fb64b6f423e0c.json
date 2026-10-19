@@ -1,0 +1,29 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "completed",
+  "control_head": "f24c76d74332751ebef75bf4d5a69535e8332d58",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "0f5106b14f664846ab0fb64b6f423e0c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened ordinary rework admission with exact predecessor selection, typed immutable evidence pinning, remote evidence publication before local workspace mutation, and durable preparation stages. Rework workspace preparation now carries proven linear multi-commit deltas, recognizes already-integrated checkpoints, and rejects arbitrary descendant replay states. Added a real-Git regression for multi-commit rework porting and exact replay."
+  },
+  "workspace_head": "82dc6ddf4f63f1aab360258f1dddf49ff185c01c"
+}
