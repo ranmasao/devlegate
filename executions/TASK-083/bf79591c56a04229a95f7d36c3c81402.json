@@ -1,0 +1,35 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "incomplete",
+  "control_head": "24d3879f91950599371733cef3fbad2826a3ddcd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "bf79591c56a04229a95f7d36c3c81402",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add the required deterministic crash/replay, remote-drift, evidence-race, and multi-generation rework regressions.",
+    "Resolve the remaining focused lineage fixture failure where the product-base publisher commits on devlegate/control rather than main, then rerun the specified focused suites."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add the required deterministic crash/replay, remote-drift, evidence-race, and multi-generation rework regressions.",
+      "Resolve the remaining focused lineage fixture failure where the product-base publisher commits on devlegate/control rather than main, then rerun the specified focused suites."
+    ],
+    "report": null,
+    "summary": "Corrected rework Git ancestry and patch-equivalence validation, including safe absent-ref handling for zero-delta history. Rework admission now binds the newest exact reviewed lifecycle report, and remote evidence uses raw refs with replay-boundary re-observation."
+  },
+  "workspace_head": "39913d77d396c5d8082f12232828d009d931c803"
+}
