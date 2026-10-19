@@ -372,3 +372,76 @@ another Git abstraction. Preserve `e1dff2e`, `52da1ec`,
 `a68d243`, `0e1011f`, all reports, existing code and prior curator
 instructions. TASK-083 stays unchanged; TASK-080/TASK-081 remain
 blocked on integrated TASK-079.
+
+## Curator acceptance — 2026-10-19, execution a82f6e88: ACCEPTED
+
+**Final worker execution:** `a82f6e886c864c4c8f8464264339fb79`;
+**exact checkpoint:** `82089591940db6ed4c7f76763892a8b5bc35860e`;
+**parent:** `0e1011f0a20468da563ccc28b84dad02e1e53658`;
+**code base:** `412fca11d553b5537cb973ef8fa94b6ac6a041b1`.
+Previous worker reports/checkpoints and review instructions are retained.
+The complete linear TASK-079 implementation is four commits ahead of that
+product base, with no unrelated/behind history in the reviewed comparison.
+
+### Exact-checkpoint CI and functional review
+
+[GitHub Actions #39208028204](https://github.com/ranmasao/devlegate/actions/runs/39208028204)
+on the **exact checkpoint**: **1300 passed, 1 skipped**,
+**78% coverage**, and **Ruff all checks passed**.
+
+The prior fail-closed blockers were independently reviewed and resolved:
+- Git execution/OS failures are observation errors, not absent refs;
+- exact evidence-ref existence distinguishes absent vs dangling/corrupt refs;
+- raw `show-ref` OID must equal validated `rev-parse ref^{commit}`
+  OID, refusing peeled annotated tags and changed/inconsistent identity;
+- guarded create-if-absent evidence pins are re-observed before local
+  control reset or workspace branch/worktree effects;
+- matching pins replay idempotently; conflicts/read failures do not
+  authorize writes; real-Git and deterministic injected-race regressions
+  cover both control and execution workspace recovery.
+
+### Command/effect trace acceptance
+
+The final execution retains the descriptive report artifact
+`executions/TASK-079/a82f6e886c864c4c8f8464264339fb79.md`
+and **executable complete command-trace assertions** in
+`tests/test_control_recovery.py::
+test_control_lineage_command_trace_has_only_guarded_local_effects`
+and `tests/test_control_workspace.py::
+test_prior_generation_is_repaired_with_evidence_and_same_execution_id`.
+The test suite executes these assertions at the accepted SHA.
+
+Measured current control-path sequences:
+- absent evidence: `show-ref, update-ref(create), show-ref, rev-parse,
+  reset` = 5 calls; **2 local writes**, **3 local observations**;
+- already matching evidence: `show-ref, rev-parse, show-ref, rev-parse,
+  reset` = 5 calls; **1 local write**, **4 observations**;
+- conflicting evidence: `show-ref, rev-parse, show-ref, rev-parse`
+  = 4 calls; **0 writes**, **4 observations**;
+- unreadable initial evidence: `show-ref` = 1 call; **0 writes**.
+
+The real-Git workspace repair success test captures **54 commands**:
+**49 nonmutating local calls** and exactly **5 local effects**, ordered
+as guarded evidence ref creation -> worktree removal -> expected-old
+branch CAS -> worktree creation -> submodule update. Zero `fetch`,
+`push`, or `ls-remote` occur in those traced transactions.
+The command list, operation arguments and local-effect sequence are
+asserted in the test, not inferred solely from the worker prose.
+
+For reviewer baseline comparison, the original `412fca11` source
+path (not rerun as a separate instrumented baseline) has:
+control absent/matching/conflict **3/2/1** local commands versus
+current **5/5/4**. The analogous absent-evidence workspace path has
+**52 vs 54** commands, inferred by applying the exact additional two
+local observation calls to the otherwise unchanged 54-command
+traced scenario. No added Tier-3 mutation or remote operation results
+from these differences. This analytic baseline limitation is explicitly
+recorded; it does not negate the observed current command trace or
+the narrow safety proof. Existing service owner/lock, repeated admission,
+WAL, shutdown and CAS authority remain unchanged.
+
+**Decision: ACCEPTED.** Move the *same ticket with all prior reviews*
+from `kanban/review/TASK-079.md` to
+`kanban/accepted/TASK-079.md`. Do not edit the worker branch, execution
+reports, product branch, or TASK-083. Devlegate remains responsible
+for normal accepted integration and the subsequent `done` transition.
