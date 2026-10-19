@@ -623,7 +623,7 @@ def test_completed_generation_retains_attempt_authority_when_control_advances(tm
     assert final_control_head == control_head
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_base
 
-def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
+def test_bound_pending_generation_adopts_safe_control_descendant(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -663,7 +663,35 @@ def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(
     payload = state_payload(state)
     assert payload["execution_control_head"] == original["handled_control_head"]
     assert payload["execution_control_head"] != current_control
-    assert "stale execution" in result.stderr
+    assert payload["execution_validated_control_head"] == current_control
+    assert "stale execution" not in result.stderr
+
+
+def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "--once", config=config).returncode == 1
+    original = state_payload(state)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwait\n'
+    )
+    (control / "kanban/todo/T-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "First"\n'
+        '"depends_on":\n  - "D-1"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo")
+    git(control, "commit", "-m", "block pending ticket")
+    git(control, "push", "origin", "devlegate/control")
+
+    result = invoke(working, "--once", config=config)
+
+    payload = state_payload(state)
+    assert result.returncode == 1
+    assert payload["execution_id"] == original["execution_id"]
+    assert payload["execution_control_head"] == original["execution_control_head"]
+    assert "eligibility" in result.stderr
+
 
 def test_public_recover_owner_admission_reaches_exact_matching_operation(
     tmp_path, monkeypatch
