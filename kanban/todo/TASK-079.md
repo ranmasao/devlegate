@@ -185,3 +185,101 @@ modifications are authorized by this review.
 and this review appended. The newer TASK-083 rework-protocol ticket remains
 unmodified in todo. TASK-080 and TASK-081 stay dependent on accepted/integrated
 TASK-079.
+
+## Curator review — 2026-10-19, execution 4934f865: REWORK REQUIRED
+
+**Execution:** `4934f8653fae4be0af7d623177b4af16`.
+**Exact checkpoint:** `a68d2431680084845131f89bfca029a03b5efc72`
+(parent `52da1ec3d28333a061e0f189c82aca88b594a582`);
+admitted control `6753f41ca90532d2e734b9fabd39c78714c43de5`,
+lifecycle control `d23a9f1e019b8d1272a807aaef158d24c67c7401`.
+
+### Verified improvements
+
+- [Exact-SHA CI #39204299716](https://github.com/ranmasao/devlegate/actions/runs/39204299716):
+  **1293 passed, 1 skipped; 78% coverage; Ruff all checks passed**.
+  Worker report `completed`, no remaining items.
+- New `git.resolve_ref_commit()` queries `show-ref --verify` before
+  `rev-parse --verify ref^{commit}`. Real Git regression cases for a
+  dangling evidence ref now demonstrate refusal before `update-ref`,
+  `reset --hard`, branch CAS and workspace removal. Initial Git
+  observation failure also has a negative control-path test.
+- Control and workspace evidence paths use the new helper and preserve
+  guarded create-if-absent, re-observation and existing owner constraints.
+  No additional remote Git effect is visible in the source diff.
+  The execution report provides a useful **command-shape narrative**,
+  but it does not include measured before/after counts.
+
+### Blocking finding: exact raw evidence OID not verified
+
+`src/devlegate/git.py::resolve_ref_commit()` reads
+`fields[0]` from `git show-ref --verify <ref>`, validates only that it is
+40-hex, and then returns `resolve_commit(<ref>)`. It never checks that
+the **raw ref target** `fields[0]` equals the **resolved commit**.
+Git's `^{commit}` peeling permits a ref pointing to an annotated tag to
+be accepted as evidence for the tag's commit. This violates the ticket's
+exact-identity and wrong-object rejection requirement: an evidence ref
+must name the exact historical **commit object**, not any peelable object.
+It also misses ref changes between the two observations when they resolve
+to an otherwise acceptable commit.
+
+Independently reproduced in a disposable real Git repository:
+
+```sh
+git init -q
+git -c user.name=Test -c user.email=t@t commit --allow-empty -qm initial
+expected=$(git rev-parse HEAD)
+git -c user.name=Test -c user.email=t@t tag -a evidence-tag -m annotated
+tag_oid=$(git rev-parse refs/tags/evidence-tag)
+ref=refs/devlegate/recovery/control/probe
+git update-ref "$ref" "$tag_oid"
+git show-ref --verify "$ref"           # <tag_oid> <ref>
+git rev-parse --verify "${ref}^{commit}"  # <expected> (different OID!)
+```
+
+For the tested implementation,
+`resolve_ref_commit(repo, ref)` returns `expected`, even though the
+actual ref target is `tag_oid != expected`. Consequently
+`reconcile_control_lineage()` may treat this existing wrong-object
+evidence as an exact displaced-head pin and proceed to reset. The
+workspace recovery path shares the same flaw.
+
+**Required narrowly scoped fix:** after successful exact `show-ref`,
+require the raw ref OID to equal the validated commit OID returned by
+`rev-parse`, otherwise fail with `GitObservationError` *before*
+any evidence create, control reset, execution branch CAS or worktree
+removal. Handle an exact ref switched between the two observations in
+the same fail-closed manner; do not silently accept peeling. Preserve
+true-absence, dangling-ref, read-error and create-race behavior.
+
+Add a real Git regression with an **annotated tag** as the target of
+the control evidence ref, and an analogous workspace recovery case,
+both asserting no subsequent mutation. Add a deterministic
+`show-ref`/`rev-parse` inconsistent-identity race case with the
+same refusal. Keep earlier verified real-Git dangling-ref tests intact.
+
+### Still required: executed Git-effect accounting
+
+The execution report lists command forms, tiers and ordering, but its
+"executed trace" section contains no actual per-scenario command records
+or before/after numeric counts. Prior curator acceptance explicitly
+requires **executed** and auditable accounting, including helper-internal
+`show-ref`, `rev-parse`, `update-ref`, `reset` and worktree commands.
+Supply compact tested/traced counts for **control** and **workspace** paths
+(absent/ref-existing/conflicting as appropriate) and compare the
+before/current call sequences; attribute the added local reads,
+unchanged Tier-3 writes and zero added remote operations. No full
+suite repetition in worker checkout is needed.
+
+### Disposition
+
+**NOT ACCEPTED.** Preserve checkpoint `a68d24316800`, prior
+`52da1ec3` and `e1dff2e` history, all execution reports and curator
+notes. Fix the raw identity mismatch, add the focused negative tests,
+supply the requested concise executed command/effect trace and obtain
+green exact-SHA CI. No general-purpose Git ref framework, force pushes
+or product/worker branch mutations authorized.
+
+Move the **same TASK-079** from `kanban/review` to `kanban/todo`;
+leave TASK-083 in todo unmodified. TASK-080 and TASK-081 continue to
+depend on accepted/integrated TASK-079.
