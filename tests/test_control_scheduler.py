@@ -754,6 +754,71 @@ def test_running_worker_defers_clean_product_descendant_to_integration(
     assert execution_remote == checkpoint
 
 
+@pytest.mark.parametrize("crash_after_push", [False, True])
+def test_descendant_integration_replays_interrupted_product_merge(
+    tmp_path, monkeypatch, crash_after_push
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    publisher = tmp_path / "product-publisher"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        (publisher / "parallel.txt").write_text("parallel\n")
+        git(publisher, "add", "parallel.txt")
+        git(publisher, "commit", "-m", "parallel product advance")
+        git(publisher, "push", "origin", "main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-1")
+    git(control, "push", "origin", "devlegate/control")
+    original_push = runtime.push_refs
+
+    def interrupting_push(repo, remote, refspec, **kwargs):
+        if repo == devlegate.repo and "refs/heads/main" in refspec:
+            if crash_after_push:
+                result = original_push(repo, remote, refspec, **kwargs)
+                assert result.returncode == 0
+            raise SystemExit("interrupted descendant integration")
+        return original_push(repo, remote, refspec, **kwargs)
+
+    monkeypatch.setattr(runtime, "push_refs", interrupting_push)
+    with pytest.raises(SystemExit, match="interrupted descendant integration"):
+        run_test_iteration(devlegate)
+    payload = state_payload(state)
+    assert payload["accepted_integration"]["product_transition"]["status"] == "merged"
+    monkeypatch.setattr(runtime, "push_refs", original_push)
+    restarted = Devlegate(config)
+    assert run_test_iteration(restarted) == 0
+    product_head = git(
+        working, "ls-remote", "origin", "refs/heads/main"
+    ).stdout.split()[0]
+    assert (
+        git(working, "merge-base", "--is-ancestor", "HEAD", product_head).returncode
+        == 0
+    )
+    assert (
+        git(working, "show", f"{product_head}:implementation.txt").stdout
+        == "worker\n"
+    )
+    assert git(working, "show", f"{product_head}:parallel.txt").stdout == "parallel\n"
+    assert (control / "kanban/done/T-1.md").is_file()
+
+
 def test_public_recover_owner_admission_reaches_exact_matching_operation(
     tmp_path, monkeypatch
 ):
