@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "completed",
+  "control_head": "12c4aa538b52ef14a493b431cb56a63e4b08a96e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "c3f295af6aa14c1aa03b273a4ebf0abe",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added focused TASK-076 regressions for rejected ticket-content changes, accepted-integration merge conflicts that preserve checkpoint evidence, and interleaved execution generations retaining distinct admission provenance. Preserved the existing runtime implementation and transition behavior."
+  },
+  "workspace_head": "08eff0f506409126dcbffa15ee509c75a69e94c6"
+}
