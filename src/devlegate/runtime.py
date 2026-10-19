@@ -3618,6 +3618,7 @@ class ServiceEngine:
                 "execution_ticket_id",
                 "execution_base_head",
                 "execution_control_head",
+                "execution_validated_control_head",
                 "execution_branch",
                 "execution_path",
                 "execution_id",
@@ -4552,6 +4553,9 @@ class ServiceEngine:
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
                 execution_control_head=bound_execution_control,
+                # This is a mutable observation.  The execution_control_head
+                # remains the immutable admission provenance for this attempt.
+                execution_validated_control_head=control_head,
                 execution_branch=f"devlegate/work/{selected_ticket.id}",
                 execution_path=str(
                     self.execution_worktree_root / "work" / selected_ticket.id
@@ -4634,7 +4638,6 @@ class ServiceEngine:
             execution_start_head=workspace.head,
             execution_ticket_id=selected_ticket.id,
             execution_base_head=workspace.base_head,
-            execution_control_head=str(self._state["control_head"]),
             execution_branch=workspace.branch,
             execution_path=str(workspace.path),
             execution_id=execution_id,
@@ -5411,10 +5414,9 @@ class ServiceEngine:
             else None
         )
         base_head = bound_base if isinstance(bound_base, str) else plan.code.local_head
-        if isinstance(bound_control, str) and bound_control != plan.control.local_head:
-            raise ExecutionWorkspaceError(
-                "control revision changed after execution was planned; refusing "
-                "stale execution"
+        if isinstance(bound_control, str):
+            self._adopt_validated_control_descendant(
+                plan.control.local_head, plan.ticket_id, bound_control
             )
         if not isinstance(bound_base, str) and plan.code.local_head != base_head:
             raise ExecutionWorkspaceError(
@@ -5477,11 +5479,68 @@ class ServiceEngine:
             workspace = manager.prepare(base_head)
         current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
-            raise ExecutionWorkspaceError(
-                "control revision changed during workspace preparation; refusing "
-                "stale execution"
+            self._adopt_validated_control_descendant(
+                current_control,
+                plan.ticket_id,
+                str(bound_control or plan.control.local_head),
             )
         return workspace
+
+    def _adopt_validated_control_descendant(
+        self, candidate: str, ticket_id: str, admitted_control: str
+    ) -> None:
+        """Adopt a proven-safe planning observation without rewriting admission.
+
+        A pending execution owns an immutable control revision for its report and
+        lifecycle proof.  A later control fast-forward is only an observation
+        until the selected ticket and its runnable prerequisites are revalidated.
+        """
+        if candidate == admitted_control:
+            return
+        try:
+            descendant = is_ancestor(
+                self.control_worktree, admitted_control, candidate, runner=_git
+            )
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                "control revision ancestry cannot be proven during preparation"
+            ) from error
+        if not descendant:
+            raise ExecutionWorkspaceError(
+                "control history diverged from the execution admission generation; "
+                "per-execution reconciliation is required"
+            )
+        try:
+            ticket_store = self._ticket_store()
+        except TicketError as error:
+            raise ExecutionWorkspaceError(
+                "updated control revision cannot be validated for this execution"
+            ) from error
+        ticket = ticket_store.by_id.get(ticket_id)
+        selected_body = self._state.get("selected_ticket_body")
+        selected_title = self._state.get("selected_ticket_title")
+        if (
+            ticket is None
+            or ticket.state != "todo"
+            or ticket not in ticket_store.runnable
+            or ticket.body != selected_body
+            or (
+                isinstance(selected_title, str)
+                and ticket.title != selected_title
+            )
+        ):
+            raise ExecutionWorkspaceError(
+                "control descendant changed execution ticket eligibility; "
+                "per-execution reconciliation is required"
+            )
+        # Persist the adoption before any worker launch.  Replay repeats this
+        # proof against the immutable admitted_control rather than trusting the
+        # mutable observation.
+        self._save_state(
+            "agent_pending",
+            control_head=candidate,
+            execution_validated_control_head=candidate,
+        )
 
     def _pin_rework_evidence(
         self, ticket_id: str, execution_id: str, checkpoint: str
