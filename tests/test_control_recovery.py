@@ -291,6 +291,15 @@ def test_accepted_integration_state_requires_idle_and_exact_identity():
         runtime.ServiceEngine._validate_state_invariant(
             {"phase": "agent_running", "accepted_integration": complete}
         )
+    runtime.ServiceEngine._validate_state_invariant(
+        {
+            "phase": "idle",
+            "accepted_integration": {
+                **complete,
+                "control_predecessor": "c" * 40,
+            },
+        }
+    )
 
 @pytest.mark.parametrize(
     ("stable", "execution_remote_head", "expected_class"),

@@ -66,17 +66,27 @@ the product reconciliation A/B/H coordinates:
 
 * `R` is the exact control HEAD persisted at accepted-integration admission.
 * `H` is the accepted product checkpoint persisted with the ticket intent.
-* `C` is the exact accepted-to-done control commit, with `parent(C) == R`.
+* `P` is the durable, observed control predecessor for `C`; fresh intents set
+  `P == R`, while verified recovery can advance only `P` once.
+* `C` is the exact accepted-to-done control commit, with `parent(C) == P`.
 
 The durable intent is `ticket_id + H + R`. Recovery starts from that exact
 persisted provenance. `C` is not discovered by arbitrary history search. A
 valid `C` somewhere in ancestry does not authorize publishing any descendant;
 automatic unpublished recovery is valid only for exact `C` rooted directly at
-`R`.
+the durable predecessor `P`.
+
+Replay can adopt a descendant `P` only before the done effect, after
+proving `R` is its ancestor, local and remote both equal `P`, the accepted
+ticket and its execution-evidence tree are byte-identical at `R` and `P`, and
+the ticket remains accepted with all dependencies done. It writes `P` to the
+intent before creating `C`; `R` and the execution admission identity remain
+immutable. Control publication always leases the observed `P`; a failed push
+is accepted only when re-observation proves the exact `C` was published.
 
 | Control topology | Recovery rule |
 | --- | --- |
-| local=R, remote=R, before control effect | Create and prove exact C from R; no intervening control generation is allowed |
+| local=P, remote=P, before control effect | Create and prove exact C from P; no intervening control generation is allowed |
 | local=R--C, remote=R | Publish exact SHA C, never generic HEAD |
 | local=R--C--X, remote=R | Fail closed; valid C does not authorize descendant X |
 | local=R--X, remote=R | Fail closed |
