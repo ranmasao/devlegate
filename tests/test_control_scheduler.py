@@ -595,12 +595,14 @@ def test_control_fast_forward_logs_generation_change(tmp_path, monkeypatch, caps
     assert new_head != old_head
     assert f"control updated: {old_head} -> {new_head}" in output
 
-def test_new_control_generation_refreshes_attempt_authority(tmp_path):
+def test_completed_generation_retains_attempt_authority_when_control_advances(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "--once", config=config).returncode == 1
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    original_base = state_payload(state)["execution_base_head"]
+    previous = state_payload(state)
+    original_base = previous["execution_base_head"]
+    previous_control_head = previous["execution_control_head"]
     control = next((state / "worktrees").glob("*/control"))
     (control / "unrelated.md").write_text("architect note\n")
     git(control, "add", "unrelated.md")
@@ -614,8 +616,11 @@ def test_new_control_generation_refreshes_attempt_authority(tmp_path):
     payload = state_payload(state)
     assert payload["execution_base_head"] == original_base
     final_control_head = git(control, "rev-parse", "HEAD").stdout.strip()
-    assert payload["execution_control_head"] == final_control_head
-    assert final_control_head != control_head
+    # The first execution completed and retained its immutable lifecycle
+    # binding. An unrelated control update is not a new admission.
+    assert payload["execution_control_head"] == previous_control_head
+    assert payload["execution_control_head"] != final_control_head
+    assert final_control_head == control_head
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_base
 
 def test_bound_pending_generation_preserves_authority_and_rejects_stale_control(

@@ -879,6 +879,7 @@ class ServiceEngine:
                         )
                     if force:
                         self._lifecycle_force = True
+                        self._record_forced_lifecycle_abort()
                         stop_event = self._stop_event
                         if stop_event is not None:
                             request_abort = getattr(stop_event, "request", None)
@@ -894,31 +895,8 @@ class ServiceEngine:
                 self._lifecycle_phase = "draining"
                 self._lifecycle_request_id = request_id
                 self._lifecycle_force = force
-                if (
-                    intent == "stop"
-                    and force
-                    and self._state.get("phase") in {"agent_pending", "agent_running"}
-                    and all(
-                        isinstance(self._state.get(field), str) and self._state[field]
-                        for field in (
-                            "execution_ticket_id",
-                            "execution_id",
-                            "execution_base_head",
-                        )
-                    )
-                ):
-                    # This is the only lifecycle path that creates a durable
-                    # manual-retry barrier. The low-level abort itself is not
-                    # sufficient to infer operator intent.
-                    self._save_state(
-                        str(self._state["phase"]),
-                        manual_retry_required={
-                            "ticket_id": self._state.get("execution_ticket_id"),
-                            "execution_id": self._state.get("execution_id"),
-                            "generation": self._state.get("execution_base_head"),
-                            "request_id": request_id,
-                        },
-                    )
+                if force:
+                    self._record_forced_lifecycle_abort(request_id)
                 stop_event = self._stop_event
                 if force and stop_event is not None:
                     request_abort = getattr(stop_event, "request", None)
@@ -930,6 +908,34 @@ class ServiceEngine:
                         stop_event.set()
         self.wake()
         return self.lifecycle_status_payload()
+
+    def _record_forced_lifecycle_abort(self, request_id: str | None = None) -> None:
+        """Durably record forced worker interruption before signalling it."""
+        if self._state.get("phase") not in {"agent_pending", "agent_running"}:
+            return
+        if not all(
+            isinstance(self._state.get(field), str) and self._state[field]
+            for field in (
+                "execution_ticket_id",
+                "execution_id",
+                "execution_base_head",
+            )
+        ):
+            return
+        fields: dict[str, object] = {
+            "execution_interruption_kind": "operator_abort",
+        }
+        request_id = request_id or self._lifecycle_request_id
+        if self._lifecycle_intent == "stop" and request_id is not None:
+            # The low-level abort alone is not sufficient to infer operator
+            # retry authority.
+            fields["manual_retry_required"] = {
+                "ticket_id": self._state.get("execution_ticket_id"),
+                "execution_id": self._state.get("execution_id"),
+                "generation": self._state.get("execution_base_head"),
+                "request_id": request_id,
+            }
+        self._save_state(str(self._state["phase"]), **fields)
 
     def lifecycle_status_payload(self) -> dict[str, object]:
         with self._lifecycle_lock:
