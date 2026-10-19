@@ -66,6 +66,7 @@ from devlegate.git import (
     fetch_ref,
     file_history_commit,
     hash_object,
+    history_changes,
     history_commits,
     is_ancestor,
     merge_fast_forward,
@@ -4496,30 +4497,27 @@ class ServiceEngine:
                         "cannot read previous execution evidence for "
                         f"{selected_ticket.id}"
                     ) from error
-                completed = [
-                    report
-                    for report in reports
-                    if report.workspace_head is not None
-                    and report.execution_branch
-                    == f"devlegate/work/{selected_ticket.id}"
-                ]
-                if completed:
-                    # Reports are named by random execution IDs.  The reusable
-                    # ticket branch is the durable lifecycle predecessor, so do
-                    # not let lexical report ordering choose an older attempt.
+                previous = self._latest_reviewed_rework_report(reports)
+                if previous is not None:
+                    if (
+                        previous.workspace_head is None
+                        or previous.execution_branch
+                        != f"devlegate/work/{selected_ticket.id}"
+                    ):
+                        raise WorkflowBlockedError(
+                            "latest reviewed execution lacks a reusable workspace "
+                            "binding"
+                        )
+                    # The lifecycle commit, not report filename ordering, binds
+                    # this ticket's preceding reviewed generation.
                     branch_head = resolve_ref_commit(
                         self.repo, f"refs/heads/devlegate/work/{selected_ticket.id}",
                         runner=_git,
                     )
-                    matching = [
-                        report for report in completed
-                        if report.workspace_head == branch_head
-                    ]
-                    if len(matching) != 1:
+                    if branch_head not in {None, previous.workspace_head}:
                         raise WorkflowBlockedError(
                             "cannot prove the exact previous rework generation"
                         )
-                    previous = matching[0]
                     rework_provenance = {
                         "previous_execution_id": previous.execution_id,
                         "previous_report_checkpoint": previous.workspace_head,
@@ -5443,9 +5441,19 @@ class ServiceEngine:
                 )
             # Prove and pin remote history before retiring or moving any local
             # ticket workspace.  A remote conflict must leave local code intact.
-            if rework.get("preparation_stage") in {None, "admitted"}:
+            # Re-observe the exact old remote predecessor before every local
+            # mutation boundary.  Evidence publication alone does not reserve
+            # the ticket ref against a race while the service was stopped.
+            if rework.get("preparation_stage") in {
+                None,
+                "admitted",
+                "remote_evidence_published",
+            }:
                 self._prepare_rework_remote_evidence(
-                    manager.ticket_id, previous_execution, previous_checkpoint
+                    manager.ticket_id,
+                    previous_execution,
+                    previous_base,
+                    previous_checkpoint,
                 )
             workspace = manager.prepare_rework(
                 base_head, previous_base, previous_checkpoint
@@ -5492,14 +5500,22 @@ class ServiceEngine:
         )
 
     def _prepare_rework_remote_evidence(
-        self, ticket_id: str, previous_execution: str, previous_checkpoint: str
+        self,
+        ticket_id: str,
+        previous_execution: str,
+        previous_base: str,
+        previous_checkpoint: str,
     ) -> None:
         """Publish exact immutable remote evidence before local branch mutation."""
         evidence = self._pin_rework_evidence(
             ticket_id, previous_execution, previous_checkpoint
         )
         remote = self._execution_remote_head(f"devlegate/work/{ticket_id}")
-        if remote != previous_checkpoint:
+        if remote is None and previous_checkpoint == previous_base:
+            # A reviewed no-op has no ticket-scoped remote history to replace.
+            # Its immutable report and evidence pin still bind the rework.
+            pass
+        elif remote != previous_checkpoint:
             raise ExecutionWorkspaceError(
                 "rework preparation conflict: remote execution branch does not "
                 "match the previous checkpoint"
@@ -5522,6 +5538,50 @@ class ServiceEngine:
         if self._execution_remote_head(evidence) != previous_checkpoint:
             raise ExecutionWorkspaceError("remote rework evidence could not be proven")
         self._set_rework_preparation_stage("remote_evidence_published")
+
+    def _latest_reviewed_rework_report(
+        self, reports: tuple[ExecutionReport, ...]
+    ) -> ExecutionReport | None:
+        """Return only the newest exact normal lifecycle report for this ticket.
+
+        Report filenames are opaque IDs.  A newer failed or retry report must
+        not fall back to an older review publication and become a rework.
+        """
+        if not reports:
+            return None
+        by_path = {
+            f"executions/{report.ticket_id}/{report.execution_id}.json": report
+            for report in reports
+        }
+        ticket_id = reports[0].ticket_id
+        try:
+            history = history_changes(
+                self.control_worktree,
+                "HEAD",
+                f"executions/{ticket_id}",
+                runner=self._git_runtime,
+            )
+        except GitObservationError as error:
+            raise WorkflowBlockedError(
+                "cannot inspect reviewed execution lifecycle history"
+            ) from error
+        for commit, changes in history:
+            touched = [
+                by_path[path]
+                for change in changes
+                if len(change) > 2
+                and change[1] == "\t"
+                and (path := change[2:]) in by_path
+            ]
+            if len(touched) > 1:
+                raise WorkflowBlockedError("reviewed execution lifecycle is ambiguous")
+            if touched:
+                return (
+                    touched[0]
+                    if self._lifecycle_commit_is_exact(commit, touched[0])
+                    else None
+                )
+        return None
 
     def _prepare_rework_remote_predecessor(
         self,
@@ -5616,11 +5676,12 @@ class ServiceEngine:
             raise DevlegateError("execution branch remote changed during publication")
 
     def _execution_remote_head(self, branch: str) -> str | None:
+        ref = branch if branch.startswith("refs/") else f"refs/heads/{branch}"
         try:
             return remote_ref(
                 self.repo,
                 self.remote_name,
-                f"refs/heads/{branch}",
+                ref,
                 runner=self._git_runtime,
             )
         except GitObservationError as error:

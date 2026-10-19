@@ -148,21 +148,43 @@ class ExecutionWorkspaceManager:
         self._validate_base(previous_base)
         self._validate_base(previous_checkpoint)
         branch_ref = f"refs/heads/{self.branch}"
-        current = _git(self.repo, "rev-parse", branch_ref, check=False)
-        if current.returncode:
-            raise ExecutionWorkspaceConflict("previous execution branch is missing")
+        current = _git(
+            self.repo,
+            "for-each-ref",
+            "--format=%(objectname)",
+            branch_ref,
+            check=False,
+        )
+        if current.returncode == 0 and not current.stdout.strip():
+            if previous_checkpoint != previous_base:
+                raise ExecutionWorkspaceConflict("previous execution branch is missing")
+            # A completed no-op may not have published a ticket branch. There
+            # is no implementation delta to carry, so create this generation's
+            # ordinary branch from its admitted base.
+            return self.prepare(base_head)
+        if current.returncode or len(current.stdout.splitlines()) != 1:
+            raise ExecutionWorkspaceError(
+                "cannot observe previous execution branch: "
+                f"{current.stderr.strip() or 'unknown git error'}"
+            )
         current_head = current.stdout.strip()
-        if not _git(
+        predecessor = _git(
             self.repo,
             "merge-base",
             "--is-ancestor",
             previous_base,
             previous_checkpoint,
             check=False,
-        ).returncode:
+        )
+        if predecessor.returncode == 1:
             raise ExecutionWorkspaceConflict(
                 "rework preparation conflict: previous checkpoint is not descended "
                 "from its reported base"
+            )
+        if predecessor.returncode:
+            raise ExecutionWorkspaceError(
+                "cannot prove previous execution ancestry: "
+                f"{predecessor.stderr.strip() or 'unknown git error'}"
             )
         commits = _git(
             self.repo,
@@ -223,16 +245,22 @@ class ExecutionWorkspaceManager:
         elif current_head != base_head:
             # A completed replay must contain exactly the old patch series and
             # nothing else.  This rejects a foreign descendant after a crash.
-            if not _git(
+            replay_ancestry = _git(
                 self.repo,
                 "merge-base",
                 "--is-ancestor",
                 base_head,
                 current_head,
                 check=False,
-            ).returncode:
+            )
+            if replay_ancestry.returncode == 1:
                 raise ExecutionWorkspaceConflict(
                     "execution branch changed during rework preparation"
+                )
+            if replay_ancestry.returncode:
+                raise ExecutionWorkspaceError(
+                    "cannot prove replay ancestry: "
+                    f"{replay_ancestry.stderr.strip() or 'unknown git error'}"
                 )
             replay = _git(
                 self.repo, "rev-list", "--reverse", f"{base_head}..{current_head}",
@@ -242,9 +270,9 @@ class ExecutionWorkspaceManager:
             equivalent = _git(
                 self.repo,
                 "cherry",
-                current_head,
-                previous_base,
                 previous_checkpoint,
+                current_head,
+                base_head,
                 check=False,
             )
             if (
