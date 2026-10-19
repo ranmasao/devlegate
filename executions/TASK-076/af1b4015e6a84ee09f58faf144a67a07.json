@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "completed",
+  "control_head": "60aec3f7e73197144ec11c481604320b9adc751d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "af1b4015e6a84ee09f58faf144a67a07",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened direct accepted-product publication with a predecessor lease and exact remote verification after an ambiguous push result. Added regression coverage for lease contention, ambiguous successful publication, restart reconciliation, and conflict replay durability."
+  },
+  "workspace_head": "53b933b0b36124125be28b5dba8d9b68334d04fd"
+}
