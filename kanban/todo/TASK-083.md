@@ -244,3 +244,21 @@ a previously reviewed and deferred ticket can be re-admitted against a
 newer product base, carry forward its implementation and reviewer notes,
 publish a new execution without manual `recover`, and preserve immutable
 prior evidence. Real conflicts must remain explicitly blocked.
+
+## Next-generation review handoff — execution 96d01f9b
+
+This ticket is returned for **rework**, not operator workspace recovery.
+Read the independent curator review artifact before editing. In the current
+runtime, the worker receives this reference through the ticket assignment:
+
+```sh
+git show devlegate/control:reviews/TASK-083/96d01f9bf2ce4945937b7cb228cd69db.md
+```
+
+The separate artifact contains the blocking CI failures, specific unsafe
+Git transitions, required deterministic crash/replay and lineage tests,
+and focused acceptance requirements. Preserve the previous implementation
+at `66955a81347a252489f6e1881d4dd6f4f7cbf859` and its original
+execution report. The earlier specification above remains unchanged; this
+handoff pointer is temporary until first-class review-artifact injection
+exists. Do not use the legacy annotation marker.
