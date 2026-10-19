@@ -1,0 +1,29 @@
+{
+  "code_base_head": "412fca11d553b5537cb973ef8fa94b6ac6a041b1",
+  "conclusion": "completed",
+  "control_head": "f6d736df9bd554122aee2d6ca070e22c3bf746e2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-079",
+  "execution_id": "e2e3545cbe64426490f2cfb7776faa19",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-079",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-079",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened control and workspace recovery evidence handling with typed observations, guarded creation, and exact post-create revalidation. Added focused regressions for absent, replay, conflict, race, unreadable evidence, and Git launcher failures."
+  },
+  "workspace_head": "52da1ec3d28333a061e0f189c82aca88b594a582"
+}
