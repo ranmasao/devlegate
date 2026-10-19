@@ -3473,6 +3473,19 @@ class ServiceEngine:
                         "ticket_id",
                         "checkpoint",
                         "control_head",
+                        "control_predecessor",
+                    },
+                    {
+                        "ticket_id",
+                        "checkpoint",
+                        "control_head",
+                        "product_transition",
+                    },
+                    {
+                        "ticket_id",
+                        "checkpoint",
+                        "control_head",
+                        "control_predecessor",
                         "product_transition",
                     },
                 )
@@ -3481,6 +3494,12 @@ class ServiceEngine:
                     and bool(accepted_integration["ticket_id"])
                     and _is_git_identity(accepted_integration.get("checkpoint"))
                     and _is_git_identity(accepted_integration.get("control_head"))
+                    and (
+                        "control_predecessor" not in accepted_integration
+                        or _is_git_identity(
+                            accepted_integration.get("control_predecessor")
+                        )
+                    )
                 )
                 or (
                     product_transition is not None
@@ -4282,6 +4301,7 @@ class ServiceEngine:
                     "ticket_id": execution_plan.ticket_id,
                     "checkpoint": checkpoint,
                     "control_head": execution_plan.control.local_head,
+                    "control_predecessor": execution_plan.control.local_head,
                 },
             )
             self.status_view()
@@ -6100,17 +6120,24 @@ class ServiceEngine:
         """
         checkpoint = pending.get("checkpoint")
         control_head = pending.get("control_head")
+        control_predecessor = pending.get("control_predecessor", control_head)
         if not isinstance(checkpoint, str) or not _is_git_identity(checkpoint):
             raise WorkflowBlockedError("accepted integration checkpoint is invalid")
         if not isinstance(control_head, str) or not _is_git_identity(control_head):
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
             )
+        if not isinstance(control_predecessor, str) or not _is_git_identity(
+            control_predecessor
+        ):
+            raise WorkflowBlockedError(
+                "accepted integration control predecessor is invalid"
+            )
         integration = self._find_accepted_integration_commit(ticket_id)
         if integration is None:
             raise WorkflowBlockedError("published accepted integration is not proven")
         parents = commit_parents(self.control_worktree, integration, runner=_git)
-        if parents is None or not parents or parents[0] != control_head:
+        if parents is None or not parents or parents[0] != control_predecessor:
             raise WorkflowBlockedError(
                 "published accepted integration control lineage is not exact"
             )
@@ -6268,7 +6295,7 @@ class ServiceEngine:
                 )
         pending = self._state.get("accepted_integration")
         expected_head = (
-            pending.get("control_head")
+            pending.get("control_predecessor", pending.get("control_head"))
             if isinstance(pending, dict)
             else control.local_head
         )
@@ -7021,12 +7048,25 @@ class ServiceEngine:
                     self.control_worktree,
                     self.remote_name,
                     f"{commit}:refs/heads/{self.control_branch}",
+                    options=(
+                        f"--force-with-lease=refs/heads/{self.control_branch}:{expected_head}",
+                    ),
                     runner=_git,
                 )
                 if push.returncode:
-                    raise DevlegateError(
-                        push.stderr.strip() or "cannot publish accepted integration"
+                    classification, published = (
+                        self._observe_accepted_control_integration(
+                            ticket_id, expected_head, current, None
+                        )
                     )
+                    if (
+                        classification != "remote_exact_published"
+                        or published != commit
+                    ):
+                        raise WorkflowBlockedError(
+                            push.stderr.strip()
+                            or "control branch changed during accepted publication"
+                        )
                 classification, commit = self._observe_accepted_control_integration(
                     ticket_id, expected_head, current, None
                 )
@@ -7040,8 +7080,23 @@ class ServiceEngine:
             raise WorkflowBlockedError("accepted ticket changed during integration")
         report = self._accepted_execution_report(ticket_id)
         if current != expected_head:
+            expected_head = self._recover_accepted_control_predecessor(
+                ticket_id, report, expected_head, current
+            )
+        try:
+            remote_head = remote_ref(
+                self.control_worktree,
+                self.remote_name,
+                f"refs/heads/{self.control_branch}",
+                runner=self._git_runtime,
+            )
+        except GitObservationError as error:
             raise WorkflowBlockedError(
-                "control HEAD changed during accepted integration"
+                "control remote could not be observed during accepted integration"
+            ) from error
+        if remote_head != expected_head:
+            raise WorkflowBlockedError(
+                "control branch changed during accepted integration"
             )
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
         ticket.path.rename(target)
@@ -7078,13 +7133,128 @@ class ServiceEngine:
             self.control_worktree,
             self.remote_name,
             f"{commit_head}:refs/heads/{self.control_branch}",
+            options=(
+                f"--force-with-lease=refs/heads/{self.control_branch}:{expected_head}",
+            ),
             runner=_git,
         )
         if push.returncode:
-            raise DevlegateError(
-                push.stderr.strip() or "cannot publish control transition"
+            classification, published = self._observe_accepted_control_integration(
+                ticket_id, expected_head, commit_head, None
             )
+            if classification != "remote_exact_published" or published != commit_head:
+                raise WorkflowBlockedError(
+                    push.stderr.strip()
+                    or "control branch changed during accepted publication"
+                )
         return commit_head
+
+    def _recover_accepted_control_predecessor(
+        self,
+        ticket_id: str,
+        report: ExecutionReport,
+        expected_predecessor: str,
+        current_head: str | None,
+    ) -> str:
+        """Adopt a verified service control descendant as this transition's parent.
+
+        ``control_head`` remains the immutable execution-admission identity.  This
+        records the separately verified current predecessor before changing the
+        ticket, so a crash cannot turn unrelated control history into provenance.
+        """
+        pending = self._state.get("accepted_integration")
+        if (
+            not isinstance(pending, dict)
+            or pending.get("ticket_id") != ticket_id
+            or pending.get("checkpoint") != report.workspace_head
+            or not _is_git_identity(current_head)
+        ):
+            raise WorkflowBlockedError("accepted integration recovery is ambiguous")
+        historical_head = pending.get("control_head")
+        saved_predecessor = pending.get("control_predecessor")
+        if not _is_git_identity(historical_head) or not _is_git_identity(
+            expected_predecessor
+        ):
+            raise WorkflowBlockedError("accepted integration recovery is ambiguous")
+        if saved_predecessor is None:
+            saved_predecessor = historical_head
+        if (
+            saved_predecessor != expected_predecessor
+            or saved_predecessor != historical_head
+        ):
+            raise WorkflowBlockedError(
+                "control HEAD changed during accepted integration"
+            )
+        try:
+            remote_head = remote_ref(
+                self.control_worktree,
+                self.remote_name,
+                f"refs/heads/{self.control_branch}",
+                runner=self._git_runtime,
+            )
+            if remote_head != current_head:
+                raise WorkflowBlockedError(
+                    "control branch changed during accepted integration"
+                )
+            if not is_ancestor(
+                self.control_worktree,
+                historical_head,
+                current_head,
+                runner=self._git_runtime,
+            ):
+                raise WorkflowBlockedError(
+                    "accepted integration control history diverged"
+                )
+            accepted_path = f"{self.accepted_path}/{ticket_id}.md"
+            historical_ticket = path_object(
+                self.control_worktree,
+                historical_head,
+                accepted_path,
+                runner=self._git_runtime,
+            )
+            current_ticket = path_object(
+                self.control_worktree,
+                current_head,
+                accepted_path,
+                runner=self._git_runtime,
+            )
+            historical_evidence = path_object(
+                self.control_worktree,
+                historical_head,
+                f"executions/{ticket_id}",
+                runner=self._git_runtime,
+            )
+            current_evidence = path_object(
+                self.control_worktree,
+                current_head,
+                f"executions/{ticket_id}",
+                runner=self._git_runtime,
+            )
+            if (
+                historical_ticket is None
+                or historical_ticket != current_ticket
+                or historical_evidence is None
+                or historical_evidence != current_evidence
+            ):
+                raise WorkflowBlockedError("accepted ticket changed during integration")
+        except (GitAncestryError, GitObservationError) as error:
+            raise WorkflowBlockedError(
+                "accepted integration control ancestry could not be observed"
+            ) from error
+        store = load_ticket_store(self.control_worktree, self._workflow_paths())
+        ticket = store.by_id.get(ticket_id)
+        if (
+            ticket is None
+            or ticket.state != "accepted"
+            or any(
+                store.by_id[dependency].state != "done"
+                for dependency in ticket.depends_on
+            )
+        ):
+            raise WorkflowBlockedError("accepted integration eligibility changed")
+        refreshed = {**pending, "control_predecessor": current_head}
+        self._save_state("idle", accepted_integration=refreshed)
+        return current_head
 
     def _observe_accepted_control_integration(
         self,
