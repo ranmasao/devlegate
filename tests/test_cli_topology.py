@@ -1419,6 +1419,71 @@ def test_real_service_replays_legacy_accepted_state_after_product_descendant(
     finally:
         service.stop()
 
+
+def test_real_service_recovers_legacy_published_integration_after_control_advance(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_recovery_driver(config, "integration_published_after_save"),
+    )
+    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "integration_before_effect")
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        _advance_product(git_fixture)
+        monkeypatch.setenv(
+            "DEVLEGATE_TEST_CRASH_POINT", "integration_published_after_save"
+        )
+        service.restart()
+        service.wait_ready()
+        _wait_process_death(service)
+
+        database = next(engine.state_dir.glob("*.sqlite3"))
+        connection = sqlite3.connect(database)
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload FROM runtime_state WHERE id = 1"
+            ).fetchone()[0]
+        )
+        pending = payload["accepted_integration"]
+        assert pending["control_head"] == control_head
+        assert pending["product_transition"]["status"] == "published"
+        pending.pop("control_predecessor", None)
+        connection.execute(
+            "UPDATE runtime_state SET payload = ? WHERE id = 1", (json.dumps(payload),)
+        )
+        connection.commit()
+        connection.close()
+
+        publisher_control = _ensure_publisher_control(git_fixture)
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "kanban/todo/T-2.md").write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Later ticket"\n---\n\nLater\n'
+        )
+        git(publisher_control, "add", "kanban/todo/T-2.md")
+        git(publisher_control, "commit", "-m", "add later ticket")
+        git(publisher_control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config)["phase"] == "idle"
+            and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        )
+        assert (engine.control_worktree / "kanban/todo/T-2.md").is_file()
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
 def test_real_service_foreign_local_control_descendant_stays_blocked(
     git_fixture, monkeypatch
 ):
