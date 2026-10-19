@@ -22,6 +22,7 @@ from devlegate.git import (
     GitObservationError,
     create_ref_if_absent,
     resolve_commit,
+    resolve_ref_commit,
     run_git,
 )
 from devlegate.recovery import validate_execution_binding
@@ -178,7 +179,7 @@ def repair_bound_workspace(
         f"refs/devlegate/recovery/workspace/{ticket_id}/{prior[0].execution_id}"
     )
     try:
-        existing = resolve_commit(owner.repo, evidence_ref, runner=run_git)
+        existing = resolve_ref_commit(owner.repo, evidence_ref, runner=run_git)
     except GitObservationError as error:
         raise ValueError(
             f"cannot observe workspace recovery evidence: {error}"
@@ -188,7 +189,7 @@ def repair_bound_workspace(
     if existing is None:
         create_ref_if_absent(owner.repo, evidence_ref, old_head, runner=run_git)
     try:
-        pinned = resolve_commit(owner.repo, evidence_ref, runner=run_git)
+        pinned = resolve_ref_commit(owner.repo, evidence_ref, runner=run_git)
     except GitObservationError as error:
         raise ValueError(
             f"cannot observe workspace recovery evidence: {error}"

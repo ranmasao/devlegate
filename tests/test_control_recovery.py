@@ -32,21 +32,36 @@ class _ControlLineageOwner:
         pass
 
 
-def _control_lineage_runner(refs, *, race=None, unreadable_after_create=False):
+def _control_lineage_runner(
+    refs, *, race=None, unreadable_after_create=False, unreadable_initially=False
+):
     calls = []
     evidence_reads = 0
 
     def runner(_cwd, *args, check):
         nonlocal evidence_reads
         calls.append(args)
-        if args[:2] == ("rev-parse", "--verify"):
-            reference = args[2].removesuffix("^{commit}")
+        if args[:2] == ("show-ref", "--verify"):
+            reference = args[2]
             if reference.startswith("refs/devlegate/recovery/control/"):
                 evidence_reads += 1
+                if unreadable_initially and evidence_reads == 1:
+                    return subprocess.CompletedProcess(
+                        [], 128, "", "repository unreadable"
+                    )
                 if unreadable_after_create and evidence_reads == 2:
                     return subprocess.CompletedProcess(
                         [], 128, "", "repository unreadable"
                     )
+            if reference in refs:
+                return subprocess.CompletedProcess(
+                    [], 0, f"{refs[reference]} {reference}\n", ""
+                )
+            return subprocess.CompletedProcess(
+                [], 128, "", f"fatal: '{reference}' - not a valid ref"
+            )
+        if args[:2] == ("rev-parse", "--verify"):
+            reference = args[2].removesuffix("^{commit}")
             if reference in refs:
                 return subprocess.CompletedProcess([], 0, f"{refs[reference]}\n", "")
             return subprocess.CompletedProcess([], 128, "", "unknown revision")
@@ -153,6 +168,50 @@ def test_control_lineage_unreadable_evidence_never_resets(monkeypatch, tmp_path)
             repo=tmp_path, control_worktree=tmp_path, take_lock=False,
         )
 
+    assert not any(call[:2] == ("reset", "--hard") for call in calls)
+
+
+def test_control_lineage_initial_evidence_failure_never_creates_or_resets(
+    monkeypatch, tmp_path
+):
+    source, target = "a" * 40, "b" * 40
+    runner, calls = _control_lineage_runner({}, unreadable_initially=True)
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    with pytest.raises(ValueError, match="cannot observe control recovery evidence"):
+        recovery_transactions.reconcile_control_lineage(
+            _ControlLineageOwner(), source, target,
+            repo=tmp_path, control_worktree=tmp_path, take_lock=False,
+        )
+
+    assert not any(call[0] == "update-ref" for call in calls)
+    assert not any(call[:2] == ("reset", "--hard") for call in calls)
+
+
+def test_control_lineage_dangling_evidence_ref_never_mutates(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    source = git(working, "rev-parse", "HEAD").stdout.strip()
+    evidence = f"refs/devlegate/recovery/control/{source}-{source}"
+    git_dir = working / git(working, "rev-parse", "--git-dir").stdout.strip()
+    evidence_path = git_dir / evidence
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text(f"{'1':0>40}\n")
+    calls = []
+    real_git = recovery_transactions.run_git
+
+    def trace(repo, *args, **kwargs):
+        calls.append(args)
+        return real_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(recovery_transactions, "run_git", trace)
+    with pytest.raises(ValueError, match="cannot observe control recovery evidence"):
+        recovery_transactions.reconcile_control_lineage(
+            _ControlLineageOwner(), source, source,
+            repo=working, control_worktree=working, take_lock=False,
+        )
+
+    assert not any(call[0] == "update-ref" for call in calls)
     assert not any(call[:2] == ("reset", "--hard") for call in calls)
 
 def test_accepted_integration_state_requires_idle_and_exact_identity():

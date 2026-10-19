@@ -19,7 +19,7 @@ from devlegate.git import (
     GitObservationError,
     create_ref_if_absent,
     reset_hard,
-    resolve_commit,
+    resolve_ref_commit,
     run_git,
 )
 from devlegate.recovery import classify_stranded_execution, interruption_kind
@@ -64,7 +64,7 @@ def reconcile_control_lineage(
         # worktree move.  No recovery evidence is created for a stale remote.
         owner.validate_control_reconcile_admission(from_head, to_head)
         try:
-            existing = resolve_commit(repo, evidence, runner=run_git)
+            existing = resolve_ref_commit(repo, evidence, runner=run_git)
         except GitObservationError as error:
             raise ValueError(
                 f"cannot observe control recovery evidence: {error}"
@@ -74,7 +74,7 @@ def reconcile_control_lineage(
             # re-observed below, never replaced.
             create_ref_if_absent(repo, evidence, from_head, runner=run_git)
         try:
-            pinned = resolve_commit(repo, evidence, runner=run_git)
+            pinned = resolve_ref_commit(repo, evidence, runner=run_git)
         except GitObservationError as error:
             raise ValueError(
                 f"cannot observe control recovery evidence: {error}"

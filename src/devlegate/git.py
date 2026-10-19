@@ -349,6 +349,43 @@ def resolve_commit(
     return resolved
 
 
+def resolve_ref_commit(
+    cwd: Path,
+    reference: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> str | None:
+    """Resolve an exact ref to a commit, distinguishing absence from corruption.
+
+    ``rev-parse`` reports the same diagnostic for a missing ref and a ref whose
+    object cannot be read.  Check ref presence first so callers that authorize
+    mutations from absence never treat a corrupt present ref as missing.
+    """
+    try:
+        present = runner(cwd, "show-ref", "--verify", reference, check=False)
+    except OSError as error:
+        raise GitObservationError(
+            f"cannot inspect Git ref {reference!r}: {error}"
+        ) from error
+    detail = _stderr(present).strip()
+    if present.returncode and _is_missing_exact_ref_error(reference, detail):
+        return None
+    if present.returncode:
+        raise GitObservationError(
+            f"cannot inspect Git ref {reference!r}: "
+            f"{detail or 'unknown Git error'}"
+        )
+    fields = present.stdout.split()
+    if len(fields) != 2 or fields[1] != reference or not _is_object_id(fields[0]):
+        raise GitObservationError(
+            f"Git returned malformed ref identity for {reference!r}"
+        )
+    resolved = resolve_commit(cwd, reference, runner=runner)
+    if resolved is None:
+        raise GitObservationError(f"Git ref {reference!r} became unreadable")
+    return resolved
+
+
 def resolve_object(
     cwd: Path,
     revision: str,
@@ -903,6 +940,11 @@ def _is_missing_revision_error(detail: str) -> bool:
             "not a valid object name",
         )
     )
+
+
+def _is_missing_exact_ref_error(reference: str, detail: str) -> bool:
+    """Recognize only ``show-ref --verify``'s exact absent-ref diagnostic."""
+    return detail == f"fatal: '{reference}' - not a valid ref"
 
 
 def _is_object_id(value: str) -> bool:

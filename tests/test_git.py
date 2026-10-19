@@ -184,6 +184,22 @@ def test_resolve_commit_wraps_runner_os_errors(tmp_path):
         git.resolve_commit(tmp_path, "HEAD", runner=fake_runner)
 
 
+def test_resolve_ref_commit_distinguishes_absent_and_corrupt_refs(tmp_path):
+    reference = "refs/devlegate/recovery/control/evidence"
+
+    def absent_runner(_cwd, *_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            [], 128, "", f"fatal: '{reference}' - not a valid ref"
+        )
+
+    def corrupt_runner(_cwd, *_args, **_kwargs):
+        return subprocess.CompletedProcess([], 128, "", "fatal: bad ref")
+
+    assert git.resolve_ref_commit(tmp_path, reference, runner=absent_runner) is None
+    with pytest.raises(git.GitObservationError, match="bad ref"):
+        git.resolve_ref_commit(tmp_path, reference, runner=corrupt_runner)
+
+
 def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
     calls = []
     first = "a" * 40

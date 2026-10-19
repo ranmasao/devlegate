@@ -2302,6 +2302,66 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
     assert devlegate._state["execution_id"] == "current"
 
+
+def test_workspace_repair_dangling_evidence_ref_never_mutates(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(old_base)
+    git(workspace.path, "config", "user.email", "test@example.com")
+    git(workspace.path, "config", "user.name", "Test User")
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    old_head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    _write_prior_execution_receipt(
+        control,
+        execution_id="old-generation",
+        base=old_base,
+        path=workspace.path,
+        head=old_head,
+    )
+    git(control, "add", "executions/T-1")
+    git(control, "commit", "-m", "retain prior execution receipt")
+    git(control, "push", "origin", "devlegate/control")
+    (working / "new.txt").write_text("new\n")
+    git(working, "add", "new.txt")
+    git(working, "commit", "-m", "new admitted base")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    devlegate = Devlegate(config)
+    _persist_pending_execution(
+        devlegate, state, workspace, new_base, "current", start_head=new_base
+    )
+    evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
+    git_dir = working / git(working, "rev-parse", "--git-dir").stdout.strip()
+    evidence_path = git_dir / evidence
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text(f"{'1':0>40}\n")
+    calls = []
+    real_git = recovery_workspace.run_git
+
+    def trace(repo, *args, **kwargs):
+        calls.append(args)
+        return real_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(recovery_workspace, "run_git", trace)
+    with pytest.raises(
+        DevlegateError, match="cannot observe workspace recovery evidence"
+    ):
+        devlegate._repair_bound_execution_workspace()
+
+    assert not any(call[0] == "update-ref" for call in calls)
+    assert not any(call[:2] == ("worktree", "remove") for call in calls)
+    repaired_head = git(
+        working, "rev-parse", f"refs/heads/{manager.branch}"
+    ).stdout.strip()
+    assert repaired_head == old_head
+
 def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
     tmp_path, monkeypatch
 ):
