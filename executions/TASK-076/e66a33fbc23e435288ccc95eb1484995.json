@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "completed",
+  "control_head": "8223f75b17f938bca3c94d3d543c05b32b777c2b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "e66a33fbc23e435288ccc95eb1484995",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added crash-replay coverage for pre-worker product fast-forward adoption while preserving immutable execution provenance. Strengthened accepted descendant-integration crash tests with exact transition state, merge ancestry, and product-content assertions."
+  },
+  "workspace_head": "566f608efd14b75e5bdd788e176c3bfc62d3c5b3"
+}
