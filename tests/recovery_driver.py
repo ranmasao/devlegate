@@ -127,7 +127,11 @@ def main() -> int:
         engine._apply_execution_lifecycle = lifecycle
     elif point in {
         "integration_before_effect",
+        "integration_merging_after_save",
+        "integration_product_fast_forward_after_effect",
+        "integration_merge_after_effect",
         "integration_product_after_effect",
+        "integration_published_after_save",
         "integration_control_commit_after_effect",
         "integration_control_push_after_effect",
     }:
@@ -141,6 +145,42 @@ def main() -> int:
                 return original_integrate(*integrate_args, **integrate_kwargs)
 
             engine._integrate_accepted = integrate
+        elif point in {
+            "integration_merging_after_save",
+            "integration_published_after_save",
+        }:
+            integration_save = engine._save_state
+
+            def save(phase, **updates):
+                integration_save(phase, **updates)
+                pending = updates.get("accepted_integration")
+                transition = (
+                    pending.get("product_transition")
+                    if isinstance(pending, dict)
+                    else None
+                )
+                if isinstance(transition, dict) and transition.get("status") == (
+                    "merging"
+                    if point == "integration_merging_after_save"
+                    else "published"
+                ):
+                    crash()
+
+            engine._save_state = save
+        elif point == "integration_product_fast_forward_after_effect":
+            original_fast_forward = engine._merge_fast_forward_runtime
+
+            def fast_forward(*fast_forward_args, **fast_forward_kwargs):
+                result = original_fast_forward(
+                    *fast_forward_args, **fast_forward_kwargs
+                )
+                if result.returncode == 0 and isinstance(
+                    engine._state.get("accepted_integration"), dict
+                ):
+                    crash()
+                return result
+
+            engine._merge_fast_forward_runtime = fast_forward
         else:
             original_git = runtime._git
 
@@ -150,6 +190,11 @@ def main() -> int:
                     repo == engine.repo
                     and git_args[:1] == ("push",)
                     and any("refs/heads/main" in arg for arg in git_args)
+                )
+                is_product_merge = (
+                    repo == engine.repo
+                    and git_args[:1] == ("merge",)
+                    and "--no-ff" in git_args
                 )
                 is_control_commit = (
                     repo == engine.control_worktree
@@ -161,6 +206,8 @@ def main() -> int:
                     and any("refs/heads/devlegate/control" in arg for arg in git_args)
                 )
                 if (
+                    point == "integration_merge_after_effect" and is_product_merge
+                ) or (
                     point == "integration_product_after_effect" and is_product_push
                 ) or (
                     point == "integration_control_commit_after_effect"
