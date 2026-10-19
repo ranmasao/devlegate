@@ -1,0 +1,29 @@
+{
+  "code_base_head": "412fca11d553b5537cb973ef8fa94b6ac6a041b1",
+  "conclusion": "completed",
+  "control_head": "e3a731a47cf440685db60e6c29cd747316890d16",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-079",
+  "execution_id": "bf4d0b3addea448f91e40e4429ae97bf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-079",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-079",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Evidence refs now fail closed unless their raw exact-ref OID equals the resolved commit OID. Added deterministic identity-race coverage and real-Git control/workspace regressions for annotated-tag and dangling evidence refs, preserving all later mutations on refusal."
+  },
+  "workspace_head": "0e1011f0a20468da563ccc28b84dad02e1e53658"
+}
