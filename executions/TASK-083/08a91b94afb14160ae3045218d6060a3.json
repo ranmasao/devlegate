@@ -1,0 +1,29 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "completed",
+  "control_head": "3ad171e73f2cee044e727decaa81591b364b02df",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "08a91b94afb14160ae3045218d6060a3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Preserved same-generation interrupted execution bindings across product advancement instead of silently admitting a new worker generation. Added fail-closed recovery that recreates only a missing expected worktree at its proven execution branch head, while retaining foreign worktree conflicts. Updated workspace regressions to verify preserved execution code and base identity."
+  },
+  "workspace_head": "cccce554082df95db3c97dfbe521524431b67472"
+}
