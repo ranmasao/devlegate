@@ -6,6 +6,155 @@
 
 from _control_support import *  # noqa: F403,F405
 
+from contextlib import nullcontext
+
+import devlegate.recovery_transactions as recovery_transactions
+
+
+class _ControlLineageOwner:
+    def __init__(self):
+        self.admissions = 0
+        self.reset = False
+
+    def recovery_lock(self):
+        return nullcontext()
+
+    def validate_control_reconcile_admission(self, _from_head, _to_head):
+        self.admissions += 1
+
+    def validate_control_worktree(self):
+        pass
+
+    def reload_ticket_store(self):
+        pass
+
+    def recovery_log(self, _message):
+        pass
+
+
+def _control_lineage_runner(refs, *, race=None, unreadable_after_create=False):
+    calls = []
+    evidence_reads = 0
+
+    def runner(_cwd, *args, check):
+        nonlocal evidence_reads
+        calls.append(args)
+        if args[:2] == ("rev-parse", "--verify"):
+            reference = args[2].removesuffix("^{commit}")
+            if reference.startswith("refs/devlegate/recovery/control/"):
+                evidence_reads += 1
+                if unreadable_after_create and evidence_reads == 2:
+                    return subprocess.CompletedProcess(
+                        [], 128, "", "repository unreadable"
+                    )
+            if reference in refs:
+                return subprocess.CompletedProcess([], 0, f"{refs[reference]}\n", "")
+            return subprocess.CompletedProcess([], 128, "", "unknown revision")
+        if args[0] == "update-ref":
+            _, reference, object_id, _expected_old = args
+            if race is not None:
+                refs[reference] = race
+                return subprocess.CompletedProcess([], 1, "", "reference exists")
+            refs[reference] = object_id
+            return subprocess.CompletedProcess([], 0, "", "")
+        if args[:2] == ("reset", "--hard"):
+            return subprocess.CompletedProcess([], 0, "", "")
+        raise AssertionError(args)
+
+    return runner, calls
+
+
+def test_control_lineage_absent_evidence_is_created_and_reproved(monkeypatch, tmp_path):
+    source, target = "a" * 40, "b" * 40
+    refs = {}
+    runner, calls = _control_lineage_runner(refs)
+    owner = _ControlLineageOwner()
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    recovery_transactions.reconcile_control_lineage(
+        owner, source, target, repo=tmp_path, control_worktree=tmp_path, take_lock=True
+    )
+
+    evidence = f"refs/devlegate/recovery/control/{source}-{target}"
+    assert refs[evidence] == source
+    assert ("update-ref", evidence, source, "") in calls
+    assert ("reset", "--hard", target) in calls
+    assert owner.admissions == 3
+
+
+@pytest.mark.parametrize("existing", ["a" * 40, "c" * 40])
+def test_control_lineage_replay_never_overwrites_evidence(
+    monkeypatch, tmp_path, existing
+):
+    source, target = "a" * 40, "b" * 40
+    evidence = f"refs/devlegate/recovery/control/{source}-{target}"
+    refs = {evidence: existing}
+    runner, calls = _control_lineage_runner(refs)
+    owner = _ControlLineageOwner()
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    if existing == source:
+        recovery_transactions.reconcile_control_lineage(
+            owner,
+            source,
+            target,
+            repo=tmp_path,
+            control_worktree=tmp_path,
+            take_lock=True,
+        )
+        assert ("reset", "--hard", target) in calls
+    else:
+        with pytest.raises(ValueError, match="another commit"):
+            recovery_transactions.reconcile_control_lineage(
+                owner,
+                source,
+                target,
+                repo=tmp_path,
+                control_worktree=tmp_path,
+                take_lock=True,
+            )
+        assert ("reset", "--hard", target) not in calls
+    assert not any(call[0] == "update-ref" for call in calls)
+
+
+@pytest.mark.parametrize("race", ["a" * 40, "c" * 40])
+def test_control_lineage_create_race_adopts_only_matching_pin(
+    monkeypatch, tmp_path, race
+):
+    source, target = "a" * 40, "b" * 40
+    refs = {}
+    runner, calls = _control_lineage_runner(refs, race=race)
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    if race == source:
+        recovery_transactions.reconcile_control_lineage(
+            _ControlLineageOwner(), source, target,
+            repo=tmp_path, control_worktree=tmp_path, take_lock=False,
+        )
+        assert ("reset", "--hard", target) in calls
+    else:
+        with pytest.raises(ValueError, match="another commit"):
+            recovery_transactions.reconcile_control_lineage(
+                _ControlLineageOwner(), source, target,
+                repo=tmp_path, control_worktree=tmp_path, take_lock=False,
+            )
+        assert ("reset", "--hard", target) not in calls
+
+
+def test_control_lineage_unreadable_evidence_never_resets(monkeypatch, tmp_path):
+    source, target = "a" * 40, "b" * 40
+    refs = {}
+    runner, calls = _control_lineage_runner(refs, unreadable_after_create=True)
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    with pytest.raises(ValueError, match="cannot observe control recovery evidence"):
+        recovery_transactions.reconcile_control_lineage(
+            _ControlLineageOwner(), source, target,
+            repo=tmp_path, control_worktree=tmp_path, take_lock=False,
+        )
+
+    assert not any(call[:2] == ("reset", "--hard") for call in calls)
+
 def test_accepted_integration_state_requires_idle_and_exact_identity():
     complete = {
         "ticket_id": "T-1",

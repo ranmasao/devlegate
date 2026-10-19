@@ -2277,6 +2277,14 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
             "refs/devlegate/recovery/workspace/T-1/old-generation",
         ):
             effects.append("evidence")
+        elif (
+            args[:2] == ("rev-parse", "--verify")
+            and args[2].startswith(
+                "refs/devlegate/recovery/workspace/T-1/old-generation"
+            )
+            and "evidence" in effects
+        ):
+            effects.append("evidence-reproved")
         elif args[:2] == ("update-ref", "refs/heads/devlegate/work/T-1"):
             effects.append("branch")
         return real_git(repo, *args, **kwargs)
@@ -2286,6 +2294,8 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     devlegate._repair_bound_execution_workspace()
     assert devlegate.plan_view().action == "run-worker"
     assert effects.index("evidence") < effects.index("branch")
+    assert effects.index("evidence") < effects.index("evidence-reproved")
+    assert effects.index("evidence-reproved") < effects.index("branch")
 
     evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
     assert git(working, "rev-parse", evidence).stdout.strip() == old_head

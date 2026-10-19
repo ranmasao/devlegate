@@ -4,6 +4,8 @@
 
 import subprocess
 
+import pytest
+
 from devlegate import git
 
 
@@ -172,6 +174,14 @@ def test_resolve_commit_distinguishes_missing_revision_from_git_failure(tmp_path
         assert "repository unreadable" in str(error)
     else:
         raise AssertionError("Git observation failures must not look like missing refs")
+
+
+def test_resolve_commit_wraps_runner_os_errors(tmp_path):
+    def fake_runner(_cwd, *_args, **_kwargs):
+        raise OSError("Git executable unavailable")
+
+    with pytest.raises(git.GitObservationError, match="Git executable unavailable"):
+        git.resolve_commit(tmp_path, "HEAD", runner=fake_runner)
 
 
 def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
