@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089",
+  "conclusion": "completed",
+  "control_head": "9e05ae1061f0df1bdfad2374493e6d293e7e3a13",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-076",
+  "execution_id": "1ebe85922d8d4a78ab82d59b0c32791c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-076",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-076",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added safe handling for product fast-forwards observed during a running worker while preserving its pinned checkout and checkpoint. Accepted integration now merges a proven descendant product revision with lease-protected publication, while conflicts remain per-execution reconciliation. Added regression coverage for a running worker and parallel product advancement."
+  },
+  "workspace_head": "c9da35dab1be2cc143c04660bfcdd0ea16442bd9"
+}
