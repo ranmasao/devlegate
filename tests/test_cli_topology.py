@@ -1293,6 +1293,96 @@ def test_real_service_accepted_integration_restart_is_idempotent(
     finally:
         service.stop()
 
+@pytest.mark.parametrize(
+    "point",
+    [
+        "integration_merging_after_save",
+        "integration_product_fast_forward_after_effect",
+        "integration_merge_after_effect",
+        "integration_published_after_save",
+    ],
+)
+def test_real_service_descendant_integration_replays_every_product_effect_boundary(
+    git_fixture, monkeypatch, point
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "integration_before_effect")
+    service = LiveService(
+        git_fixture["working"], config, command=_recovery_driver(config, point)
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        _advance_product(git_fixture)
+        monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", point)
+        service.restart()
+        service.wait_ready()
+        _wait_process_death(service)
+        crashed = _disk_state(config)
+        transition = crashed["accepted_integration"].get("product_transition")
+        assert isinstance(transition, dict)
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config)["phase"] == "idle"
+            and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        )
+        merges = git(
+            git_fixture["working"], "rev-list", "--merges", "origin/main"
+        ).stdout.splitlines()
+        assert len(merges) == 1
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+def test_real_service_replays_legacy_accepted_state_after_product_descendant(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch
+    )
+    point = "integration_before_effect"
+    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", point)
+    service = LiveService(
+        git_fixture["working"], config, command=_recovery_driver(config, point)
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        database = next(engine.state_dir.glob("*.sqlite3"))
+        connection = sqlite3.connect(database)
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload FROM runtime_state WHERE id = 1"
+            ).fetchone()[0]
+        )
+        payload["accepted_integration"].pop("product_transition", None)
+        connection.execute(
+            "UPDATE runtime_state SET payload = ? WHERE id = 1", (json.dumps(payload),)
+        )
+        connection.commit()
+        connection.close()
+        _advance_product(git_fixture)
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config)["phase"] == "idle"
+            and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        )
+        assert attempts.read_text().splitlines() == ["attempt"]
+        merges = git(
+            git_fixture["working"], "rev-list", "--merges", "origin/main"
+        ).stdout.splitlines()
+        assert len(merges) == 1
+    finally:
+        service.stop()
+
 def test_real_service_foreign_local_control_descendant_stays_blocked(
     git_fixture, monkeypatch
 ):
