@@ -4803,68 +4803,82 @@ class ServiceEngine:
                 )
                 self._refresh_published_status()
                 return self._complete_execution_lifecycle(report)
-            reconciliation_product = (
-                product["local_head"]
-                if product["local_head"] != workspace.base_head
-                else current_product_remote
-            )
-            if not reconciliation_product:
-                reconciliation_product = workspace.base_head
-            evidence_ref = self._reconciliation_evidence_ref(
-                selected_ticket.id, execution_id
-            )
-            existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
-            if (
-                existing_evidence is not None
-                and existing_evidence != checkpoint.after_head
+            if self._safe_running_product_descendant(
+                workspace.base_head, product
             ):
-                raise DevlegateError("reconciliation evidence ref is inconsistent")
-            pinned = update_ref(
-                self.repo, evidence_ref, checkpoint.after_head, runner=_git
-            )
-            if pinned.returncode:
-                raise DevlegateError(
-                    "cannot pin reconciliation worker checkpoint evidence"
+                # The worker checkout and checkpoint remain pinned to its admitted
+                # base.  A later shared product revision is only an integration
+                # observation; it is merged after acceptance, never rebased into
+                # the worker's worktree.
+                self._save_state(
+                    "agent_running",
+                    execution_validated_product_head=product["remote_head"],
                 )
-            reconciliation = {
-                "status": "pending",
-                "reason": product["reason"],
-                "resolution": None,
-                "ticket_id": selected_ticket.id,
-                "execution_id": execution_id,
-                "original_base": workspace.base_head,
-                "observed_product": reconciliation_product,
-                "worker_checkpoint": checkpoint.after_head,
-                "execution_remote_head": execution_remote_head,
-                "product_remote_head": current_product_remote,
-                "control_head": str(self._state["execution_control_head"]),
-                "execution_branch": workspace.branch,
-                "execution_path": str(workspace.path),
-                "evidence_ref": evidence_ref,
-                "product_branch": product["branch"] or "",
-                "product_local_head": product["local_head"],
-                "product_dirty": product["dirty"],
-                "product_observation": product["reason"],
-                "product_target_eligible": product["target_eligible"],
-                "execution_report": report.as_dict(),
-            }
-            self._save_state(
-                "idle",
-                handled_remote_head=current_product_remote,
-                handled_control_head=str(self._state["control_head"]),
-                reconciliation=reconciliation,
-            )
-            self._refresh_published_status()
-            reason = (
-                f"reconciliation required: ticket {selected_ticket.id}; "
-                f"original base {workspace.base_head}; "
-                f"observed product {reconciliation_product}; "
-                f"product state {product['reason']}; "
-                f"worker checkpoint {checkpoint.after_head}"
-            )
-            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
-            _log(reason)
-            return 1
+            else:
+                reconciliation_product = (
+                    product["local_head"]
+                    if product["local_head"] != workspace.base_head
+                    else current_product_remote
+                )
+                if not reconciliation_product:
+                    reconciliation_product = workspace.base_head
+                evidence_ref = self._reconciliation_evidence_ref(
+                    selected_ticket.id, execution_id
+                )
+                existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
+                if (
+                    existing_evidence is not None
+                    and existing_evidence != checkpoint.after_head
+                ):
+                    raise DevlegateError("reconciliation evidence ref is inconsistent")
+                pinned = update_ref(
+                    self.repo, evidence_ref, checkpoint.after_head, runner=_git
+                )
+                if pinned.returncode:
+                    raise DevlegateError(
+                        "cannot pin reconciliation worker checkpoint evidence"
+                    )
+                reconciliation = {
+                    "status": "pending",
+                    "reason": product["reason"],
+                    "resolution": None,
+                    "ticket_id": selected_ticket.id,
+                    "execution_id": execution_id,
+                    "original_base": workspace.base_head,
+                    "observed_product": reconciliation_product,
+                    "worker_checkpoint": checkpoint.after_head,
+                    "execution_remote_head": execution_remote_head,
+                    "product_remote_head": current_product_remote,
+                    "control_head": str(self._state["execution_control_head"]),
+                    "execution_branch": workspace.branch,
+                    "execution_path": str(workspace.path),
+                    "evidence_ref": evidence_ref,
+                    "product_branch": product["branch"] or "",
+                    "product_local_head": product["local_head"],
+                    "product_dirty": product["dirty"],
+                    "product_observation": product["reason"],
+                    "product_target_eligible": product["target_eligible"],
+                    "execution_report": report.as_dict(),
+                }
+                self._save_state(
+                    "idle",
+                    handled_remote_head=current_product_remote,
+                    handled_control_head=str(self._state["control_head"]),
+                    reconciliation=reconciliation,
+                )
+                self._refresh_published_status()
+                reason = (
+                    f"reconciliation required: ticket {selected_ticket.id}; "
+                    f"original base {workspace.base_head}; "
+                    f"observed product {reconciliation_product}; "
+                    f"product state {product['reason']}; "
+                    f"worker checkpoint {checkpoint.after_head}"
+                )
+                self._publish_service_snapshot(
+                    lifecycle="blocked", blocked_reason=reason
+                )
+                _log(reason)
+                return 1
         self._save_state("agent_running", execution_stage="publishing")
         self._refresh_published_status()
         try:
@@ -5435,7 +5449,7 @@ class ServiceEngine:
         )
         if isinstance(bound_base, str):
             base_head = self._adopt_unstarted_product_descendant(
-                manager, base_head, plan.ticket_id
+                manager, base_head, plan.ticket_id, plan.code.remote_head
             )
         persisted_branch = self._state.get("execution_branch") if same_ticket else None
         persisted_path = self._state.get("execution_path") if same_ticket else None
@@ -5503,6 +5517,7 @@ class ServiceEngine:
         manager: ExecutionWorkspaceManager,
         admitted_base: str,
         ticket_id: str,
+        planned_remote_head: str | None,
     ) -> str:
         """Advance only a clean, not-yet-materialized pending generation.
 
@@ -5511,6 +5526,12 @@ class ServiceEngine:
         the original admission remains separately durable provenance.
         """
         if self._state.get("execution_start_head") is not None:
+            return admitted_base
+        # The plan's exact remote observation is sufficient when it still names
+        # the admitted base. Avoid a redundant shared-ref fetch before creating
+        # the worker workspace; a later running-worker observation remains the
+        # publication gate.
+        if planned_remote_head == admitted_base:
             return admitted_base
         registrations = manager._registrations()
         branch_ref = f"refs/heads/{manager.branch}"
@@ -6154,9 +6175,8 @@ class ServiceEngine:
                     pushed.stderr.strip() or "product fast-forward push failed"
                 )
         else:
-            raise WorkflowBlockedError(
-                "product history diverged from accepted checkpoint; rebase or merge "
-                "is not performed"
+            self._merge_accepted_product_descendant(
+                checkpoint, report.code_base_head, product_head, product_ref
             )
         try:
             reobserved_head = remote_ref(
@@ -7449,6 +7469,109 @@ class ServiceEngine:
             "target_eligible": target_eligible,
             "reason": "; ".join(observation) if observation else "stable",
         }
+
+    def _safe_running_product_descendant(
+        self, admitted_base: str, product: dict[str, object]
+    ) -> bool:
+        """Return whether a running worker can defer a product advance safely.
+
+        The product checkout may still name the admitted base or may already be
+        cleanly fast-forwarded by another owner.  Neither case permits changing
+        the worker checkout; acceptance performs the only controlled merge.
+        """
+        remote = product.get("remote_head")
+        local = product.get("local_head")
+        if (
+            product.get("classification") != "changed"
+            or
+            not isinstance(remote, str)
+            or not remote
+            or not isinstance(local, str)
+            or not local
+            or remote == admitted_base
+            or product.get("branch") != self.current_branch
+            or product.get("dirty")
+        ):
+            return False
+        if local != admitted_base:
+            return False
+        try:
+            return is_ancestor(self.repo, admitted_base, remote, runner=_git)
+        except GitAncestryError:
+            return False
+
+    def _merge_accepted_product_descendant(
+        self,
+        checkpoint: str,
+        admitted_base: str,
+        product_head: str,
+        product_ref: str,
+    ) -> None:
+        """Merge a proven post-admission product descendant at integration.
+
+        This deliberately operates only after worker completion and checkpoint
+        publication.  It never rebases, resets, or otherwise changes the worker
+        branch, and a conflict is aborted before the per-execution refusal.
+        """
+        try:
+            descendant = is_ancestor(
+                self.repo, admitted_base, product_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise WorkflowBlockedError(
+                "product descendant ancestry cannot be proven during integration"
+            ) from error
+        if not descendant:
+            raise WorkflowBlockedError(
+                "product history diverged from accepted checkpoint; "
+                "per-execution reconciliation is required"
+            )
+        current = self._resolve_commit_runtime(self.repo, "HEAD")
+        branch_matches = self._branch_runtime(self.repo) == self.current_branch
+        if not branch_matches or self._status_runtime(self.repo):
+            raise WorkflowBlockedError("product checkout is not safely synchronized")
+        if current != product_head:
+            if current != admitted_base:
+                raise WorkflowBlockedError(
+                    "product checkout changed before descendant integration"
+                )
+            merged = self._merge_fast_forward_runtime(
+                self.repo,
+                f"{self.remote_name}/{self.remote_branch}",
+                admitted_base,
+                product_head,
+            )
+            if merged.returncode:
+                raise WorkflowBlockedError("product checkout cannot be synchronized")
+        merge = self._git_runtime(
+            self.repo, "merge", "--no-ff", "--no-edit", checkpoint, check=False
+        )
+        if merge.returncode:
+            self._git_runtime(self.repo, "merge", "--abort", check=False)
+            raise WorkflowBlockedError(
+                "product descendant conflicts with accepted checkpoint; "
+                "per-execution reconciliation is required"
+            )
+        integrated = self._resolve_commit_runtime(self.repo, "HEAD")
+        if integrated is None or not is_ancestor(
+            self.repo, checkpoint, integrated, runner=_git
+        ):
+            raise WorkflowBlockedError("accepted checkpoint merge could not be proven")
+        pushed = push_refs(
+            self.repo,
+            self.remote_name,
+            f"{integrated}:{product_ref}",
+            options=(f"--force-with-lease={product_ref}:{product_head}",),
+            runner=_git,
+        )
+        if pushed.returncode:
+            observed = remote_ref(
+                self.repo, self.remote_name, product_ref, runner=self._git_runtime
+            )
+            if observed != integrated:
+                raise WorkflowBlockedError(
+                    "product branch changed during descendant integration"
+                )
 
     def _persist_product_reconciliation(
         self,
