@@ -1317,7 +1317,10 @@ def test_real_service_descendant_integration_replays_every_product_effect_bounda
     service.wait_ready()
     try:
         _wait_process_death(service)
-        _advance_product(git_fixture)
+        before_advance, descendant = _advance_product(git_fixture)
+        pending = _disk_state(config)["accepted_integration"]
+        checkpoint = pending["checkpoint"]
+        assert pending.get("product_transition") is None
         monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", point)
         service.restart()
         service.wait_ready()
@@ -1325,6 +1328,23 @@ def test_real_service_descendant_integration_replays_every_product_effect_bounda
         crashed = _disk_state(config)
         transition = crashed["accepted_integration"].get("product_transition")
         assert isinstance(transition, dict)
+        assert transition["admitted_base"] == before_advance
+        assert transition["predecessor"] == descendant
+        expected_status = (
+            "published" if point == "integration_published_after_save" else "merging"
+        )
+        assert transition["status"] == expected_status
+        if point == "integration_merge_after_effect":
+            local_merge = git(
+                git_fixture["working"], "rev-parse", "HEAD"
+            ).stdout.strip()
+            assert git(
+                git_fixture["working"], "rev-list", "--parents", "-n", "1", local_merge
+            ).stdout.split()[1:] == [descendant, checkpoint]
+        if point == "integration_published_after_save":
+            assert transition["integration"] == git(
+                git_fixture["working"], "ls-remote", "origin", "refs/heads/main"
+            ).stdout.split()[0]
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
         service.wait_for(
@@ -1335,6 +1355,22 @@ def test_real_service_descendant_integration_replays_every_product_effect_bounda
             git_fixture["working"], "rev-list", "--merges", "origin/main"
         ).stdout.splitlines()
         assert len(merges) == 1
+        product_head = git(
+            git_fixture["working"], "rev-parse", "origin/main"
+        ).stdout.strip()
+        assert git(
+            git_fixture["working"], "rev-list", "--parents", "-n", "1", product_head
+        ).stdout.split()[1:] == [descendant, checkpoint]
+        assert (
+            git(git_fixture["working"], "show", f"{product_head}:downtime.txt").stdout
+            == "advanced\n"
+        )
+        assert (
+            git(
+                git_fixture["working"], "show", f"{product_head}:process-worker.txt"
+            ).stdout
+            == "completed\n"
+        )
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         service.stop()

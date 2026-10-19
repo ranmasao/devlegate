@@ -4,6 +4,8 @@
 # ruff: noqa: F403, F405, I001
 """Scheduler and admission semantics; workspace and restart proof live elsewhere."""
 
+from dataclasses import replace
+
 from _control_support import *  # noqa: F403,F405
 
 def test_control_init_is_explicit_idempotent_and_nested_observation(tmp_path):
@@ -711,6 +713,92 @@ def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path
     assert payload["execution_id"] == original["execution_id"]
     assert payload["execution_control_head"] == original["execution_control_head"]
     assert "eligibility" in result.stderr
+
+
+def test_unstarted_product_descendant_replays_after_fast_forward_effect(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    admitted = devlegate.plan_view()
+    assert admitted.ticket_id == "T-1"
+    assert admitted.code is not None
+    assert admitted.control is not None
+    base = admitted.code.local_head
+    control_head = admitted.control.local_head
+    manager = ExecutionWorkspaceManager(
+        working, devlegate.execution_worktree_root, "T-1"
+    )
+    devlegate._save_state(
+        "agent_pending",
+        local_head=base,
+        remote_head=base,
+        changed_paths="",
+        control_head=control_head,
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=base,
+        execution_admitted_base_head=base,
+        execution_control_head=control_head,
+        execution_branch=manager.branch,
+        execution_path=str(manager.path),
+        execution_id="pending-transition",
+        execution_remote_head=None,
+    )
+    publisher = tmp_path / "product-publisher"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+    (publisher / "parallel.txt").write_text("parallel\n")
+    git(publisher, "add", "parallel.txt")
+    git(publisher, "commit", "-m", "parallel product advance")
+    git(publisher, "push", "origin", "main")
+    descendant = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "fetch", "origin", "main").returncode == 0
+    advanced = replace(
+        devlegate.plan_view(),
+        code=devlegate._git_observation(working, devlegate.remote_branch),
+    )
+    assert advanced.code is not None
+    assert advanced.code.local_head == base
+    assert advanced.code.remote_head == descendant
+    original_fast_forward = devlegate._merge_fast_forward_runtime
+
+    def interrupt_after_fast_forward(*args, **kwargs):
+        result = original_fast_forward(*args, **kwargs)
+        assert result.returncode == 0
+        raise SystemExit("interrupted pre-worker base transition")
+
+    monkeypatch.setattr(
+        devlegate, "_merge_fast_forward_runtime", interrupt_after_fast_forward
+    )
+    with pytest.raises(SystemExit, match="interrupted pre-worker base transition"):
+        devlegate._prepare_execution_workspace(advanced)
+    interrupted = state_payload(state)
+    assert interrupted["execution_product_transition"] == {
+        "status": "admitted",
+        "ticket_id": "T-1",
+        "predecessor": base,
+        "target": descendant,
+    }
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == descendant
+    assert not manager.path.exists()
+
+    restarted = Devlegate(config)
+    replay = restarted.plan_view()
+    workspace = restarted._prepare_execution_workspace(replay)
+
+    payload = state_payload(state)
+    assert workspace.base_head == descendant
+    assert payload["execution_id"] == "pending-transition"
+    assert payload["execution_admitted_base_head"] == base
+    assert payload["execution_base_head"] == descendant
+    assert payload["execution_product_transition"]["status"] == "adopted"
 
 
 def test_running_worker_defers_clean_product_descendant_to_integration(
