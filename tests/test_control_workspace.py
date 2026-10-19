@@ -1816,6 +1816,7 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     git(control, "commit", "-m", "return ticket for rework")
     git(control, "push", "origin", "devlegate/control")
     product = control_publisher(tmp_path)
+    git(product, "switch", "main")
     (product / "new-base.txt").write_text("new product base\n")
     git(product, "add", "new-base.txt")
     git(product, "commit", "-m", "advance product base")
@@ -1866,6 +1867,65 @@ def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
         ported.path, "rev-list", f"{new_base}..HEAD"
     ).stdout.splitlines()
     assert len(ported_commits) == 2
+
+
+def test_rework_remote_drift_after_evidence_preserves_old_workspace(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    previous = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "return ticket for rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    original_prepare = devlegate._prepare_rework_remote_evidence
+
+    def prepare_then_drift(*args):
+        original_prepare(*args)
+        foreign = git(
+            working,
+            "commit-tree",
+            f"{previous}^{{tree}}",
+            "-p",
+            previous,
+            "-m",
+            "foreign execution branch update",
+        ).stdout.strip()
+        git(working, "push", "origin", f"{foreign}:refs/heads/devlegate/work/T-1")
+
+    monkeypatch.setattr(
+        devlegate, "_prepare_rework_remote_evidence", prepare_then_drift
+    )
+
+    with pytest.raises(
+        runtime_module.WorkspacePreparationBlockedError,
+        match="remote execution branch changed after evidence publication",
+    ):
+        run_test_iteration(devlegate)
+
+    assert calls == 1
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == previous
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == previous
+    assert devlegate._state["phase"] == "agent_pending"
+    assert devlegate._state["rework_provenance"]["preparation_stage"] == (
+        "remote_evidence_published"
+    )
+
 
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     tmp_path,

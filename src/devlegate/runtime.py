@@ -5455,6 +5455,9 @@ class ServiceEngine:
                     previous_base,
                     previous_checkpoint,
                 )
+            self._verify_rework_remote_predecessor(
+                manager.ticket_id, previous_base, previous_checkpoint
+            )
             workspace = manager.prepare_rework(
                 base_head, previous_base, previous_checkpoint
             )
@@ -5539,6 +5542,27 @@ class ServiceEngine:
             raise ExecutionWorkspaceError("remote rework evidence could not be proven")
         self._set_rework_preparation_stage("remote_evidence_published")
 
+    def _verify_rework_remote_predecessor(
+        self, ticket_id: str, previous_base: str, previous_checkpoint: str
+    ) -> None:
+        """Re-observe the replaceable remote ref before local retirement.
+
+        Publishing immutable evidence does not reserve the ticket-scoped ref.
+        A changed remote must stop before the old worktree is detached or its
+        local branch is moved, leaving the completed generation inspectable.
+        """
+        remote = self._execution_remote_head(f"devlegate/work/{ticket_id}")
+        expected = (
+            {None, previous_checkpoint}
+            if previous_checkpoint == previous_base
+            else {previous_checkpoint}
+        )
+        if remote not in expected:
+            raise ExecutionWorkspaceError(
+                "rework preparation conflict: remote execution branch changed "
+                "after evidence publication"
+            )
+
     def _latest_reviewed_rework_report(
         self, reports: tuple[ExecutionReport, ...]
     ) -> ExecutionReport | None:
@@ -5576,10 +5600,16 @@ class ServiceEngine:
             if len(touched) > 1:
                 raise WorkflowBlockedError("reviewed execution lifecycle is ambiguous")
             if touched:
+                report = touched[0]
+                # Failed transport attempts and no-op automatic retries can
+                # publish lifecycle records but are not a completed worker
+                # generation that may be carried into ordinary rework.
+                if not report.result.egress_ok or (
+                    report.workspace_head == report.code_base_head
+                ):
+                    return None
                 return (
-                    touched[0]
-                    if self._lifecycle_commit_is_exact(commit, touched[0])
-                    else None
+                    report if self._lifecycle_commit_is_exact(commit, report) else None
                 )
         return None
 
