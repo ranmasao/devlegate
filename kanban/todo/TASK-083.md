@@ -262,3 +262,22 @@ at `66955a81347a252489f6e1881d4dd6f4f7cbf859` and its original
 execution report. The earlier specification above remains unchanged; this
 handoff pointer is temporary until first-class review-artifact injection
 exists. Do not use the legacy annotation marker.
+
+## Next-generation review handoff — execution 0f5106b1
+
+The newer **second-pass curator review** supersedes the previous
+review's current-action instructions while preserving its evidence:
+
+```sh
+git show devlegate/control:reviews/TASK-083/0f5106b14f664846ab0fb64b6f423e0c.md
+```
+
+That separate review identifies exact-SHA CI failure (15 tests),
+the inverted Git ancestry conditions, incorrect `git cherry` replay
+arguments, remaining retry/rework classification errors, remote drift
+across preparation stages, and the necessary concrete regression tests.
+Retain source work from `66955a81347a252489f6e1881d4dd6f4f7cbf859`
+through `82dc6ddf4f63f1aab360258f1dddf49ff185c01c`.
+This is **ordinary rework**, not an invitation to operator recovery or
+to override the active product branch. Original specification is above;
+review evidence remains in separate files, with no legacy marker.
