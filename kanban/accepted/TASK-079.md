@@ -373,6 +373,8 @@ another Git abstraction. Preserve `e1dff2e`, `52da1ec`,
 instructions. TASK-083 stays unchanged; TASK-080/TASK-081 remain
 blocked on integrated TASK-079.
 
+<!-- devlegate: curator-note -->
+
 ## Curator acceptance — 2026-10-19, execution a82f6e88: ACCEPTED
 
 **Final worker execution:** `a82f6e886c864c4c8f8464264339fb79`;
