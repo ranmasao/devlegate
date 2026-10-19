@@ -1837,6 +1837,36 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     assert reports[0].workspace_head is not None
     assert reports[0].workspace_head != reports[1].workspace_head
 
+
+def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    old_workspace = manager.prepare(old_base)
+    for name in ("first.txt", "second.txt"):
+        (old_workspace.path / name).write_text(f"{name}\n")
+        git(old_workspace.path, "add", name)
+        git(old_workspace.path, "commit", "-m", f"add {name}")
+    old_checkpoint = git(old_workspace.path, "rev-parse", "HEAD").stdout.strip()
+    (working / "new-base.txt").write_text("new base\n")
+    git(working, "add", "new-base.txt")
+    git(working, "commit", "-m", "advance product")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    ported = manager.prepare_rework(new_base, old_base, old_checkpoint)
+    replayed = manager.prepare_rework(new_base, old_base, old_checkpoint)
+
+    assert (ported.path / "first.txt").read_text() == "first.txt\n"
+    assert (ported.path / "second.txt").read_text() == "second.txt\n"
+    assert (ported.path / "new-base.txt").read_text() == "new base\n"
+    assert replayed.head == ported.head
+    ported_commits = git(
+        ported.path, "rev-list", f"{new_base}..HEAD"
+    ).stdout.splitlines()
+    assert len(ported_commits) == 2
+
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     tmp_path,
 ):

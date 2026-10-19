@@ -80,6 +80,7 @@ from devlegate.git import (
     reset_hard,
     resolve_commit,
     resolve_object,
+    resolve_ref_commit,
     run_git,
     update_ref,
     working_tree_status,
@@ -4503,7 +4504,22 @@ class ServiceEngine:
                     == f"devlegate/work/{selected_ticket.id}"
                 ]
                 if completed:
-                    previous = completed[-1]
+                    # Reports are named by random execution IDs.  The reusable
+                    # ticket branch is the durable lifecycle predecessor, so do
+                    # not let lexical report ordering choose an older attempt.
+                    branch_head = resolve_ref_commit(
+                        self.repo, f"refs/heads/devlegate/work/{selected_ticket.id}",
+                        runner=_git,
+                    )
+                    matching = [
+                        report for report in completed
+                        if report.workspace_head == branch_head
+                    ]
+                    if len(matching) != 1:
+                        raise WorkflowBlockedError(
+                            "cannot prove the exact previous rework generation"
+                        )
+                    previous = matching[0]
                     rework_provenance = {
                         "previous_execution_id": previous.execution_id,
                         "previous_report_checkpoint": previous.workspace_head,
@@ -4511,6 +4527,7 @@ class ServiceEngine:
                         "previous_control_head": previous.control_head,
                         "admitted_base_head": execution_base_head,
                         "admitted_control_head": bound_execution_control,
+                        "preparation_stage": "admitted",
                     }
             self._save_state(
                 "agent_pending",
@@ -5424,12 +5441,16 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "persisted rework provenance is incomplete"
                 )
-            self._pin_rework_evidence(
-                manager.ticket_id, previous_execution, previous_checkpoint
-            )
+            # Prove and pin remote history before retiring or moving any local
+            # ticket workspace.  A remote conflict must leave local code intact.
+            if rework.get("preparation_stage") in {None, "admitted"}:
+                self._prepare_rework_remote_evidence(
+                    manager.ticket_id, previous_execution, previous_checkpoint
+                )
             workspace = manager.prepare_rework(
                 base_head, previous_base, previous_checkpoint
             )
+            self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
             )
@@ -5448,7 +5469,7 @@ class ServiceEngine:
     ) -> str:
         """Pin previous code before any ticket-scoped execution ref changes."""
         evidence = self._workspace_recovery_ref(ticket_id, execution_id)
-        existing = resolve_commit(self.repo, evidence, runner=_git)
+        existing = resolve_ref_commit(self.repo, evidence, runner=_git)
         if existing not in {None, checkpoint}:
             raise ExecutionWorkspaceError(
                 "rework evidence ref has conflicting identity"
@@ -5457,9 +5478,50 @@ class ServiceEngine:
             self.repo, evidence, checkpoint, runner=_git
         ).returncode:
             raise ExecutionWorkspaceError("cannot preserve previous rework checkpoint")
-        if resolve_commit(self.repo, evidence, runner=_git) != checkpoint:
+        if resolve_ref_commit(self.repo, evidence, runner=_git) != checkpoint:
             raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
         return evidence
+
+    def _set_rework_preparation_stage(self, stage: str) -> None:
+        rework = self._state.get("rework_provenance")
+        if not isinstance(rework, dict):
+            raise ExecutionWorkspaceError("rework preparation state is missing")
+        self._save_state(
+            "agent_pending",
+            rework_provenance={**rework, "preparation_stage": stage},
+        )
+
+    def _prepare_rework_remote_evidence(
+        self, ticket_id: str, previous_execution: str, previous_checkpoint: str
+    ) -> None:
+        """Publish exact immutable remote evidence before local branch mutation."""
+        evidence = self._pin_rework_evidence(
+            ticket_id, previous_execution, previous_checkpoint
+        )
+        remote = self._execution_remote_head(f"devlegate/work/{ticket_id}")
+        if remote != previous_checkpoint:
+            raise ExecutionWorkspaceError(
+                "rework preparation conflict: remote execution branch does not "
+                "match the previous checkpoint"
+            )
+        remote_evidence = self._execution_remote_head(evidence)
+        if remote_evidence not in {None, previous_checkpoint}:
+            raise ExecutionWorkspaceError(
+                "remote rework evidence has conflicting identity"
+            )
+        if remote_evidence is None:
+            pushed = push_refs(
+                self.repo, self.remote_name, f"{previous_checkpoint}:{evidence}",
+                options=(f"--force-with-lease={evidence}:",), runner=_git,
+            )
+            if (
+                pushed.returncode
+                and self._execution_remote_head(evidence) != previous_checkpoint
+            ):
+                raise ExecutionWorkspaceError("cannot publish remote rework evidence")
+        if self._execution_remote_head(evidence) != previous_checkpoint:
+            raise ExecutionWorkspaceError("remote rework evidence could not be proven")
+        self._set_rework_preparation_stage("remote_evidence_published")
 
     def _prepare_rework_remote_predecessor(
         self,
@@ -5480,23 +5542,6 @@ class ServiceEngine:
                     "match the previous checkpoint"
                 )
         if remote == previous_checkpoint:
-            remote_evidence = self._execution_remote_head(evidence)
-            if remote_evidence not in {None, previous_checkpoint}:
-                raise ExecutionWorkspaceError(
-                    "remote rework evidence has conflicting identity"
-                )
-            if remote_evidence is None:
-                pushed = push_refs(
-                    self.repo, self.remote_name, f"{previous_checkpoint}:{evidence}",
-                    options=(f"--force-with-lease={evidence}:",), runner=_git,
-                )
-                if (
-                    pushed.returncode
-                    and self._execution_remote_head(evidence) != previous_checkpoint
-                ):
-                    raise ExecutionWorkspaceError(
-                        "cannot publish remote rework evidence"
-                    )
             if self._execution_remote_head(evidence) != previous_checkpoint:
                 raise ExecutionWorkspaceError(
                     "remote rework evidence could not be proven"
@@ -5520,6 +5565,7 @@ class ServiceEngine:
             "agent_pending",
             execution_remote_head=self._execution_remote_head(manager.branch),
         )
+        self._set_rework_preparation_stage("remote_predecessor_installed")
 
     def _publish_execution_branch(
         self,

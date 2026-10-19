@@ -137,11 +137,12 @@ class ExecutionWorkspaceManager:
     def prepare_rework(
         self, base_head: str, previous_base: str, previous_checkpoint: str
     ) -> ExecutionWorkspace:
-        """Port one proven checkpoint onto a newly admitted product base.
+        """Port a proven linear worker delta onto a newly admitted product base.
 
-        Rework is deliberately narrower than a general rebase: the completed
-        generation must contain either no code delta or exactly one checkpoint
-        commit.  Anything else needs an explicit reconciliation operation.
+        A rework transition can be interrupted after the ticket branch has
+        moved but before the cherry-pick completes.  Replay accepts only the
+        empty target base or an exact-size, patch-equivalent linear port; an
+        arbitrary descendant is never evidence that the old code survived.
         """
         self._validate_base(base_head)
         self._validate_base(previous_base)
@@ -151,25 +152,17 @@ class ExecutionWorkspaceManager:
         if current.returncode:
             raise ExecutionWorkspaceConflict("previous execution branch is missing")
         current_head = current.stdout.strip()
-        # A crash after the port is safe to replay: do not repeat a transplant.
-        if current_head != previous_checkpoint:
-            workspace = self.prepare(base_head)
-            if not _git(
-                self.repo, "merge-base", "--is-ancestor", base_head, workspace.head,
-                check=False,
-            ).returncode:
-                return workspace
+        if not _git(
+            self.repo,
+            "merge-base",
+            "--is-ancestor",
+            previous_base,
+            previous_checkpoint,
+            check=False,
+        ).returncode:
             raise ExecutionWorkspaceConflict(
-                "execution branch changed during rework preparation"
-            )
-        registrations = self._registrations()
-        registration = registrations.get(self.path.resolve())
-        if registration is None:
-            raise ExecutionWorkspaceConflict("previous execution worktree is missing")
-        workspace = self._validate_existing(registration, previous_base)
-        if workspace.head != previous_checkpoint or workspace.dirty:
-            raise ExecutionWorkspaceConflict(
-                "previous execution worktree is not clean at its reported checkpoint"
+                "rework preparation conflict: previous checkpoint is not descended "
+                "from its reported base"
             )
         commits = _git(
             self.repo,
@@ -181,28 +174,94 @@ class ExecutionWorkspaceManager:
         if commits.returncode:
             raise ExecutionWorkspaceError("cannot inspect previous execution delta")
         delta = [commit for commit in commits.stdout.splitlines() if commit]
-        if len(delta) > 1:
-            raise ExecutionWorkspaceConflict(
-                "rework preparation conflict: previous implementation is not a "
-                "single checkpoint delta"
-            )
-        self.retire(workspace, previous_checkpoint)
-        moved = _git(
+        merges = _git(
             self.repo,
-            "update-ref",
-            branch_ref,
-            base_head,
-            previous_checkpoint,
+            "rev-list",
+            "--merges",
+            f"{previous_base}..{previous_checkpoint}",
             check=False,
         )
-        if moved.returncode:
+        if merges.returncode or merges.stdout.strip():
             raise ExecutionWorkspaceConflict(
-                "execution branch changed during rework preparation"
+                "rework preparation conflict: previous implementation is not a "
+                "linear worker delta"
             )
+        already_integrated = not _git(
+            self.repo,
+            "merge-base",
+            "--is-ancestor",
+            previous_checkpoint,
+            base_head,
+            check=False,
+        ).returncode
+        if current_head == previous_checkpoint:
+            registrations = self._registrations()
+            registration = registrations.get(self.path.resolve())
+            if registration is None:
+                raise ExecutionWorkspaceConflict(
+                    "previous execution worktree is missing"
+                )
+            workspace = self._validate_existing(registration, previous_base)
+            if workspace.head != previous_checkpoint or workspace.dirty:
+                raise ExecutionWorkspaceConflict(
+                    "previous execution worktree is not clean at its reported "
+                    "checkpoint"
+                )
+            self.retire(workspace, previous_checkpoint)
+            moved = _git(
+                self.repo,
+                "update-ref",
+                branch_ref,
+                base_head,
+                previous_checkpoint,
+                check=False,
+            )
+            if moved.returncode:
+                raise ExecutionWorkspaceConflict(
+                    "execution branch changed during rework preparation"
+                )
+        elif current_head != base_head:
+            # A completed replay must contain exactly the old patch series and
+            # nothing else.  This rejects a foreign descendant after a crash.
+            if not _git(
+                self.repo,
+                "merge-base",
+                "--is-ancestor",
+                base_head,
+                current_head,
+                check=False,
+            ).returncode:
+                raise ExecutionWorkspaceConflict(
+                    "execution branch changed during rework preparation"
+                )
+            replay = _git(
+                self.repo, "rev-list", "--reverse", f"{base_head}..{current_head}",
+                check=False,
+            )
+            replay_delta = [commit for commit in replay.stdout.splitlines() if commit]
+            equivalent = _git(
+                self.repo,
+                "cherry",
+                current_head,
+                previous_base,
+                previous_checkpoint,
+                check=False,
+            )
+            if (
+                replay.returncode
+                or equivalent.returncode
+                or len(replay_delta) != len(delta)
+                or [line[:1] for line in equivalent.stdout.splitlines()]
+                != ["-"] * len(delta)
+            ):
+                raise ExecutionWorkspaceConflict(
+                    "rework preparation conflict: execution branch is not the exact "
+                    "proven transplanted implementation"
+                )
         prepared = self.prepare(base_head)
-        if delta:
+        if delta and not already_integrated and prepared.head == base_head:
             transplanted = _git(
-                prepared.path, "cherry-pick", "--no-edit", delta[0], check=False
+                prepared.path, "cherry-pick", "--no-edit", *delta, check=False
             )
             if transplanted.returncode:
                 _git(prepared.path, "cherry-pick", "--abort", check=False)
@@ -212,6 +271,10 @@ class ExecutionWorkspaceManager:
                 )
             registration = self._registrations().get(self.path.resolve())
             prepared = self._validate_existing(registration, base_head)
+        if delta and not already_integrated and prepared.head == base_head:
+            raise ExecutionWorkspaceConflict(
+                "rework preparation conflict: previous implementation was not ported"
+            )
         return prepared
 
     def inspect(
