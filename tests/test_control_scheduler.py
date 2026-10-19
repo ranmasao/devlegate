@@ -715,6 +715,48 @@ def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path
     assert "eligibility" in result.stderr
 
 
+def test_bound_pending_generation_blocks_changed_ticket_content(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "--once", config=config).returncode == 1
+    original = state_payload(state)
+    devlegate = Devlegate(config)
+    execution_path = (
+        state / "worktrees" / next(state.glob("worktrees/*")).name / "work" / "T-1"
+    )
+    devlegate._save_state(
+        "agent_pending",
+        local_head=original["local_head"],
+        remote_head=original["remote_head"],
+        changed_paths=original["changed_paths"],
+        control_head=original["handled_control_head"],
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=original["execution_base_head"],
+        execution_control_head=original["handled_control_head"],
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(execution_path),
+        execution_id=original["execution_id"],
+        execution_remote_head=original.get("execution_remote_head"),
+    )
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "First"\n---\nchanged work\n'
+    )
+    git(control, "add", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "change pending ticket")
+    git(control, "push", "origin", "devlegate/control")
+
+    result = invoke(working, "--once", config=config)
+
+    payload = state_payload(state)
+    assert result.returncode == 1
+    assert payload["execution_id"] == original["execution_id"]
+    assert payload["execution_control_head"] == original["execution_control_head"]
+    assert "changed execution ticket eligibility" in result.stderr
+
+
 def test_unstarted_product_descendant_replays_after_fast_forward_effect(
     tmp_path, monkeypatch
 ):
@@ -842,6 +884,88 @@ def test_running_worker_defers_clean_product_descendant_to_integration(
     assert execution_remote == checkpoint
 
 
+def test_interleaved_generations_keep_distinct_admission_provenance(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    first = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Second"\n---\nwork\n'
+    )
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add second ticket")
+    git(control, "push", "origin", "devlegate/control")
+
+    second_working = tmp_path / "second-working"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(tmp_path, "clone", "-b", "main", origin, second_working)
+    second_state = tmp_path / "second-state"
+    second_config = second_working / ".env"
+    second_config.write_text(
+        "REMOTE_BRANCH=main\nCONTROL_BRANCH=devlegate/control\n"
+        "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
+        f"STATE_DIR={second_state}\n"
+    )
+    (second_working / ".git" / "info" / "exclude").open("a").write("\n.env\n")
+    second = Devlegate(second_config)
+    assert second.control_init() == 0
+
+    publisher = tmp_path / "product-publisher"
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+
+    def first_worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "first.txt").write_text("first\n")
+        (publisher / "parallel.txt").write_text("parallel\n")
+        git(publisher, "add", "parallel.txt")
+        git(publisher, "commit", "-m", "advance during first generation")
+        git(publisher, "push", "origin", "main")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(first._workers, "run", first_worker)
+    assert run_test_iteration(first) == 0
+    first_state = state_payload(state)
+    first_execution = first_state["execution_id"]
+    first_base = first_state["execution_base_head"]
+    first_control = first_state["execution_control_head"]
+    advanced_product = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    assert first_base != advanced_product
+    (control / "kanban/review/T-1.md").rename(control / "kanban/done/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "complete first generation")
+    git(control, "push", "origin", "devlegate/control")
+
+    def second_worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "second.txt").write_text("second\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(second._workers, "run", second_worker)
+    assert run_test_iteration(second) == 0
+    second_payload = state_payload(second_state)
+    assert second_payload["execution_id"] != first_execution
+    assert second_payload["execution_base_head"] == advanced_product
+    assert second_payload["execution_control_head"] != first_control
+    first_report = next((state / "worktrees").glob("*/control/executions/T-1/*.json"))
+    second_report = next(
+        (second_state / "worktrees").glob("*/control/executions/T-2/*.json")
+    )
+    assert json.loads(first_report.read_text())["execution_id"] == first_execution
+    assert json.loads(first_report.read_text())["code_base_head"] == first_base
+    assert json.loads(second_report.read_text())["execution_id"] == second_payload[
+        "execution_id"
+    ]
+    assert json.loads(second_report.read_text())["code_base_head"] == advanced_product
+
+
 @pytest.mark.parametrize("crash_after_push", [False, True])
 def test_descendant_integration_replays_interrupted_product_merge(
     tmp_path, monkeypatch, crash_after_push
@@ -905,6 +1029,63 @@ def test_descendant_integration_replays_interrupted_product_merge(
     )
     assert git(working, "show", f"{product_head}:parallel.txt").stdout == "parallel\n"
     assert (control / "kanban/done/T-1.md").is_file()
+
+
+def test_descendant_integration_conflict_preserves_checkpoint_evidence(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    publisher = tmp_path / "product-publisher"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint = git(execution, "rev-parse", "HEAD").stdout.strip()
+    (publisher / "implementation.txt").write_text("publisher\n")
+    git(publisher, "add", "implementation.txt")
+    git(publisher, "commit", "-m", "conflicting product advance")
+    git(publisher, "push", "origin", "main")
+    product_head = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-1")
+    git(control, "push", "origin", "devlegate/control")
+
+    with pytest.raises(DevlegateError, match="conflicts with accepted checkpoint"):
+        run_test_iteration(devlegate)
+
+    payload = state_payload(state)
+    transition = payload["accepted_integration"]["product_transition"]
+    assert transition["status"] == "merging"
+    assert transition["predecessor"] == product_head
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+    assert (
+        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1")
+        .stdout.split()[0]
+        == checkpoint
+    )
+    assert (
+        git(working, "ls-remote", "origin", "refs/heads/main").stdout.split()[0]
+        == product_head
+    )
+    assert (control / "kanban/accepted/T-1.md").is_file()
+    assert not (control / "kanban/done/T-1.md").exists()
 
 
 def test_public_recover_owner_admission_reaches_exact_matching_operation(
