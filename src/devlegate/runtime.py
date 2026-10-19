@@ -6207,13 +6207,23 @@ class ServiceEngine:
         if checkpoint_is_ancestor:
             pass
         elif product_is_ancestor:
+            # The remote observation is the exact predecessor for this direct
+            # publication. Do not let a competing publisher be overwritten.
             pushed = push_refs(
-                self.repo, self.remote_name, f"{checkpoint}:{product_ref}", runner=_git
+                self.repo,
+                self.remote_name,
+                f"{checkpoint}:{product_ref}",
+                options=(f"--force-with-lease={product_ref}:{product_head}",),
+                runner=_git,
             )
             if pushed.returncode:
-                raise DevlegateError(
-                    pushed.stderr.strip() or "product fast-forward push failed"
+                observed = remote_ref(
+                    self.repo, self.remote_name, product_ref, runner=self._git_runtime
                 )
+                if observed != checkpoint:
+                    raise WorkflowBlockedError(
+                        "product branch changed during accepted publication"
+                    )
         else:
             self._merge_accepted_product_descendant(
                 checkpoint, report.code_base_head, product_head, product_ref

@@ -1087,6 +1087,108 @@ def test_descendant_integration_conflict_preserves_checkpoint_evidence(
     assert (control / "kanban/accepted/T-1.md").is_file()
     assert not (control / "kanban/done/T-1.md").exists()
 
+    # A restart must retain the durable merge intent rather than treating the
+    # aborted local merge as a completed product publication.
+    restarted = Devlegate(config)
+    with pytest.raises(DevlegateError, match="conflicts with accepted checkpoint"):
+        run_test_iteration(restarted)
+    replay = state_payload(state)["accepted_integration"]["product_transition"]
+    assert replay == transition
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert (control / "kanban/accepted/T-1.md").is_file()
+    assert not (control / "kanban/done/T-1.md").exists()
+
+
+@pytest.mark.parametrize("outcome", ["lease-lost", "ambiguous-success"])
+def test_descendant_integration_push_outcomes_preserve_exact_publication_proof(
+    tmp_path, monkeypatch, outcome
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    publisher = tmp_path / "product-publisher"
+    origin = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(working, "clone", origin, publisher)
+    git(publisher, "checkout", "main")
+    git(publisher, "config", "user.email", "test@example.com")
+    git(publisher, "config", "user.name", "Test User")
+
+    def worker(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("worker\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    checkpoint = git(
+        next((state / "worktrees").glob("*/work/T-1")), "rev-parse", "HEAD"
+    ).stdout.strip()
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "accept T-1")
+    git(control, "push", "origin", "devlegate/control")
+
+    original_push = runtime.push_refs
+    contender = None
+
+    def push_with_outcome(repo, remote, refspec, **kwargs):
+        nonlocal contender
+        if repo == devlegate.repo and "refs/heads/main" in refspec:
+            if outcome == "lease-lost" and contender is None:
+                (publisher / "contender.txt").write_text("foreign\n")
+                git(publisher, "add", "contender.txt")
+                git(publisher, "commit", "-m", "competing product advance")
+                git(publisher, "push", "origin", "main")
+                contender = git(publisher, "rev-parse", "HEAD").stdout.strip()
+                return original_push(repo, remote, refspec, **kwargs)
+            result = original_push(repo, remote, refspec, **kwargs)
+            assert result.returncode == 0
+            return subprocess.CompletedProcess(
+                result.args, 1, result.stdout, "lost reply"
+            )
+        return original_push(repo, remote, refspec, **kwargs)
+
+    monkeypatch.setattr(runtime, "push_refs", push_with_outcome)
+    if outcome == "lease-lost":
+        with pytest.raises(DevlegateError, match="product branch changed"):
+            run_test_iteration(devlegate)
+        assert contender is not None
+        assert (
+            git(working, "ls-remote", "origin", "refs/heads/main").stdout.split()[0]
+            == contender
+        )
+        pending = state_payload(state)["accepted_integration"]
+        assert pending["checkpoint"] == checkpoint
+        assert pending.get("product_transition") is None
+
+        restarted = Devlegate(config)
+        assert run_test_iteration(restarted) == 0
+        product_head = git(
+            working, "ls-remote", "origin", "refs/heads/main"
+        ).stdout.split()[0]
+        assert (
+            git(
+                working, "merge-base", "--is-ancestor", checkpoint, product_head
+            ).returncode
+            == 0
+        )
+        assert (control / "kanban/done/T-1.md").is_file()
+    else:
+        assert run_test_iteration(devlegate) == 0
+        product_head = git(
+            working, "ls-remote", "origin", "refs/heads/main"
+        ).stdout.split()[0]
+        assert (
+            git(
+                working, "merge-base", "--is-ancestor", checkpoint, product_head
+            ).returncode
+            == 0
+        )
+        assert (control / "kanban/done/T-1.md").is_file()
+
 
 def test_public_recover_owner_admission_reaches_exact_matching_operation(
     tmp_path, monkeypatch
