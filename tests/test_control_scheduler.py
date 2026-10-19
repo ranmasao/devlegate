@@ -672,6 +672,26 @@ def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "--once", config=config).returncode == 1
     original = state_payload(state)
+    devlegate = Devlegate(config)
+    execution_path = (
+        state / "worktrees" / next(state.glob("worktrees/*")).name / "work" / "T-1"
+    )
+    devlegate._save_state(
+        "agent_pending",
+        local_head=original["local_head"],
+        remote_head=original["remote_head"],
+        changed_paths=original["changed_paths"],
+        control_head=original["handled_control_head"],
+        selected_ticket_id="T-1",
+        selected_ticket_body="work\n",
+        execution_ticket_id="T-1",
+        execution_base_head=original["execution_base_head"],
+        execution_control_head=original["handled_control_head"],
+        execution_branch="devlegate/work/T-1",
+        execution_path=str(execution_path),
+        execution_id=original["execution_id"],
+        execution_remote_head=original.get("execution_remote_head"),
+    )
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/todo/D-1.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwait\n'

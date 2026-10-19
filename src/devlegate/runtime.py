@@ -3617,6 +3617,10 @@ class ServiceEngine:
             fields_to_clear = (
                 "execution_ticket_id",
                 "execution_base_head",
+                "execution_admitted_base_head",
+                "execution_validated_product_head",
+                "execution_product_predecessor",
+                "execution_product_transition",
                 "execution_control_head",
                 "execution_validated_control_head",
                 "execution_branch",
@@ -4552,6 +4556,10 @@ class ServiceEngine:
                 selected_ticket_title=selected_ticket.title,
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
+                # The effective base may advance before a worker starts, but
+                # retain the original admission for audit and replay proof.
+                execution_admitted_base_head=execution_base_head,
+                execution_validated_product_head=execution_base_head,
                 execution_control_head=bound_execution_control,
                 # This is a mutable observation.  The execution_control_head
                 # remains the immutable admission provenance for this attempt.
@@ -5425,6 +5433,10 @@ class ServiceEngine:
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, plan.ticket_id
         )
+        if isinstance(bound_base, str):
+            base_head = self._adopt_unstarted_product_descendant(
+                manager, base_head, plan.ticket_id
+            )
         persisted_branch = self._state.get("execution_branch") if same_ticket else None
         persisted_path = self._state.get("execution_path") if same_ticket else None
         if isinstance(persisted_branch, str) and persisted_branch != manager.branch:
@@ -5485,6 +5497,155 @@ class ServiceEngine:
                 str(bound_control or plan.control.local_head),
             )
         return workspace
+
+    def _adopt_unstarted_product_descendant(
+        self,
+        manager: ExecutionWorkspaceManager,
+        admitted_base: str,
+        ticket_id: str,
+    ) -> str:
+        """Advance only a clean, not-yet-materialized pending generation.
+
+        Once a worktree or worker exists, its base is pinned.  Before either
+        exists, a linear product fast-forward is a normal planning transition;
+        the original admission remains separately durable provenance.
+        """
+        if self._state.get("execution_start_head") is not None:
+            return admitted_base
+        registrations = manager._registrations()
+        branch_ref = f"refs/heads/{manager.branch}"
+        if (
+            resolve_commit(self.repo, branch_ref, runner=_git) is not None
+            or manager.path.exists()
+            or any(
+                item.get("branch") == manager.branch
+                for item in registrations.values()
+            )
+        ):
+            return admitted_base
+        product = self._observe_product_generation(admitted_base)
+        if product["stable"]:
+            return admitted_base
+        candidate = product.get("remote_head")
+        transition = self._state.get("execution_product_transition")
+        # Replay the durable intent after Git completed but before the state
+        # recorded the adopted base.  This is the only local-HEAD change that
+        # belongs to this transition.
+        if (
+            isinstance(transition, dict)
+            and transition.get("status") == "admitted"
+            and transition.get("ticket_id") == ticket_id
+            and transition.get("predecessor") == admitted_base
+            and transition.get("target") == candidate
+            and product.get("local_head") == candidate
+            and not product.get("dirty")
+            and isinstance(candidate, str)
+            and candidate
+        ):
+            original = self._state.get("execution_admitted_base_head")
+            self._save_state(
+                "agent_pending",
+                local_head=candidate,
+                remote_head=candidate,
+                execution_base_head=candidate,
+                execution_admitted_base_head=(
+                    original
+                    if isinstance(original, str) and original
+                    else admitted_base
+                ),
+                execution_validated_product_head=candidate,
+                execution_product_predecessor=admitted_base,
+                execution_product_transition={**transition, "status": "adopted"},
+            )
+            return candidate
+        if product["classification"] == "unobservable":
+            if (
+                product.get("local_head") == admitted_base
+                and not isinstance(transition, dict)
+            ):
+                # No descendant was observed, so preserve the already admitted
+                # base rather than turning a transient observation failure into
+                # a workspace conflict.
+                return admitted_base
+            raise ExecutionWorkspaceError(
+                "product revision cannot be observed before worker launch"
+            )
+        product_pre_advanced = (
+            product.get("local_head") == candidate
+            and product.get("remote_head") == candidate
+            and not product.get("dirty")
+            and product.get("branch") == self.current_branch
+            and isinstance(candidate, str)
+            and bool(candidate)
+        )
+        if product["classification"] == "unsafe-local" and not product_pre_advanced:
+            raise ExecutionWorkspaceError(
+                "product checkout is not clean and owned for base transition; "
+                "per-execution reconciliation is required"
+            )
+        if not isinstance(candidate, str) or not candidate:
+            raise ExecutionWorkspaceError(
+                "product descendant lacks an observed remote revision"
+            )
+        try:
+            descendant = is_ancestor(self.repo, admitted_base, candidate, runner=_git)
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                "product revision ancestry cannot be proven before worker launch"
+            ) from error
+        if not descendant:
+            raise ExecutionWorkspaceError(
+                "product history diverged from the execution admission generation; "
+                "per-execution reconciliation is required"
+            )
+        # Write intent before moving the shared checkout.  If the process stops
+        # after Git succeeds, the next owner can prove the exact target again.
+        if isinstance(transition, dict) and transition.get("target") not in {
+            candidate,
+            None,
+        }:
+            raise ExecutionWorkspaceError(
+                "product base transition has conflicting target"
+            )
+        self._save_state(
+            "agent_pending",
+            execution_product_transition={
+                "status": "admitted",
+                "ticket_id": ticket_id,
+                "predecessor": admitted_base,
+                "target": candidate,
+            },
+        )
+        merged = self._merge_fast_forward_runtime(
+            self.repo,
+            f"{self.remote_name}/{self.remote_branch}",
+            admitted_base,
+            candidate,
+        )
+        if merged.returncode:
+            raise ExecutionWorkspaceError(
+                merged.stderr.strip()
+                or "cannot fast-forward product before worker launch"
+            )
+        original = self._state.get("execution_admitted_base_head")
+        self._save_state(
+            "agent_pending",
+            local_head=candidate,
+            remote_head=candidate,
+            execution_base_head=candidate,
+            execution_admitted_base_head=(
+                original if isinstance(original, str) and original else admitted_base
+            ),
+            execution_validated_product_head=candidate,
+            execution_product_predecessor=admitted_base,
+            execution_product_transition={
+                "status": "adopted",
+                "ticket_id": ticket_id,
+                "predecessor": admitted_base,
+                "target": candidate,
+            },
+        )
+        return candidate
 
     def _adopt_validated_control_descendant(
         self, candidate: str, ticket_id: str, admitted_control: str
