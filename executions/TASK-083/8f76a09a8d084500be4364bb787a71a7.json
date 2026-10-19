@@ -1,0 +1,29 @@
+{
+  "code_base_head": "82089591940db6ed4c7f76763892a8b5bc35860e",
+  "conclusion": "completed",
+  "control_head": "7a8e8de61ffcecdf103832af04a666643dd5a96d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-083",
+  "execution_id": "8f76a09a8d084500be4364bb787a71a7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-083",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-083",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Forced lifecycle escalation now durably records operator abort and its retry authority before signalling the worker. Scheduler coverage now distinguishes immutable completed-generation control authority from a newly admitted generation."
+  },
+  "workspace_head": "a1d4cbdf8a0eb00f8d2927def90318a9b63d5089"
+}
