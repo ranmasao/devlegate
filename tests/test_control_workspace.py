@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
+import devlegate.execution_workspace as execution_workspace_module
 import devlegate.runtime as runtime_module
 from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
@@ -2269,9 +2270,12 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         for report in ExecutionReportStore(control).list("T-1")
     ] == [old_head]
     effects = []
+    commands = []
+    evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
     real_git = runtime._git
 
     def observe_effect(repo, *args, **kwargs):
+        commands.append(args)
         if args[:2] == (
             "update-ref",
             "refs/devlegate/recovery/workspace/T-1/old-generation",
@@ -2291,13 +2295,61 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
 
     monkeypatch.setattr(runtime, "_git", observe_effect)
     monkeypatch.setattr(recovery_workspace, "run_git", observe_effect)
+    monkeypatch.setattr(execution_workspace_module, "_git", observe_effect)
     devlegate._repair_bound_execution_workspace()
+    recovery_commands = tuple(commands)
     assert devlegate.plan_view().action == "run-worker"
     assert effects.index("evidence") < effects.index("branch")
     assert effects.index("evidence") < effects.index("evidence-reproved")
     assert effects.index("evidence-reproved") < effects.index("branch")
+    effects = [
+        command
+        for command in recovery_commands
+        if command[0] == "update-ref"
+        or command[:2] in {("worktree", "remove"), ("worktree", "add")}
+        or command[:2] == ("submodule", "update")
+    ]
+    assert effects == [
+        ("update-ref", evidence, old_head, ""),
+        ("worktree", "remove", "--force", str(manager.path)),
+        ("update-ref", f"refs/heads/{manager.branch}", new_base, old_head),
+        ("worktree", "add", str(manager.path), manager.branch),
+        ("submodule", "update", "--init", "--recursive"),
+    ]
+    assert len(recovery_commands) == 54
+    assert len(recovery_commands) - len(effects) == 49
+    assert [command[:2] for command in recovery_commands] == [
+        ("rev-parse", "--verify"), ("worktree", "list"),
+        ("rev-parse", "--show-toplevel"), ("symbolic-ref", "--quiet"),
+        ("show-ref", "--verify"), ("update-ref", evidence),
+        ("show-ref", "--verify"), ("rev-parse", "--verify"),
+        ("rev-parse", "--verify"), ("worktree", "list"),
+        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
+        ("rev-parse", "HEAD"), ("status", "--porcelain"),
+        ("worktree", "remove"), ("rev-parse", "--verify"),
+        ("update-ref", f"refs/heads/{manager.branch}"),
+        ("rev-parse", "--verify"), ("show-ref", "--verify"),
+        ("merge-base", "--is-ancestor"), ("worktree", "list"),
+        ("worktree", "add"), ("worktree", "list"),
+        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
+        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("ls-tree", "-r"),
+        ("submodule", "status"), ("ls-tree", "-r"), ("submodule", "update"),
+        ("ls-tree", "-r"), ("rev-parse", "--verify"), ("worktree", "list"),
+        ("show-ref", "--verify"), ("merge-base", "--is-ancestor"),
+        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
+        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("worktree", "list"),
+        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
+        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("ls-tree", "-r"),
+    ]
+    assert not any(
+        command[0] in {"fetch", "push", "ls-remote"}
+        for command in recovery_commands
+    )
 
-    evidence = "refs/devlegate/recovery/workspace/T-1/old-generation"
     assert git(working, "rev-parse", evidence).stdout.strip() == old_head
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
     assert devlegate._state["execution_id"] == "current"

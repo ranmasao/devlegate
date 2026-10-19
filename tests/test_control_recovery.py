@@ -97,6 +97,61 @@ def test_control_lineage_absent_evidence_is_created_and_reproved(monkeypatch, tm
     assert owner.admissions == 3
 
 
+@pytest.mark.parametrize(
+    ("existing", "unreadable", "expected"),
+    [
+        (
+            None,
+            False,
+            ("show-ref", "update-ref", "show-ref", "rev-parse", "reset"),
+        ),
+        (
+            "a" * 40,
+            False,
+            ("show-ref", "rev-parse", "show-ref", "rev-parse", "reset"),
+        ),
+        ("c" * 40, False, ("show-ref", "rev-parse", "show-ref", "rev-parse")),
+        (None, True, ("show-ref",)),
+    ],
+)
+def test_control_lineage_command_trace_has_only_guarded_local_effects(
+    monkeypatch, tmp_path, existing, unreadable, expected
+):
+    """Record the full transaction seam for absence, replay, conflict, and failure."""
+    source, target = "a" * 40, "b" * 40
+    evidence = f"refs/devlegate/recovery/control/{source}-{target}"
+    refs = {} if existing is None else {evidence: existing}
+    runner, calls = _control_lineage_runner(
+        refs, unreadable_initially=unreadable
+    )
+    monkeypatch.setattr(recovery_transactions, "run_git", runner)
+
+    if not unreadable and (existing is None or existing == source):
+        recovery_transactions.reconcile_control_lineage(
+            _ControlLineageOwner(), source, target,
+            repo=tmp_path, control_worktree=tmp_path, take_lock=True,
+        )
+    else:
+        with pytest.raises(ValueError):
+            recovery_transactions.reconcile_control_lineage(
+                _ControlLineageOwner(), source, target,
+                repo=tmp_path, control_worktree=tmp_path, take_lock=True,
+            )
+
+    assert tuple(call[0] for call in calls) == expected
+    assert not any(call[0] in {"fetch", "push", "ls-remote"} for call in calls)
+    writes = [call for call in calls if call[0] in {"update-ref", "reset"}]
+    if existing is None and not unreadable:
+        assert writes == [
+            ("update-ref", evidence, source, ""),
+            ("reset", "--hard", target),
+        ]
+    elif existing == source:
+        assert writes == [("reset", "--hard", target)]
+    else:
+        assert writes == []
+
+
 @pytest.mark.parametrize("existing", ["a" * 40, "c" * 40])
 def test_control_lineage_replay_never_overwrites_evidence(
     monkeypatch, tmp_path, existing
