@@ -1800,9 +1800,12 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     devlegate = Devlegate(config)
     calls = 0
 
-    def worker(workspace, _prompt, **_kwargs):
+    directives = []
+
+    def worker(workspace, prompt, **_kwargs):
         nonlocal calls
         calls += 1
+        directives.append(prompt)
         (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
@@ -1812,16 +1815,27 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
     git(control, "commit", "-m", "return ticket for rework")
     git(control, "push", "origin", "devlegate/control")
+    product = control_publisher(tmp_path)
+    (product / "new-base.txt").write_text("new product base\n")
+    git(product, "add", "new-base.txt")
+    git(product, "commit", "-m", "advance product base")
+    git(product, "push", "origin", "main")
 
     assert run_test_iteration(devlegate) == 0
     execution = next((state / "worktrees").glob("*/work/T-1"))
     assert calls == 2
+    assert "Revise the existing implementation" in directives[1]
+    assert (execution / "new-base.txt").read_text() == "new product base\n"
     assert (execution / "attempt-1.txt").exists()
     assert (execution / "attempt-2.txt").exists()
     assert git(execution, "log", "--format=%s").stdout.splitlines().count(
         "T-1: Control ticket"
     ) == 2
     assert len(list((control / "executions/T-1").glob("*.json"))) == 2
+    reports = ExecutionReportStore(control).list("T-1")
+    assert reports[0].execution_id != reports[1].execution_id
+    assert reports[0].workspace_head is not None
+    assert reports[0].workspace_head != reports[1].workspace_head
 
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     tmp_path,

@@ -134,6 +134,86 @@ class ExecutionWorkspaceManager:
         self._prepare_submodules(workspace.path)
         return workspace
 
+    def prepare_rework(
+        self, base_head: str, previous_base: str, previous_checkpoint: str
+    ) -> ExecutionWorkspace:
+        """Port one proven checkpoint onto a newly admitted product base.
+
+        Rework is deliberately narrower than a general rebase: the completed
+        generation must contain either no code delta or exactly one checkpoint
+        commit.  Anything else needs an explicit reconciliation operation.
+        """
+        self._validate_base(base_head)
+        self._validate_base(previous_base)
+        self._validate_base(previous_checkpoint)
+        branch_ref = f"refs/heads/{self.branch}"
+        current = _git(self.repo, "rev-parse", branch_ref, check=False)
+        if current.returncode:
+            raise ExecutionWorkspaceConflict("previous execution branch is missing")
+        current_head = current.stdout.strip()
+        # A crash after the port is safe to replay: do not repeat a transplant.
+        if current_head != previous_checkpoint:
+            workspace = self.prepare(base_head)
+            if not _git(
+                self.repo, "merge-base", "--is-ancestor", base_head, workspace.head,
+                check=False,
+            ).returncode:
+                return workspace
+            raise ExecutionWorkspaceConflict(
+                "execution branch changed during rework preparation"
+            )
+        registrations = self._registrations()
+        registration = registrations.get(self.path.resolve())
+        if registration is None:
+            raise ExecutionWorkspaceConflict("previous execution worktree is missing")
+        workspace = self._validate_existing(registration, previous_base)
+        if workspace.head != previous_checkpoint or workspace.dirty:
+            raise ExecutionWorkspaceConflict(
+                "previous execution worktree is not clean at its reported checkpoint"
+            )
+        commits = _git(
+            self.repo,
+            "rev-list",
+            "--reverse",
+            f"{previous_base}..{previous_checkpoint}",
+            check=False,
+        )
+        if commits.returncode:
+            raise ExecutionWorkspaceError("cannot inspect previous execution delta")
+        delta = [commit for commit in commits.stdout.splitlines() if commit]
+        if len(delta) > 1:
+            raise ExecutionWorkspaceConflict(
+                "rework preparation conflict: previous implementation is not a "
+                "single checkpoint delta"
+            )
+        self.retire(workspace, previous_checkpoint)
+        moved = _git(
+            self.repo,
+            "update-ref",
+            branch_ref,
+            base_head,
+            previous_checkpoint,
+            check=False,
+        )
+        if moved.returncode:
+            raise ExecutionWorkspaceConflict(
+                "execution branch changed during rework preparation"
+            )
+        prepared = self.prepare(base_head)
+        if delta:
+            transplanted = _git(
+                prepared.path, "cherry-pick", "--no-edit", delta[0], check=False
+            )
+            if transplanted.returncode:
+                _git(prepared.path, "cherry-pick", "--abort", check=False)
+                raise ExecutionWorkspaceConflict(
+                    "rework preparation conflict: previous checkpoint cannot be "
+                    "applied to the new product base"
+                )
+            registration = self._registrations().get(self.path.resolve())
+            prepared = self._validate_existing(registration, base_head)
+        return prepared
+
     def inspect(
         self, base_head: str, expected_head: str | None = None
     ) -> WorkspaceInspection:

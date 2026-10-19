@@ -3618,7 +3618,9 @@ class ServiceEngine:
                 "resume_required",
             )
             for field in fields_to_clear:
-                if field == "resume_required" and preserve_resume_required:
+                if field in fields or (
+                    field == "resume_required" and preserve_resume_required
+                ):
                     continue
                 state.pop(field, None)
         if clear_pre_worker_generation:
@@ -4429,7 +4431,8 @@ class ServiceEngine:
                 _log("no new work generation; unchanged todo is already handled")
                 return 0
             existing_lineage = (
-                self._state.get("execution_ticket_id") == selected_ticket.id
+                pending_agent_execution
+                and self._state.get("execution_ticket_id") == selected_ticket.id
                 and isinstance(self._state.get("execution_base_head"), str)
                 and isinstance(self._state.get("execution_control_head"), str)
             )
@@ -4481,8 +4484,38 @@ class ServiceEngine:
             )
             if not isinstance(execution_id, str) or not execution_id:
                 raise DevlegateError("invalid persisted execution identity")
+            rework_provenance = None
+            if not pending_agent_execution:
+                try:
+                    reports = ExecutionReportStore(self.control_worktree).list(
+                        selected_ticket.id
+                    )
+                except ExecutionReportError as error:
+                    raise WorkflowBlockedError(
+                        "cannot read previous execution evidence for "
+                        f"{selected_ticket.id}"
+                    ) from error
+                completed = [
+                    report
+                    for report in reports
+                    if report.workspace_head is not None
+                    and report.execution_branch
+                    == f"devlegate/work/{selected_ticket.id}"
+                ]
+                if completed:
+                    previous = completed[-1]
+                    rework_provenance = {
+                        "previous_execution_id": previous.execution_id,
+                        "previous_report_checkpoint": previous.workspace_head,
+                        "previous_base_head": previous.code_base_head,
+                        "previous_control_head": previous.control_head,
+                        "admitted_base_head": execution_base_head,
+                        "admitted_control_head": bound_execution_control,
+                    }
             self._save_state(
                 "agent_pending",
+                clear_execution=not pending_agent_execution,
+                clear_pre_worker_generation=not pending_agent_execution,
                 local_head=local_head,
                 remote_head=remote_head,
                 changed_paths=changed_paths,
@@ -4503,6 +4536,7 @@ class ServiceEngine:
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
                 worker_identity=None,
+                rework_provenance=rework_provenance,
                 resume_required=None,
                 force_retry_authorization=None,
                 automatic_retry=(
@@ -4532,7 +4566,11 @@ class ServiceEngine:
             f"{'resumed' if workspace.head != workspace.base_head else 'prepared'}: "
             f"{workspace.path} ({workspace.branch} at {workspace.head[:12]})"
         )
-        directive = WorkDirective.FRESH
+        directive = (
+            WorkDirective.REWORK
+            if isinstance(self._state.get("rework_provenance"), dict)
+            else WorkDirective.FRESH
+        )
         retrying_interrupted = False
         if authorization is not None and authorization.is_explicit_retry:
             failures = self._state.get("failed_executions", {})
@@ -5333,7 +5371,12 @@ class ServiceEngine:
                 "execution plan has no complete revision binding"
             )
         same_ticket = self._state.get("execution_ticket_id") == plan.ticket_id
-        bound_base = self._state.get("execution_base_head") if same_ticket else None
+        bound_base = (
+            self._state.get("execution_base_head")
+            if same_ticket
+            and str(self._state.get("phase")) in {"agent_pending", "agent_running"}
+            else None
+        )
         bound_control = (
             self._state.get("execution_control_head")
             if same_ticket
@@ -5369,7 +5412,29 @@ class ServiceEngine:
                 f"persisted execution path {persisted_path} does not match "
                 f"expected path {manager.path}"
             )
-        workspace = manager.prepare(base_head)
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict):
+            previous_base = rework.get("previous_base_head")
+            previous_checkpoint = rework.get("previous_report_checkpoint")
+            previous_execution = rework.get("previous_execution_id")
+            if not all(
+                isinstance(value, str) and value
+                for value in (previous_base, previous_checkpoint, previous_execution)
+            ):
+                raise ExecutionWorkspaceError(
+                    "persisted rework provenance is incomplete"
+                )
+            self._pin_rework_evidence(
+                manager.ticket_id, previous_execution, previous_checkpoint
+            )
+            workspace = manager.prepare_rework(
+                base_head, previous_base, previous_checkpoint
+            )
+            self._prepare_rework_remote_predecessor(
+                manager, workspace, previous_execution, previous_checkpoint
+            )
+        else:
+            workspace = manager.prepare(base_head)
         current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
             raise ExecutionWorkspaceError(
@@ -5377,6 +5442,84 @@ class ServiceEngine:
                 "stale execution"
             )
         return workspace
+
+    def _pin_rework_evidence(
+        self, ticket_id: str, execution_id: str, checkpoint: str
+    ) -> str:
+        """Pin previous code before any ticket-scoped execution ref changes."""
+        evidence = self._workspace_recovery_ref(ticket_id, execution_id)
+        existing = resolve_commit(self.repo, evidence, runner=_git)
+        if existing not in {None, checkpoint}:
+            raise ExecutionWorkspaceError(
+                "rework evidence ref has conflicting identity"
+            )
+        if existing is None and create_ref_if_absent(
+            self.repo, evidence, checkpoint, runner=_git
+        ).returncode:
+            raise ExecutionWorkspaceError("cannot preserve previous rework checkpoint")
+        if resolve_commit(self.repo, evidence, runner=_git) != checkpoint:
+            raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
+        return evidence
+
+    def _prepare_rework_remote_predecessor(
+        self,
+        manager: ExecutionWorkspaceManager,
+        workspace: ExecutionWorkspace,
+        previous_execution: str,
+        previous_checkpoint: str,
+    ) -> None:
+        """Publish immutable evidence before replacing a ticket-scoped remote ref."""
+        evidence = self._pin_rework_evidence(
+            manager.ticket_id, previous_execution, previous_checkpoint
+        )
+        remote = self._execution_remote_head(manager.branch)
+        if remote is not None and remote != previous_checkpoint:
+            if remote != workspace.head:
+                raise ExecutionWorkspaceError(
+                    "rework preparation conflict: remote execution branch does not "
+                    "match the previous checkpoint"
+                )
+        if remote == previous_checkpoint:
+            remote_evidence = self._execution_remote_head(evidence)
+            if remote_evidence not in {None, previous_checkpoint}:
+                raise ExecutionWorkspaceError(
+                    "remote rework evidence has conflicting identity"
+                )
+            if remote_evidence is None:
+                pushed = push_refs(
+                    self.repo, self.remote_name, f"{previous_checkpoint}:{evidence}",
+                    options=(f"--force-with-lease={evidence}:",), runner=_git,
+                )
+                if (
+                    pushed.returncode
+                    and self._execution_remote_head(evidence) != previous_checkpoint
+                ):
+                    raise ExecutionWorkspaceError(
+                        "cannot publish remote rework evidence"
+                    )
+            if self._execution_remote_head(evidence) != previous_checkpoint:
+                raise ExecutionWorkspaceError(
+                    "remote rework evidence could not be proven"
+                )
+            pushed = push_refs(
+                workspace.path,
+                self.remote_name,
+                f"{workspace.head}:refs/heads/{manager.branch}",
+                options=(
+                    f"--force-with-lease=refs/heads/{manager.branch}:{previous_checkpoint}",
+                ), runner=_git,
+            )
+            if (
+                pushed.returncode
+                and self._execution_remote_head(manager.branch) != workspace.head
+            ):
+                raise ExecutionWorkspaceError(
+                    "cannot install rework execution predecessor"
+                )
+        self._save_state(
+            "agent_pending",
+            execution_remote_head=self._execution_remote_head(manager.branch),
+        )
 
     def _publish_execution_branch(
         self,
