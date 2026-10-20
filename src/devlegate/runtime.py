@@ -6396,13 +6396,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted execution workspace branch is not exact"
             )
-        if self._state.get("worker_identity") is not None or self._state.get(
-            "reconciliation"
-        ) is not None or self._state.get("automatic_retry") is not None:
-            raise WorkflowBlockedError("accepted execution still has live dependencies")
-        pending = self._state.get("accepted_integration")
-        if isinstance(pending, dict) and pending.get("ticket_id") != ticket_id:
-            raise WorkflowBlockedError("another accepted integration is pending")
+        self._assert_cleanup_has_no_execution_dependency(report)
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is None:
@@ -6413,14 +6407,24 @@ class ServiceEngine:
                     "accepted execution workspace registration is ambiguous"
                 )
             _log(f"workspace already retired: {ticket_id}")
-            self._retire_execution_refs(report.execution_branch, report.workspace_head)
+            self._retire_execution_refs(
+                report.execution_branch, report.workspace_head, report=report
+            )
             return
         workspace = manager._validate_existing(registration, report.workspace_head)
         manager.retire(workspace, report.workspace_head)
-        self._retire_execution_refs(report.execution_branch, report.workspace_head)
+        self._retire_execution_refs(
+            report.execution_branch, report.workspace_head, report=report
+        )
         _log(f"retired workspace {ticket_id} at {report.workspace_head[:12]}")
 
-    def _retire_execution_refs(self, branch: str, expected_head: str) -> None:
+    def _retire_execution_refs(
+        self,
+        branch: str,
+        expected_head: str,
+        *,
+        report: ExecutionReport | None = None,
+    ) -> None:
         """Release only exact, already-published disposable execution refs."""
         if not branch.startswith("devlegate/work/") or not _is_git_identity(
             expected_head
@@ -6451,6 +6455,8 @@ class ServiceEngine:
         if local_head is not None:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
+            if report is not None:
+                self._revalidate_cleanup_retirement(report)
             # Recheck the exact observed head before the helper's compare-
             # and-delete transaction.  The helper also rechecks all Git
             # worktree registrations so foreign checkouts are retained.
@@ -6478,6 +6484,18 @@ class ServiceEngine:
             return
         if remote_head != expected_head:
             raise WorkflowBlockedError("remote execution ref changed before removal")
+        if report is not None:
+            self._revalidate_cleanup_retirement(report)
+            remote_head = remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{branch}",
+                runner=self._git_runtime,
+            )
+            if remote_head != expected_head:
+                raise WorkflowBlockedError(
+                    "remote execution ref changed before removal"
+                )
         removed = push_refs(
             self.repo,
             self.remote_name,
@@ -6566,13 +6584,28 @@ class ServiceEngine:
         if phase in {"agent_pending", "agent_running"}:
             active_ticket = state.get("execution_ticket_id")
             active_execution = state.get("execution_id")
+            active_branch = state.get("execution_branch")
+            active_path = state.get("execution_path")
             if not isinstance(active_ticket, str) or not active_ticket:
                 raise WorkflowBlockedError(
                     "active execution ticket identity is invalid"
                 )
             if not isinstance(active_execution, str) or not active_execution:
                 raise WorkflowBlockedError("active execution identity is invalid")
-            if active_ticket == ticket_id or active_execution == execution_id:
+            if not isinstance(active_branch, str) or not active_branch:
+                raise WorkflowBlockedError(
+                    "active execution branch identity is invalid"
+                )
+            if not isinstance(active_path, str) or not active_path:
+                raise WorkflowBlockedError(
+                    "active execution workspace identity is invalid"
+                )
+            if (
+                active_ticket == ticket_id
+                or active_execution == execution_id
+                or active_branch == branch
+                or Path(active_path).absolute() == Path(path)
+            ):
                 raise WorkflowBlockedError("accepted execution is still active")
 
         reconciliation = state.get("reconciliation")
@@ -6678,6 +6711,11 @@ class ServiceEngine:
                 or not isinstance(pending.get("ticket_id"), str)
                 or not pending["ticket_id"]
                 or not _is_git_identity(pending.get("checkpoint"))
+                or not _is_git_identity(pending.get("control_head"))
+                or (
+                    "control_predecessor" in pending
+                    and not _is_git_identity(pending.get("control_predecessor"))
+                )
             ):
                 raise WorkflowBlockedError(
                     "accepted integration dependency identity is invalid"
@@ -6836,7 +6874,9 @@ class ServiceEngine:
                         if apply:
                             self._revalidate_cleanup_retirement(report)
                             self._retire_execution_refs(
-                                report.execution_branch, report.workspace_head
+                                report.execution_branch,
+                                report.workspace_head,
+                                report=report,
                             )
                         workspace_state = "present" if path.exists() else "absent"
                         refs_state = (
@@ -6982,7 +7022,9 @@ class ServiceEngine:
                     )
                     self._revalidate_cleanup_retirement(report)
                     self._retire_execution_refs(
-                        report.execution_branch, report.workspace_head
+                        report.execution_branch,
+                        report.workspace_head,
+                        report=report,
                     )
                     decision["resources"] = {
                         "worktree": "absent",
