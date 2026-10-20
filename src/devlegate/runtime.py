@@ -6792,6 +6792,9 @@ class ServiceEngine:
     ) -> None:
         """Re-observe exact ownership and Git evidence before each deletion."""
         self._assert_cleanup_has_no_execution_dependency(report)
+        ticket = self._ticket_store().by_id.get(report.ticket_id)
+        if ticket is None or ticket.state != "done":
+            raise WorkflowBlockedError("ticket is not durably done")
         fresh = self._accepted_execution_report(report.ticket_id)
         if (
             fresh.execution_id != report.execution_id
