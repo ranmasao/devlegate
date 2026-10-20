@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Protocol
@@ -53,6 +54,7 @@ class SQLiteRuntimeStore:
             else:
                 self.state_dir.mkdir(parents=True, exist_ok=True)
                 connection = sqlite3.connect(self._path, timeout=5)
+                os.chmod(self._path, 0o600)
         except sqlite3.Error as error:
             raise RuntimeStoreError(
                 f"cannot open runtime database {self._path}: {error}"
@@ -62,6 +64,10 @@ class SQLiteRuntimeStore:
         if not read_only:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = FULL")
+            for suffix in ("-wal", "-shm"):
+                sidecar = Path(f"{self._path}{suffix}")
+                if sidecar.exists():
+                    os.chmod(sidecar, 0o600)
         return connection
 
     @staticmethod

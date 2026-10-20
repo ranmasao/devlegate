@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import hashlib
+import shutil
 
 import pytest
 
@@ -12,6 +13,7 @@ from devlegate.agent_protocol import (
     packaged_template_root,
     render_project,
     seed_project_env,
+    upgrade_project_templates,
 )
 
 
@@ -105,6 +107,57 @@ def test_upgrade_preserves_old_templates_until_explicit_update(tmp_path):
     assert render_project(tmp_path, context()) == (2, 2)
     assert ".devlegate/project.md" in old_architect.read_text()
     assert ".devlegate/project.md" in old_reviewer.read_text()
+
+
+def test_managed_template_upgrade_is_compare_and_swap_and_idempotent(
+    tmp_path, monkeypatch
+):
+    initialize_project(tmp_path, context())
+    packaged = tmp_path / "packaged"
+    shutil.copytree(packaged_template_root(), packaged)
+    architect = packaged / "skills/architect/SKILL.md.tmpl"
+    architect.write_text(architect.read_text() + "\nUPGRADED PROTOCOL\n")
+    monkeypatch.setattr(
+        "devlegate.agent_protocol.packaged_template_root", lambda: packaged
+    )
+
+    assert upgrade_project_templates(tmp_path, context()) == (2, 1, 1)
+    assert "UPGRADED PROTOCOL" in (
+        tmp_path / "skills/architect/SKILL.md"
+    ).read_text()
+    assert upgrade_project_templates(tmp_path, context()) == (2, 0, 0)
+    assert upgrade_project_templates(tmp_path, context(), check=True) == (2, 0, 0)
+
+
+def test_managed_template_upgrade_refuses_customized_source(tmp_path, monkeypatch):
+    initialize_project(tmp_path, context())
+    local = tmp_path / ".devlegate/templates/skills/reviewer/SKILL.md.tmpl"
+    local.write_text(local.read_text() + "\nPROJECT OVERRIDE\n")
+    packaged = tmp_path / "packaged"
+    shutil.copytree(packaged_template_root(), packaged)
+    reviewer = packaged / "skills/reviewer/SKILL.md.tmpl"
+    reviewer.write_text(reviewer.read_text() + "\nUPGRADED PROTOCOL\n")
+    monkeypatch.setattr(
+        "devlegate.agent_protocol.packaged_template_root", lambda: packaged
+    )
+
+    with pytest.raises(AgentProtocolError, match="customized; no files were changed"):
+        upgrade_project_templates(tmp_path, context())
+    assert "PROJECT OVERRIDE" in local.read_text()
+    assert "UPGRADED PROTOCOL" not in local.read_text()
+
+
+def test_init_does_not_receipt_preexisting_custom_template(tmp_path):
+    custom = tmp_path / ".devlegate/templates/skills/architect/SKILL.md.tmpl"
+    custom.parent.mkdir(parents=True)
+    custom.write_text("# Project-owned Architect override\n")
+
+    initialize_project(tmp_path, context())
+
+    assert not (tmp_path / ".devlegate/templates/.devlegate-defaults.json").exists()
+    with pytest.raises(AgentProtocolError, match="customized; no files were changed"):
+        upgrade_project_templates(tmp_path, context())
+    assert custom.read_text() == "# Project-owned Architect override\n"
 
 
 def test_seed_project_env_is_packaged_and_byte_preserving(tmp_path):

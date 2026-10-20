@@ -23,6 +23,7 @@ from devlegate.agent_protocol import (
     RenderContext,
     initialize_project,
     render_project,
+    upgrade_project_templates,
 )
 from devlegate.commit_messages import integration_message, lifecycle_message
 from devlegate.control_git_workflow import (
@@ -120,6 +121,10 @@ from devlegate.recovery_workspace import (
     inspect_bound_workspace,
     repair_bound_workspace,
 )
+from devlegate.review_provenance import (
+    ReviewProvenanceError,
+    resolve_rework_review,
+)
 from devlegate.runtime_locator import (
     RuntimeLocator,
     RuntimeLocatorError,
@@ -138,6 +143,9 @@ from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
     build_worker_prompt,
+    mark_worker_prompt_sent,
+    worker_prompt_sha256,
+    write_worker_prompt_artifact,
 )
 from devlegate.worker_supervisor import (
     WorkerAdmissionClosed,
@@ -1451,10 +1459,7 @@ class ServiceEngine:
             ) from error
         evidence_ref = f"refs/devlegate/recovery/force-retry/{ticket_id}/{execution_id}"
         existing = resolve_commit(self.repo, evidence_ref, runner=_git)
-        if (
-            existing is not None
-            and existing != checkpoint.after_head
-        ):
+        if existing is not None and existing != checkpoint.after_head:
             raise DevlegateError("forced retry evidence ref has conflicting identity")
         if existing is None:
             pinned = create_ref_if_absent(
@@ -1594,9 +1599,8 @@ class ServiceEngine:
         current = resolve_commit(self.repo, f"refs/heads/{branch}", runner=_git)
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
         evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
-        replay = (
-            evidence == observed_head
-            and current == state.get("execution_base_head")
+        replay = evidence == observed_head and current == state.get(
+            "execution_base_head"
         )
         if current is None or (current != observed_head and not replay):
             raise DevlegateError("execution branch does not match the authorized HEAD")
@@ -1621,10 +1625,7 @@ class ServiceEngine:
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
         current_head = resolve_commit(self.repo, branch_ref, runner=_git)
         existing = resolve_commit(self.repo, evidence_ref, runner=_git)
-        authorized_replay = (
-            existing == observed_head
-            and current_head == str(base_head)
-        )
+        authorized_replay = existing == observed_head and current_head == str(base_head)
         if current_head is None or (
             current_head != observed_head and not authorized_replay
         ):
@@ -1662,13 +1663,8 @@ class ServiceEngine:
                 remote_evidence = self._workspace_recovery_ref(
                     ticket_id, prior[0].execution_id
                 )
-            remote_existing = resolve_commit(
-                self.repo, remote_evidence, runner=_git
-            )
-            if (
-                remote_existing is not None
-                and remote_existing != remote_head
-            ):
+            remote_existing = resolve_commit(self.repo, remote_evidence, runner=_git)
+            if remote_existing is not None and remote_existing != remote_head:
                 raise DevlegateError(
                     "operator recovery evidence has conflicting identity"
                 )
@@ -1727,9 +1723,7 @@ class ServiceEngine:
             workspace = manager._validate_existing(registration, expected_worktree_head)
             if workspace.head != expected_worktree_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
-            removed = remove_worktree(
-                self.repo, manager.path, force=True, runner=_git
-            )
+            removed = remove_worktree(self.repo, manager.path, force=True, runner=_git)
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
         current_head = resolve_commit(self.repo, branch_ref, runner=_git)
@@ -2005,8 +1999,7 @@ class ServiceEngine:
         local = resolve_commit(self.control_worktree, "HEAD", runner=_git)
         if local != from_head:
             raise DevlegateError(
-                f"control local HEAD changed; expected {from_head}, "
-                f"found {local}"
+                f"control local HEAD changed; expected {from_head}, found {local}"
             )
         fetch = fetch_ref(
             self.control_worktree,
@@ -2020,9 +2013,7 @@ class ServiceEngine:
                 f"cannot freshly fetch control branch: {fetch.stderr.strip()}"
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
-        observed_remote = resolve_commit(
-            self.control_worktree, remote_ref, runner=_git
-        )
+        observed_remote = resolve_commit(self.control_worktree, remote_ref, runner=_git)
         if observed_remote is None:
             raise DevlegateError(f"control remote branch not found: {remote_ref}")
         if observed_remote != to_head:
@@ -2332,9 +2323,7 @@ class ServiceEngine:
         # like an owned execution tree.
         work_root_path = self.execution_worktree_root / "work"
         work_root_symlinked = work_root_path.is_symlink()
-        work_root = (
-            work_root_path if work_root_symlinked else work_root_path.resolve()
-        )
+        work_root = work_root_path if work_root_symlinked else work_root_path.resolve()
         candidates: dict[str, dict[str, str]] = {}
         for path, registration in sorted(
             registrations.items(), key=lambda item: str(item[0])
@@ -2488,9 +2477,9 @@ class ServiceEngine:
                     result = self.cleanup_workspaces(
                         apply=command.force,
                         limit=int(command.onto),
-                        targets=(
-                            self._mutable_receipt(command.request_id) or {}
-                        ).get("cohort"),
+                        targets=(self._mutable_receipt(command.request_id) or {}).get(
+                            "cohort"
+                        ),
                     )
                     command.admission_result = result
                     if command.mutable:
@@ -2991,9 +2980,7 @@ class ServiceEngine:
     def _worktree_root_runtime(self, repo: Path) -> Path:
         return worktree_root(repo, runner=self._git_runtime)
 
-    def _is_ancestor_runtime(
-        self, repo: Path, ancestor: str, descendant: str
-    ) -> bool:
+    def _is_ancestor_runtime(self, repo: Path, ancestor: str, descendant: str) -> bool:
         """Check ancestry without collapsing Git errors into a negative answer."""
         try:
             return is_ancestor(repo, ancestor, descendant, runner=self._git_runtime)
@@ -3683,6 +3670,8 @@ class ServiceEngine:
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
             state.pop("selected_ticket_title", None)
+            state.pop("worker_prompt_sha256", None)
+            state.pop("worker_prompt_directive", None)
             state.pop("pending_execution_report", None)
             state.pop("execution_interruption_kind", None)
             state["worker_identity"] = None
@@ -3702,6 +3691,8 @@ class ServiceEngine:
                 "execution_remote_head",
                 "execution_start_head",
                 "resume_required",
+                "worker_prompt_sha256",
+                "worker_prompt_directive",
             )
             for field in fields_to_clear:
                 if field in fields or (
@@ -4586,8 +4577,9 @@ class ServiceEngine:
                         "cannot read previous execution evidence for "
                         f"{selected_ticket.id}"
                     ) from error
-                previous = self._latest_reviewed_rework_report(reports)
-                if previous is not None:
+                previous_generation = self._latest_reviewed_rework_report(reports)
+                if previous_generation is not None:
+                    lifecycle_commit, previous = previous_generation
                     if (
                         previous.workspace_head is None
                         or previous.execution_branch
@@ -4600,13 +4592,30 @@ class ServiceEngine:
                     # The lifecycle commit, not report filename ordering, binds
                     # this ticket's preceding reviewed generation.
                     branch_head = resolve_ref_commit(
-                        self.repo, f"refs/heads/devlegate/work/{selected_ticket.id}",
+                        self.repo,
+                        f"refs/heads/devlegate/work/{selected_ticket.id}",
                         runner=_git,
                     )
                     if branch_head not in {None, previous.workspace_head}:
                         raise WorkflowBlockedError(
                             "cannot prove the exact previous rework generation"
                         )
+                    try:
+                        review_binding = resolve_rework_review(
+                            self.control_worktree,
+                            control_head,
+                            lifecycle_commit,
+                            previous,
+                            todo_path=self.todo_path,
+                            review_path=self.review_path,
+                            backlog_path=self.backlog_path,
+                            runner=self._git_runtime,
+                        )
+                    except ReviewProvenanceError as error:
+                        raise WorkflowBlockedError(
+                            "cannot bind curator feedback for "
+                            f"{selected_ticket.id}: {error}"
+                        ) from error
                     rework_provenance = {
                         "previous_execution_id": previous.execution_id,
                         "previous_report_checkpoint": previous.workspace_head,
@@ -4615,6 +4624,7 @@ class ServiceEngine:
                         "admitted_base_head": execution_base_head,
                         "admitted_control_head": bound_execution_control,
                         "preparation_stage": "admitted",
+                        "review": review_binding.as_dict(),
                     }
             self._save_state(
                 "agent_pending",
@@ -4710,12 +4720,77 @@ class ServiceEngine:
         execution_remote_head = self._state.get("execution_remote_head")
         if "execution_remote_head" not in self._state:
             execution_remote_head = self._execution_remote_head(workspace.branch)
+        review_feedback = None
+        review_source = None
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict):
+            review = rework.get("review")
+            if isinstance(review, dict):
+                content = review.get("content")
+                path = review.get("path")
+                digest = review.get("sha256")
+                if content is not None and not isinstance(content, str):
+                    raise DevlegateError("persisted curator review content is invalid")
+                if content is not None:
+                    expected_path = (
+                        f"reviews/{selected_ticket.id}/"
+                        f"{rework.get('previous_execution_id')}.md"
+                    )
+                    actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    if path != expected_path or digest != actual_digest:
+                        raise DevlegateError(
+                            "persisted curator review binding failed "
+                            "integrity validation"
+                        )
+                review_feedback = content
+                if isinstance(path, str) and isinstance(digest, str):
+                    review_source = f"{path} (sha256:{digest})"
         prompt = build_worker_prompt(
-            WorkerPromptInput(assignment=selected_ticket.body, directive=directive)
+            WorkerPromptInput(
+                assignment=selected_ticket.body,
+                directive=directive,
+                review_feedback=review_feedback,
+                review_source=review_source,
+            )
+        )
+        prompt_digest = worker_prompt_sha256(prompt)
+        review_path = None
+        review_digest = None
+        review_publication = None
+        reviewed_execution = None
+        reviewed_checkpoint = None
+        if isinstance(rework, dict) and isinstance(rework.get("review"), dict):
+            review_path = rework["review"].get("path")
+            review_digest = rework["review"].get("sha256")
+            review_publication = rework["review"].get("publication")
+            reviewed_execution = rework.get("previous_execution_id")
+            reviewed_checkpoint = rework.get("previous_report_checkpoint")
+        _log(
+            f"worker prompt constructed: execution={execution_id} "
+            f"directive={directive.value} sha256={prompt_digest}"
         )
         # This is the last safe gate before committing agent_running.
         if self._stop_before_admission():
             return 0
+        prompt_artifact = write_worker_prompt_artifact(
+            self.state_dir,
+            execution_id,
+            prompt,
+            ticket_id=selected_ticket.id,
+            directive=directive,
+            review_path=review_path if isinstance(review_path, str) else None,
+            review_sha256=review_digest if isinstance(review_digest, str) else None,
+            review_publication=(
+                review_publication if isinstance(review_publication, str) else None
+            ),
+            reviewed_execution_id=(
+                reviewed_execution if isinstance(reviewed_execution, str) else None
+            ),
+            reviewed_checkpoint=(
+                reviewed_checkpoint if isinstance(reviewed_checkpoint, str) else None
+            ),
+            admitted_control_head=str(self._state["execution_control_head"]),
+        )
         self._save_state(
             "agent_running",
             execution_stage="worker-launch",
@@ -4726,6 +4801,8 @@ class ServiceEngine:
             execution_path=str(workspace.path),
             execution_id=execution_id,
             execution_remote_head=execution_remote_head,
+            worker_prompt_sha256=prompt_digest,
+            worker_prompt_directive=directive.value,
             worker_identity=None,
         )
         self._owned_execution_id = execution_id
@@ -4742,6 +4819,13 @@ class ServiceEngine:
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
+                    ),
+                    prompt_delivered_handler=lambda: (
+                        mark_worker_prompt_sent(prompt_artifact),
+                        _log(
+                            f"worker prompt sent: execution={execution_id} "
+                            f"sha256={prompt_digest}"
+                        ),
                     ),
                 )
             except WorkerAdmissionClosed:
@@ -4879,9 +4963,7 @@ class ServiceEngine:
                 )
                 self._refresh_published_status()
                 return self._complete_execution_lifecycle(report)
-            if self._safe_running_product_descendant(
-                workspace.base_head, product
-            ):
+            if self._safe_running_product_descendant(workspace.base_head, product):
                 # The worker checkout and checkpoint remain pinned to its admitted
                 # base.  A later shared product revision is only an integration
                 # observation; it is merged after acceptance, never rebased into
@@ -5615,8 +5697,7 @@ class ServiceEngine:
             resolve_commit(self.repo, branch_ref, runner=_git) is not None
             or manager.path.exists()
             or any(
-                item.get("branch") == manager.branch
-                for item in registrations.values()
+                item.get("branch") == manager.branch for item in registrations.values()
             )
         ):
             return admitted_base
@@ -5656,9 +5737,8 @@ class ServiceEngine:
             )
             return candidate
         if product["classification"] == "unobservable":
-            if (
-                product.get("local_head") == admitted_base
-                and not isinstance(transition, dict)
+            if product.get("local_head") == admitted_base and not isinstance(
+                transition, dict
             ):
                 # No descendant was observed, so preserve the already admitted
                 # base rather than turning a transient observation failure into
@@ -5783,10 +5863,7 @@ class ServiceEngine:
             or ticket.state != "todo"
             or ticket not in ticket_store.runnable
             or ticket.body != selected_body
-            or (
-                isinstance(selected_title, str)
-                and ticket.title != selected_title
-            )
+            or (isinstance(selected_title, str) and ticket.title != selected_title)
         ):
             raise ExecutionWorkspaceError(
                 "control descendant changed execution ticket eligibility; "
@@ -5811,9 +5888,12 @@ class ServiceEngine:
             raise ExecutionWorkspaceError(
                 "rework evidence ref has conflicting identity"
             )
-        if existing is None and create_ref_if_absent(
-            self.repo, evidence, checkpoint, runner=_git
-        ).returncode:
+        if (
+            existing is None
+            and create_ref_if_absent(
+                self.repo, evidence, checkpoint, runner=_git
+            ).returncode
+        ):
             raise ExecutionWorkspaceError("cannot preserve previous rework checkpoint")
         if resolve_ref_commit(self.repo, evidence, runner=_git) != checkpoint:
             raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
@@ -5856,8 +5936,11 @@ class ServiceEngine:
             )
         if remote_evidence is None:
             pushed = push_refs(
-                self.repo, self.remote_name, f"{previous_checkpoint}:{evidence}",
-                options=(f"--force-with-lease={evidence}:",), runner=_git,
+                self.repo,
+                self.remote_name,
+                f"{previous_checkpoint}:{evidence}",
+                options=(f"--force-with-lease={evidence}:",),
+                runner=_git,
             )
             if (
                 pushed.returncode
@@ -5891,7 +5974,7 @@ class ServiceEngine:
 
     def _latest_reviewed_rework_report(
         self, reports: tuple[ExecutionReport, ...]
-    ) -> ExecutionReport | None:
+    ) -> tuple[str, ExecutionReport] | None:
         """Return only the newest exact normal lifecycle report for this ticket.
 
         Report filenames are opaque IDs.  A newer failed or retry report must
@@ -5935,7 +6018,9 @@ class ServiceEngine:
                 ):
                     return None
                 return (
-                    report if self._lifecycle_commit_is_exact(commit, report) else None
+                    (commit, report)
+                    if self._lifecycle_commit_is_exact(commit, report)
+                    else None
                 )
         return None
 
@@ -5968,7 +6053,8 @@ class ServiceEngine:
                 f"{workspace.head}:refs/heads/{manager.branch}",
                 options=(
                     f"--force-with-lease=refs/heads/{manager.branch}:{previous_checkpoint}",
-                ), runner=_git,
+                ),
+                runner=_git,
             )
             if (
                 pushed.returncode
@@ -6253,9 +6339,7 @@ class ServiceEngine:
                 product_is_ancestor = (
                     False
                     if checkpoint_is_ancestor
-                    else is_ancestor(
-                        self.repo, product_head, checkpoint, runner=_git
-                    )
+                    else is_ancestor(self.repo, product_head, checkpoint, runner=_git)
                 )
         except GitAncestryError as error:
             raise WorkflowBlockedError(
@@ -6299,10 +6383,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "published product history could not be observed"
             ) from error
-        if (
-            reobserved_head is None
-            or not published_checkpoint_is_ancestor
-        ):
+        if reobserved_head is None or not published_checkpoint_is_ancestor:
             raise WorkflowBlockedError(
                 "published product checkpoint could not be proven"
             )
@@ -6531,19 +6612,20 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     removed.stderr.strip() or "cannot retire remote execution ref"
                 )
-        if remote_ref(
-            self.repo,
-            self.remote_name,
-            f"refs/heads/{branch}",
-            runner=self._git_runtime,
-        ) is not None:
+        if (
+            remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{branch}",
+                runner=self._git_runtime,
+            )
+            is not None
+        ):
             raise WorkflowBlockedError("remote execution ref remains after removal")
 
     def _validate_execution_ref_heads(self, branch: str, expected_head: str) -> None:
         """Require every observed disposable ref to name the proven checkpoint."""
-        local_head = self._resolve_commit_runtime(
-            self.repo, f"refs/heads/{branch}"
-        )
+        local_head = self._resolve_commit_runtime(self.repo, f"refs/heads/{branch}")
         if local_head is not None and local_head != expected_head:
             raise WorkflowBlockedError(
                 "local execution ref does not match accepted checkpoint"
@@ -6597,9 +6679,7 @@ class ServiceEngine:
                 not isinstance(active_execution, str)
                 or active_execution != identity.execution_id
             ):
-                raise WorkflowBlockedError(
-                    "worker dependency ownership is invalid"
-                )
+                raise WorkflowBlockedError("worker dependency ownership is invalid")
             if identity.execution_id == execution_id:
                 raise WorkflowBlockedError(
                     "accepted execution has a live worker dependency"
@@ -6653,12 +6733,10 @@ class ServiceEngine:
                 "status",
             }
             if (
-                reconciliation.get("status")
-                not in {"pending", "resolving", "resolved"}
+                reconciliation.get("status") not in {"pending", "resolving", "resolved"}
                 or not required.issubset(reconciliation)
                 or not all(
-                    isinstance(reconciliation.get(field), str)
-                    and reconciliation[field]
+                    isinstance(reconciliation.get(field), str) and reconciliation[field]
                     for field in required
                 )
                 or not _is_git_identity(reconciliation.get("worker_checkpoint"))
@@ -6693,10 +6771,13 @@ class ServiceEngine:
                 reconciliation[field] == expected
                 for field, expected in reconciliation_ownership
             ):
-                if any(
-                    reconciliation[field] != expected
-                    for field, expected in reconciliation_ownership
-                ) or reconciliation["worker_checkpoint"] != checkpoint:
+                if (
+                    any(
+                        reconciliation[field] != expected
+                        for field, expected in reconciliation_ownership
+                    )
+                    or reconciliation["worker_checkpoint"] != checkpoint
+                ):
                     raise WorkflowBlockedError(
                         "reconciliation dependency contradicts accepted execution"
                     )
@@ -6736,10 +6817,7 @@ class ServiceEngine:
                 retry.get("stale_execution_id"),
                 retry.get("fresh_execution_id"),
             }
-            if (
-                retry["ticket_id"] == ticket_id
-                or execution_id in retry_ids
-            ):
+            if retry["ticket_id"] == ticket_id or execution_id in retry_ids:
                 raise WorkflowBlockedError(
                     "accepted execution has an automatic retry dependency"
                 )
@@ -7074,9 +7152,7 @@ class ServiceEngine:
                     )
                     # Revalidate after potentially slow workspace inspection,
                     # directly before the destructive worktree removal.
-                    self._revalidate_cleanup_retirement(
-                        report, manager, registration
-                    )
+                    self._revalidate_cleanup_retirement(report, manager, registration)
                     manager.retire(workspace, report.workspace_head)
                     self._revalidate_cleanup_retirement(report)
                     self._retire_execution_refs(
@@ -8054,8 +8130,7 @@ class ServiceEngine:
         local = product.get("local_head")
         if (
             product.get("classification") != "changed"
-            or
-            not isinstance(remote, str)
+            or not isinstance(remote, str)
             or not remote
             or not isinstance(local, str)
             or not local
@@ -8389,10 +8464,7 @@ class ServiceEngine:
             )
         head_value = resolve_commit(manager.path, "HEAD", runner=_git)
         status_value = working_tree_status(manager.path, runner=_git)
-        if (
-            head_value is None
-            or registration.get("head") != head_value
-        ):
+        if head_value is None or registration.get("head") != head_value:
             raise WorkflowBlockedError(
                 "cannot observe staged execution rewrite worktree"
             )
@@ -8653,9 +8725,7 @@ class ServiceEngine:
                     f"{fetched.stderr.strip() or 'unknown git error'}"
                 )
             remote_ref = f"{self.remote_name}/{self.control_branch}"
-            remote_head = resolve_commit(
-                self.control_worktree, remote_ref, runner=_git
-            )
+            remote_head = resolve_commit(self.control_worktree, remote_ref, runner=_git)
             if remote_head is None:
                 raise WorkflowBlockedError("control remote branch is unavailable")
             local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
@@ -8729,9 +8799,7 @@ class ServiceEngine:
                         apply_conclusion=apply_conclusion,
                     )
                     self._prove_control_descendant(remote_head, report)
-                    reset = reset_hard(
-                        self.control_worktree, remote_head, runner=_git
-                    )
+                    reset = reset_hard(self.control_worktree, remote_head, runner=_git)
                     if reset.returncode:
                         raise WorkflowBlockedError(
                             "cannot replay lifecycle on control descendant"
@@ -10258,9 +10326,7 @@ class ServiceEngine:
         return reconciliation
 
     def reconciliation_target(self, value: str) -> str:
-        resolved = resolve_commit(
-            self.repo, value, check=False, runner=_git
-        )
+        resolved = resolve_commit(self.repo, value, check=False, runner=_git)
         if resolved is None:
             raise ReconciliationTransactionError(
                 "requested reconciliation target is not a commit"
@@ -10574,9 +10640,7 @@ class ServiceEngine:
             runner=_git,
         )
         control_ref = f"{self.remote_name}/{self.control_branch}"
-        control_head = resolve_commit(
-            self.control_worktree, control_ref, runner=_git
-        )
+        control_head = resolve_commit(self.control_worktree, control_ref, runner=_git)
         if control_fetch.returncode or control_head is None:
             raise DevlegateError("cannot freshly observe control remote")
         local_control = resolve_commit(self.control_worktree, "HEAD", runner=_git)
@@ -10597,9 +10661,7 @@ class ServiceEngine:
             str(state["selected_ticket_body"]),
         )
         if local_control != control_head:
-            merged = merge_fast_forward(
-                self.control_worktree, control_ref, runner=_git
-            )
+            merged = merge_fast_forward(self.control_worktree, control_ref, runner=_git)
             if merged.returncode:
                 raise DevlegateError(
                     "cannot fast-forward compatible control descendant"
@@ -10924,6 +10986,21 @@ class ServiceEngine:
                 f"({result['changed']} changed)"
             )
         return 0
+
+    def upgrade_templates_result(self, check: bool = False) -> dict[str, object]:
+        try:
+            total, templates, rendered = upgrade_project_templates(
+                self.repo, self._agent_render_context(), check=check
+            )
+        except AgentProtocolError as error:
+            raise DevlegateError(str(error)) from error
+        return {
+            "result": "current" if check else "upgraded",
+            "artifacts": total,
+            "templates": templates,
+            "rendered": rendered,
+            "check": check,
+        }
 
     def plan_view(self) -> ExecutionPlan:
         """Collect the current read-only scheduling decision."""
