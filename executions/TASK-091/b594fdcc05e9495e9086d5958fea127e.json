@@ -1,0 +1,29 @@
+{
+  "code_base_head": "53b933b0b36124125be28b5dba8d9b68334d04fd",
+  "conclusion": "completed",
+  "control_head": "cda20fea2ca8c871d4bb9e4af0214791be6b4def",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-091",
+  "execution_id": "b594fdcc05e9495e9086d5958fea127e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-091",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-091",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Accepted-integration recovery now treats missing dependencies as an eligibility failure instead of raising an unhandled lookup error. This preserves fail-closed control progression while retaining the durable predecessor and provenance behavior already present."
+  },
+  "workspace_head": "ca3cb807cbf6e88b2761f93dbd4ed70d91acfc71"
+}
