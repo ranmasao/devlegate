@@ -536,6 +536,7 @@ def test_proven_done_unregistered_checkout_retires_refs_but_retains_checkout(
     (checkout / "retain.txt").write_text("unknown checkout\n")
     report = SimpleNamespace(
         ticket_id="T-1",
+        execution_id="unregistered-cleanup",
         execution_branch=branch,
         execution_path=str(checkout),
         workspace_head=base,
@@ -1164,6 +1165,7 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
     ).prepare(base)
     report = SimpleNamespace(
         ticket_id="T-1",
+        execution_id="partial-cleanup",
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         workspace_head=workspace.head,
@@ -1216,6 +1218,102 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
         resolve_commit(engine.repo, f"refs/heads/{workspace.branch}")
         == workspace.head
     )
+
+
+def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+
+    # T-2 is live and T-3's resolved reconciliation remains durable history.
+    # Neither record names T-1's checkout, branch, execution, or checkpoint.
+    engine._state.update(
+        {
+            "phase": "agent_running",
+            "execution_ticket_id": "T-2",
+            "execution_id": "live-execution",
+            "worker_identity": {
+                "execution_id": "live-execution",
+                "pid": 1,
+                "pgid": 1,
+                "sid": 1,
+                "boot_id": "fixture",
+                "start_time": 1,
+            },
+            "reconciliation": {
+                "status": "resolved",
+                "ticket_id": "T-3",
+                "execution_id": "historical-execution",
+                "worker_checkpoint": "historical-checkpoint",
+                "execution_branch": "devlegate/work/T-3",
+                "execution_path": str(engine.execution_worktree_root / "work/T-3"),
+            },
+        }
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "retired"
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+
+
+def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    report = engine._accepted_execution_report("T-1")
+    engine._state["reconciliation"] = {
+        "status": "resolved",
+        "ticket_id": report.ticket_id,
+        "execution_id": report.execution_id,
+        "worker_checkpoint": report.workspace_head,
+        "execution_branch": report.execution_branch,
+        "execution_path": report.execution_path,
+    }
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "blocked",
+            "reason": "accepted execution has a reconciliation dependency",
+            "resources": {
+                "worktree": "present",
+                "local_ref": "present",
+                "upstream_ref": "present",
+            },
+        }
+    ]
+    assert workspace.path.is_dir()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
 
 
 def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
