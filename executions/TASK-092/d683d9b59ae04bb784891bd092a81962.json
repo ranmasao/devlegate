@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "0a2f13f04ff2c179994741f94ad226d2ea07d7c0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "d683d9b59ae04bb784891bd092a81962",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Cleanup now evaluates durable dependencies per execution, revalidates exact ownership and Git identity before destructive effects, and retires integrated resources only after the owning accepted-integration transaction is durably cleared. Recovery preserves resources while that dependency remains and safely retires them on replay, while unrelated live workers and resolved reconciliation records no longer veto eligible candidates."
+  },
+  "workspace_head": "8aac350f109c173ded7797f558c9bcd7d0b3ca29"
+}
