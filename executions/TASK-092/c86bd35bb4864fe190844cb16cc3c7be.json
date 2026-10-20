@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "4739d4539529e45a13e9fb98f996f93bb407d2d0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "c86bd35bb4864fe190844cb16cc3c7be",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Removed forced Git worktree deletion from validated execution-resource retirement. Added regression coverage requiring a normal worktree removal command after cleanup validation."
+  },
+  "workspace_head": "d0f7211df6ec9d34a671b040db79ec30be73b9ab"
+}
