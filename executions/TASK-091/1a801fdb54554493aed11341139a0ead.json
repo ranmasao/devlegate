@@ -1,0 +1,29 @@
+{
+  "code_base_head": "53b933b0b36124125be28b5dba8d9b68334d04fd",
+  "conclusion": "completed",
+  "control_head": "145f8293305f08105f70db5afeb9e11287a5c68a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-091",
+  "execution_id": "1a801fdb54554493aed11341139a0ead",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-091",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-091",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Strengthened accepted-control recovery coverage for legacy published integrations, immutable-content rejections, and zero-delta descendant recovery. Preserved specific accepted-integration rejection reasons in the published status view across read-only refreshes."
+  },
+  "workspace_head": "0f807c7ba958f3de26aa19676196fb9ed8b07d01"
+}
