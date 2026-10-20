@@ -7265,6 +7265,34 @@ class ServiceEngine:
             )
         ):
             raise WorkflowBlockedError("accepted integration eligibility changed")
+        # A dependency becoming done after admission must not make an old
+        # accepted integration newly eligible. Its completed ticket identity is
+        # part of the control generation we are adopting.
+        try:
+            for dependency in ticket.depends_on:
+                historical_dependency = path_object(
+                    self.control_worktree,
+                    historical_head,
+                    f"{self.done_path}/{dependency}.md",
+                    runner=self._git_runtime,
+                )
+                current_dependency = path_object(
+                    self.control_worktree,
+                    current_head,
+                    f"{self.done_path}/{dependency}.md",
+                    runner=self._git_runtime,
+                )
+                if (
+                    historical_dependency is None
+                    or historical_dependency != current_dependency
+                ):
+                    raise WorkflowBlockedError(
+                        "accepted integration eligibility changed"
+                    )
+        except GitObservationError as error:
+            raise WorkflowBlockedError(
+                "accepted integration control ancestry could not be observed"
+            ) from error
         refreshed = {**pending, "control_predecessor": current_head}
         self._save_state("idle", accepted_integration=refreshed)
         return current_head

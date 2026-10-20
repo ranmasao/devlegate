@@ -353,13 +353,18 @@ def _service_engine_with_control(git_fixture, config):
         assert engine.control_init() == 0
     return engine
 
-def _add_service_ticket(engine):
+def _add_service_ticket(engine, depends=None):
     ticket_path = engine.control_worktree / "kanban/todo/T-1.md"
-    ticket_path.write_text(ticket("Control ticket", "work"))
+    if depends:
+        for dependency in depends:
+            (engine.control_worktree / f"kanban/done/{dependency}.md").write_text(
+                ticket("Dependency", "done")
+            )
+    ticket_path.write_text(ticket("Control ticket", "work", depends=depends))
     git(
         engine.control_worktree,
         "add",
-        str(ticket_path.relative_to(engine.control_worktree)),
+        "-A",
     )
     git(engine.control_worktree, "commit", "-m", "add service test ticket")
     git(
@@ -498,7 +503,7 @@ def _kill_worker_identity(identity):
         except ProcessLookupError:
             pass
 
-def _prepare_accepted_integration(git_fixture, monkeypatch):
+def _prepare_accepted_integration(git_fixture, monkeypatch, depends=None):
     worker = git_fixture["tmp"] / "accepted-worker.py"
     attempts = git_fixture["tmp"] / "accepted-attempts.txt"
     _worker_script(worker)
@@ -509,7 +514,7 @@ def _prepare_accepted_integration(git_fixture, monkeypatch):
         config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
     )
     engine = _service_engine_with_control(git_fixture, config)
-    _add_service_ticket(engine)
+    _add_service_ticket(engine, depends=depends)
     review = engine.control_worktree / "kanban/review/T-1.md"
     assert run_test_iteration(engine) == 0
     assert review.is_file()
