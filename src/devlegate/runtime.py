@@ -7247,7 +7247,8 @@ class ServiceEngine:
             ticket is None
             or ticket.state != "accepted"
             or any(
-                store.by_id[dependency].state != "done"
+                store.by_id.get(dependency) is None
+                or store.by_id[dependency].state != "done"
                 for dependency in ticket.depends_on
             )
         ):
