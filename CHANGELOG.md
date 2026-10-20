@@ -10,10 +10,9 @@ release are not separate product changes.
 Development is underway on `release/0.5.7`. Changes will be recorded here as
 features and fixes are integrated; no release date has been scheduled.
 
-## 0.5.6
+## 0.5.6 -- 2026-10-13
 
-Release preparation for safer lifecycle recovery and complete distribution
-proofs. Publication date is intentionally omitted until release publication.
+Safer lifecycle recovery and complete distribution proofs.
 
 ### Added
 
