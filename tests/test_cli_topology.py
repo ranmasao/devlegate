@@ -1484,6 +1484,71 @@ def test_real_service_recovers_legacy_published_integration_after_control_advanc
         service.stop()
 
 
+@pytest.mark.parametrize("mutation", ["ticket", "evidence", "dependency"])
+def test_real_service_rejects_changed_accepted_integration_descendant(
+    git_fixture, monkeypatch, mutation
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, _control_head = _prepare_accepted_integration(
+        git_fixture,
+        monkeypatch,
+        depends=("D-1",) if mutation == "dependency" else None,
+    )
+    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "integration_before_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_recovery_driver(config, "integration_before_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        publisher_control = _ensure_publisher_control(git_fixture)
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        if mutation == "ticket":
+            (publisher_control / "kanban/accepted/T-1.md").write_text(
+                ticket("Control ticket", "changed")
+            )
+            changed_path = "kanban/accepted/T-1.md"
+        elif mutation == "evidence":
+            (publisher_control / "executions/T-1/extra.txt").write_text("changed\n")
+            changed_path = "executions/T-1/extra.txt"
+        else:
+            (publisher_control / "kanban/done/D-1.md").write_text(
+                ticket("Dependency", "changed")
+            )
+            changed_path = "kanban/done/D-1.md"
+        git(publisher_control, "add", changed_path)
+        git(publisher_control, "commit", "-m", f"change accepted {mutation}")
+        git(publisher_control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        remote_before = git(
+            publisher_control,
+            "rev-parse",
+            "HEAD",
+        ).stdout.strip()
+
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
+        assert service.process is not None and service.process.poll() is None
+        assert not (engine.control_worktree / "kanban/done/T-1.md").exists()
+        assert (
+            git(
+                publisher_control,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            == remote_before
+        )
+        assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
 def test_real_service_foreign_local_control_descendant_stays_blocked(
     git_fixture, monkeypatch
 ):

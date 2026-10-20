@@ -78,8 +78,9 @@ the durable predecessor `P`.
 
 Replay can adopt a descendant `P` only before the done effect, after
 proving `R` is its ancestor, local and remote both equal `P`, the accepted
-ticket and its execution-evidence tree are byte-identical at `R` and `P`, and
-the ticket remains accepted with all dependencies done. It writes `P` to the
+ticket and its execution-evidence tree are byte-identical at `R` and `P`, each
+completed dependency has the same identity at both revisions, and the ticket
+remains accepted with all dependencies done. It writes `P` to the
 intent before creating `C`; `R` and the execution admission identity remain
 immutable. Control publication always leases the observed `P`; a failed push
 is accepted only when re-observation proves the exact `C` was published.
