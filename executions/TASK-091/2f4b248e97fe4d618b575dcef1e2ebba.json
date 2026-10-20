@@ -1,0 +1,35 @@
+{
+  "code_base_head": "53b933b0b36124125be28b5dba8d9b68334d04fd",
+  "conclusion": "incomplete",
+  "control_head": "a0824629d3540349dfa0094e7bee10377f09c86c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-091",
+  "execution_id": "2f4b248e97fe4d618b575dcef1e2ebba",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-091",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the repository-wide pytest run; it exceeded the available 10-minute command timeout at 38% progress.",
+    "Resolve or explicitly scope the existing repository-wide Ruff violations under packaging/standalone-compliance/pex."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-091",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the repository-wide pytest run; it exceeded the available 10-minute command timeout at 38% progress.",
+      "Resolve or explicitly scope the existing repository-wide Ruff violations under packaging/standalone-compliance/pex."
+    ],
+    "report": null,
+    "summary": "Hardened accepted-integration descendant recovery by requiring completed dependency identities to remain unchanged from the historical admission revision. Added real-Git restart regressions for accepted ticket, execution-evidence, and dependency mutations, and documented the added provenance requirement."
+  },
+  "workspace_head": "6d89d432694ba0a65357d9b17a149098ba876c38"
+}
