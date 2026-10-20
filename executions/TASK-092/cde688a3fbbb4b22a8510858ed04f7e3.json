@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "8e21e646780587e2002f44de84d9134a9cc69893",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "cde688a3fbbb4b22a8510858ed04f7e3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced immediate post-integration cleanup's global runtime gate with the existing execution-scoped ownership check. Strengthened active and accepted-integration identity validation, revalidated provenance before destructive ref operations, and added a real-worktree regression for unrelated live and resolved runtime state."
+  },
+  "workspace_head": "22b506df9f6b80f9052ea4364e94e52ce07145ee"
+}
