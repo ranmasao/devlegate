@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "79c7264d0f472a67ae8b15900849fbeca0818d0e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "d7ea83459ae241cdb15fbac857a05208",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced the global workspace-cleanup dependency gate with exact per-execution ownership checks for worker, reconciliation, retry, and integration state. Cleanup now revalidates durable provenance, registration, and Git refs before each destructive step, while allowing unrelated live execution and historical reconciliation state. Added isolated Git-worktree coverage for unrelated activity and matching resolved reconciliation retention."
+  },
+  "workspace_head": "2530f7c54e26f278d798f0da994df73f068de9e0"
+}
