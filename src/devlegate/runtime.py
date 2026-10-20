@@ -6524,6 +6524,207 @@ class ServiceEngine:
                 "remote execution ref does not match accepted checkpoint"
             )
 
+    def _assert_cleanup_has_no_execution_dependency(
+        self, report: ExecutionReport
+    ) -> None:
+        """Reject only durable runtime state that owns this execution.
+
+        Runtime state is shared by the currently scheduled execution and old
+        reconciliation history.  A well-formed record for another execution
+        must not retain an otherwise proven done-ticket workspace.  Conversely,
+        an unparseable record cannot establish that it is unrelated.
+        """
+        state = self._state
+        ticket_id = report.ticket_id
+        execution_id = getattr(report, "execution_id", None)
+        checkpoint = report.workspace_head
+        branch = report.execution_branch
+        path = str(Path(report.execution_path).absolute())
+        if not all(
+            isinstance(value, str) and value
+            for value in (ticket_id, execution_id, checkpoint, branch)
+        ):
+            raise WorkflowBlockedError(
+                "accepted execution dependency identity is incomplete"
+            )
+
+        identity_value = state.get("worker_identity")
+        if identity_value is not None:
+            try:
+                identity = _worker_identity_from_value(identity_value)
+            except DevlegateError as error:
+                raise WorkflowBlockedError(
+                    "worker dependency identity is invalid"
+                ) from error
+            assert identity is not None
+            if identity.execution_id == execution_id:
+                raise WorkflowBlockedError(
+                    "accepted execution has a live worker dependency"
+                )
+
+        phase = state.get("phase")
+        if phase in {"agent_pending", "agent_running"}:
+            active_ticket = state.get("execution_ticket_id")
+            active_execution = state.get("execution_id")
+            if not isinstance(active_ticket, str) or not active_ticket:
+                raise WorkflowBlockedError(
+                    "active execution ticket identity is invalid"
+                )
+            if not isinstance(active_execution, str) or not active_execution:
+                raise WorkflowBlockedError("active execution identity is invalid")
+            if active_ticket == ticket_id or active_execution == execution_id:
+                raise WorkflowBlockedError("accepted execution is still active")
+
+        reconciliation = state.get("reconciliation")
+        if reconciliation is not None:
+            if not isinstance(reconciliation, dict):
+                raise WorkflowBlockedError(
+                    "reconciliation dependency identity is invalid"
+                )
+            required = {
+                "ticket_id",
+                "execution_id",
+                "worker_checkpoint",
+                "execution_branch",
+                "execution_path",
+                "status",
+            }
+            if (
+                reconciliation.get("status")
+                not in {"pending", "resolving", "resolved"}
+                or not required.issubset(reconciliation)
+                or not all(
+                    isinstance(reconciliation.get(field), str)
+                    and reconciliation[field]
+                    for field in required
+                )
+            ):
+                raise WorkflowBlockedError(
+                    "reconciliation dependency identity is invalid"
+                )
+            if reconciliation["ticket_id"] == ticket_id or reconciliation[
+                "execution_id"
+            ] == execution_id:
+                if any(
+                    reconciliation[field] != expected
+                    for field, expected in (
+                        ("ticket_id", ticket_id),
+                        ("execution_id", execution_id),
+                        ("worker_checkpoint", checkpoint),
+                        ("execution_branch", branch),
+                        ("execution_path", path),
+                    )
+                ):
+                    raise WorkflowBlockedError(
+                        "reconciliation dependency contradicts accepted execution"
+                    )
+                # A resolved record intentionally retains this binding for
+                # recovery/rewrite provenance, so it remains resource-live.
+                raise WorkflowBlockedError(
+                    "accepted execution has a reconciliation dependency"
+                )
+
+        retry = state.get("automatic_retry")
+        if retry is not None:
+            required_retry = {
+                "status",
+                "reason",
+                "ticket_id",
+                "stale_execution_id",
+                "original_base",
+                "worker_checkpoint",
+                "product_head",
+                "control_head",
+            }
+            if (
+                not isinstance(retry, dict)
+                or retry.get("status")
+                not in {"pending", "pending_admission", "admitted"}
+                or not required_retry.issubset(retry)
+                or not all(
+                    isinstance(retry.get(field), str) and retry[field]
+                    for field in required_retry - {"status"}
+                )
+            ):
+                raise WorkflowBlockedError(
+                    "automatic retry dependency identity is invalid"
+                )
+            retry_ids = {
+                retry.get("stale_execution_id"),
+                retry.get("fresh_execution_id"),
+            }
+            if retry["ticket_id"] == ticket_id or execution_id in retry_ids:
+                raise WorkflowBlockedError(
+                    "accepted execution has an automatic retry dependency"
+                )
+
+        pending = state.get("accepted_integration")
+        if pending is not None:
+            if (
+                not isinstance(pending, dict)
+                or set(pending)
+                not in (
+                    {"ticket_id", "checkpoint", "control_head"},
+                    {"ticket_id", "checkpoint", "control_head", "control_predecessor"},
+                    {"ticket_id", "checkpoint", "control_head", "product_transition"},
+                    {
+                        "ticket_id",
+                        "checkpoint",
+                        "control_head",
+                        "control_predecessor",
+                        "product_transition",
+                    },
+                )
+                or not isinstance(pending.get("ticket_id"), str)
+                or not pending["ticket_id"]
+                or not _is_git_identity(pending.get("checkpoint"))
+            ):
+                raise WorkflowBlockedError(
+                    "accepted integration dependency identity is invalid"
+                )
+            if pending["ticket_id"] == ticket_id:
+                if pending["checkpoint"] != checkpoint:
+                    raise WorkflowBlockedError(
+                        "accepted integration dependency contradicts accepted execution"
+                    )
+                raise WorkflowBlockedError(
+                    "accepted execution has a pending integration dependency"
+                )
+
+    def _revalidate_cleanup_retirement(
+        self,
+        report: ExecutionReport,
+        manager: ExecutionWorkspaceManager | None = None,
+        registration: dict[str, str] | None = None,
+    ) -> None:
+        """Re-observe exact ownership and Git evidence before each deletion."""
+        self._assert_cleanup_has_no_execution_dependency(report)
+        fresh = self._accepted_execution_report(report.ticket_id)
+        if (
+            fresh.execution_id != report.execution_id
+            or fresh.execution_branch != report.execution_branch
+            or fresh.execution_path != report.execution_path
+            or fresh.workspace_head != report.workspace_head
+        ):
+            raise WorkflowBlockedError(
+                "accepted execution evidence changed before retirement"
+            )
+        self._validate_execution_ref_heads(
+            report.execution_branch, report.workspace_head
+        )
+        integration = self._find_accepted_integration_commit(report.ticket_id, fresh)
+        if integration is None:
+            raise WorkflowBlockedError("accepted integration is not proven")
+        self._prove_published_product_checkpoint(
+            report.workspace_head, integration=integration
+        )
+        if manager is not None and registration is not None:
+            current = manager._registrations().get(manager.path.resolve())
+            if current != registration:
+                raise WorkflowBlockedError(
+                    "workspace registration changed before retirement"
+                )
+
     def cleanup_workspaces(
         self,
         *,
@@ -6633,6 +6834,7 @@ class ServiceEngine:
                             report.workspace_head, integration=integration
                         )
                         if apply:
+                            self._revalidate_cleanup_retirement(report)
                             self._retire_execution_refs(
                                 report.execution_branch, report.workspace_head
                             )
@@ -6764,27 +6966,21 @@ class ServiceEngine:
                 self._prove_published_product_checkpoint(
                     report.workspace_head, integration=integration
                 )
-                if self._state.get("worker_identity") is not None or any(
-                    self._state.get(key) is not None
-                    for key in (
-                        "reconciliation",
-                        "automatic_retry",
-                        "accepted_integration",
-                    )
-                ):
-                    raise WorkflowBlockedError(
-                        "runtime still has execution dependencies"
-                    )
+                self._assert_cleanup_has_no_execution_dependency(report)
                 decision = {
                     "ticket_id": ticket_id,
                     "status": "eligible",
                     "reason": "accepted integration proven",
                 }
                 if apply:
+                    self._revalidate_cleanup_retirement(
+                        report, manager, registration
+                    )
                     manager.retire(
                         manager._validate_existing(registration, report.workspace_head),
                         report.workspace_head,
                     )
+                    self._revalidate_cleanup_retirement(report)
                     self._retire_execution_refs(
                         report.execution_branch, report.workspace_head
                     )
