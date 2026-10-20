@@ -5,10 +5,9 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
-## 0.5.6
+## 0.5.6 -- 2026-10-13
 
-Release preparation for safer lifecycle recovery and complete distribution
-proofs. Publication date is intentionally omitted until release publication.
+Safer lifecycle recovery and complete distribution proofs.
 
 ### Added
 
