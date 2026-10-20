@@ -1465,12 +1465,25 @@ def test_real_service_recovers_legacy_published_integration_after_control_advanc
         publisher_control = _ensure_publisher_control(git_fixture)
         git(publisher_control, "fetch", "origin", "devlegate/control")
         git(publisher_control, "reset", "--hard", "origin/devlegate/control")
-        (publisher_control / "kanban/todo/T-2.md").write_text(
+        (publisher_control / "kanban/backlog/DRAFT-007.md").write_text(
             '---\n"type": "devlegate.ticket"\n"title": "Later ticket"\n---\n\nLater\n'
         )
-        git(publisher_control, "add", "kanban/todo/T-2.md")
+        git(publisher_control, "add", "kanban/backlog/DRAFT-007.md")
         git(publisher_control, "commit", "-m", "add later ticket")
         git(publisher_control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+        monkeypatch.setenv(
+            "DEVLEGATE_TEST_CRASH_POINT",
+            "integration_control_predecessor_after_save",
+        )
+        service.restart()
+        _wait_process_death(service)
+        adopted = _disk_state(config)["accepted_integration"]
+        assert adopted["control_head"] == control_head
+        assert adopted["control_predecessor"] == git(
+            publisher_control, "rev-parse", "HEAD"
+        ).stdout.strip()
+        product_merge = adopted["product_transition"]["integration"]
 
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
@@ -1478,7 +1491,51 @@ def test_real_service_recovers_legacy_published_integration_after_control_advanc
             lambda: _disk_state(config)["phase"] == "idle"
             and (engine.control_worktree / "kanban/done/T-1.md").is_file()
         )
-        assert (engine.control_worktree / "kanban/todo/T-2.md").is_file()
+        assert (engine.control_worktree / "kanban/backlog/DRAFT-007.md").is_file()
+        remote_ref = "refs/devlegate/tests/legacy-accepted-control"
+
+        def remote_done_commit():
+            remote_control = git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()[0]
+            git(
+                engine.control_worktree,
+                "fetch",
+                "origin",
+                f"{remote_control}:{remote_ref}",
+            )
+            return git(
+                engine.control_worktree,
+                "log",
+                "-1",
+                "--format=%H",
+                remote_ref,
+                "--",
+                "kanban/done/T-1.md",
+            ).stdout.strip()
+
+        service.wait_for(lambda: bool(remote_done_commit()))
+        remote_done = remote_done_commit()
+        assert git(
+            engine.control_worktree, "rev-parse", f"{remote_done}^"
+        ).stdout.strip() == adopted["control_predecessor"]
+        assert len(
+            git(
+                engine.control_worktree,
+                "log",
+                "--format=%H",
+                remote_ref,
+                "--",
+                "kanban/done/T-1.md",
+            ).stdout.splitlines()
+        ) == 1
+        published_product = git(
+            git_fixture["working"], "rev-parse", "origin/main"
+        ).stdout.strip()
+        assert published_product == product_merge
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         service.stop()
@@ -1531,7 +1588,26 @@ def test_real_service_rejects_changed_accepted_integration_descendant(
 
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
-        service.wait_for(lambda: service.cli("status", "--json").stdout != "")
+
+        expected_reason = (
+            "accepted integration eligibility changed"
+            if mutation == "dependency"
+            else (
+                "review content changed after admission; "
+                "specification changes are not trusted"
+                if mutation == "ticket"
+                else "accepted ticket changed during integration"
+            )
+        )
+
+        def rejected():
+            status = json.loads(service.cli("status", "--json").stdout)
+            return (
+                status["plan"]["action"] == "blocked"
+                and status["plan"]["reason"] == expected_reason
+            )
+
+        service.wait_for(rejected)
         assert service.process is not None and service.process.poll() is None
         assert not (engine.control_worktree / "kanban/done/T-1.md").exists()
         assert (
@@ -1544,6 +1620,58 @@ def test_real_service_rejects_changed_accepted_integration_descendant(
             == remote_before
         )
         assert isinstance(_disk_state(config).get("accepted_integration"), dict)
+        assert attempts.read_text().splitlines() == ["attempt"]
+    finally:
+        service.stop()
+
+
+def test_real_service_recovers_zero_delta_accepted_integration_after_control_advance(
+    git_fixture, monkeypatch
+):
+    monkeypatch.chdir(git_fixture["working"])
+    config, engine, attempts, control_head = _prepare_accepted_integration(
+        git_fixture, monkeypatch, zero_delta=True
+    )
+    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "integration_before_effect")
+    service = LiveService(
+        git_fixture["working"],
+        config,
+        command=_recovery_driver(config, "integration_before_effect"),
+    )
+    service.start()
+    service.wait_ready()
+    try:
+        _wait_process_death(service)
+        product_head = git(
+            git_fixture["working"], "rev-parse", "origin/main"
+        ).stdout.strip()
+        publisher_control = _ensure_publisher_control(git_fixture)
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "kanban/backlog/DRAFT-007.md").write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Later ticket"\n---\n\nLater\n'
+        )
+        git(publisher_control, "add", "kanban/backlog/DRAFT-007.md")
+        git(publisher_control, "commit", "-m", "add later ticket")
+        git(publisher_control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        predecessor = git(publisher_control, "rev-parse", "HEAD").stdout.strip()
+
+        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        service.restart()
+        service.wait_for(
+            lambda: _disk_state(config)["phase"] == "idle"
+            and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        )
+        done_commit = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        assert control_head != predecessor
+        assert git(
+            engine.control_worktree, "rev-parse", f"{done_commit}^"
+        ).stdout.strip() == predecessor
+        assert (engine.control_worktree / "kanban/backlog/DRAFT-007.md").is_file()
+        published_product = git(
+            git_fixture["working"], "rev-parse", "origin/main"
+        ).stdout.strip()
+        assert published_product == product_head
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         service.stop()

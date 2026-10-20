@@ -132,6 +132,7 @@ def main() -> int:
         "integration_merge_after_effect",
         "integration_product_after_effect",
         "integration_published_after_save",
+        "integration_control_predecessor_after_save",
         "integration_control_commit_after_effect",
         "integration_control_push_after_effect",
     }:
@@ -145,6 +146,21 @@ def main() -> int:
                 return original_integrate(*integrate_args, **integrate_kwargs)
 
             engine._integrate_accepted = integrate
+        elif point == "integration_control_predecessor_after_save":
+            integration_save = engine._save_state
+
+            def save(phase, **updates):
+                integration_save(phase, **updates)
+                pending = updates.get("accepted_integration")
+                if (
+                    isinstance(pending, dict)
+                    and pending.get("control_predecessor")
+                    and pending.get("control_predecessor")
+                    != pending.get("control_head")
+                ):
+                    crash()
+
+            engine._save_state = save
         elif point in {
             "integration_merging_after_save",
             "integration_published_after_save",

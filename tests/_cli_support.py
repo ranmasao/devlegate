@@ -339,6 +339,22 @@ def _worker_script(path):
     )
     path.chmod(0o755)
 
+
+def _zero_delta_worker_script(path):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "sys.stdin.buffer.read()\n"
+        "attempts = os.environ.get('DEVLEGATE_TEST_ATTEMPTS')\n"
+        "if attempts:\n"
+        "    pathlib.Path(attempts).open('a').write('attempt\\n')\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'no product change', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    path.chmod(0o755)
+
 def _service_engine_with_control(git_fixture, config):
     engine = ServiceEngine(config)
     engine.control_worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -503,10 +519,12 @@ def _kill_worker_identity(identity):
         except ProcessLookupError:
             pass
 
-def _prepare_accepted_integration(git_fixture, monkeypatch, depends=None):
+def _prepare_accepted_integration(
+    git_fixture, monkeypatch, depends=None, *, zero_delta=False
+):
     worker = git_fixture["tmp"] / "accepted-worker.py"
     attempts = git_fixture["tmp"] / "accepted-attempts.txt"
-    _worker_script(worker)
+    (_zero_delta_worker_script if zero_delta else _worker_script)(worker)
     monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
     monkeypatch.setenv("DEVLEGATE_TEST_WAKE_AFTER_READY", "1")
     config = _recovery_config(git_fixture)

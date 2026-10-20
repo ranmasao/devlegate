@@ -2684,12 +2684,26 @@ class ServiceEngine:
             self._published_snapshot = replacement
 
     def _publish_status_snapshot(self, snapshot: StatusSnapshot) -> None:
+        service_snapshot = self.service_snapshot()
         blocked_reason = (
             snapshot.plan.reason if snapshot.plan.action == "blocked" else None
         )
         if snapshot.lifecycle_integration is not None:
-            blocked_reason = snapshot.plan.reason
-        service_snapshot = self.service_snapshot()
+            # Preserve a recovery refusal published by the owning iteration.
+            # A read-only status refresh only knows that recovery is pending.
+            blocked_reason = (
+                service_snapshot.blocked_reason
+                if service_snapshot.lifecycle == "blocked"
+                and service_snapshot.blocked_reason is not None
+                else snapshot.plan.reason
+            )
+            if blocked_reason != snapshot.plan.reason:
+                snapshot = dataclasses.replace(
+                    snapshot,
+                    plan=dataclasses.replace(
+                        snapshot.plan, action="blocked", reason=blocked_reason
+                    ),
+                )
         worker_running = service_snapshot.worker_running
         preparation_blocker = self._workspace_preparation_blocker
         if (
