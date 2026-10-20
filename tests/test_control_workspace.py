@@ -126,7 +126,7 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
 
 
 def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -136,9 +136,21 @@ def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
         engine.repo, engine.execution_worktree_root, "T-1"
     )
     workspace = manager.prepare(base)
+    calls = []
+    real_git = execution_workspace_module._git
+
+    def observe_removal(repo, *args, **kwargs):
+        calls.append(args)
+        return real_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(execution_workspace_module, "_git", observe_removal)
 
     manager.retire(workspace, base)
 
+    assert ("worktree", "remove", str(workspace.path)) in calls
+    assert not any(
+        call[:2] == ("worktree", "remove") and "--force" in call for call in calls
+    )
     assert not workspace.path.exists()
     assert not any(
         item.get("branch") == manager.branch
