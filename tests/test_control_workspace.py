@@ -401,6 +401,68 @@ def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
     )
 
 
+def test_remote_execution_ref_move_during_leased_delete_is_preserved(
+    tmp_path, monkeypatch
+):
+    """A remote ref changed after observation must survive cleanup."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    workspace = manager.prepare(base)
+    assert git(
+        working,
+        "push",
+        "origin",
+        f"{manager.branch}:refs/heads/{manager.branch}",
+    ).returncode == 0
+    manager.retire(workspace, base)
+
+    (working / "remote-delete-race.txt").write_text("moved\n")
+    git(working, "add", "remote-delete-race.txt")
+    assert git(
+        working,
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "move remote disposable ref during delete",
+    ).returncode == 0
+    moved = git(working, "rev-parse", "HEAD").stdout.strip()
+    original_runtime = engine._git_runtime
+    moved_during_delete = False
+
+    def interleave(repo, *args, **kwargs):
+        nonlocal moved_during_delete
+        if args[0] == "push" and f":refs/heads/{manager.branch}" in args:
+            assert git(
+                working,
+                "push",
+                "--force",
+                "origin",
+                f"{moved}:refs/heads/{manager.branch}",
+            ).returncode == 0
+            moved_during_delete = True
+        return original_runtime(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", interleave)
+    with pytest.raises(WorkflowBlockedError, match="stale info|cannot retire remote"):
+        engine._retire_execution_refs(manager.branch, base)
+
+    assert moved_during_delete
+    assert resolve_commit(working, f"refs/heads/{manager.branch}") is None
+    assert (
+        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
+        .split()[0]
+        == moved
+    )
+
+
 def test_historical_cleanup_requires_published_product_checkpoint(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
