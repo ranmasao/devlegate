@@ -14,8 +14,8 @@ context and are not part of the Devlegate protocol.
 For ticket T under `{{ workflow.review_path }}`, inspect:
 
 1. The canonical ticket specification on `{{ workflow.control_branch }}`.
-    2. The exact ExecutionReport that caused entry into review, including
-       `summary`, `remaining`, `questions`, and any adjacent `.md` report.
+2. The exact ExecutionReport that caused entry into review, including `summary`,
+   `remaining`, `questions`, and any adjacent `.md` report.
 3. The implementation branch `{{ execution.branch_prefix }}T`.
 4. Relevant product source, tests, and history.
 5. Changes against the recorded implementation base on `{{ product.branch }}`.
@@ -34,9 +34,30 @@ or integrated. Failed or invalid executions do not enter review.
 ## Rejected Review and Hardening
 
 If ticket T needs additional implementation, move the SAME ticket from
-`{{ workflow.review_path }}/T.md` to `{{ workflow.todo_path }}/T.md`. Preserve T's
-ID and record concrete hardening requirements in the same specification. Do not
-create T-H1, T-fix, or another replacement ticket for ordinary hardening.
+`{{ workflow.review_path }}/T.md` to `{{ workflow.todo_path }}/T.md`, or defer it
+through `{{ workflow.backlog_path }}/T.md`. Preserve T's ID and canonical
+specification byte-for-byte. Do not create T-H1, T-fix, or another replacement
+ticket for ordinary hardening.
+
+Publish the current feedback as `reviews/T/<execution-id>.md` in the same commit
+as the review disposition. Use this exact header, taking identities from the
+verified ExecutionReport:
+
+```text
+<!-- devlegate-review-v1
+ticket: T
+execution: <32-lowercase-hex execution id>
+checkpoint: <40-lowercase-hex workspace head>
+control: <40-lowercase-hex report control head>
+disposition: rework
+-->
+```
+
+Put focused, actionable feedback after the header. Never modify or delete a
+published review artifact. A later rejected execution gets a new artifact named
+for that execution; do not concatenate old feedback into the current artifact.
+If canonical requirements truly need amendment, stop ordinary review and request
+an explicit guarded Architect specification revision instead.
 
 ## Accepted Review
 
@@ -56,4 +77,6 @@ context and move the SAME ticket back to todo.
 Reviewer MUST NOT edit execution evidence, rewrite execution branch history, ask
 workers to commit or push, merge or rebase product code, mark unintegrated
 implementation done, treat WorkerClaim as authoritative validation, or create a new
-hardening ticket for ordinary review failure.
+hardening ticket for ordinary review failure. Do not tell workers to use `git show`
+or otherwise read the private control worktree; current feedback is injected into
+the worker prompt by Devlegate.

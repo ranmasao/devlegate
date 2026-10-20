@@ -2300,7 +2300,24 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     control = next((state / "worktrees").glob("*/control"))
+    previous_report = ExecutionReportStore(control).list("T-1")[0]
+    review_feedback = "Fix the five submodule worktree-removal regressions exactly."
+    review_artifact = (
+        control / "reviews" / "T-1" / f"{previous_report.execution_id}.md"
+    )
+    review_artifact.parent.mkdir(parents=True)
+    review_artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {previous_report.execution_id}\n"
+        f"checkpoint: {previous_report.workspace_head}\n"
+        f"control: {previous_report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        f"{review_feedback}\n"
+    )
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(review_artifact.relative_to(control)))
     git(control, "commit", "-m", "return ticket for rework")
     git(control, "push", "origin", "devlegate/control")
     product = control_publisher(tmp_path)
@@ -2311,20 +2328,53 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     git(product, "push", "origin", "main")
 
     assert run_test_iteration(devlegate) == 0
+    second_report = next(
+        report
+        for report in ExecutionReportStore(control).list("T-1")
+        if report.execution_id != previous_report.execution_id
+    )
+    second_feedback = "The second generation still mishandles nested submodules."
+    second_artifact = (
+        control / "reviews" / "T-1" / f"{second_report.execution_id}.md"
+    )
+    second_artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {second_report.execution_id}\n"
+        f"checkpoint: {second_report.workspace_head}\n"
+        f"control: {second_report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        f"{second_feedback}\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(second_artifact.relative_to(control)))
+    git(control, "commit", "-m", "return second generation for rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    assert run_test_iteration(devlegate) == 0
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    assert calls == 2
+    assert calls == 3
     assert "Revise the existing implementation" in directives[1]
+    assert review_feedback in directives[1]
+    assert previous_report.execution_id in directives[1]
+    assert "## Current Review Feedback" in directives[1]
+    assert second_feedback in directives[2]
+    assert second_report.execution_id in directives[2]
+    assert review_feedback not in directives[2]
+    assert previous_report.execution_id not in directives[2]
     assert (execution / "new-base.txt").read_text() == "new product base\n"
     assert (execution / "attempt-1.txt").exists()
     assert (execution / "attempt-2.txt").exists()
+    assert (execution / "attempt-3.txt").exists()
     assert git(execution, "log", "--format=%s").stdout.splitlines().count(
         "T-1: Control ticket"
-    ) == 2
-    assert len(list((control / "executions/T-1").glob("*.json"))) == 2
+    ) == 3
+    assert len(list((control / "executions/T-1").glob("*.json"))) == 3
     reports = ExecutionReportStore(control).list("T-1")
-    assert reports[0].execution_id != reports[1].execution_id
-    assert reports[0].workspace_head is not None
-    assert reports[0].workspace_head != reports[1].workspace_head
+    assert len({report.execution_id for report in reports}) == 3
+    assert all(report.workspace_head is not None for report in reports)
+    assert len({report.workspace_head for report in reports}) == 3
 
 
 def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
@@ -2355,6 +2405,82 @@ def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
         ported.path, "rev-list", f"{new_base}..HEAD"
     ).stdout.splitlines()
     assert len(ported_commits) == 2
+
+
+def test_malformed_review_feedback_blocks_rework_before_worker_launch(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("forged review without attribution\n")
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "publish malformed review")
+    git(control, "push", "origin", "devlegate/control")
+
+    with pytest.raises(
+        runtime_module.WorkflowBlockedError, match="malformed attribution header"
+    ):
+        run_test_iteration(devlegate)
+    assert calls == 1
+    assert devlegate._state["phase"] == "idle"
+
+
+def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    prompts = []
+
+    def worker(workspace, prompt, **_kwargs):
+        prompts.append(prompt)
+        (workspace.path / f"attempt-{len(prompts)}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    feedback = "Preserve gitlink entries while removing nested worktrees."
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        f"{feedback}\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/backlog/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "defer reviewed rework")
+    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "schedule deferred rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    assert run_test_iteration(devlegate) == 0
+    assert len(prompts) == 2
+    assert feedback in prompts[1]
 
 
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(

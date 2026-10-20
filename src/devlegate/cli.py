@@ -176,7 +176,9 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
                     "message": "service diagnostic unavailable/corrupt",
                 }
                 if corrupt
-                else diagnostic.as_public_dict() if diagnostic is not None else None
+                else diagnostic.as_public_dict()
+                if diagnostic is not None
+                else None
             )
             return ReadOnlyView(value, "stopped", service_failure=failure)
     except RuntimeAuthorityPresent as error:
@@ -187,9 +189,7 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
         assert response is not None
         try:
             value = (
-                decode_status(response)
-                if method == "status"
-                else decode_plan(response)
+                decode_status(response) if method == "status" else decode_plan(response)
             )
             live_execution = response.get("live_execution")
             if not isinstance(live_execution, dict):
@@ -227,9 +227,7 @@ def _select_candidate(
         ticket_id = candidate["id"]
         title = candidate.get("title", "").strip()
         label = (
-            ticket_id
-            if not title or title == ticket_id
-            else f"{ticket_id}  {title}"
+            ticket_id if not title or title == ticket_id else f"{ticket_id}  {title}"
         )
         print(f"  {index}) {label}")
         print(f"     {candidate['reason']}")
@@ -285,9 +283,7 @@ def _retry_daemon(
                 return 0
             ticket_id = selected["id"]
         if not locator.daemon_authority_present():
-            raise DevlegateError(
-                "service stopped before retry was submitted"
-            )
+            raise DevlegateError("service stopped before retry was submitted")
         result = request(
             locator.socket_path,
             "retry",
@@ -526,17 +522,14 @@ def _reconcile_auto_daemon(
         payload = {"ticket_id": ticket_id}
         if onto is not None:
             payload["onto"] = onto
-        result = request(
-            locator.socket_path, "reconcile-auto", payload, mutable=True
-        )
+        result = request(locator.socket_path, "reconcile-auto", payload, mutable=True)
         if result.get("accepted") is not True or result.get("ticket_id") != ticket_id:
             raise DevlegateError(
                 "service returned an invalid reconciliation acknowledgement"
             )
         effective_onto = result.get("onto")
         if effective_onto is not None and (
-            not isinstance(effective_onto, str)
-            or not effective_onto
+            not isinstance(effective_onto, str) or not effective_onto
         ):
             raise DevlegateError("service returned an invalid reconciliation target")
     except RuntimeLocatorError as error:
@@ -834,9 +827,7 @@ def _systemd_authority_established(
         except SystemdSupervisorError as error:
             raise DevlegateError(str(error)) from error
     if existing is None:
-        preferred = unit_path(
-            target.locator, getattr(current, "unit_directory", None)
-        )
+        preferred = unit_path(target.locator, getattr(current, "unit_directory", None))
         if preferred.exists():
             try:
                 current.inspect(
@@ -920,8 +911,7 @@ def _lifecycle_service(
             )
             if active and not force:
                 print(
-                    f"stop requested; will stop at checkpoint "
-                    f"({active} worker active)"
+                    f"stop requested; will stop at checkpoint ({active} worker active)"
                 )
                 return 0
             _wait_for_runtime_stop(locator)
@@ -962,10 +952,7 @@ def _lifecycle_service(
         workers = response.get("workers") if isinstance(response, dict) else None
         active = workers.get("active", 0) if isinstance(workers, dict) else 0
         if active and not force:
-            print(
-                f"stop requested; will stop at checkpoint "
-                f"({active} worker active)"
-            )
+            print(f"stop requested; will stop at checkpoint ({active} worker active)")
         else:
             print("service stopped")
     else:
@@ -995,9 +982,10 @@ def _lifecycle_service(
         if not isinstance(instance_id, str) or not instance_id:
             raise DevlegateError("service IPC returned no service instance identity")
         authoritative_request_id = response.get("request_id", request_id)
-        if not isinstance(
-            authoritative_request_id, str
-        ) or not authoritative_request_id:
+        if (
+            not isinstance(authoritative_request_id, str)
+            or not authoritative_request_id
+        ):
             raise DevlegateError(
                 "service IPC returned no authoritative lifecycle request identity"
             )
@@ -1058,10 +1046,7 @@ def _healthy_service(env_file: Path) -> dict[str, object] | None:
         raise DevlegateError(
             "service authority exists but its IPC endpoint is unavailable"
         ) from error
-    if (
-        response.get("service") != "devlegate"
-        or response.get("protocol_version") != 1
-    ):
+    if response.get("service") != "devlegate" or response.get("protocol_version") != 1:
         raise DevlegateError("service authority exists but its IPC health is invalid")
     return response
 
@@ -1127,9 +1112,7 @@ def _validate_registered_projects(registry: ProjectRegistry) -> None:
             f"cannot validate registered project inventory: {error}"
         ) from error
     active = [
-        target.alias
-        for target in targets
-        if target.locator.daemon_authority_present()
+        target.alias for target in targets if target.locator.daemon_authority_present()
     ]
     if active:
         formatted = ", ".join(f"@{alias}" for alias in active)
@@ -1380,8 +1363,7 @@ def _remove_project(args: argparse.Namespace) -> int:
     emit(
         value,
         args.output_format,
-        f"removed @{alias} from this Devlegate installation; "
-        "project data preserved",
+        f"removed @{alias} from this Devlegate installation; project data preserved",
     )
     return 0
 
@@ -1510,9 +1492,7 @@ def _systemd_service_command(args: argparse.Namespace) -> int:
         unit = _known_systemd_name(target, supervisor, store)
         match args.service_action:
             case "install":
-                path = supervisor.install(
-                    target.locator, target.env_file, name=unit
-                )
+                path = supervisor.install(target.locator, target.env_file, name=unit)
                 print(f"systemd user unit installed: {path}")
             case "remove":
                 path = supervisor.remove(
@@ -1557,14 +1537,10 @@ def _notify_startup_failure(error: BaseException) -> None:
 def _background_command(
     env_file: Path, launcher: LaunchCommand | None = None
 ) -> list[str]:
-    return (launcher or product_launcher()).argv(
-        "--env", str(env_file), "foreground"
-    )
+    return (launcher or product_launcher()).argv("--env", str(env_file), "foreground")
 
 
-def _start_background(
-    env_file: Path, *, launcher: LaunchCommand | None = None
-) -> int:
+def _start_background(env_file: Path, *, launcher: LaunchCommand | None = None) -> int:
     if not hosted_runtime_supported():
         raise DevlegateError(HOSTED_RUNTIME_ERROR)
     try:
@@ -1662,8 +1638,7 @@ def _start_systemd(target: ProjectTarget) -> int:
                 "repository": str(target.repo.resolve()),
             }
             if any(
-                authority.get(key) != value
-                for key, value in expected_authority.items()
+                authority.get(key) != value for key, value in expected_authority.items()
             ):
                 raise DevlegateError(
                     "persisted systemd authority does not match the selected project"
@@ -1743,9 +1718,7 @@ def _run_attached_target(
         "host_mode": host_mode,
         "once": once,
         "startup_fd": startup_fd,
-        "startup_report": lambda: _startup_report(
-            engine, host_mode.value
-        ),
+        "startup_report": lambda: _startup_report(engine, host_mode.value),
     }
     readiness_report = _systemd_readiness_report()
     if readiness_report is not None:
@@ -1776,15 +1749,20 @@ def _execution_projection(
         and _service_owns_execution(snapshot, live_execution)
     ):
         state = "starting"
-    elif phase == "agent_running" and stage in {
-        "post-worker",
-        "pre-checkpoint",
-        "checkpointing",
-        "post-checkpoint",
-        "publishing",
-        "post-publication",
-        "lifecycle",
-    } and _service_owns_execution(snapshot, live_execution):
+    elif (
+        phase == "agent_running"
+        and stage
+        in {
+            "post-worker",
+            "pre-checkpoint",
+            "checkpointing",
+            "post-checkpoint",
+            "publishing",
+            "post-publication",
+            "lifecycle",
+        }
+        and _service_owns_execution(snapshot, live_execution)
+    ):
         state = "finalizing"
     elif (
         phase == "agent_running"
@@ -1913,8 +1891,7 @@ def _render_status_text(
         if intent in {"stop", "restart"} and active:
             action = "stop" if intent == "stop" else "restart"
             lines.append(
-                f"Status: running, will {action} at checkpoint "
-                "(a worker is active)"
+                f"Status: running, will {action} at checkpoint (a worker is active)"
             )
         elif intent == "restart":
             lines.append("Status: restarting")
@@ -2074,7 +2051,8 @@ def _render_status_text(
                     tuple(
                         (key.replace("_", " ").title(), value)
                         for key, value in reconciliation.items()
-                        if key in {
+                        if key
+                        in {
                             "ticket_id",
                             "original_base",
                             "observed_product",
@@ -2151,8 +2129,7 @@ def _render_check_text(result: dict[str, object]) -> str:
             render_table(
                 "Repository diagnostics:",
                 tuple(
-                    (label, _display_output_value(result[key]))
-                    for key, label in labels
+                    (label, _display_output_value(result[key])) for key, label in labels
                 ),
             ),
         ]
@@ -2346,6 +2323,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
             (
                 ("init", "initialize project-local workflow files"),
                 ("render", "render project-local workflow files"),
+                ("upgrade-templates", "safely upgrade managed role templates"),
                 ("check", "validate setup readiness"),
                 ("control", "manage workflow history"),
                 ("project", "inspect and register local projects"),
@@ -2508,6 +2486,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--check", action="store_true", help="check freshness without writing files"
     )
     add_output_arguments(render_parser)
+    upgrade_templates_parser = commands.add_parser(
+        "upgrade-templates",
+        help="safely upgrade managed project role templates",
+        description=(
+            "Replace only known unmodified Devlegate role templates and render "
+            "their project artifacts."
+        ),
+    )
+    upgrade_templates_parser.add_argument(
+        "--check", action="store_true", help="check for updates without writing files"
+    )
+    add_output_arguments(upgrade_templates_parser)
     stop_parser = commands.add_parser(
         "stop",
         help="orderly stop the persistent workflow service",
@@ -2641,8 +2631,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help=(
-            "retire a proven stranded execution and retry the current "
-            "ticket generation"
+            "retire a proven stranded execution and retry the current ticket generation"
         ),
     )
     add_output_arguments(retry_parser)
@@ -2859,10 +2848,12 @@ def main() -> int:
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
     if "reconcile" in argv:
         index = argv.index("reconcile")
-        if index + 1 < len(argv) and argv[index + 1] not in {
-            "auto", "resume", "update-base", "control"
-        } and not argv[index + 1].startswith("-"):
-            argv[index + 1:index + 1] = ["auto"]
+        if (
+            index + 1 < len(argv)
+            and argv[index + 1] not in {"auto", "resume", "update-base", "control"}
+            and not argv[index + 1].startswith("-")
+        ):
+            argv[index + 1 : index + 1] = ["auto"]
     args = parser.parse_args(argv)
     args.project_alias = project_alias
     startup_fd = _startup_fd()
@@ -2969,7 +2960,7 @@ def main() -> int:
         if args.command == "logs":
             return _logs_command(args, target)
         devlegate = None
-        if args.command in {"render", "check", "control"}:
+        if args.command in {"render", "upgrade-templates", "check", "control"}:
             devlegate = Devlegate(env_file, read_only=True, repository=target.repo)
         if args.command == "render":
             value = devlegate.render_result(args.check)
@@ -2985,6 +2976,20 @@ def main() -> int:
                 ),
             )
             return 0
+        if args.command == "upgrade-templates":
+            value = devlegate.upgrade_templates_result(args.check)
+            value = {**value, "command": "upgrade-templates"}
+            emit(
+                value,
+                args.output_format,
+                (
+                    "Managed role templates are current."
+                    if args.check
+                    else f"Upgraded {value['templates']} templates and rendered "
+                    f"{value['rendered']} artifacts."
+                ),
+            )
+            return 0
         if args.command == "control":
             value = devlegate.control_init_result()
             value = {**value, "command": "control init"}
@@ -2996,8 +3001,7 @@ def main() -> int:
             emit(
                 value,
                 args.output_format,
-                f"{control_messages[value['result']]}: "
-                f"{value['control_worktree']}",
+                f"{control_messages[value['result']]}: {value['control_worktree']}",
             )
             return 0
         if args.command == "status":

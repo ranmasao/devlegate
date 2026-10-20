@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -51,6 +52,7 @@ class RenderContext:
 _PLACEHOLDER = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
 _MANIFEST_NAME = "artifacts.toml"
 _ENV_NAME = ".env.example"
+_DEFAULT_RECEIPT = ".devlegate-defaults.json"
 _DEFAULT_ARTIFACTS = (
     {
         "source": "skills/architect/SKILL.md.tmpl",
@@ -61,6 +63,16 @@ _DEFAULT_ARTIFACTS = (
         "target": "skills/reviewer/SKILL.md",
     },
 )
+_LEGACY_DEFAULT_HASHES = {
+    "skills/architect/SKILL.md.tmpl": {
+        "51cb4bed1639489131f9a64c01eab9856358ff764d3df081af913945b4c84c9d",
+        "79733a491c00f08d1565a3fac83765a0ceaac00332737966d88e64a0c0574caa",
+    },
+    "skills/reviewer/SKILL.md.tmpl": {
+        "d52fd6a57a9113c5e4c4e703acdb7eee0b1909dd5a030107f2d7cde5184f83b8",
+        "30967c7480d70ee1327f20fb840560f7c890c788e512badf4fd692d7210c9abd",
+    },
+}
 
 
 def packaged_template_root() -> Path:
@@ -107,9 +119,7 @@ def _directory(path: Path, label: str, *, create: bool = True) -> None:
         raise AgentProtocolError(f"{label} is missing: {path}")
 
 
-def _safe_project_roots(
-    project: Path, *, create: bool = True
-) -> tuple[Path, Path]:
+def _safe_project_roots(project: Path, *, create: bool = True) -> tuple[Path, Path]:
     protocol = project / ".devlegate"
     templates = protocol / "templates"
     _directory(protocol, ".devlegate root", create=create)
@@ -174,9 +184,7 @@ def _manifest(templates: Path) -> tuple[tuple[Path, Path], ...]:
         if source.suffix != ".tmpl":
             raise AgentProtocolError(f"artifact source must end in .tmpl: {source}")
         if target == Path(".git") or ".git" in target.parts:
-            raise AgentProtocolError(
-                f"manifest target cannot be under .git: {target}"
-            )
+            raise AgentProtocolError(f"manifest target cannot be under .git: {target}")
         if source in sources or target in targets:
             raise AgentProtocolError(f"duplicate artifact mapping in {path}")
         if source == target:
@@ -246,6 +254,35 @@ def _atomic_write(path: Path, content: str, *, allow_foreign: bool = False) -> b
     return True
 
 
+def _digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _write_default_receipt(templates: Path) -> None:
+    sources = {
+        item["source"]: _digest((templates / item["source"]).read_bytes())
+        for item in _DEFAULT_ARTIFACTS
+    }
+    path = templates / _DEFAULT_RECEIPT
+    content = json.dumps({"version": 1, "sources": sources}, sort_keys=True) + "\n"
+    temporary_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=templates, prefix=".defaults.", suffix=".tmp", delete=False
+        ) as temporary:
+            temporary_name = temporary.name
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+
+
 def _state_backup_path(state_dir: Path, project: Path, target: Path) -> Path:
     key = hashlib.sha256(str(project.resolve()).encode()).hexdigest()
     return state_dir / "backups" / key / target.relative_to(project)
@@ -306,9 +343,7 @@ def _render_plan(
                 if backup.exists() or backup.is_symlink():
                     backup_conflicts.append(backup)
                     backup = None
-        plan.append(
-            (target, rendered, backup, conflicts != "abort")
-        )
+        plan.append((target, rendered, backup, conflicts != "abort"))
     if conflicts_found:
         details = "\n".join(f"  {target}" for target in conflicts_found)
         raise AgentProtocolError(
@@ -319,8 +354,7 @@ def _render_plan(
     if backup_conflicts:
         details = "\n".join(f"  {backup}" for backup in backup_conflicts)
         raise AgentProtocolError(
-            "backup already exists; no project artifacts were changed:\n"
-            f"{details}"
+            f"backup already exists; no project artifacts were changed:\n{details}"
         )
     return plan
 
@@ -357,7 +391,13 @@ def initialize_project(
     manifest = templates / _MANIFEST_NAME
     if manifest.is_symlink():
         raise AgentProtocolError(f"unsafe symlinked artifact manifest: {manifest}")
-    if not manifest.exists():
+    fresh_defaults = not manifest.exists()
+    receipt_safe = fresh_defaults and not any(
+        (templates / item["source"]).exists()
+        or (templates / item["source"]).is_symlink()
+        for item in _DEFAULT_ARTIFACTS
+    )
+    if fresh_defaults:
         packaged_manifest = packaged_template_root() / "artifacts.toml"
         if not packaged_manifest.is_file():
             raise AgentProtocolError(
@@ -391,6 +431,8 @@ def initialize_project(
             raise AgentProtocolError(f"packaged template is missing: {packaged}")
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(packaged.read_bytes())
+    if receipt_safe:
+        _write_default_receipt(templates)
     changed = 0
     for target, rendered, backup, allow_foreign in plan:
         _directory(target.parent, "target directory")
@@ -400,6 +442,87 @@ def initialize_project(
         if _atomic_write(target, rendered, allow_foreign=allow_foreign):
             changed += 1
     return len(plan), changed
+
+
+def upgrade_project_templates(
+    project: Path, context: RenderContext, *, check: bool = False
+) -> tuple[int, int, int]:
+    """Compare-and-swap known managed defaults, then render their targets."""
+    _protocol, templates = _safe_project_roots(project, create=False)
+    manifest = templates / _MANIFEST_NAME
+    packaged_manifest = packaged_template_root() / _MANIFEST_NAME
+    if manifest.read_bytes() != packaged_manifest.read_bytes():
+        raise AgentProtocolError(
+            "project artifact manifest is customized; merge packaged protocol "
+            "updates manually and run `devlegate render`"
+        )
+    receipt_path = templates / _DEFAULT_RECEIPT
+    receipt_sources: dict[str, str] = {}
+    if receipt_path.is_file() and not receipt_path.is_symlink():
+        try:
+            receipt = json.loads(receipt_path.read_text())
+            if receipt.get("version") == 1 and isinstance(receipt.get("sources"), dict):
+                receipt_sources = receipt["sources"]
+        except (OSError, json.JSONDecodeError):
+            raise AgentProtocolError("managed template receipt is malformed") from None
+    plan: list[tuple[Path, bytes]] = []
+    conflicts: list[Path] = []
+    for item in _DEFAULT_ARTIFACTS:
+        relative = item["source"]
+        local = _check_components(templates, Path(relative), "template path")
+        packaged = _check_components(
+            packaged_template_root(), Path(relative), "packaged template path"
+        )
+        if not local.is_file() or not packaged.is_file():
+            raise AgentProtocolError(f"managed template is unavailable: {local}")
+        current = local.read_bytes()
+        replacement = packaged.read_bytes()
+        current_hash = _digest(current)
+        trusted = set(_LEGACY_DEFAULT_HASHES.get(relative, set()))
+        receipt_hash = receipt_sources.get(relative)
+        if isinstance(receipt_hash, str):
+            trusted.add(receipt_hash)
+        if current == replacement:
+            continue
+        if current_hash not in trusted:
+            conflicts.append(local)
+            continue
+        plan.append((local, replacement))
+    if conflicts:
+        details = "\n".join(f"  {path}" for path in conflicts)
+        raise AgentProtocolError(
+            "project templates are customized; no files were changed. Merge the "
+            f"packaged updates manually:\n{details}"
+        )
+    if check and plan:
+        raise AgentProtocolError("managed project templates have a packaged update")
+    if not check:
+        # Validate every generated target before replacing any managed source.
+        _render_plan(project, packaged_template_root(), context, "abort", None)
+        for path, replacement in plan:
+            temporary_name = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temporary:
+                    temporary_name = temporary.name
+                    temporary.write(replacement)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                os.replace(temporary_name, path)
+            finally:
+                if temporary_name is not None:
+                    try:
+                        os.unlink(temporary_name)
+                    except FileNotFoundError:
+                        pass
+        _write_default_receipt(templates)
+    total, rendered = render_project(project, context, check=check)
+    return total, len(plan), rendered
 
 
 def render_project(
@@ -422,9 +545,7 @@ def render_project(
                 or not target.is_file()
                 or target.read_text() != rendered
             ):
-                raise AgentProtocolError(
-                    f"stale or missing rendered target: {target}"
-                )
+                raise AgentProtocolError(f"stale or missing rendered target: {target}")
         else:
             _directory(target.parent, "target directory")
             if _atomic_write(target, rendered):
@@ -438,5 +559,6 @@ __all__ = [
     "initialize_project",
     "packaged_template_root",
     "render_project",
+    "upgrade_project_templates",
     "seed_project_env",
 ]
