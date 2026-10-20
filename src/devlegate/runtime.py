@@ -6330,6 +6330,10 @@ class ServiceEngine:
                 "accepted integration control identity is invalid"
             )
         control_head = self._complete_accepted(ticket_id, expected_head)
+        # The done transition is now exact and published.  This durable record
+        # cannot drive another integration, so clear it before optional cleanup.
+        # A crash after this point is recovered by the same published-proof path.
+        self._save_state("idle", accepted_integration=None)
         cleanup = {
             "ticket_id": ticket_id,
             "status": "retired",
@@ -6646,6 +6650,23 @@ class ServiceEngine:
                     for field in required
                 )
                 or not _is_git_identity(reconciliation.get("worker_checkpoint"))
+                or not all(
+                    _is_git_identity(reconciliation.get(field))
+                    for field in (
+                        "original_base",
+                        "observed_product",
+                        "product_remote_head",
+                        "control_head",
+                    )
+                )
+                or reconciliation["execution_branch"]
+                != f"devlegate/work/{reconciliation['ticket_id']}"
+                or Path(reconciliation["execution_path"]).absolute()
+                != self.execution_worktree_root / "work" / reconciliation["ticket_id"]
+                or reconciliation["evidence_ref"]
+                != self._reconciliation_evidence_ref(
+                    reconciliation["ticket_id"], reconciliation["execution_id"]
+                )
             ):
                 raise WorkflowBlockedError(
                     "reconciliation dependency identity is invalid"
@@ -6695,6 +6716,7 @@ class ServiceEngine:
                     isinstance(retry.get(field), str) and retry[field]
                     for field in required_retry - {"status"}
                 )
+                or not _is_git_identity(retry.get("worker_checkpoint"))
             ):
                 raise WorkflowBlockedError(
                     "automatic retry dependency identity is invalid"
