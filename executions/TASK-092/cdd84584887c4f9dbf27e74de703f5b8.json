@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "050884600cd1f05ed4d419d42ccd0fb14253860c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "cdd84584887c4f9dbf27e74de703f5b8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Strengthened cleanup ownership checks to fail closed on incomplete or overlapping reconciliation, retry, integration, and worker provenance while allowing well-formed unrelated runtime activity. Added a fresh exact retirement revalidation before immediate worktree deletion and updated isolated real-Git cleanup coverage."
+  },
+  "workspace_head": "ae009e6d04fba3ebd7bd53cb1e11ca5643ebac9a"
+}
