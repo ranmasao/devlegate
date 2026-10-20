@@ -1267,7 +1267,9 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
                 "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
-                "evidence_ref": "refs/devlegate/reconcile/T-3/historical-execution",
+                "evidence_ref": engine._reconciliation_evidence_ref(
+                    "T-3", "historical-execution"
+                ),
             },
         }
     )
@@ -1324,7 +1326,9 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
                 "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
-                "evidence_ref": "refs/devlegate/reconcile/T-3/historical-execution",
+                "evidence_ref": engine._reconciliation_evidence_ref(
+                    "T-3", "historical-execution"
+                ),
             },
         }
     )
@@ -1366,7 +1370,7 @@ def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
         "control_head": checkpoint,
         "execution_branch": report.execution_branch,
         "execution_path": report.execution_path,
-        "evidence_ref": "refs/devlegate/reconcile/T-1/done-execution",
+        "evidence_ref": "refs/devlegate/reconciliation/T-1/done-execution",
     }
 
     result = engine.cleanup_workspaces(apply=True, limit=1)
@@ -1385,6 +1389,56 @@ def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
     ]
     assert workspace.path.is_dir()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+
+
+def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(
+    tmp_path,
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    report = engine._accepted_execution_report("T-1")
+    engine._state["reconciliation"] = {
+        "status": "resolved",
+        "ticket_id": "T-3",
+        "execution_id": "historical-execution",
+        "original_base": checkpoint,
+        "observed_product": checkpoint,
+        "worker_checkpoint": checkpoint,
+        "product_remote_head": checkpoint,
+        "control_head": checkpoint,
+        "execution_branch": "devlegate/work/T-3",
+        "execution_path": str(engine.execution_worktree_root / "work/T-3"),
+        # A record whose evidence reference cannot establish its owner is not
+        # safely unrelated to the candidate.
+        "evidence_ref": "refs/devlegate/reconciliation/T-3/other-execution",
+    }
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "blocked"
+    assert (
+        result["decisions"][0]["reason"]
+        == "reconciliation dependency identity is invalid"
+    )
+    assert workspace.path.is_dir()
+    assert (
+        resolve_commit(working, f"refs/heads/{workspace.branch}")
+        == report.workspace_head
+    )
 
 
 def test_workspace_cleanup_rejects_cohort_larger_than_pass_limit(tmp_path):
