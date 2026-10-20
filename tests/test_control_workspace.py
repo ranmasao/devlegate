@@ -1262,7 +1262,8 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
                 "execution_id": "historical-execution",
                 "original_base": historical_checkpoint,
                 "observed_product": historical_checkpoint,
-                "worker_checkpoint": historical_checkpoint,
+                # Independent zero-delta executions can have the same SHA.
+                "worker_checkpoint": checkpoint,
                 "product_remote_head": historical_checkpoint,
                 "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
@@ -1389,6 +1390,68 @@ def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
     ]
     assert workspace.path.is_dir()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+
+
+def test_workspace_cleanup_retains_candidate_owned_runtime_dependencies(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    report = engine._accepted_execution_report("T-1")
+    engine._state.update(
+        {
+            "execution_id": report.execution_id,
+            "worker_identity": {
+                "execution_id": report.execution_id,
+                "pid": 1,
+                "pgid": 1,
+                "sid": 1,
+                "boot_id": "fixture",
+                "start_time": 1,
+            },
+        }
+    )
+    with pytest.raises(WorkflowBlockedError, match="live worker dependency"):
+        engine._assert_cleanup_has_no_execution_dependency(report)
+
+    engine._state["worker_identity"] = None
+    engine._state["automatic_retry"] = {
+        "status": "pending",
+        "reason": "fixture",
+        "ticket_id": report.ticket_id,
+        "stale_execution_id": report.execution_id,
+        "original_base": checkpoint,
+        "worker_checkpoint": report.workspace_head,
+        "product_head": checkpoint,
+        "control_head": checkpoint,
+    }
+    with pytest.raises(WorkflowBlockedError, match="automatic retry dependency"):
+        engine._assert_cleanup_has_no_execution_dependency(report)
+
+    engine._state["automatic_retry"] = None
+    engine._state["accepted_integration"] = {
+        "ticket_id": report.ticket_id,
+        "checkpoint": report.workspace_head,
+        "control_head": checkpoint,
+    }
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="accepted")}),
+    )
+    with pytest.raises(WorkflowBlockedError, match="pending integration dependency"):
+        engine._assert_cleanup_has_no_execution_dependency(report)
 
 
 def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(

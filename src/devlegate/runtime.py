@@ -6330,10 +6330,6 @@ class ServiceEngine:
                 "accepted integration control identity is invalid"
             )
         control_head = self._complete_accepted(ticket_id, expected_head)
-        # The done transition is now exact and published.  This durable record
-        # cannot drive another integration, so clear it before optional cleanup.
-        # A crash after this point is recovered by the same published-proof path.
-        self._save_state("idle", accepted_integration=None)
         cleanup = {
             "ticket_id": ticket_id,
             "status": "retired",
@@ -6674,7 +6670,6 @@ class ServiceEngine:
             reconciliation_ownership = (
                 ("ticket_id", ticket_id),
                 ("execution_id", execution_id),
-                ("worker_checkpoint", checkpoint),
                 ("execution_branch", branch),
                 ("execution_path", path),
             )
@@ -6685,7 +6680,7 @@ class ServiceEngine:
                 if any(
                     reconciliation[field] != expected
                     for field, expected in reconciliation_ownership
-                ):
+                ) or reconciliation["worker_checkpoint"] != checkpoint:
                     raise WorkflowBlockedError(
                         "reconciliation dependency contradicts accepted execution"
                     )
@@ -6728,7 +6723,6 @@ class ServiceEngine:
             if (
                 retry["ticket_id"] == ticket_id
                 or execution_id in retry_ids
-                or retry["worker_checkpoint"] == checkpoint
             ):
                 raise WorkflowBlockedError(
                     "accepted execution has an automatic retry dependency"
@@ -6763,11 +6757,23 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration dependency identity is invalid"
                 )
-            if (
-                pending["ticket_id"] == ticket_id
-                or pending["checkpoint"] == checkpoint
-            ):
+            if pending["ticket_id"] == ticket_id:
                 if pending["checkpoint"] != checkpoint:
+                    raise WorkflowBlockedError(
+                        "accepted integration dependency contradicts accepted execution"
+                    )
+                ticket = self._ticket_store().by_id.get(ticket_id)
+                if ticket is not None and ticket.state == "done":
+                    published = self._published_accepted_execution_report(
+                        ticket_id, pending
+                    )
+                    if (
+                        published.execution_id == execution_id
+                        and published.execution_branch == branch
+                        and str(Path(published.execution_path).absolute()) == path
+                        and published.workspace_head == checkpoint
+                    ):
+                        return
                     raise WorkflowBlockedError(
                         "accepted integration dependency contradicts accepted execution"
                     )
