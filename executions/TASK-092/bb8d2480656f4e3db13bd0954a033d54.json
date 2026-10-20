@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "042fd222f1801f481ddfd7a45378157fc5db3754",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "bb8d2480656f4e3db13bd0954a033d54",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Strengthened cleanup dependency ownership validation so malformed reconciliation or retry provenance blocks retirement while valid unrelated execution state does not. Cleared a completed accepted-integration record before optional immediate retirement and added real-Git cleanup coverage for malformed unrelated provenance."
+  },
+  "workspace_head": "32a18ca87571fbfb83604ce5c69bc9ab62aeaab9"
+}
