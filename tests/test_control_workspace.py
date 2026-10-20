@@ -125,7 +125,7 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
     assert engine._state.get("mutable_receipts", {}) == {}
 
 
-def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
+def test_validated_workspace_retirement_forces_removal_but_keeps_branch(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -147,10 +147,7 @@ def test_clean_workspace_retirement_removes_registration_but_keeps_branch(
 
     manager.retire(workspace, base)
 
-    assert ("worktree", "remove", str(workspace.path)) in calls
-    assert not any(
-        call[:2] == ("worktree", "remove") and "--force" in call for call in calls
-    )
+    assert ("worktree", "remove", "--force", str(workspace.path)) in calls
     assert not workspace.path.exists()
     assert not any(
         item.get("branch") == manager.branch
