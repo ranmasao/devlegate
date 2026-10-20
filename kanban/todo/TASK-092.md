@@ -30,17 +30,6 @@ This is a **global** gate: a different live worker or even an unrelated resolved
 6. Tests with real Git refs/worktrees and service state covering: LAB-185 proven done while LAB-186 worker live and LAB-158 resolved reconciliation persists; candidate itself actively owned (must retain); candidate-specific active reconciliation/retry/integration; missing or contradictory evidence (must retain); interrupted retirement and idempotent replay; remote ref changes during retirement (fail closed); no scheduler interruption or duplicate worker.
 7. Check Arch/Debian runtime behavior remains distribution-neutral. Run focused tests and checkpoint CI; scope to cleanup semantics and related observability only, not the separate TASK-080/084/085 Git API/recovery refactors.
 
-## Service journal observability (additional acceptance requirement)
-
-Cleanup must emit useful messages to the **normal Devlegate service log** (systemd journal when hosted), not only the `status --json` snapshot. Cover both post-integration immediate retirement and periodic/bounded historical cleanup:
-
-- Log the start of an actual cleanup pass with its scope/bound, and a completion summary: candidates examined, retired, blocked/skipped and remaining (distinguish pass-local counts from whole-inventory counts).
-- Log each successfully retired ticket/execution with enough stable identity (ticket ID, execution ID where available) and the worktree/local-ref/upstream-ref effects; never claim removal before confirmation.
-- Log blocked or partially retired candidates with a specific actionable reason and which resources remain, particularly dependency ownership conflicts, changed Git refs, and ambiguous provenance.
-- Record interrupted/failed cleanup in the journal without hiding the underlying error or treating it as successful; allow safe retry.
-- Avoid flooding the journal on every scheduler poll for unchanged old blockers: log on actual passes, state/reason changes, or use bounded aggregate/rate-limited detail. Do not emit full sensitive paths or worker report contents unnecessarily.
-- Add tests asserting journal events for success, refusal and partial failure, including the immediate `accepted -> done` cleanup path. Keep log/status consistency.
-
 ## Boundary
 
 **Do not operate on the live rslab2 checkout, SQLite, worktrees, or remote refs.** Use isolated fixtures. Do not mass-delete the 74 candidates. Historical candidates with missing/ambiguous evidence remain separately blocked; this fix should retire only those for which full per-ticket proof succeeds.
