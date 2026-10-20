@@ -1237,6 +1237,7 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
         == 0
     )
+    historical_checkpoint = git(control, "rev-parse", "HEAD").stdout.strip()
 
     # T-2 is live and T-3's resolved reconciliation remains durable history.
     # Neither record names T-1's checkout, branch, execution, or checkpoint.
@@ -1259,9 +1260,14 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
                 "status": "resolved",
                 "ticket_id": "T-3",
                 "execution_id": "historical-execution",
-                "worker_checkpoint": "historical-checkpoint",
+                "original_base": historical_checkpoint,
+                "observed_product": historical_checkpoint,
+                "worker_checkpoint": historical_checkpoint,
+                "product_remote_head": historical_checkpoint,
+                "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
+                "evidence_ref": "refs/devlegate/reconcile/T-3/historical-execution",
             },
         }
     )
@@ -1291,6 +1297,7 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
         == 0
     )
     report = engine._accepted_execution_report("T-1")
+    historical_checkpoint = git(control, "rev-parse", "HEAD").stdout.strip()
     engine._state.update(
         {
             "phase": "agent_running",
@@ -1310,9 +1317,14 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
                 "status": "resolved",
                 "ticket_id": "T-3",
                 "execution_id": "historical-execution",
-                "worker_checkpoint": "historical-checkpoint",
+                "original_base": historical_checkpoint,
+                "observed_product": historical_checkpoint,
+                "worker_checkpoint": historical_checkpoint,
+                "product_remote_head": historical_checkpoint,
+                "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
+                "evidence_ref": "refs/devlegate/reconcile/T-3/historical-execution",
             },
         }
     )
@@ -1347,9 +1359,14 @@ def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
         "status": "resolved",
         "ticket_id": report.ticket_id,
         "execution_id": report.execution_id,
+        "original_base": checkpoint,
+        "observed_product": checkpoint,
         "worker_checkpoint": report.workspace_head,
+        "product_remote_head": checkpoint,
+        "control_head": checkpoint,
         "execution_branch": report.execution_branch,
         "execution_path": report.execution_path,
+        "evidence_ref": "refs/devlegate/reconcile/T-1/done-execution",
     }
 
     result = engine.cleanup_workspaces(apply=True, limit=1)
