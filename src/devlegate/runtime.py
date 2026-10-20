@@ -6210,7 +6210,19 @@ class ServiceEngine:
                     "zero-delta accepted result is stale or product history changed"
                 )
             self._retire_zero_delta_execution(report)
-            return self._complete_accepted(ticket_id, control.local_head)
+            pending = self._state.get("accepted_integration")
+            expected_head = (
+                pending.get("control_predecessor", pending.get("control_head"))
+                if isinstance(pending, dict)
+                else control.local_head
+            )
+            if not isinstance(expected_head, str) or not _is_git_identity(
+                expected_head
+            ):
+                raise WorkflowBlockedError(
+                    "accepted integration control identity is invalid"
+                )
+            return self._complete_accepted(ticket_id, expected_head)
 
         try:
             if product_head == checkpoint:
