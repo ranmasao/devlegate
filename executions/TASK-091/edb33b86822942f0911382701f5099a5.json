@@ -1,0 +1,29 @@
+{
+  "code_base_head": "53b933b0b36124125be28b5dba8d9b68334d04fd",
+  "conclusion": "completed",
+  "control_head": "05d136352fc4b8e7f6450e37808ccf080b577b81",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-091",
+  "execution_id": "edb33b86822942f0911382701f5099a5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-091",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-091",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Routed zero-delta accepted integration through the durable control predecessor so descendant recovery receives the same provenance and eligibility validation as product-changing integrations. Documented immutable admission identity, durable predecessor persistence, leased publication, and fail-closed replay ordering."
+  },
+  "workspace_head": "5eff5a10a69909a94a9bd774fbd900210d44a86e"
+}
