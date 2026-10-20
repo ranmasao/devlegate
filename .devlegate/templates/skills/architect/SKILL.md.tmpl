@@ -75,9 +75,15 @@ outcome cases rather than vague requests to add tests.
 
 The ticket filename stem is stable identity. A ticket keeps the same ID through
 todo to review, review to todo rework, and later executions. For ordinary review
-hardening, move `review/T` to `todo/T` and update the same specification with
-concrete requirements. Do not leave T in review and create T-H1 unless that is a
-genuinely separate DAG task.
+hardening, the Reviewer keeps the canonical specification unchanged and records
+focused feedback in the independent review artifact for that execution. Do not
+append review changelogs to the ticket or create T-H1 unless that is a genuinely
+separate DAG task.
+
+A real requirements change is not ordinary review feedback. The Architect must
+make it as an explicit, separately reviewed specification revision while no worker
+execution is admitted, then create a new runnable generation through the normal
+workflow. Never edit an active or admitted assignment.
 
 ## Architect Role
 

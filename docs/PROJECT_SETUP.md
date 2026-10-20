@@ -73,6 +73,30 @@ devlegate check
 during setup. Execution starts only after the project accepts those changes and
 the checkout passes `check`.
 
+## Upgrade Role Templates
+
+Installing a newer wheel or standalone executable updates packaged defaults but
+does not overwrite project-owned templates. After upgrading Devlegate, stop the
+service and run:
+
+```sh
+devlegate upgrade-templates --check
+devlegate upgrade-templates
+devlegate render --check
+```
+
+The upgrade command uses a managed source-hash receipt and known historical
+default hashes. It replaces only templates proven to be unchanged Devlegate
+defaults, writes each replacement atomically, and is safe to repeat after an
+interruption. A customized template or manifest produces an explicit conflict;
+merge the packaged changes manually, preserve project additions, and then run
+`devlegate render`. Generated marker-bearing role files are project-owned managed
+outputs. Files without that marker are intentional overrides and are not replaced.
+
+Review and accept the resulting project diff through the normal project process.
+To roll back, restore the previous project templates and generated role files from
+product Git and run the previous Devlegate runtime.
+
 ## Project Decisions
 
 The project, not Devlegate, decides whether to:

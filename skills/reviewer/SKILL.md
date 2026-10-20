@@ -16,11 +16,11 @@ context and are not part of the Devlegate protocol.
 For ticket T under `kanban/review`, inspect:
 
 1. The canonical ticket specification on `devlegate/control`.
-2. The exact ExecutionReport that caused entry into review, including
-   `summary`, `remaining`, `questions`, and any adjacent `.md` report.
+2. The exact ExecutionReport that caused entry into review, including `summary`,
+   `remaining`, `questions`, and any adjacent `.md` report.
 3. The implementation branch `devlegate/work/T`.
 4. Relevant product source, tests, and history.
-5. Changes against the recorded implementation base on `release/0.5.5`.
+5. Changes against the recorded implementation base on `main`.
 
 ## Trust Model
 
@@ -36,25 +36,49 @@ or integrated. Failed or invalid executions do not enter review.
 ## Rejected Review and Hardening
 
 If ticket T needs additional implementation, move the SAME ticket from
-`kanban/review/T.md` to `kanban/todo/T.md`. Preserve T's
-ID and record concrete hardening requirements in the same specification. Do not
-create T-H1, T-fix, or another replacement ticket for ordinary hardening.
+`kanban/review/T.md` to `kanban/todo/T.md`, or defer it
+through `kanban/backlog/T.md`. Preserve T's ID and canonical
+specification byte-for-byte. Do not create T-H1, T-fix, or another replacement
+ticket for ordinary hardening.
+
+Publish the current feedback as `reviews/T/<execution-id>.md` in the same commit
+as the review disposition. Use this exact header, taking identities from the
+verified ExecutionReport:
+
+```text
+<!-- devlegate-review-v1
+ticket: T
+execution: <32-lowercase-hex execution id>
+checkpoint: <40-lowercase-hex workspace head>
+control: <40-lowercase-hex report control head>
+disposition: rework
+-->
+```
+
+Put focused, actionable feedback after the header. Never modify or delete a
+published review artifact. A later rejected execution gets a new artifact named
+for that execution; do not concatenate old feedback into the current artifact.
+If canonical requirements truly need amendment, stop ordinary review and request
+an explicit guarded Architect specification revision instead.
 
 ## Accepted Review
 
-If the exact checkpoint passes review, move the SAME ticket from
-`kanban/review/T.md` to `kanban/accepted/T.md`.
+If the exact reviewed result passes review, move the SAME ticket from
+`kanban/review/T.md` to `kanban/accepted/T.md`. A product
+delta is not required: a proven zero-product-delta report may also be accepted.
 Preserve its ID and specification. This submits it for Devlegate-owned integration;
 accepted does not mean integrated or done.
 
-A product delta is not required for acceptance. Devlegate finalizes an accepted
-result either by ancestry-safe product fast-forward or by proving a zero-delta
-no-op, then moves it to done. Never move review directly to done; return the SAME
-ticket to todo when more work or an authoritative answer is needed.
+Never move review directly to done. Devlegate finalizes accepted results, either by
+ancestry-safe product fast-forward or by proving a zero-delta no-op, and then moves
+the ticket to done. If more work or an answer is needed, record the authoritative
+context and move the SAME ticket back to todo.
 
 ## Prohibitions
 
 Reviewer MUST NOT edit execution evidence, rewrite execution branch history, ask
 workers to commit or push, merge or rebase product code, mark unintegrated
 implementation done, treat WorkerClaim as authoritative validation, or create a new
-hardening ticket for ordinary review failure.
+hardening ticket for ordinary review failure. Do not tell workers to use `git show`
+or otherwise read the private control worktree; current feedback is injected into
+the worker prompt by Devlegate.

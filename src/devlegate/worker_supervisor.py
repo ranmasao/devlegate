@@ -114,11 +114,7 @@ def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
         # Legacy identities have no kernel ownership boundary to inspect.
         # A surviving group keeps recovery conservative; an absent group is
         # enough to classify the recorded leader as gone.
-        return (
-            "indeterminate"
-            if _worker_group_exists(identity.pgid)
-            else "absent"
-        )
+        return "indeterminate" if _worker_group_exists(identity.pgid) else "absent"
     if current_start != identity.start_time:
         return "absent"
     try:
@@ -245,6 +241,7 @@ def _wait_process(process, timeout: float | None = None):
                 raise subprocess.TimeoutExpired(process, timeout)
             time.sleep(min(WORKER_WAIT_INTERVAL, deadline - time.monotonic()))
 
+
 _HOST_CONTROL_ENVIRONMENT = frozenset(
     {
         "NOTIFY_SOCKET",
@@ -274,9 +271,12 @@ def worker_environment(
     """Copy the environment without service-owned process authority."""
     worker_env = dict(os.environ if environment is None else environment)
     for name in tuple(worker_env):
-        if name in _HOST_CONTROL_ENVIRONMENT or name.startswith(
-            ("PEX_", "SCIE_")
-        ) or name.startswith("__PEX") or name.startswith("_PEX_"):
+        if (
+            name in _HOST_CONTROL_ENVIRONMENT
+            or name.startswith(("PEX_", "SCIE_"))
+            or name.startswith("__PEX")
+            or name.startswith("_PEX_")
+        ):
             worker_env.pop(name, None)
     return worker_env
 
@@ -295,6 +295,7 @@ def _run_opencode(
     execution_log: ExecutionLog | None = None,
     show_worker_output: bool = True,
     worker_started_handler: Callable[[], None] | None = None,
+    prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
@@ -443,6 +444,8 @@ def _run_opencode(
                     raise OSError("worker stdin accepted no prompt bytes")
                 remaining = remaining[written:]
             stdin.flush()
+            if prompt_delivered_handler is not None:
+                prompt_delivered_handler()
         except (BrokenPipeError, OSError, ValueError) as error:
             prompt_error = f"worker prompt delivery failed: {error}"
         finally:
@@ -654,6 +657,7 @@ class WorkerSupervisor:
         stop_request: object | None = None,
         identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
         interruption_handler: Callable[[str], None] | None = None,
+        prompt_delivered_handler: Callable[[], None] | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if not isinstance(workspace, ExecutionWorkspace):
@@ -749,6 +753,7 @@ export default tool({
                 execution_log=execution_log,
                 show_worker_output=self.show_worker_output,
                 worker_started_handler=mark_worker_started,
+                prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
             )
             claim, egress_error = parser.finish()
@@ -772,11 +777,7 @@ export default tool({
         except (ContainmentError, OSError) as error:
             return WorkerRunResult(-1, str(error), None, None, process_started=False)
         finally:
-            if (
-                execution_log is not None
-                and worker_started
-                and not completion_logged
-            ):
+            if execution_log is not None and worker_started and not completion_logged:
                 service_log(
                     "execution finished: "
                     f"ticket={workspace.ticket_id} execution={execution_id} "
