@@ -6411,6 +6411,7 @@ class ServiceEngine:
                 report.execution_branch, report.workspace_head, report=report
             )
             return
+        self._revalidate_cleanup_retirement(report, manager, registration)
         workspace = manager._validate_existing(registration, report.workspace_head)
         manager.retire(workspace, report.workspace_head)
         self._retire_execution_refs(
@@ -6575,6 +6576,14 @@ class ServiceEngine:
                     "worker dependency identity is invalid"
                 ) from error
             assert identity is not None
+            active_execution = state.get("execution_id")
+            if (
+                not isinstance(active_execution, str)
+                or active_execution != identity.execution_id
+            ):
+                raise WorkflowBlockedError(
+                    "worker dependency ownership is invalid"
+                )
             if identity.execution_id == execution_id:
                 raise WorkflowBlockedError(
                     "accepted execution has a live worker dependency"
@@ -6617,9 +6626,14 @@ class ServiceEngine:
             required = {
                 "ticket_id",
                 "execution_id",
+                "original_base",
+                "observed_product",
                 "worker_checkpoint",
+                "product_remote_head",
+                "control_head",
                 "execution_branch",
                 "execution_path",
+                "evidence_ref",
                 "status",
             }
             if (
@@ -6631,22 +6645,25 @@ class ServiceEngine:
                     and reconciliation[field]
                     for field in required
                 )
+                or not _is_git_identity(reconciliation.get("worker_checkpoint"))
             ):
                 raise WorkflowBlockedError(
                     "reconciliation dependency identity is invalid"
                 )
-            if reconciliation["ticket_id"] == ticket_id or reconciliation[
-                "execution_id"
-            ] == execution_id:
+            reconciliation_ownership = (
+                ("ticket_id", ticket_id),
+                ("execution_id", execution_id),
+                ("worker_checkpoint", checkpoint),
+                ("execution_branch", branch),
+                ("execution_path", path),
+            )
+            if any(
+                reconciliation[field] == expected
+                for field, expected in reconciliation_ownership
+            ):
                 if any(
                     reconciliation[field] != expected
-                    for field, expected in (
-                        ("ticket_id", ticket_id),
-                        ("execution_id", execution_id),
-                        ("worker_checkpoint", checkpoint),
-                        ("execution_branch", branch),
-                        ("execution_path", path),
-                    )
+                    for field, expected in reconciliation_ownership
                 ):
                     raise WorkflowBlockedError(
                         "reconciliation dependency contradicts accepted execution"
@@ -6686,7 +6703,11 @@ class ServiceEngine:
                 retry.get("stale_execution_id"),
                 retry.get("fresh_execution_id"),
             }
-            if retry["ticket_id"] == ticket_id or execution_id in retry_ids:
+            if (
+                retry["ticket_id"] == ticket_id
+                or execution_id in retry_ids
+                or retry["worker_checkpoint"] == checkpoint
+            ):
                 raise WorkflowBlockedError(
                     "accepted execution has an automatic retry dependency"
                 )
@@ -6720,7 +6741,10 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration dependency identity is invalid"
                 )
-            if pending["ticket_id"] == ticket_id:
+            if (
+                pending["ticket_id"] == ticket_id
+                or pending["checkpoint"] == checkpoint
+            ):
                 if pending["checkpoint"] != checkpoint:
                     raise WorkflowBlockedError(
                         "accepted integration dependency contradicts accepted execution"
