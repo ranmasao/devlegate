@@ -1466,6 +1466,54 @@ def test_workspace_cleanup_retains_candidate_owned_runtime_dependencies(
         engine._assert_cleanup_has_no_execution_dependency(report)
 
 
+def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    report = engine._accepted_execution_report("T-1")
+    original_validate = ExecutionWorkspaceManager._validate_existing
+    admitted = False
+
+    def admit_candidate(*args, **kwargs):
+        nonlocal admitted
+        if not admitted:
+            admitted = True
+            engine._state.update(
+                {
+                    "phase": "agent_running",
+                    "execution_ticket_id": report.ticket_id,
+                    "execution_id": report.execution_id,
+                    "execution_branch": report.execution_branch,
+                    "execution_path": report.execution_path,
+                }
+            )
+        return original_validate(*args, **kwargs)
+
+    monkeypatch.setattr(ExecutionWorkspaceManager, "_validate_existing", admit_candidate)
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "blocked"
+    assert result["decisions"][0]["reason"] == "accepted execution is still active"
+    assert workspace.path.is_dir()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+
+
 def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(
     tmp_path,
 ):
