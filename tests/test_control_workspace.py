@@ -1245,6 +1245,8 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
             "phase": "agent_running",
             "execution_ticket_id": "T-2",
             "execution_id": "live-execution",
+            "execution_branch": "devlegate/work/T-2",
+            "execution_path": str(engine.execution_worktree_root / "work/T-2"),
             "worker_identity": {
                 "execution_id": "live-execution",
                 "pid": 1,
@@ -1267,6 +1269,58 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     result = engine.cleanup_workspaces(apply=True, limit=1)
 
     assert result["decisions"][0]["status"] == "retired"
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+
+
+def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    report = engine._accepted_execution_report("T-1")
+    engine._state.update(
+        {
+            "phase": "agent_running",
+            "execution_ticket_id": "T-2",
+            "execution_id": "live-execution",
+            "execution_branch": "devlegate/work/T-2",
+            "execution_path": str(engine.execution_worktree_root / "work/T-2"),
+            "worker_identity": {
+                "execution_id": "live-execution",
+                "pid": 1,
+                "pgid": 1,
+                "sid": 1,
+                "boot_id": "fixture",
+                "start_time": 1,
+            },
+            "reconciliation": {
+                "status": "resolved",
+                "ticket_id": "T-3",
+                "execution_id": "historical-execution",
+                "worker_checkpoint": "historical-checkpoint",
+                "execution_branch": "devlegate/work/T-3",
+                "execution_path": str(engine.execution_worktree_root / "work/T-3"),
+            },
+        }
+    )
+
+    engine._retire_integrated_workspace(
+        "T-1", report, git(control, "rev-parse", "HEAD").stdout.strip()
+    )
+
     assert not workspace.path.exists()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
 
