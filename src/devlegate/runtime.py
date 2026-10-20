@@ -6765,21 +6765,6 @@ class ServiceEngine:
                     raise WorkflowBlockedError(
                         "accepted integration dependency contradicts accepted execution"
                     )
-                ticket = self._ticket_store().by_id.get(ticket_id)
-                if ticket is not None and ticket.state == "done":
-                    published = self._published_accepted_execution_report(
-                        ticket_id, pending
-                    )
-                    if (
-                        published.execution_id == execution_id
-                        and published.execution_branch == branch
-                        and str(Path(published.execution_path).absolute()) == path
-                        and published.workspace_head == checkpoint
-                    ):
-                        return
-                    raise WorkflowBlockedError(
-                        "accepted integration dependency contradicts accepted execution"
-                    )
                 raise WorkflowBlockedError(
                     "accepted execution has a pending integration dependency"
                 )
