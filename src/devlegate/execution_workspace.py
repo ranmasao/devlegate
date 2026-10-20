@@ -402,9 +402,7 @@ class ExecutionWorkspaceManager:
             raise ExecutionWorkspaceError("execution worktree changed before removal")
         self._validate_submodule_paths(self.path)
         self._verify_submodules(self.path)
-        removed = _git(
-            self.repo, "worktree", "remove", "--force", str(self.path), check=False
-        )
+        removed = _git(self.repo, "worktree", "remove", str(self.path), check=False)
         if removed.returncode:
             raise ExecutionWorkspaceError(
                 f"cannot remove execution worktree {self.path}: "
