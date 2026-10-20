@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a897e3c97416a7d2a7762d225112f68c4458e472",
+  "conclusion": "completed",
+  "control_head": "502acfa61c004f94720ed2b5131c9599d2325307",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-092",
+  "execution_id": "4ffccaf9c2f9475da59c3237bd60530c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-092",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-092",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Refined cleanup dependency ownership to avoid checkpoint-only aliasing while retaining candidate-specific worker, retry, reconciliation, and integration protection. Restored the established accepted-integration crash-recovery boundary and added regression coverage for shared-checkpoint unrelated history and active candidate dependencies."
+  },
+  "workspace_head": "66aa00a8bac0e15d3f14518ffaaa10d776307880"
+}
