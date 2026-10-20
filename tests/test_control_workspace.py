@@ -1514,6 +1514,53 @@ def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
 
 
+def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    original_validate = ExecutionWorkspaceManager._validate_existing
+    requeued = False
+
+    def requeue_candidate(*args, **kwargs):
+        nonlocal requeued
+        if not requeued:
+            requeued = True
+            monkeypatch.setattr(
+                engine,
+                "_ticket_store",
+                lambda: SimpleNamespace(
+                    by_id={"T-1": SimpleNamespace(state="review")}
+                ),
+            )
+        return original_validate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ExecutionWorkspaceManager, "_validate_existing", requeue_candidate
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "blocked"
+    assert result["decisions"][0]["reason"] == "ticket is not durably done"
+    assert workspace.path.is_dir()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+
+
 def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(
     tmp_path,
 ):
