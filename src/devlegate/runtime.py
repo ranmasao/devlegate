@@ -6411,8 +6411,11 @@ class ServiceEngine:
                 report.execution_branch, report.workspace_head, report=report
             )
             return
-        self._revalidate_cleanup_retirement(report, manager, registration)
         workspace = manager._validate_existing(registration, report.workspace_head)
+        # Workspace validation can take time (notably with submodules). Check
+        # durable ownership and the exact Git observations again immediately
+        # before the destructive worktree removal.
+        self._revalidate_cleanup_retirement(report, manager, registration)
         manager.retire(workspace, report.workspace_head)
         self._retire_execution_refs(
             report.execution_branch, report.workspace_head, report=report
@@ -7065,13 +7068,15 @@ class ServiceEngine:
                     "reason": "accepted integration proven",
                 }
                 if apply:
+                    workspace = manager._validate_existing(
+                        registration, report.workspace_head
+                    )
+                    # Revalidate after potentially slow workspace inspection,
+                    # directly before the destructive worktree removal.
                     self._revalidate_cleanup_retirement(
                         report, manager, registration
                     )
-                    manager.retire(
-                        manager._validate_existing(registration, report.workspace_head),
-                        report.workspace_head,
-                    )
+                    manager.retire(workspace, report.workspace_head)
                     self._revalidate_cleanup_retirement(report)
                     self._retire_execution_refs(
                         report.execution_branch,
