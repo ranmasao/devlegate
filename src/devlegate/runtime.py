@@ -787,6 +787,7 @@ class ServiceEngine:
         self._foreground_diagnostic_fingerprint: str | None = None
         self._iteration_diagnostic: str | None = None
         self._workspace_cleanup_observation_error: str | None = None
+        self._pending_integrated_cleanup: tuple[ExecutionReport, str] | None = None
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.RLock()
@@ -4301,6 +4302,7 @@ class ServiceEngine:
                 handled_todo_fingerprint=todo_fingerprint,
                 accepted_integration=None,
             )
+            self._finish_integrated_workspace_cleanup()
             self._publish_service_snapshot(lifecycle="ready", worker_running=False)
             self._refresh_published_status()
             _log(f"accepted ticket {pending_ticket} integrated")
@@ -4337,6 +4339,7 @@ class ServiceEngine:
                 handled_todo_fingerprint=todo_fingerprint,
                 accepted_integration=None,
             )
+            self._finish_integrated_workspace_cleanup()
             self._publish_service_snapshot(lifecycle="ready", worker_running=False)
             self._refresh_published_status()
             _log(f"accepted ticket {execution_plan.ticket_id} integrated")
@@ -6223,7 +6226,6 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "zero-delta accepted result is stale or product history changed"
                 )
-            self._retire_zero_delta_execution(report)
             pending = self._state.get("accepted_integration")
             expected_head = (
                 pending.get("control_predecessor", pending.get("control_head"))
@@ -6236,7 +6238,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration control identity is invalid"
                 )
-            return self._complete_accepted(ticket_id, expected_head)
+            control_head = self._complete_accepted(ticket_id, expected_head)
+            self._pending_integrated_cleanup = (report, control_head)
+            return control_head
 
         try:
             if product_head == checkpoint:
@@ -6330,13 +6334,23 @@ class ServiceEngine:
                 "accepted integration control identity is invalid"
             )
         control_head = self._complete_accepted(ticket_id, expected_head)
+        self._pending_integrated_cleanup = (report, control_head)
+        return control_head
+
+    def _finish_integrated_workspace_cleanup(self) -> None:
+        """Retire integration resources only after its durable dependency clears."""
+        pending = self._pending_integrated_cleanup
+        self._pending_integrated_cleanup = None
+        if pending is None:
+            return
+        report, control_head = pending
         cleanup = {
-            "ticket_id": ticket_id,
+            "ticket_id": report.ticket_id,
             "status": "retired",
             "reason": "accepted integration proven",
         }
         try:
-            self._retire_integrated_workspace(ticket_id, report, control_head)
+            self._retire_integrated_workspace(report.ticket_id, report, control_head)
         except (
             ExecutionWorkspaceError,
             ExecutionReportError,
@@ -6350,18 +6364,17 @@ class ServiceEngine:
             # Publication is already durable. Workspace retention is optional and
             # must never make an accepted integration pending again.
             cleanup = {
-                "ticket_id": ticket_id,
+                "ticket_id": report.ticket_id,
                 "status": "blocked",
                 "reason": str(error) or error.__class__.__name__,
             }
             _log(
-                f"workspace cleanup blocked for {ticket_id}: {cleanup['reason']}"
+                f"workspace cleanup blocked for {report.ticket_id}: {cleanup['reason']}"
             )
         # Keep this per-ticket event separate from the aggregate inventory
         # consumed by `devlegate clean`; the next owner pass may still have a
         # large backlog after this integration.
         self._state["workspace_cleanup_event"] = cleanup
-        return control_head
 
     def _retire_integrated_workspace(
         self, ticket_id: str, report: ExecutionReport, integration_head: str
@@ -10085,6 +10098,8 @@ class ServiceEngine:
 
     def recovery_save_state(self, state: str, **values: object) -> None:
         self._save_state(state, **values)
+        if values.get("accepted_integration", _UNSET) is None:
+            self._finish_integrated_workspace_cleanup()
 
     def recovery_worker_observation(self, identity) -> str:
         return self._workers.observe(identity)

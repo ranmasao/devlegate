@@ -132,7 +132,7 @@ def test_accepted_ticket_is_fast_forward_integrated_and_completed(
 def test_done_cleanup_recovery_after_process_loss_before_state_clear(
     tmp_path, monkeypatch
 ):
-    """Published evidence must recover after all disposable resources are gone."""
+    """Replay clears the integration dependency before retiring its resources."""
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -170,11 +170,12 @@ def test_done_cleanup_recovery_after_process_loss_before_state_clear(
         run_test_iteration(engine)
 
     assert engine._state.get("accepted_integration", {}).get("ticket_id") == "T-1"
-    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") is None
-    assert (
-        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1").stdout
-        == ""
-    )
+    execution_path = engine.execution_worktree_root / "work" / "T-1"
+    assert execution_path.is_dir()
+    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") is not None
+    assert git(
+        working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout
 
     restarted = Devlegate(config)
     assert restarted._state.get("accepted_integration", {}).get("ticket_id") == "T-1"
@@ -182,6 +183,12 @@ def test_done_cleanup_recovery_after_process_loss_before_state_clear(
     assert restarted._state.get("accepted_integration") is None
     assert (working / "implementation.txt").is_file()
     assert (control / "kanban/done/T-1.md").is_file()
+    assert not execution_path.exists()
+    assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") is None
+    assert (
+        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1").stdout
+        == ""
+    )
 
 
 def test_hosted_cleanup_recovers_after_published_done_before_retirement(
