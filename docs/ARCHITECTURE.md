@@ -367,6 +367,15 @@ uses proven fast-forward ancestry only. Devlegate does not automatically rebase,
 merge conflicting histories, resolve conflicts, or perform destructive
 reconciliation.
 
+Accepted-integration state preserves `control_head` as the immutable execution
+admission identity. Before moving an accepted ticket to done, the service
+persists a separately validated `control_predecessor`; the control transition
+is then committed and published with a lease for that exact predecessor. A
+restart re-observes the remote and replays only that exact transition. A newer
+control descendant is eligible only when the accepted ticket and its execution
+evidence are unchanged and the ticket remains eligible; divergent history,
+ticket or evidence changes, and ambiguous publication remain blocked.
+
 ## Worker Boundary
 
 Workers edit implementation files and return a result or claim. Devlegate owns:
