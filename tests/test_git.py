@@ -218,6 +218,46 @@ def test_resolve_ref_commit_refuses_peeled_or_changed_identity(tmp_path):
         git.resolve_ref_commit(tmp_path, reference, runner=inconsistent_runner)
 
 
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    [(0, True), (1, False)],
+)
+def test_ref_exists_uses_show_ref_status_not_localized_diagnostics(
+    tmp_path, returncode, expected
+):
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        return subprocess.CompletedProcess([], returncode, "", "localized diagnostic")
+
+    assert git.ref_exists(
+        tmp_path, "refs/heads/devlegate/control", runner=fake_runner
+    ) is expected
+    assert calls == [
+        (
+            tmp_path,
+            (
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/heads/devlegate/control",
+            ),
+            False,
+        )
+    ]
+
+
+def test_ref_exists_preserves_show_ref_observation_errors(tmp_path):
+    def fake_runner(_cwd, *_args, **_kwargs):
+        return subprocess.CompletedProcess([], 128, "", "localized repository error")
+
+    with pytest.raises(git.GitObservationError, match="localized repository error"):
+        git.ref_exists(
+            tmp_path, "refs/heads/devlegate/control", runner=fake_runner
+        )
+
+
 def test_history_changes_collects_commits_and_paths_in_one_observation(tmp_path):
     calls = []
     first = "a" * 40

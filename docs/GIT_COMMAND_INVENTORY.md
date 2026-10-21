@@ -18,11 +18,12 @@ the service runner, so owner and shutdown enforcement remain in force.
 
 | Operation | Executed command and actual effect | Preconditions and error boundary |
 | --- | --- | --- |
+| `ref_exists` | `show-ref --verify --quiet ref`; Tier 1 exact local-ref observation | Status 0 is present, status 1 is absent, and every other status is an observation error; localized diagnostics are not parsed. |
 | `create_ref_if_absent` | `update-ref ref new ""`; Tier 3 local ref write | Caller observed absence; nonzero is a race and is re-observed. |
 | `compare_and_swap_ref` | `update-ref ref new expected-old`; Tier 3 local ref write | Caller observed the expected old object; nonzero is never treated as success. |
 | `update_ref` | `update-ref ref new`; Tier 3 local ref write | Only idempotent recovery/disposition paths use this intentionally unguarded operation. |
 | `fetch_ref` | `fetch [--prune] remote ref`; Tier 3 remote read plus local object/tracking-ref writes | Failure is transport failure, never ref absence. |
-| `push_refs` | `push options remote refspecs`; Tier 3 remote write | Caller supplies the exact lease and re-observes the remote tip. |
+| `push_refs` | `push options remote refspecs`; Tier 3 remote write | Caller supplies the exact lease and re-observes the remote tip. Fresh control publication leases against absence so a ref created after observation is not overwritten. |
 | `merge_fast_forward` | `merge --ff-only ref`; Tier 3 local worktree/ref write | Caller has validated ancestry and, where needed, a durable pending stage. |
 | `add_all` / `commit` | `add option` / `commit -m message`; Tier 3 local index/history writes | Control lifecycle state is validated before this transaction. |
 | `hash_object` | `hash-object -w --stdin`; Tier 3 local object-store write | Payload is complete before its disposition/evidence ref is published. |

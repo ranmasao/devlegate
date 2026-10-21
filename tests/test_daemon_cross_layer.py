@@ -121,7 +121,12 @@ def test_control_init_attach_trace_covers_full_runtime_path(tmp_path, monkeypatc
         ("ls-remote", "origin", "refs/heads/devlegate/control"),
         ("fetch", "origin", "devlegate/control"),
         ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
-        ("rev-parse", "--verify", "refs/heads/devlegate/control"),
+        (
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/devlegate/control",
+        ),
         (
             "worktree",
             "add",
@@ -150,11 +155,17 @@ def test_control_init_bootstrap_trace_covers_full_runtime_path(
 
     monkeypatch.setattr(runtime, "_git", traced_git)
     result = engine.control_init_result()
+    control_head = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
     assert result["result"] == "initialized_new_control_plane"
     assert trace == [
         ("ls-remote", "origin", "refs/heads/devlegate/control"),
-        ("rev-parse", "--verify", "refs/heads/devlegate/control"),
+        (
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/devlegate/control",
+        ),
         (
             "worktree",
             "add",
@@ -165,9 +176,254 @@ def test_control_init_bootstrap_trace_covers_full_runtime_path(
         ),
         ("add", "--all"),
         ("commit", "-m", "Initialize Devlegate control plane"),
-        ("push", "origin", "HEAD:refs/heads/devlegate/control"),
+        ("rev-parse", "--verify", "refs/heads/devlegate/control^{commit}"),
+        (
+            "push",
+            "--force-with-lease=refs/heads/devlegate/control:",
+            "origin",
+            f"{control_head}:refs/heads/devlegate/control",
+        ),
         ("fetch", "origin", "devlegate/control"),
+        (
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/devlegate/control^{commit}",
+        ),
     ]
+
+
+def test_control_init_is_idempotent_and_preserves_product_checkout(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    product_branch = git(working, "branch", "--show-current").stdout.strip()
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    first = engine.control_init_result()
+    second = engine.control_init_result()
+
+    assert first["result"] == "initialized_new_control_plane"
+    assert second["result"] == "already_attached"
+    assert git(working, "branch", "--show-current").stdout.strip() == product_branch
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_rejects_local_only_control_ref_without_product_mutation(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    git(working, "branch", "devlegate/control", "HEAD")
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(
+        DevlegateError, match="exists while the remote branch is absent"
+    ):
+        engine.control_init_result()
+
+    assert not engine.control_worktree.exists()
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_transport_failure_is_observation_error_without_mutation(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    git(working, "remote", "set-url", "origin", tmp_path / "unavailable.git")
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(DevlegateError, match="cannot observe remote ref"):
+        engine.control_init_result()
+
+    assert not engine.control_worktree.exists()
+    assert (
+        runtime._git(
+            working,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/devlegate/control",
+            check=False,
+        ).returncode
+        == 1
+    )
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_resumes_registered_unborn_control_worktree(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    engine.control_worktree.parent.mkdir(parents=True)
+    git(
+        working,
+        "worktree",
+        "add",
+        "--orphan",
+        "-b",
+        engine.control_branch,
+        engine.control_worktree,
+    )
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    result = engine.control_init_result()
+
+    assert result["result"] == "initialized_new_control_plane"
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_retries_rejected_publication_with_absent_ref_lease(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    hook = tmp_path / "remote.git/hooks/pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(DevlegateError, match="cannot publish initial control branch"):
+        engine.control_init_result()
+
+    assert engine.control_worktree.is_dir()
+    assert (
+        runtime._git(
+            working,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+            check=False,
+        ).stdout
+        == ""
+    )
+    hook.unlink()
+    result = engine.control_init_result()
+
+    assert result["result"] == "initialized_new_control_plane"
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_rejects_incomplete_committed_partial_skeleton(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    engine.control_worktree.parent.mkdir(parents=True)
+    git(
+        working,
+        "worktree",
+        "add",
+        "--orphan",
+        "-b",
+        engine.control_branch,
+        engine.control_worktree,
+    )
+    incomplete = engine.control_worktree / "workflow/backlog"
+    incomplete.mkdir(parents=True)
+    (incomplete / ".gitkeep").touch()
+    git(engine.control_worktree, "add", "--all")
+    git(engine.control_worktree, "commit", "-m", "incomplete control")
+
+    with pytest.raises(DevlegateError, match="complete workflow skeleton"):
+        engine.control_init_result()
+
+    assert (
+        runtime._git(
+            working,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+            check=False,
+        ).stdout
+        == ""
+    )
+
+
+def test_control_init_does_not_overwrite_ref_created_after_absence_observation(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    bare = tmp_path / "remote.git"
+    competing_head = git(bare, "rev-parse", "refs/heads/main").stdout.strip()
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    original_git = runtime._git
+    inserted = False
+
+    def racing_git(repo, *args, check=True):
+        nonlocal inserted
+        if args[:1] == ("push",) and not inserted:
+            inserted = True
+            git(
+                bare,
+                "update-ref",
+                "refs/heads/devlegate/control",
+                competing_head,
+                "",
+            )
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", racing_git)
+    with pytest.raises(DevlegateError, match="cannot publish initial control branch"):
+        engine.control_init_result()
+
+    assert inserted
+    assert (
+        git(bare, "rev-parse", "refs/heads/devlegate/control").stdout.strip()
+        == competing_head
+    )
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == competing_head
+    assert git(working, "status", "--porcelain").stdout == ""
+
+
+def test_control_init_detects_remote_replacement_during_refresh(
+    tmp_path, monkeypatch
+):
+    working, config, _state = fresh_control_fixture(tmp_path)
+    bare = tmp_path / "remote.git"
+    competing_head = git(bare, "rev-parse", "refs/heads/main").stdout.strip()
+    monkeypatch.chdir(working)
+    engine = ServiceEngine(config)
+    original_git = runtime._git
+    replaced = False
+
+    def racing_git(repo, *args, check=True):
+        nonlocal replaced
+        if args[:1] == ("fetch",) and not replaced:
+            replaced = True
+            git(
+                bare,
+                "update-ref",
+                "refs/heads/devlegate/control",
+                competing_head,
+            )
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime, "_git", racing_git)
+    with pytest.raises(DevlegateError, match="changed during refresh"):
+        engine.control_init_result()
+
+    assert replaced
+    assert (
+        git(bare, "rev-parse", "refs/heads/devlegate/control").stdout.strip()
+        == competing_head
+    )
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == competing_head
+    assert git(working, "status", "--porcelain").stdout == ""
 
 
 def test_drop_rejects_live_or_ambiguous_execution_state(tmp_path, monkeypatch):
