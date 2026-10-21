@@ -2442,6 +2442,38 @@ def test_malformed_review_feedback_blocks_rework_before_worker_launch(
     assert devlegate._state["phase"] == "idle"
 
 
+def test_independently_published_historical_review_is_injected(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    prompts = []
+
+    def worker(workspace, prompt, **_kwargs):
+        prompts.append(prompt)
+        (workspace.path / f"attempt-{len(prompts)}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    feedback = "Historical review: preserve all five submodule cleanup invariants."
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(f"# Curator review\n\n{feedback}\n")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "publish independent historical review")
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "return historical review for rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    assert run_test_iteration(devlegate) == 0
+    assert len(prompts) == 2
+    assert feedback in prompts[1]
+    assert "## Current Review Feedback" in prompts[1]
+
+
 def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

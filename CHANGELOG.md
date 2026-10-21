@@ -10,6 +10,17 @@ release are not separate product changes.
 Development is underway on `release/0.5.7`. Changes will be recorded here as
 features and fixes are integrated; no release date has been scheduled.
 
+### Added
+
+- Added provenance-bound curator review feedback to REWORK worker prompts,
+  private exact-prompt diagnostics, and safe managed role-template upgrades.
+
+### Fixed
+
+- Preserved admitted review feedback across restart and resume, rejected stale
+  or malformed review bindings before worker launch, and retained compatible
+  independently published historical reviews without changing ticket specs.
+
 ## 0.5.6 -- 2026-10-13
 
 Safer lifecycle recovery and complete distribution proofs.

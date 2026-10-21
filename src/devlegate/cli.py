@@ -2977,6 +2977,10 @@ def main() -> int:
             )
             return 0
         if args.command == "upgrade-templates":
+            if not args.check and _healthy_service(env_file) is not None:
+                raise DevlegateError(
+                    "stop the running service before upgrading managed templates"
+                )
             value = devlegate.upgrade_templates_result(args.check)
             value = {**value, "command": "upgrade-templates"}
             emit(

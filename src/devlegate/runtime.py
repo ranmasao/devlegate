@@ -124,6 +124,7 @@ from devlegate.recovery_workspace import (
 from devlegate.review_provenance import (
     ReviewProvenanceError,
     resolve_rework_review,
+    restore_review_binding,
 )
 from devlegate.runtime_locator import (
     RuntimeLocator,
@@ -3653,6 +3654,36 @@ class ServiceEngine:
             raise DevlegateError(
                 "invalid state: execution remote revision identity is invalid"
             )
+        rework = state.get("rework_provenance")
+        if rework is not None:
+            if not isinstance(rework, dict):
+                raise DevlegateError("invalid state: rework provenance is malformed")
+            ticket_id = state.get("execution_ticket_id")
+            previous_execution = rework.get("previous_execution_id")
+            previous_checkpoint = rework.get("previous_report_checkpoint")
+            previous_control = rework.get("previous_control_head")
+            if not all(
+                isinstance(item, str)
+                for item in (
+                    ticket_id,
+                    previous_execution,
+                    previous_checkpoint,
+                    previous_control,
+                )
+            ):
+                raise DevlegateError(
+                    "invalid state: rework execution binding is incomplete"
+                )
+            try:
+                restore_review_binding(
+                    rework.get("review"),
+                    ticket_id=ticket_id,
+                    execution_id=previous_execution,
+                    checkpoint=previous_checkpoint,
+                    control_head=previous_control,
+                )
+            except ReviewProvenanceError as error:
+                raise DevlegateError(f"invalid state: {error}") from error
 
     def _save_state(
         self,
@@ -4566,8 +4597,21 @@ class ServiceEngine:
             )
             if not isinstance(execution_id, str) or not execution_id:
                 raise DevlegateError("invalid persisted execution identity")
-            rework_provenance = None
-            if not pending_agent_execution:
+            rework_provenance = (
+                self._state.get("rework_provenance")
+                if authorization is not None
+                and (
+                    authorization.is_automatic_resume
+                    or authorization.is_explicit_retry
+                    or authorization.is_forced_retry
+                )
+                else None
+            )
+            if rework_provenance is not None and not isinstance(
+                rework_provenance, dict
+            ):
+                raise WorkflowBlockedError("persisted rework provenance is malformed")
+            if not pending_agent_execution and rework_provenance is None:
                 try:
                     reports = ExecutionReportStore(self.control_worktree).list(
                         selected_ticket.id
@@ -4722,35 +4766,40 @@ class ServiceEngine:
             execution_remote_head = self._execution_remote_head(workspace.branch)
         review_feedback = None
         review_source = None
+        legacy_rework = False
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict):
-            review = rework.get("review")
-            if isinstance(review, dict):
-                content = review.get("content")
-                path = review.get("path")
-                digest = review.get("sha256")
-                if content is not None and not isinstance(content, str):
-                    raise DevlegateError("persisted curator review content is invalid")
-                if content is not None:
-                    expected_path = (
-                        f"reviews/{selected_ticket.id}/"
-                        f"{rework.get('previous_execution_id')}.md"
-                    )
-                    actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                    if path != expected_path or digest != actual_digest:
-                        raise DevlegateError(
-                            "persisted curator review binding failed "
-                            "integrity validation"
-                        )
-                review_feedback = content
-                if isinstance(path, str) and isinstance(digest, str):
-                    review_source = f"{path} (sha256:{digest})"
+            previous_execution = rework.get("previous_execution_id")
+            previous_checkpoint = rework.get("previous_report_checkpoint")
+            previous_control = rework.get("previous_control_head")
+            if not all(
+                isinstance(item, str)
+                for item in (previous_execution, previous_checkpoint, previous_control)
+            ):
+                raise DevlegateError("persisted rework execution binding is invalid")
+            try:
+                review_binding = restore_review_binding(
+                    rework.get("review"),
+                    ticket_id=selected_ticket.id,
+                    execution_id=previous_execution,
+                    checkpoint=previous_checkpoint,
+                    control_head=previous_control,
+                )
+            except ReviewProvenanceError as error:
+                raise DevlegateError(str(error)) from error
+            review_feedback = review_binding.content
+            legacy_rework = review_binding.legacy and review_binding.content is None
+            if review_binding.path is not None and review_binding.sha256 is not None:
+                review_source = (
+                    f"{review_binding.path} (sha256:{review_binding.sha256})"
+                )
         prompt = build_worker_prompt(
             WorkerPromptInput(
                 assignment=selected_ticket.body,
                 directive=directive,
                 review_feedback=review_feedback,
                 review_source=review_source,
+                legacy_rework=legacy_rework,
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)
@@ -4820,12 +4869,8 @@ class ServiceEngine:
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
                     ),
-                    prompt_delivered_handler=lambda: (
-                        mark_worker_prompt_sent(prompt_artifact),
-                        _log(
-                            f"worker prompt sent: execution={execution_id} "
-                            f"sha256={prompt_digest}"
-                        ),
+                    prompt_delivered_handler=lambda: self._record_prompt_delivery(
+                        prompt_artifact, execution_id, prompt_digest
                     ),
                 )
             except WorkerAdmissionClosed:
@@ -5899,6 +5944,21 @@ class ServiceEngine:
             raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
         return evidence
 
+    def _record_prompt_delivery(
+        self, artifact: Path, execution_id: str, prompt_digest: str
+    ) -> None:
+        """Record successful stdin delivery separately from diagnostic I/O."""
+        _log(
+            f"worker prompt sent: execution={execution_id} sha256={prompt_digest}"
+        )
+        try:
+            mark_worker_prompt_sent(artifact)
+        except (OSError, ValueError) as error:
+            _log(
+                "worker prompt diagnostic update failed after successful delivery: "
+                f"execution={execution_id} error={error}"
+            )
+
     def _set_rework_preparation_stage(self, stage: str) -> None:
         rework = self._state.get("rework_provenance")
         if not isinstance(rework, dict):
@@ -6010,12 +6070,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError("reviewed execution lifecycle is ambiguous")
             if touched:
                 report = touched[0]
-                # Failed transport attempts and no-op automatic retries can
-                # publish lifecycle records but are not a completed worker
-                # generation that may be carried into ordinary rework.
-                if not report.result.egress_ok or (
-                    report.workspace_head == report.code_base_head
-                ):
+                # Failed transport attempts are not completed worker generations.
+                # A valid worker claim can still be reviewed after a no-op result.
+                if not report.result.egress_ok:
                     return None
                 return (
                     (commit, report)
