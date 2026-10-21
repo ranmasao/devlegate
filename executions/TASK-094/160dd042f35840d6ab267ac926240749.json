@@ -1,0 +1,29 @@
+{
+  "code_base_head": "1013cc6c2fe6f5d71f1ad28996becf60fcab4f37",
+  "conclusion": "completed",
+  "control_head": "3254e9e51da3cc9b0f35f3e3fcaa5bbad9400610",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-094",
+  "execution_id": "160dd042f35840d6ab267ac926240749",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-094",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-094",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added an immutable review-protocol adoption boundary so only proven pre-adoption feedback-free rework remains compatible, while new missing-feedback dispositions fail closed. Added safe initialization and idempotent existing-project migration through `devlegate control upgrade-review-protocol`, persisted boundary provenance across restart, and documented upgrade and rollback behavior."
+  },
+  "workspace_head": "08a39dd431eff299d67ad988efabd242bd93d407"
+}
