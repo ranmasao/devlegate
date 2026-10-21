@@ -196,3 +196,6 @@ def test_bootstrap_control_preserves_publish_and_refresh_order(
 
     assert initialized["result"] == "initialized_new_control_plane"
     assert trace == ["worktree-add", "add", "commit", "push", "refresh"]
+    assert (worktree / "reviews/.devlegate-review-v1").read_text() == (
+        "devlegate-review-protocol-v1\n"
+    )

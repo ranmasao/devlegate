@@ -31,6 +31,7 @@ from devlegate.control_git_workflow import (
     attach_existing_control,
     bootstrap_control,
     sync_control,
+    upgrade_review_protocol,
 )
 from devlegate.execution_provenance import (
     ExecutionProvenanceError,
@@ -3177,6 +3178,28 @@ class ServiceEngine:
         }
         print(f"{messages[result['result']]}: {result['control_worktree']}")
         return 0
+
+    def control_upgrade_review_protocol_result(self) -> dict[str, object]:
+        """Adopt review-v1 only while no execution generation is admitted."""
+        if self._state.get("phase") != "idle":
+            raise DevlegateError(
+                "cannot upgrade the review protocol while an execution is admitted"
+            )
+        try:
+            self._validate_control_worktree()
+            return upgrade_review_protocol(
+                control_worktree=self.control_worktree,
+                control_branch=self.control_branch,
+                remote_name=self.remote_name,
+                runner=self._git_runtime,
+            )
+        except (
+            ControlGitWorkflowError,
+            GitObservationError,
+            GitAncestryError,
+            WorkflowBlockedError,
+        ) as error:
+            raise DevlegateError(str(error)) from error
 
     def _probe_state_access(self) -> None:
         self._runtime_store.probe()

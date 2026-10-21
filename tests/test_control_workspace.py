@@ -2442,6 +2442,82 @@ def test_malformed_review_feedback_blocks_rework_before_worker_launch(
     assert devlegate._state["phase"] == "idle"
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_post_adoption_feedback_free_rework_fails_closed(
+    tmp_path, monkeypatch, deferred
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    migrated = invoke(
+        working, "control", "upgrade-review-protocol", config=config
+    )
+    assert migrated.returncode == 0, migrated.stderr
+    assert "Review protocol upgraded" in migrated.stdout
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    destination = "kanban/backlog/T-1.md" if deferred else "kanban/todo/T-1.md"
+    git(control, "mv", "kanban/review/T-1.md", destination)
+    git(control, "commit", "-m", "feedback-free disposition")
+    if deferred:
+        git(control, "mv", destination, "kanban/todo/T-1.md")
+        git(control, "commit", "-m", "schedule deferred rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    with pytest.raises(
+        WorkflowBlockedError, match="missing for a post-adoption rework"
+    ):
+        run_test_iteration(devlegate)
+    assert calls == 1
+    assert devlegate._state["phase"] == "idle"
+
+
+def test_pre_adoption_feedback_free_rework_has_proven_legacy_boundary(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    prompts = []
+
+    def worker(workspace, prompt, **_kwargs):
+        prompts.append(prompt)
+        (workspace.path / f"attempt-{len(prompts)}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "historical feedback-free disposition")
+    git(control, "push", "origin", "devlegate/control")
+    migrated = invoke(
+        working, "control", "upgrade-review-protocol", config=config
+    )
+    assert migrated.returncode == 0, migrated.stderr
+
+    assert run_test_iteration(devlegate) == 0
+    assert len(prompts) == 2
+    assert "## Current Review Feedback" not in prompts[1]
+    review = devlegate._state.get("rework_provenance", {}).get("review", {})
+    assert review.get("legacy") is True
+    assert len(review.get("legacy_boundary", "")) == 40
+    restarted = Devlegate(config)
+    restored = restarted._state.get("rework_provenance", {}).get("review", {})
+    assert restored == review
+
+
 def test_forged_newer_completed_report_blocks_rework_before_worker_launch(
     tmp_path, monkeypatch
 ):
@@ -2584,7 +2660,21 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     control = next((state / "worktrees").glob("*/control"))
     execution = next((state / "worktrees").glob("*/work/T-1"))
     previous = git(execution, "rev-parse", "HEAD").stdout.strip()
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        "Preserve the reviewed implementation while rebasing it.\n"
+    )
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
     git(control, "commit", "-m", "return ticket for rework")
     git(control, "push", "origin", "devlegate/control")
 

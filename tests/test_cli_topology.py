@@ -6,6 +6,7 @@
 
 from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
+from devlegate.execution_result import ExecutionReportStore
 
 @pytest.mark.parametrize("output", ["--json", "--yaml"])
 def test_restart_rejects_output_formats(output):
@@ -1193,6 +1194,24 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         assert "waiting for review" in plan["reason"]
 
         review = engine.control_worktree / "kanban/review/T-1.md"
+        report = ExecutionReportStore(engine.control_worktree).list("T-1")[0]
+        artifact = (
+            engine.control_worktree
+            / "reviews"
+            / "T-1"
+            / f"{report.execution_id}.md"
+        )
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text(
+            "<!-- devlegate-review-v1\n"
+            "ticket: T-1\n"
+            f"execution: {report.execution_id}\n"
+            f"checkpoint: {report.workspace_head}\n"
+            f"control: {report.control_head}\n"
+            "disposition: rework\n"
+            "-->\n"
+            "Re-run the recovered generation through the review barrier.\n"
+        )
         review.rename(engine.control_worktree / "kanban/todo/T-1.md")
         git(engine.control_worktree, "add", "-A")
         git(engine.control_worktree, "commit", "-m", "return T-1 to todo")

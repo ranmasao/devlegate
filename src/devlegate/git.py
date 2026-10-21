@@ -602,10 +602,17 @@ def common_dir(
 def working_tree_status(
     cwd: Path,
     *,
+    include_all_untracked: bool = False,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str:
     """Return porcelain status text, failing on an unreadable checkout."""
-    result = runner(cwd, "status", "--porcelain", check=False)
+    result = runner(
+        cwd,
+        "status",
+        "--porcelain",
+        *(["--untracked-files=all"] if include_all_untracked else []),
+        check=False,
+    )
     if result.returncode:
         raise GitObservationError(
             "cannot observe working tree: "

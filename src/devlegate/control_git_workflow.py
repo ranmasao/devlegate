@@ -20,17 +20,25 @@ from devlegate.git import (
     add_all,
     add_worktree,
     branch_name,
+    commit_changes,
+    commit_range,
     common_dir,
     fetch_ref,
+    history_changes,
     is_ancestor,
     merge_fast_forward,
     push_refs,
     ref_exists,
     resolve_commit,
+    working_tree_status,
     worktree_paths,
 )
 from devlegate.git import (
     commit as git_commit,
+)
+from devlegate.review_provenance import (
+    REVIEW_PROTOCOL_MARKER,
+    REVIEW_PROTOCOL_MARKER_CONTENT,
 )
 
 
@@ -252,6 +260,9 @@ def bootstrap_control(
         directory = control_worktree / configured_path
         directory.mkdir(parents=True, exist_ok=True)
         (directory / ".gitkeep").touch()
+    marker = control_worktree / REVIEW_PROTOCOL_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(REVIEW_PROTOCOL_MARKER_CONTENT, encoding="ascii")
     added = add_all(control_worktree, runner=runner)
     if added.returncode:
         raise ControlGitWorkflowError(
@@ -283,3 +294,186 @@ def bootstrap_control(
         "result": "initialized_new_control_plane",
         "control_worktree": str(control_worktree),
     }
+
+
+def upgrade_review_protocol(
+    *,
+    control_worktree: Path,
+    control_branch: str,
+    remote_name: str,
+    runner: Callable[..., Any],
+) -> dict[str, object]:
+    """Publish or finish publishing the immutable review-v1 adoption marker."""
+    try:
+        if branch_name(control_worktree, runner=runner) != control_branch:
+            raise ControlGitWorkflowError(
+                f"control worktree is not on configured branch {control_branch!r}"
+            )
+        fetched = fetch_ref(
+            control_worktree, remote_name, control_branch, runner=runner
+        )
+        if fetched.returncode:
+            raise ControlGitWorkflowError(
+                "cannot fetch control branch before review protocol upgrade: "
+                f"{fetched.stderr.strip()}"
+            )
+        local_head = resolve_commit(control_worktree, "HEAD", runner=runner)
+        remote_head = resolve_commit(
+            control_worktree, f"{remote_name}/{control_branch}", runner=runner
+        )
+        if local_head is None or remote_head is None:
+            raise ControlGitWorkflowError(
+                "cannot resolve control revisions for review protocol upgrade"
+            )
+        marker = control_worktree / REVIEW_PROTOCOL_MARKER
+        status = working_tree_status(
+            control_worktree, include_all_untracked=True, runner=runner
+        )
+        marker_history = history_changes(
+            control_worktree,
+            local_head,
+            REVIEW_PROTOCOL_MARKER,
+            runner=runner,
+        )
+        if marker.exists() or marker.is_symlink():
+            if marker.is_symlink() or not marker.is_file():
+                raise ControlGitWorkflowError(
+                    "review protocol marker is not a regular file"
+                )
+            if marker.read_text(encoding="ascii") != REVIEW_PROTOCOL_MARKER_CONTENT:
+                raise ControlGitWorkflowError("review protocol marker is malformed")
+            if marker_history:
+                if status:
+                    raise ControlGitWorkflowError("control working tree is dirty")
+                if len(marker_history) != 1 or marker_history[0][1] != (
+                    f"A\t{REVIEW_PROTOCOL_MARKER}",
+                ):
+                    raise ControlGitWorkflowError(
+                        "review protocol marker history is ambiguous or modified"
+                    )
+                publication = marker_history[0][0]
+                if local_head == remote_head:
+                    return {
+                        "result": "review_protocol_current",
+                        "control_worktree": str(control_worktree),
+                    }
+                ahead = commit_range(
+                    control_worktree,
+                    f"{remote_head}..{local_head}",
+                    reverse=True,
+                    runner=runner,
+                )
+                if (
+                    ahead != (publication,)
+                    or publication != local_head
+                    or commit_changes(
+                        control_worktree, publication, runner=runner
+                    )
+                    != (f"A\t{REVIEW_PROTOCOL_MARKER}",)
+                ):
+                    raise ControlGitWorkflowError(
+                        "local control history contains changes other than the "
+                        "unpublished review protocol marker"
+                    )
+                if not is_ancestor(
+                    control_worktree, remote_head, local_head, runner=runner
+                ):
+                    raise ControlGitWorkflowError(
+                        "local control history diverged during review protocol upgrade"
+                    )
+            elif status not in {
+                f"?? {REVIEW_PROTOCOL_MARKER}\n",
+                f"A  {REVIEW_PROTOCOL_MARKER}\n",
+            }:
+                raise ControlGitWorkflowError(
+                    "uncommitted review protocol marker has conflicting changes"
+                )
+            elif local_head != remote_head:
+                raise ControlGitWorkflowError(
+                    "control worktree changed before the review protocol marker "
+                    "was committed"
+                )
+            else:
+                staged = runner(
+                    control_worktree,
+                    "add",
+                    REVIEW_PROTOCOL_MARKER,
+                    check=False,
+                )
+                if staged.returncode:
+                    raise ControlGitWorkflowError(
+                        f"cannot stage review protocol marker: {staged.stderr.strip()}"
+                    )
+                committed = git_commit(
+                    control_worktree,
+                    "Adopt Devlegate review protocol v1",
+                    runner=runner,
+                )
+                if committed.returncode:
+                    raise ControlGitWorkflowError(
+                        "cannot commit review protocol marker: "
+                        f"{committed.stderr.strip()}"
+                    )
+                local_head = resolve_commit(
+                    control_worktree, "HEAD", runner=runner
+                )
+                if local_head is None:
+                    raise ControlGitWorkflowError(
+                        "cannot resolve review protocol marker commit"
+                    )
+        else:
+            if marker_history:
+                raise ControlGitWorkflowError(
+                    "review protocol marker was deleted or is unreadable"
+                )
+            if status:
+                raise ControlGitWorkflowError("control working tree is dirty")
+            if local_head != remote_head:
+                raise ControlGitWorkflowError(
+                    "control worktree is not synchronized with its remote; "
+                    "fast-forward it before upgrading the review protocol"
+                )
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(REVIEW_PROTOCOL_MARKER_CONTENT, encoding="ascii")
+            staged = runner(
+                control_worktree,
+                "add",
+                REVIEW_PROTOCOL_MARKER,
+                check=False,
+            )
+            if staged.returncode:
+                raise ControlGitWorkflowError(
+                    f"cannot stage review protocol marker: {staged.stderr.strip()}"
+                )
+            committed = git_commit(
+                control_worktree,
+                "Adopt Devlegate review protocol v1",
+                runner=runner,
+            )
+            if committed.returncode:
+                raise ControlGitWorkflowError(
+                    f"cannot commit review protocol marker: {committed.stderr.strip()}"
+                )
+            local_head = resolve_commit(control_worktree, "HEAD", runner=runner)
+            if local_head is None:
+                raise ControlGitWorkflowError(
+                    "cannot resolve review protocol marker commit"
+                )
+        pushed = push_refs(
+            control_worktree,
+            remote_name,
+            f"HEAD:refs/heads/{control_branch}",
+            runner=runner,
+        )
+        if pushed.returncode:
+            raise ControlGitWorkflowError(
+                "cannot publish review protocol marker; rerun the command after "
+                f"resolving the push failure: {pushed.stderr.strip()}"
+            )
+        return {
+            "result": "review_protocol_upgraded",
+            "control_worktree": str(control_worktree),
+            "control_head": local_head,
+        }
+    except (GitObservationError, GitAncestryError, OSError, UnicodeError) as error:
+        raise ControlGitWorkflowError(str(error)) from error
