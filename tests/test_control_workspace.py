@@ -2407,8 +2407,16 @@ def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
     assert len(ported_commits) == 2
 
 
-def test_malformed_review_feedback_blocks_rework_before_worker_launch(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("artifact_kind", "error"),
+    [
+        ("headerless", "malformed attribution header"),
+        ("malformed", "malformed attribution header"),
+        ("mismatched", "does not match the reviewed execution"),
+    ],
+)
+def test_unattributed_or_mismatched_review_blocks_before_worker_launch(
+    tmp_path, monkeypatch, artifact_kind, error
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2428,14 +2436,29 @@ def test_malformed_review_feedback_blocks_rework_before_worker_launch(
     report = ExecutionReportStore(control).list("T-1")[0]
     artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
     artifact.parent.mkdir(parents=True)
-    artifact.write_text("forged review without attribution\n")
+    if artifact_kind == "headerless":
+        content = "historical review without attribution\n"
+    elif artifact_kind == "malformed":
+        content = "<!-- devlegate-review-v1\nticket T-1\n-->\nFix it.\n"
+    else:
+        content = (
+            "<!-- devlegate-review-v1\n"
+            "ticket: T-1\n"
+            f"execution: {report.execution_id}\n"
+            f"checkpoint: {report.workspace_head}\n"
+            f"control: {'f' * 40}\n"
+            "disposition: rework\n"
+            "-->\n"
+            "Fix the reviewed implementation.\n"
+        )
+    artifact.write_text(content)
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
     git(control, "add", str(artifact.relative_to(control)))
     git(control, "commit", "-m", "publish malformed review")
     git(control, "push", "origin", "devlegate/control")
 
     with pytest.raises(
-        runtime_module.WorkflowBlockedError, match="malformed attribution header"
+        runtime_module.WorkflowBlockedError, match=error
     ):
         run_test_iteration(devlegate)
     assert calls == 1
@@ -2443,16 +2466,11 @@ def test_malformed_review_feedback_blocks_rework_before_worker_launch(
 
 
 @pytest.mark.parametrize("deferred", [False, True])
-def test_post_adoption_feedback_free_rework_fails_closed(
+def test_missing_review_artifact_fails_closed(
     tmp_path, monkeypatch, deferred
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
-    migrated = invoke(
-        working, "control", "upgrade-review-protocol", config=config
-    )
-    assert migrated.returncode == 0, migrated.stderr
-    assert "Review protocol upgraded" in migrated.stdout
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
     calls = 0
@@ -2475,25 +2493,26 @@ def test_post_adoption_feedback_free_rework_fails_closed(
     git(control, "push", "origin", "devlegate/control")
 
     with pytest.raises(
-        WorkflowBlockedError, match="missing for a post-adoption rework"
+        WorkflowBlockedError, match="curator review feedback is missing"
     ):
         run_test_iteration(devlegate)
     assert calls == 1
     assert devlegate._state["phase"] == "idle"
 
 
-def test_pre_adoption_feedback_free_rework_has_proven_legacy_boundary(
+def test_historical_marker_does_not_enable_feedback_free_rework(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    prompts = []
+    calls = 0
 
-    def worker(workspace, prompt, **_kwargs):
-        prompts.append(prompt)
-        (workspace.path / f"attempt-{len(prompts)}.txt").write_text("checkpoint\n")
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
@@ -2501,21 +2520,75 @@ def test_pre_adoption_feedback_free_rework_has_proven_legacy_boundary(
     control = next((state / "worktrees").glob("*/control"))
     git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
     git(control, "commit", "-m", "historical feedback-free disposition")
+    marker = control / "reviews/.devlegate-review-v1"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("devlegate-review-protocol-v1\n")
+    git(control, "add", str(marker.relative_to(control)))
+    git(control, "commit", "-m", "historical protocol marker")
     git(control, "push", "origin", "devlegate/control")
-    migrated = invoke(
-        working, "control", "upgrade-review-protocol", config=config
-    )
-    assert migrated.returncode == 0, migrated.stderr
 
+    with pytest.raises(
+        WorkflowBlockedError, match="curator review feedback is missing"
+    ):
+        run_test_iteration(devlegate)
+    assert calls == 1
+
+
+def test_old_pending_rework_without_binding_requires_external_disposition(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / f"attempt-{calls}.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
-    assert len(prompts) == 2
-    assert "## Current Review Feedback" not in prompts[1]
-    review = devlegate._state.get("rework_provenance", {}).get("review", {})
-    assert review.get("legacy") is True
-    assert len(review.get("legacy_boundary", "")) == 40
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        "Fix the reviewed implementation.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "return ticket for rework")
+    git(control, "push", "origin", "devlegate/control")
+    monkeypatch.setattr(
+        devlegate,
+        "_stop_before_admission",
+        lambda: devlegate._state.get("phase") == "agent_pending",
+    )
+    assert run_test_iteration(devlegate) == 0
+    assert devlegate._state["phase"] == "agent_pending"
+    assert isinstance(devlegate._state.get("rework_provenance"), dict)
+
+    old_state = dict(devlegate._state)
+    old_state.pop("rework_provenance")
+    devlegate._runtime_store.replace(old_state)
     restarted = Devlegate(config)
-    restored = restarted._state.get("rework_provenance", {}).get("review", {})
-    assert restored == review
+    monkeypatch.setattr(restarted._workers, "run", worker)
+
+    with pytest.raises(
+        WorkflowBlockedError, match="explicitly dispose.*outside the runtime"
+    ):
+        run_test_iteration(restarted)
+    assert calls == 1
 
 
 def test_forged_newer_completed_report_blocks_rework_before_worker_launch(
@@ -2567,7 +2640,7 @@ def test_forged_newer_completed_report_blocks_rework_before_worker_launch(
     assert devlegate._state["phase"] == "idle"
 
 
-def test_independently_published_historical_review_is_injected(tmp_path, monkeypatch):
+def test_independently_published_headerless_review_is_rejected(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2593,10 +2666,11 @@ def test_independently_published_historical_review_is_injected(tmp_path, monkeyp
     git(control, "commit", "-m", "return historical review for rework")
     git(control, "push", "origin", "devlegate/control")
 
-    assert run_test_iteration(devlegate) == 0
-    assert len(prompts) == 2
-    assert feedback in prompts[1]
-    assert "## Current Review Feedback" in prompts[1]
+    with pytest.raises(
+        WorkflowBlockedError, match="malformed attribution header"
+    ):
+        run_test_iteration(devlegate)
+    assert len(prompts) == 1
 
 
 def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatch):

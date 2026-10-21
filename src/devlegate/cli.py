@@ -2744,15 +2744,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Initialize or attach the separate workflow Git history.",
     )
     add_output_arguments(init_parser)
-    review_protocol_parser = control_commands.add_parser(
-        "upgrade-review-protocol",
-        help="adopt execution-bound curator review artifacts",
-        description=(
-            "Publish the immutable review protocol adoption boundary for an "
-            "existing control history."
-        ),
-    )
-    add_output_arguments(review_protocol_parser)
     return parser
 
 
@@ -3004,25 +2995,13 @@ def main() -> int:
             )
             return 0
         if args.command == "control":
-            if args.control_command == "init":
-                value = devlegate.control_init_result()
-                value = {**value, "command": "control init"}
-                control_messages = {
-                    "already_attached": "Control worktree already attached",
-                    "attached_existing_remote": "Control worktree attached",
-                    "initialized_new_control_plane": "Control plane initialized",
-                }
-            else:
-                if _healthy_service(env_file) is not None:
-                    raise DevlegateError(
-                        "stop the running service before upgrading the review protocol"
-                    )
-                value = devlegate.control_upgrade_review_protocol_result()
-                value = {**value, "command": "control upgrade-review-protocol"}
-                control_messages = {
-                    "review_protocol_current": "Review protocol is current",
-                    "review_protocol_upgraded": "Review protocol upgraded",
-                }
+            value = devlegate.control_init_result()
+            value = {**value, "command": "control init"}
+            control_messages = {
+                "already_attached": "Control worktree already attached",
+                "attached_existing_remote": "Control worktree attached",
+                "initialized_new_control_plane": "Control plane initialized",
+            }
             emit(
                 value,
                 args.output_format,

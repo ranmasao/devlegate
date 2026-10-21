@@ -25,7 +25,6 @@ class WorkerPromptInput:
     directive: WorkDirective
     review_feedback: str | None = None
     review_source: str | None = None
-    legacy_rework: bool = False
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -84,16 +83,8 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         sections.append(
             ("Current Review Feedback", f"Source: {source}\n\n{feedback}", True)
         )
-    elif (
-        prompt_input.directive is WorkDirective.REWORK
-        and not prompt_input.legacy_rework
-    ):
+    elif prompt_input.directive is WorkDirective.REWORK:
         raise ValueError("rework requires verified review feedback")
-    if prompt_input.legacy_rework and (
-        prompt_input.directive is not WorkDirective.REWORK
-        or prompt_input.review_feedback is not None
-    ):
-        raise ValueError("legacy rework must be feedback-free rework")
     return (
         "\n\n".join(
             f"## {title}\n{_fenced_content(value) if untrusted else value}"

@@ -17,7 +17,7 @@ from devlegate.worker_prompt import (
 
 def prompt(directive, assignment="Implement the parser.", **context):
     if directive is WorkDirective.REWORK and "review_feedback" not in context:
-        context["legacy_rework"] = True
+        context["review_feedback"] = "Fix the reviewed implementation."
     return build_worker_prompt(
         WorkerPromptInput(directive=directive, assignment=assignment, **context)
     )
@@ -174,7 +174,7 @@ def test_fresh_rejects_review_feedback():
         )
 
 
-def test_rework_without_feedback_requires_explicit_legacy_binding():
+def test_rework_without_feedback_fails_closed():
     with pytest.raises(ValueError, match="requires verified review feedback"):
         build_worker_prompt(
             WorkerPromptInput(
@@ -252,6 +252,7 @@ def test_untrusted_headings_cannot_create_owned_sections():
         "## Core Worker Contract",
         "## Work Directive",
         "## Assigned Work",
+        "## Current Review Feedback",
     ]
     assert untrusted_section(result, "Assigned Work") == malicious
 
@@ -267,8 +268,11 @@ def test_unknown_directive_fails_closed():
 def test_all_directives_use_one_stable_section_order(directive):
     result = prompt(directive)
 
-    assert [line for line in result.splitlines() if line.startswith("## ")] == [
+    expected = [
         "## Core Worker Contract",
         "## Work Directive",
         "## Assigned Work",
     ]
+    if directive is WorkDirective.REWORK:
+        expected.append("## Current Review Feedback")
+    assert [line for line in result.splitlines() if line.startswith("## ")] == expected

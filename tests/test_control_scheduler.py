@@ -44,9 +44,7 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     assert len(git(control, "rev-list", "--parents", "-n1", "HEAD").stdout.split()) == 1
     for state_name in ("backlog", "todo", "review", "accepted", "done"):
         assert (control / "workflow" / state_name / ".gitkeep").is_file()
-    assert (control / "reviews/.devlegate-review-v1").read_text() == (
-        "devlegate-review-protocol-v1\n"
-    )
+    assert not (control / "reviews/.devlegate-review-v1").exists()
     assert not (working / "workflow").exists()
     assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
     assert git(working, "ls-remote", "origin", "refs/heads/devlegate/control").stdout
@@ -80,7 +78,7 @@ def test_control_init_does_not_treat_remote_observation_failure_as_absence(tmp_p
     ).stdout
 
 
-def test_review_protocol_upgrade_recovers_uncommitted_marker_and_is_idempotent(
+def test_historical_review_protocol_marker_is_inert_and_upgrade_command_is_absent(
     tmp_path,
 ):
     working, config, state = control_fixture(tmp_path)
@@ -89,21 +87,20 @@ def test_review_protocol_upgrade_recovers_uncommitted_marker_and_is_idempotent(
     marker = control / "reviews/.devlegate-review-v1"
     marker.parent.mkdir(parents=True)
     marker.write_text("devlegate-review-protocol-v1\n")
+    git(control, "add", str(marker.relative_to(control)))
+    git(control, "commit", "-m", "historical review protocol marker")
+    marker.write_text("historically modified marker\n")
+    git(control, "add", str(marker.relative_to(control)))
+    git(control, "commit", "-m", "historical marker modification")
+    git(control, "push", "origin", "devlegate/control")
 
-    recovered = invoke(
-        working, "control", "upgrade-review-protocol", config=config
-    )
-    repeated = invoke(
-        working, "control", "upgrade-review-protocol", config=config
-    )
+    planned = invoke(working, "plan", "--json", config=config)
+    removed = invoke(working, "control", "upgrade-review-protocol", config=config)
 
-    assert recovered.returncode == 0, recovered.stderr
-    assert "Review protocol upgraded" in recovered.stdout
-    assert repeated.returncode == 0, repeated.stderr
-    assert "Review protocol is current" in repeated.stdout
-    assert git(control, "log", "--format=%s", "--", marker).stdout.splitlines() == [
-        "Adopt Devlegate review protocol v1"
-    ]
+    assert planned.returncode == 0, planned.stderr
+    assert json.loads(planned.stdout)["action"] == "run-worker"
+    assert removed.returncode == 2
+    assert "unknown command 'upgrade-review-protocol'" in removed.stderr
 
 def test_control_init_rejects_ambiguous_local_control_state(tmp_path):
     working, config, state = fresh_control_fixture(tmp_path)

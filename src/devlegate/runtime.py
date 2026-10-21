@@ -31,7 +31,6 @@ from devlegate.control_git_workflow import (
     attach_existing_control,
     bootstrap_control,
     sync_control,
-    upgrade_review_protocol,
 )
 from devlegate.execution_provenance import (
     ExecutionProvenanceError,
@@ -3179,28 +3178,6 @@ class ServiceEngine:
         print(f"{messages[result['result']]}: {result['control_worktree']}")
         return 0
 
-    def control_upgrade_review_protocol_result(self) -> dict[str, object]:
-        """Adopt review-v1 only while no execution generation is admitted."""
-        if self._state.get("phase") != "idle":
-            raise DevlegateError(
-                "cannot upgrade the review protocol while an execution is admitted"
-            )
-        try:
-            self._validate_control_worktree()
-            return upgrade_review_protocol(
-                control_worktree=self.control_worktree,
-                control_branch=self.control_branch,
-                remote_name=self.remote_name,
-                runner=self._git_runtime,
-            )
-        except (
-            ControlGitWorkflowError,
-            GitObservationError,
-            GitAncestryError,
-            WorkflowBlockedError,
-        ) as error:
-            raise DevlegateError(str(error)) from error
-
     def _probe_state_access(self) -> None:
         self._runtime_store.probe()
 
@@ -4622,11 +4599,14 @@ class ServiceEngine:
                 raise DevlegateError("invalid persisted execution identity")
             rework_provenance = (
                 self._state.get("rework_provenance")
-                if authorization is not None
-                and (
-                    authorization.is_automatic_resume
-                    or authorization.is_explicit_retry
-                    or authorization.is_forced_retry
+                if pending_agent_execution
+                or (
+                    authorization is not None
+                    and (
+                        authorization.is_automatic_resume
+                        or authorization.is_explicit_retry
+                        or authorization.is_forced_retry
+                    )
                 )
                 else None
             )
@@ -4634,6 +4614,22 @@ class ServiceEngine:
                 rework_provenance, dict
             ):
                 raise WorkflowBlockedError("persisted rework provenance is malformed")
+            if pending_agent_execution and rework_provenance is None:
+                try:
+                    pending_reports = ExecutionReportStore(self.control_worktree).list(
+                        selected_ticket.id
+                    )
+                except ExecutionReportError as error:
+                    raise WorkflowBlockedError(
+                        "cannot verify whether the persisted pending execution "
+                        "is rework"
+                    ) from error
+                if self._latest_reviewed_rework_report(pending_reports) is not None:
+                    raise WorkflowBlockedError(
+                        "persisted pending rework has no current review binding; "
+                        "explicitly dispose of this pre-protocol pending execution "
+                        "outside the runtime before scheduling more work"
+                    )
             if (
                 not pending_agent_execution
                 and rework_provenance is None
@@ -4796,7 +4792,6 @@ class ServiceEngine:
             execution_remote_head = self._execution_remote_head(workspace.branch)
         review_feedback = None
         review_source = None
-        legacy_rework = False
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict):
             previous_execution = rework.get("previous_execution_id")
@@ -4818,18 +4813,13 @@ class ServiceEngine:
             except ReviewProvenanceError as error:
                 raise DevlegateError(str(error)) from error
             review_feedback = review_binding.content
-            legacy_rework = review_binding.legacy and review_binding.content is None
-            if review_binding.path is not None and review_binding.sha256 is not None:
-                review_source = (
-                    f"{review_binding.path} (sha256:{review_binding.sha256})"
-                )
+            review_source = f"{review_binding.path} (sha256:{review_binding.sha256})"
         prompt = build_worker_prompt(
             WorkerPromptInput(
                 assignment=selected_ticket.body,
                 directive=directive,
                 review_feedback=review_feedback,
                 review_source=review_source,
-                legacy_rework=legacy_rework,
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)

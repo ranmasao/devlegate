@@ -83,7 +83,6 @@ service and run:
 devlegate upgrade-templates --check
 devlegate upgrade-templates
 devlegate render --check
-devlegate control upgrade-review-protocol
 ```
 
 The upgrade command uses a managed source-hash receipt and known historical
@@ -96,11 +95,9 @@ outputs. Files without that marker are intentional overrides and are not replace
 
 Review and accept the resulting project diff through the normal project process.
 To roll back, restore the previous project templates and generated role files from
-product Git and run the previous Devlegate runtime. The control-history adoption
-marker is intentionally immutable and remains in place across runtime rollback;
-do not delete it or rewrite control history. A previous runtime can ignore it, and
-a later v1 runtime will continue to require review artifacts for dispositions made
-after its publication.
+product Git and run the previous Devlegate runtime. Review-protocol migrations are
+not part of the runtime or CLI. Historical marker files can remain in control Git
+as inert data; do not rewrite control history to add, remove, or repair them.
 
 ## Project Decisions
 

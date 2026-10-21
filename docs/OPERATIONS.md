@@ -29,16 +29,16 @@ owns its documentation and decides how generated changes are accepted.
 
 A package install does not replace code already loaded by a running service.
 Upgrade the wheel or standalone executable, stop or checkpoint the service, run
-`devlegate upgrade-templates`, then run
-`devlegate control upgrade-review-protocol`. Review the project-side diff and
-restart the service. The control command publishes a one-time immutable boundary:
-feedback-free review dispositions strictly older than it retain legacy
-compatibility, while later dispositions must publish an execution-scoped review.
-The next worker launch then uses the upgraded packaged worker prompt and the
-corrected materialized Architect and Reviewer contracts. Use
+`devlegate upgrade-templates`, review the project-side diff, and restart the
+service. The next worker launch then uses the upgraded packaged worker prompt and
+the corrected materialized Architect and Reviewer contracts. Use
 `devlegate upgrade-templates --check` and `devlegate render --check` for read-only
 drift diagnostics. Customized project templates fail with manual merge guidance
 instead of being overwritten.
+
+Review-protocol migrations are external one-shot operations, not runtime or CLI
+features. Existing `reviews/.devlegate-review-v1` files are inert historical data:
+their presence, content, modification, or ancestry does not alter runtime behavior.
 
 ## Select A Project
 
@@ -203,11 +203,12 @@ For rework, the Reviewer publishes immutable feedback at
 `reviews/<ticket-id>/<execution-id>.md` with the `devlegate-review-v1` attribution
 header and moves the unchanged ticket from review to todo, optionally through
 backlog. Devlegate binds only that reviewed execution's exact artifact and injects
-it over worker stdin. Historical projects without artifacts are accepted only when
-Git proves an exact content-preserving review disposition that predates the
-immutable review-protocol adoption marker. A missing marker produces migration
-guidance, and malformed, conflicting, stale, or mismatched artifacts block worker
-launch.
+it over worker stdin. Missing, headerless, mutable, conflicting, stale, or
+mismatched artifacts block worker launch regardless of marker history. If an old
+pending REWORK has no valid current-protocol artifact, Devlegate does not infer
+feedback or start it as FRESH. Stop the service, preserve and inspect its workspace
+and evidence, then explicitly dispose of that pending generation outside the
+runtime before publishing a new, fully attributed review disposition.
 
 ## Decommissioning
 

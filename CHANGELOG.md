@@ -18,8 +18,11 @@ features and fixes are integrated; no release date has been scheduled.
 ### Fixed
 
 - Preserved admitted review feedback across restart and resume, rejected stale
-  or malformed review bindings before worker launch, and retained compatible
-  independently published historical reviews without changing ticket specs.
+  or malformed review bindings before worker launch, and kept canonical ticket
+  specifications unchanged.
+- Removed the bundled review-protocol migration and all pre-v1 review fallbacks.
+  Every rejected execution now requires an immutable, attributed review artifact
+  co-published with its disposition; historical marker files are inert.
 
 ## 0.5.6 -- 2026-10-13
 

@@ -41,9 +41,9 @@ through `kanban/backlog/T.md`. Preserve T's ID and canonical
 specification byte-for-byte. Do not create T-H1, T-fix, or another replacement
 ticket for ordinary hardening.
 
-Publish the current feedback as `reviews/T/<execution-id>.md` in the same commit
-as the review disposition. Use this exact header, taking identities from the
-verified ExecutionReport:
+Every rejected current execution requires feedback. Publish it as
+`reviews/T/<execution-id>.md` in the same commit as the review disposition. Use
+this exact header, taking identities from the verified ExecutionReport:
 
 ```text
 <!-- devlegate-review-v1

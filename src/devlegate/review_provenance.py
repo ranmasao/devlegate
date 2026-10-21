@@ -19,7 +19,6 @@ from devlegate.git import (
     commit_changes,
     commit_range,
     file_history_commit,
-    history_changes,
     is_ancestor,
     path_object,
     read_path,
@@ -32,8 +31,6 @@ class ReviewProvenanceError(ValueError):
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 MAX_REVIEW_BYTES = 256 * 1024
-REVIEW_PROTOCOL_MARKER = "reviews/.devlegate-review-v1"
-REVIEW_PROTOCOL_MARKER_CONTENT = "devlegate-review-protocol-v1\n"
 _HEADER = re.compile(
     r"\A<!-- devlegate-review-v1\n"
     r"ticket: (?P<ticket>[A-Za-z0-9][A-Za-z0-9._-]*)\n"
@@ -46,13 +43,11 @@ _HEADER = re.compile(
 
 @dataclass(frozen=True)
 class ReviewBinding:
-    content: str | None
-    path: str | None
-    publication: str | None
+    content: str
+    path: str
+    publication: str
     transition: tuple[str, ...]
-    sha256: str | None
-    legacy: bool = False
-    legacy_boundary: str | None = None
+    sha256: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -61,8 +56,6 @@ class ReviewBinding:
             "publication": self.publication,
             "transition": list(self.transition),
             "sha256": self.sha256,
-            "legacy": self.legacy,
-            "legacy_boundary": self.legacy_boundary,
         }
 
 
@@ -81,46 +74,21 @@ def restore_review_binding(
         "publication",
         "transition",
         "sha256",
-        "legacy",
     }
-    if not isinstance(value, dict) or frozenset(value) not in {
-        frozenset(required),
-        frozenset(required | {"legacy_boundary"}),
-    }:
+    if not isinstance(value, dict) or frozenset(value) != frozenset(required):
         raise ReviewProvenanceError("persisted curator review binding is malformed")
     content = value["content"]
     path = value["path"]
     publication = value["publication"]
     digest = value["sha256"]
-    legacy = value["legacy"]
-    legacy_boundary = value.get("legacy_boundary")
     transition = value["transition"]
-    if not isinstance(legacy, bool) or not isinstance(transition, list) or not (
-        1 <= len(transition) <= 2
-    ):
+    if not isinstance(transition, list) or not (1 <= len(transition) <= 2):
         raise ReviewProvenanceError("persisted curator review provenance is invalid")
     if not all(
         isinstance(item, str) and re.fullmatch(r"[0-9a-f]{40}", item)
         for item in transition
     ):
         raise ReviewProvenanceError("persisted curator review transition is invalid")
-    if content is None:
-        if (
-            not legacy
-            or any(item is not None for item in (path, publication, digest))
-            or not isinstance(legacy_boundary, str)
-            or re.fullmatch(r"[0-9a-f]{40}", legacy_boundary) is None
-        ):
-            raise ReviewProvenanceError("persisted feedback-free rework is invalid")
-        return ReviewBinding(
-            None,
-            None,
-            None,
-            tuple(transition),
-            None,
-            legacy=True,
-            legacy_boundary=legacy_boundary,
-        )
     if not all(isinstance(item, str) for item in (content, path, publication, digest)):
         raise ReviewProvenanceError("persisted curator review content is invalid")
     encoded = content.encode("utf-8")
@@ -132,7 +100,7 @@ def restore_review_binding(
     if not re.fullmatch(r"[0-9a-f]{40}", publication):
         raise ReviewProvenanceError("persisted curator review publication is invalid")
     match = _HEADER.match(content)
-    if not legacy and (
+    if (
         match is None
         or match.groupdict()
         != {
@@ -144,41 +112,7 @@ def restore_review_binding(
         }
     ):
         raise ReviewProvenanceError("persisted curator review attribution is invalid")
-    if legacy and match is not None:
-        raise ReviewProvenanceError(
-            "persisted legacy review attribution is inconsistent"
-        )
-    if legacy_boundary is not None:
-        raise ReviewProvenanceError("persisted curator review boundary is invalid")
-    return ReviewBinding(
-        content, path, publication, tuple(transition), digest, legacy=legacy
-    )
-
-
-def _review_protocol_boundary(repo: Path, head: str, runner: Runner) -> str | None:
-    """Return the immutable review-v1 adoption commit, or None when absent."""
-    try:
-        content = read_path(repo, head, REVIEW_PROTOCOL_MARKER, runner=runner)
-        history = history_changes(
-            repo, head, REVIEW_PROTOCOL_MARKER, runner=runner
-        )
-    except GitObservationError as error:
-        raise ReviewProvenanceError(
-            "cannot inspect curator review protocol marker"
-        ) from error
-    if content is None:
-        if history:
-            raise ReviewProvenanceError(
-                "curator review protocol marker was deleted or is unreadable"
-            )
-        return None
-    if content != REVIEW_PROTOCOL_MARKER_CONTENT:
-        raise ReviewProvenanceError("curator review protocol marker is malformed")
-    if len(history) != 1 or history[0][1] != (f"A\t{REVIEW_PROTOCOL_MARKER}",):
-        raise ReviewProvenanceError(
-            "curator review protocol marker history is ambiguous or modified"
-        )
-    return history[0][0]
+    return ReviewBinding(content, path, publication, tuple(transition), digest)
 
 
 def _same_blob(
@@ -281,7 +215,7 @@ def resolve_rework_review(
     backlog_path: str,
     runner: Runner,
 ) -> ReviewBinding:
-    """Resolve one immutable review, or a narrowly proven legacy disposition."""
+    """Resolve the immutable review bound to one rejected execution."""
     artifact = f"reviews/{report.ticket_id}/{report.execution_id}.md"
     transitions, transition_publication = _transition(
         repo,
@@ -304,37 +238,10 @@ def resolve_rework_review(
     if content is None:
         if publication is not None or transition_publication is not None:
             raise ReviewProvenanceError("curator review artifact is missing or deleted")
-        boundary = _review_protocol_boundary(repo, head, runner)
-        if boundary is None:
-            raise ReviewProvenanceError(
-                "curator review feedback is missing and the legacy boundary is not "
-                "installed; stop the service and run "
-                "'devlegate control upgrade-review-protocol'"
-            )
-        try:
-            transition_is_legacy = is_ancestor(
-                repo, transitions[0], boundary, runner=runner
-            )
-            boundary_precedes_transition = is_ancestor(
-                repo, boundary, transitions[0], runner=runner
-            )
-        except (GitAncestryError, GitObservationError) as error:
-            raise ReviewProvenanceError(
-                "cannot verify feedback-free rework against the legacy boundary"
-            ) from error
-        if not transition_is_legacy or boundary_precedes_transition:
-            raise ReviewProvenanceError(
-                "curator review feedback is missing for a post-adoption rework; "
-                "publish the execution-scoped review artifact with the disposition"
-            )
-        return ReviewBinding(
-            None,
-            None,
-            None,
-            transitions,
-            None,
-            legacy=True,
-            legacy_boundary=boundary,
+        raise ReviewProvenanceError(
+            "curator review feedback is missing; explicitly dispose of this "
+            "pre-protocol rework outside the runtime, or publish a valid review "
+            "artifact with a new review disposition"
         )
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_REVIEW_BYTES:
@@ -353,32 +260,8 @@ def resolve_rework_review(
         ) from error
     match = _HEADER.match(content)
     if match is None:
-        # Before v1 attribution, reviews were independently committed under the
-        # exact execution-scoped path. Accept only that immutable artifact-only
-        # publication shape; newly co-published headerless feedback fails closed.
-        try:
-            legacy_publication = (
-                transition_publication is not None
-                and publication != transitions[0]
-                and publication_changes == {f"A\t{artifact}"}
-                and is_ancestor(repo, lifecycle, publication, runner=runner)
-                and is_ancestor(repo, publication, transitions[0], runner=runner)
-            )
-        except (GitAncestryError, GitObservationError) as error:
-            raise ReviewProvenanceError(
-                "cannot verify legacy curator review ancestry"
-            ) from error
-        if not legacy_publication:
-            raise ReviewProvenanceError(
-                "curator review artifact has a malformed attribution header"
-            )
-        return ReviewBinding(
-            content,
-            artifact,
-            publication,
-            transitions,
-            hashlib.sha256(encoded).hexdigest(),
-            legacy=True,
+        raise ReviewProvenanceError(
+            "curator review artifact has a malformed attribution header"
         )
     if publication != transition_publication or publication != transitions[0]:
         raise ReviewProvenanceError(
@@ -422,8 +305,6 @@ def resolve_rework_review(
 
 __all__ = [
     "MAX_REVIEW_BYTES",
-    "REVIEW_PROTOCOL_MARKER",
-    "REVIEW_PROTOCOL_MARKER_CONTENT",
     "ReviewBinding",
     "ReviewProvenanceError",
     "restore_review_binding",

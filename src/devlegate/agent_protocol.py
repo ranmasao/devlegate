@@ -67,10 +67,12 @@ _LEGACY_DEFAULT_HASHES = {
     "skills/architect/SKILL.md.tmpl": {
         "51cb4bed1639489131f9a64c01eab9856358ff764d3df081af913945b4c84c9d",
         "79733a491c00f08d1565a3fac83765a0ceaac00332737966d88e64a0c0574caa",
+        "5b08f01a52d24c73ad27b60dfb2d8551a2fcc6ff9626881cb8a973a62398968c",
     },
     "skills/reviewer/SKILL.md.tmpl": {
         "d52fd6a57a9113c5e4c4e703acdb7eee0b1909dd5a030107f2d7cde5184f83b8",
         "30967c7480d70ee1327f20fb840560f7c890c788e512badf4fd692d7210c9abd",
+        "5cfe7ee60efd2701f16583f00de3a51b1dd152eb0468961eb63ade78d2656b4c",
     },
 }
 
