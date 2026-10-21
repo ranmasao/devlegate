@@ -1,0 +1,29 @@
+{
+  "code_base_head": "81eec24f111567195ddbf3ab252204573e475020",
+  "conclusion": "completed",
+  "control_head": "3708349e1a9127792d31867f2656d5f39a2bf676",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-095",
+  "execution_id": "0d9ba52beba143d79a7f649d9d979ddb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-095",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-095",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Removed the bundled review-protocol migration and all review compatibility branches, leaving one fail-closed execution-scoped review contract with strict persisted binding and prompt admission. Updated managed roles, documentation, changelog, and real-Git regressions, including inert historical markers and explicit rejection of old pending rework without a binding."
+  },
+  "workspace_head": "4c236f95592e7e17deb0c85dc56e7f6d4d343bf4"
+}
