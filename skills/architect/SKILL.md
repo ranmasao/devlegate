@@ -14,7 +14,7 @@ These are project-owned context and are not part of the Devlegate protocol.
 ## Canonical State
 
 The canonical workflow lives on the configured branch `devlegate/control`.
-The product branch is `main` and does not contain the canonical
+The product branch is `release/0.5.7` and does not contain the canonical
 workflow. Use these paths exactly:
 
 - backlog: `kanban/backlog`
