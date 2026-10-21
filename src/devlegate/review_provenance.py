@@ -61,6 +61,75 @@ class ReviewBinding:
         }
 
 
+def restore_review_binding(
+    value: object,
+    *,
+    ticket_id: str,
+    execution_id: str,
+    checkpoint: str,
+    control_head: str,
+) -> ReviewBinding:
+    """Validate a persisted immutable binding before reusing its prompt data."""
+    if not isinstance(value, dict) or set(value) != {
+        "content",
+        "path",
+        "publication",
+        "transition",
+        "sha256",
+        "legacy",
+    }:
+        raise ReviewProvenanceError("persisted curator review binding is malformed")
+    content = value["content"]
+    path = value["path"]
+    publication = value["publication"]
+    digest = value["sha256"]
+    legacy = value["legacy"]
+    transition = value["transition"]
+    if not isinstance(legacy, bool) or not isinstance(transition, list) or not (
+        1 <= len(transition) <= 2
+    ):
+        raise ReviewProvenanceError("persisted curator review provenance is invalid")
+    if not all(
+        isinstance(item, str) and re.fullmatch(r"[0-9a-f]{40}", item)
+        for item in transition
+    ):
+        raise ReviewProvenanceError("persisted curator review transition is invalid")
+    if content is None:
+        if not legacy or any(item is not None for item in (path, publication, digest)):
+            raise ReviewProvenanceError("persisted feedback-free rework is invalid")
+        return ReviewBinding(None, None, None, tuple(transition), None, legacy=True)
+    if not all(isinstance(item, str) for item in (content, path, publication, digest)):
+        raise ReviewProvenanceError("persisted curator review content is invalid")
+    encoded = content.encode("utf-8")
+    expected_path = f"reviews/{ticket_id}/{execution_id}.md"
+    if len(encoded) > MAX_REVIEW_BYTES:
+        raise ReviewProvenanceError("persisted curator review exceeds the prompt limit")
+    if path != expected_path or hashlib.sha256(encoded).hexdigest() != digest:
+        raise ReviewProvenanceError("persisted curator review integrity check failed")
+    if not re.fullmatch(r"[0-9a-f]{40}", publication):
+        raise ReviewProvenanceError("persisted curator review publication is invalid")
+    match = _HEADER.match(content)
+    if not legacy and (
+        match is None
+        or match.groupdict()
+        != {
+            "ticket": ticket_id,
+            "execution": execution_id,
+            "checkpoint": checkpoint,
+            "control": control_head,
+            "disposition": "rework",
+        }
+    ):
+        raise ReviewProvenanceError("persisted curator review attribution is invalid")
+    if legacy and match is not None:
+        raise ReviewProvenanceError(
+            "persisted legacy review attribution is inconsistent"
+        )
+    return ReviewBinding(
+        content, path, publication, tuple(transition), digest, legacy=legacy
+    )
+
+
 def _same_blob(
     repo: Path, older: str, older_path: str, newer: str, newer_path: str, runner: Runner
 ) -> bool:
@@ -190,15 +259,50 @@ def resolve_rework_review(
         raise ReviewProvenanceError(
             f"curator review exceeds the {MAX_REVIEW_BYTES}-byte prompt limit"
         )
-    if publication is None or publication != transition_publication:
+    if publication is None:
         raise ReviewProvenanceError(
             "curator review publication is ambiguous or mutable"
         )
-    if publication != transitions[0]:
+    try:
+        publication_changes = set(commit_changes(repo, publication, runner=runner))
+    except GitObservationError as error:
+        raise ReviewProvenanceError(
+            "cannot inspect curator review publication"
+        ) from error
+    match = _HEADER.match(content)
+    if match is None:
+        # Before v1 attribution, reviews were independently committed under the
+        # exact execution-scoped path. Accept only that immutable artifact-only
+        # publication shape; newly co-published headerless feedback fails closed.
+        try:
+            legacy_publication = (
+                transition_publication is not None
+                and publication != transitions[0]
+                and publication_changes == {f"A\t{artifact}"}
+                and is_ancestor(repo, lifecycle, publication, runner=runner)
+                and is_ancestor(repo, publication, transitions[0], runner=runner)
+            )
+        except (GitAncestryError, GitObservationError) as error:
+            raise ReviewProvenanceError(
+                "cannot verify legacy curator review ancestry"
+            ) from error
+        if not legacy_publication:
+            raise ReviewProvenanceError(
+                "curator review artifact has a malformed attribution header"
+            )
+        return ReviewBinding(
+            content,
+            artifact,
+            publication,
+            transitions,
+            hashlib.sha256(encoded).hexdigest(),
+            legacy=True,
+        )
+    if publication != transition_publication or publication != transitions[0]:
         raise ReviewProvenanceError(
             "curator review was not published with its review disposition"
         )
-    if set(commit_changes(repo, publication, runner=runner)) - {
+    if publication_changes - {
         f"A\t{artifact}",
         f"D\t{review_path}/{report.ticket_id}.md",
         f"A\t{todo_path}/{report.ticket_id}.md",
@@ -206,11 +310,6 @@ def resolve_rework_review(
     }:
         raise ReviewProvenanceError(
             "curator review publication contains unrelated changes"
-        )
-    match = _HEADER.match(content)
-    if match is None:
-        raise ReviewProvenanceError(
-            "curator review artifact has a malformed attribution header"
         )
     expected = {
         "ticket": report.ticket_id,
@@ -243,5 +342,6 @@ __all__ = [
     "MAX_REVIEW_BYTES",
     "ReviewBinding",
     "ReviewProvenanceError",
+    "restore_review_binding",
     "resolve_rework_review",
 ]

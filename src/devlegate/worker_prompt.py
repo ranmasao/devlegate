@@ -25,6 +25,7 @@ class WorkerPromptInput:
     directive: WorkDirective
     review_feedback: str | None = None
     review_source: str | None = None
+    legacy_rework: bool = False
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -83,6 +84,16 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         sections.append(
             ("Current Review Feedback", f"Source: {source}\n\n{feedback}", True)
         )
+    elif (
+        prompt_input.directive is WorkDirective.REWORK
+        and not prompt_input.legacy_rework
+    ):
+        raise ValueError("rework requires verified review feedback")
+    if prompt_input.legacy_rework and (
+        prompt_input.directive is not WorkDirective.REWORK
+        or prompt_input.review_feedback is not None
+    ):
+        raise ValueError("legacy rework must be feedback-free rework")
     return (
         "\n\n".join(
             f"## {title}\n{_fenced_content(value) if untrusted else value}"
@@ -115,7 +126,12 @@ def write_worker_prompt_artifact(
 ) -> Path:
     """Atomically retain a private, exact prompt diagnostic for operators."""
     root = state_dir / "prompts"
+    if root.is_symlink():
+        raise ValueError(f"worker prompt diagnostic directory is symlinked: {root}")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise ValueError(f"worker prompt diagnostic path is not a directory: {root}")
+    os.chmod(root, 0o700)
     path = root / f"{execution_id}.json"
     payload = {
         "admitted_control_head": admitted_control_head,
@@ -149,6 +165,11 @@ def write_worker_prompt_artifact(
             os.fsync(temporary.fileno())
         os.replace(temporary_name, path)
         os.chmod(path, 0o600)
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if temporary_name is not None:
             try:
@@ -182,6 +203,11 @@ def mark_worker_prompt_sent(path: Path) -> None:
             os.fsync(temporary.fileno())
         os.replace(temporary_name, path)
         os.chmod(path, 0o600)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if temporary_name is not None:
             try:
