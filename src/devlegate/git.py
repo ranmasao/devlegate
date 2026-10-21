@@ -830,12 +830,32 @@ def history_changes(
 
 def ref_exists(
     cwd: Path,
-    revision: str,
+    reference: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> bool:
-    """Return whether a revision exists, preserving repository failures."""
-    return resolve_object(cwd, revision, runner=runner) is not None
+    """Return whether an exact ref exists, preserving observation failures.
+
+    ``show-ref --verify --quiet`` has portable status semantics: zero means the
+    exact ref exists and one means it is absent. Diagnostics are deliberately
+    not parsed because Git localizes them.
+    """
+    try:
+        result = runner(
+            cwd, "show-ref", "--verify", "--quiet", reference, check=False
+        )
+    except OSError as error:
+        raise GitObservationError(
+            f"cannot inspect Git ref {reference!r}: {error}"
+        ) from error
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise GitObservationError(
+        f"cannot inspect Git ref {reference!r}: "
+        f"{_stderr(result).strip() or 'Git show-ref capability is unavailable'}"
+    )
 
 
 def path_object(

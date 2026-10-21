@@ -10,11 +10,29 @@ Before attaching Devlegate, have:
 
 - an existing Git repository with the intended product branch checked out;
 - a configured remote and working Git authentication;
+- a Git client with the command capabilities described below;
 - enough project documentation for the Architect and Reviewer roles;
 - a decision about which existing documents those roles should read.
 
 Devlegate does not require a particular documentation layout. The project keeps
 ownership of its README, agent instructions, documentation, and change process.
+
+### Git capability policy
+
+Devlegate supports Git installations by command capability, not by pinning one
+Git version. Control initialization requires exact-ref observation through
+`git show-ref --verify --quiet`, remote-ref observation through `git ls-remote`,
+orphan worktree creation through `git worktree add --orphan -b`, and protected
+publication through `git push --force-with-lease=<ref>:`. Release validation
+must exercise these capabilities with representative older and current Git
+installations.
+
+For exact local refs, exit status `0` means present and `1` means absent. For an
+exact `ls-remote` query, successful empty output means absent. Every other
+status, malformed output, or transport failure is an observation error;
+Devlegate does not classify localized diagnostic text. If an installed Git
+lacks a required option, initialization stops with that command's capability
+error instead of treating the control ref as absent or changing product state.
 
 ## Project Files
 

@@ -20,13 +20,16 @@ from devlegate.git import (
     add_all,
     add_worktree,
     branch_name,
+    commit_parents,
     common_dir,
     fetch_ref,
     is_ancestor,
     merge_fast_forward,
     push_refs,
     ref_exists,
+    remote_ref,
     resolve_commit,
+    working_tree_status,
     worktree_paths,
 )
 from devlegate.git import (
@@ -231,43 +234,106 @@ def bootstrap_control(
     runner: Callable[..., Any],
 ) -> dict[str, object]:
     """Create, commit, publish, and refresh a new control plane."""
-    if control_worktree.exists() or control_worktree.is_symlink():
-        raise ControlGitWorkflowError(
-            f"expected control worktree path already exists: {control_worktree}"
-        )
-    if ref_exists(repo, f"refs/heads/{control_branch}", runner=runner):
+    branch_ref = f"refs/heads/{control_branch}"
+    local_branch = ref_exists(repo, branch_ref, runner=runner)
+    resumable = control_worktree.exists() or control_worktree.is_symlink()
+    if resumable:
+        try:
+            if control_worktree.is_symlink() or not control_worktree.is_dir():
+                raise ControlGitWorkflowError(
+                    f"expected control worktree path already exists and is not a "
+                    "directory: "
+                    f"{control_worktree}"
+                )
+            if control_worktree.resolve() not in set(
+                worktree_paths(repo, runner=runner)
+            ):
+                raise ControlGitWorkflowError(
+                    "partial control path is not a registered Git worktree"
+                )
+            if common_dir(control_worktree, runner=runner) != common_dir(
+                repo, runner=runner
+            ):
+                raise ControlGitWorkflowError(
+                    "partial control worktree belongs to another repository"
+                )
+            if branch_name(control_worktree, runner=runner) != control_branch:
+                raise ControlGitWorkflowError(
+                    "partial control worktree is on the wrong branch"
+                )
+            _validate_bootstrap_files(
+                control_worktree,
+                workflow_paths,
+                require_complete=local_branch,
+            )
+            if local_branch:
+                local_head = resolve_commit(
+                    control_worktree, branch_ref, runner=runner
+                )
+                if local_head is None:
+                    raise ControlGitWorkflowError(
+                        "partial control branch HEAD is unavailable"
+                    )
+                if commit_parents(
+                    control_worktree, local_head, runner=runner
+                ) != ():
+                    raise ControlGitWorkflowError(
+                        "partial control branch is not an initial root commit"
+                    )
+                if working_tree_status(
+                    control_worktree,
+                    include_all_untracked=True,
+                    runner=runner,
+                ):
+                    raise ControlGitWorkflowError(
+                        "partial control worktree has uncommitted changes"
+                    )
+        except GitObservationError as error:
+            raise ControlGitWorkflowError(str(error)) from error
+    elif local_branch:
         raise ControlGitWorkflowError(
             f"local control branch {control_branch!r} exists while the remote "
             "branch is absent"
         )
-    control_worktree.parent.mkdir(parents=True, exist_ok=True)
-    created = add_worktree(
-        repo, "--orphan", "-b", control_branch, str(control_worktree), runner=runner
-    )
-    if created.returncode:
-        raise ControlGitWorkflowError(
-            f"cannot create fresh control worktree: {created.stderr.strip()}"
+    if not resumable:
+        control_worktree.parent.mkdir(parents=True, exist_ok=True)
+        created = add_worktree(
+            repo,
+            "--orphan",
+            "-b",
+            control_branch,
+            str(control_worktree),
+            runner=runner,
         )
+        if created.returncode:
+            raise ControlGitWorkflowError(
+                f"cannot create fresh control worktree: {created.stderr.strip()}"
+            )
     for configured_path in workflow_paths.values():
         directory = control_worktree / configured_path
         directory.mkdir(parents=True, exist_ok=True)
         (directory / ".gitkeep").touch()
-    added = add_all(control_worktree, runner=runner)
-    if added.returncode:
-        raise ControlGitWorkflowError(
-            f"cannot stage initial control state: {added.stderr.strip()}"
+    if not local_branch:
+        added = add_all(control_worktree, runner=runner)
+        if added.returncode:
+            raise ControlGitWorkflowError(
+                f"cannot stage initial control state: {added.stderr.strip()}"
+            )
+        committed = git_commit(
+            control_worktree, "Initialize Devlegate control plane", runner=runner
         )
-    committed = git_commit(
-        control_worktree, "Initialize Devlegate control plane", runner=runner
-    )
-    if committed.returncode:
-        raise ControlGitWorkflowError(
-            f"cannot commit initial control state: {committed.stderr.strip()}"
-        )
+        if committed.returncode:
+            raise ControlGitWorkflowError(
+                f"cannot commit initial control state: {committed.stderr.strip()}"
+            )
+    published_head = resolve_commit(control_worktree, branch_ref, runner=runner)
+    if published_head is None:
+        raise ControlGitWorkflowError("initial control branch HEAD is unavailable")
     pushed = push_refs(
         control_worktree,
         remote_name,
-        f"HEAD:refs/heads/{control_branch}",
+        f"{published_head}:{branch_ref}",
+        options=(f"--force-with-lease={branch_ref}:",),
         runner=runner,
     )
     if pushed.returncode:
@@ -279,7 +345,70 @@ def bootstrap_control(
         raise ControlGitWorkflowError(
             f"cannot refresh published control branch: {refreshed.stderr.strip()}"
         )
+    refreshed_head = resolve_commit(
+        repo,
+        f"refs/remotes/{remote_name}/{control_branch}",
+        runner=runner,
+    )
+    if refreshed_head != published_head:
+        try:
+            observed_remote = remote_ref(
+                repo, remote_name, branch_ref, runner=runner
+            )
+        except GitObservationError as error:
+            raise ControlGitWorkflowError(str(error)) from error
+        detail = observed_remote or "absent"
+        raise ControlGitWorkflowError(
+            "published control branch changed during refresh: "
+            f"expected {published_head}, observed {detail}"
+        )
     return {
         "result": "initialized_new_control_plane",
         "control_worktree": str(control_worktree),
     }
+
+
+def _validate_bootstrap_files(
+    control_worktree: Path,
+    workflow_paths: Mapping[str, str],
+    *,
+    require_complete: bool,
+) -> None:
+    """Allow only the exact initial skeleton in a resumable worktree."""
+    expected_files = {
+        Path(configured_path) / ".gitkeep"
+        for configured_path in workflow_paths.values()
+    }
+    expected_directories: set[Path] = set()
+    for expected_file in expected_files:
+        expected_directories.update(expected_file.parents)
+    expected_directories.discard(Path("."))
+
+    observed_files: set[Path] = set()
+    observed_directories: set[Path] = set()
+    for path in control_worktree.rglob("*"):
+        relative = path.relative_to(control_worktree)
+        if relative == Path(".git"):
+            continue
+        if relative in expected_directories and path.is_dir() and not path.is_symlink():
+            observed_directories.add(relative)
+            continue
+        if (
+            relative in expected_files
+            and path.is_file()
+            and not path.is_symlink()
+            and path.stat().st_size == 0
+        ):
+            observed_files.add(relative)
+            continue
+        raise ControlGitWorkflowError(
+            f"partial control worktree contains unexpected path: {relative}"
+        )
+    if require_complete and (
+        observed_files != expected_files
+        or observed_directories != expected_directories
+    ):
+        raise ControlGitWorkflowError(
+            "partial control root commit does not contain the complete workflow "
+            "skeleton"
+        )

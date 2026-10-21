@@ -157,6 +157,11 @@ def test_bootstrap_control_preserves_publish_and_refresh_order(
     monkeypatch.setattr(
         control_git_workflow, "ref_exists", lambda *_args, **_kwargs: False
     )
+    monkeypatch.setattr(
+        control_git_workflow,
+        "resolve_commit",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
 
     def add_worktree(*_args, **_kwargs):
         trace.append("worktree-add")
