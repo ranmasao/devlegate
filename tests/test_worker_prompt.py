@@ -16,6 +16,8 @@ from devlegate.worker_prompt import (
 
 
 def prompt(directive, assignment="Implement the parser.", **context):
+    if directive is WorkDirective.REWORK and "review_feedback" not in context:
+        context["legacy_rework"] = True
     return build_worker_prompt(
         WorkerPromptInput(directive=directive, assignment=assignment, **context)
     )
@@ -139,8 +141,26 @@ def test_rework_feedback_is_fenced_verbatim_and_hashed_deterministically(tmp_pat
     assert payload["prompt_sha256"] == digest
     assert payload["delivery"] == "constructed"
     assert artifact.stat().st_mode & 0o777 == 0o600
+    assert artifact.parent.stat().st_mode & 0o777 == 0o700
     mark_worker_prompt_sent(artifact)
     assert json.loads(artifact.read_text())["delivery"] == "sent"
+
+
+def test_prompt_artifact_refuses_symlinked_private_directory(tmp_path):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (tmp_path / "prompts").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="is symlinked"):
+        write_worker_prompt_artifact(
+            tmp_path,
+            "a" * 32,
+            prompt(WorkDirective.FRESH),
+            ticket_id="T-1",
+            directive=WorkDirective.FRESH,
+            review_path=None,
+            review_sha256=None,
+        )
 
 
 def test_fresh_rejects_review_feedback():
@@ -150,6 +170,16 @@ def test_fresh_rejects_review_feedback():
                 assignment="ticket",
                 directive=WorkDirective.FRESH,
                 review_feedback="stale review",
+            )
+        )
+
+
+def test_rework_without_feedback_requires_explicit_legacy_binding():
+    with pytest.raises(ValueError, match="requires verified review feedback"):
+        build_worker_prompt(
+            WorkerPromptInput(
+                assignment="ticket",
+                directive=WorkDirective.REWORK,
             )
         )
 
