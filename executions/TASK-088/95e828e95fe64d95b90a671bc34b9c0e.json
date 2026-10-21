@@ -1,0 +1,33 @@
+{
+  "code_base_head": "4c236f95592e7e17deb0c85dc56e7f6d4d343bf4",
+  "conclusion": "incomplete",
+  "control_head": "ec18af199354365f2e7cd7310a88ae4b9c864fad",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-088",
+  "execution_id": "95e828e95fe64d95b90a671bc34b9c0e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-088",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Build the canonical Arch package from the integrated clean checkpoint and repeat the fresh-host packaged control-init smoke test; the package graph rejects this uncommitted worker worktree and the worker contract forbids creating the required source commit."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-088",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Build the canonical Arch package from the integrated clean checkpoint and repeat the fresh-host packaged control-init smoke test; the package graph rejects this uncommitted worker worktree and the worker contract forbids creating the required source commit."
+    ],
+    "report": null,
+    "summary": "Implemented locale-independent exact-ref observation, leased immutable control publication with post-fetch identity verification, and narrowly validated bootstrap retry for registered partial worktrees. Added real-Git regression coverage and documented capability-based Git support."
+  },
+  "workspace_head": "8e363f957c2d7754277da1d14c2285c69952525c"
+}
