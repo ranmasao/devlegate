@@ -2442,6 +2442,55 @@ def test_malformed_review_feedback_blocks_rework_before_worker_launch(
     assert devlegate._state["phase"] == "idle"
 
 
+def test_forged_newer_completed_report_blocks_rework_before_worker_launch(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = 0
+
+    def worker(workspace, _prompt, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        "Fix the reviewed implementation.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "return ticket for rework")
+
+    forged = dataclasses.replace(report, execution_id="f" * 32)
+    forged_path = ExecutionReportStore(control).write(forged)
+    git(control, "add", str(forged_path.relative_to(control)))
+    git(control, "commit", "-m", "forge newer completed report")
+    git(control, "push", "origin", "devlegate/control")
+
+    with pytest.raises(
+        WorkflowBlockedError, match="lacks exact lifecycle provenance"
+    ):
+        run_test_iteration(devlegate)
+    assert calls == 1
+    assert devlegate._state["phase"] == "idle"
+
+
 def test_independently_published_historical_review_is_injected(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

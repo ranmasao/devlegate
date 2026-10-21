@@ -4611,7 +4611,14 @@ class ServiceEngine:
                 rework_provenance, dict
             ):
                 raise WorkflowBlockedError("persisted rework provenance is malformed")
-            if not pending_agent_execution and rework_provenance is None:
+            if (
+                not pending_agent_execution
+                and rework_provenance is None
+                and not (
+                    authorization is not None
+                    and authorization.is_zero_delta_retry
+                )
+            ):
                 try:
                     reports = ExecutionReportStore(self.control_worktree).list(
                         selected_ticket.id
@@ -6074,11 +6081,12 @@ class ServiceEngine:
                 # A valid worker claim can still be reviewed after a no-op result.
                 if not report.result.egress_ok:
                     return None
-                return (
-                    (commit, report)
-                    if self._lifecycle_commit_is_exact(commit, report)
-                    else None
-                )
+                if not self._lifecycle_commit_is_exact(commit, report):
+                    raise WorkflowBlockedError(
+                        "newest completed execution report lacks exact lifecycle "
+                        "provenance"
+                    )
+                return commit, report
         return None
 
     def _prepare_rework_remote_predecessor(
