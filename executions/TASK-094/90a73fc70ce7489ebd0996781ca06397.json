@@ -1,0 +1,29 @@
+{
+  "code_base_head": "1013cc6c2fe6f5d71f1ad28996becf60fcab4f37",
+  "conclusion": "completed",
+  "control_head": "59f5cc1f96c573255c9266ca1fcf12640deb4202",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-094",
+  "execution_id": "90a73fc70ce7489ebd0996781ca06397",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-094",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-094",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented provenance-bound current-review injection with strict persisted-binding validation, restart-safe rework reuse, bounded historical review compatibility, and fail-closed feedback requirements. Hardened private prompt diagnostics and delivery-state reporting, prevented template migration while the service is active, and added real-Git and prompt regressions plus release notes."
+  },
+  "workspace_head": "bbc18a1a184d45cdd7d3cb3b112f01f191d63464"
+}
