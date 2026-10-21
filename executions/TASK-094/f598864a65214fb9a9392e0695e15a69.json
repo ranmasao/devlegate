@@ -1,0 +1,29 @@
+{
+  "code_base_head": "1013cc6c2fe6f5d71f1ad28996becf60fcab4f37",
+  "conclusion": "completed",
+  "control_head": "ddb4aaefae4b4ee7318509077b88639a4c765415",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-094",
+  "execution_id": "f598864a65214fb9a9392e0695e15a69",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-094",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-094",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened rework generation selection so a newer completed execution report without exact Devlegate lifecycle provenance blocks admission instead of silently downgrading the ticket to FRESH work. Preserved the separately proven automatic zero-delta fresh-retry path and added a real-Git forged-report regression."
+  },
+  "workspace_head": "e8fd70ae12deba7a0633060ed4ca293d5a762854"
+}
