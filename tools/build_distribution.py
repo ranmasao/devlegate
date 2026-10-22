@@ -421,6 +421,14 @@ def validate_wheel(artifact: Artifact, source: Source) -> None:
             validate_members(names, source.repo, "wheel")
         except BoundaryError as error:
             raise DistributionError(str(error)) from error
+        for name in sorted(names):
+            if not name.startswith("devlegate/") or not name.endswith(".py"):
+                continue
+            source_path = source.repo / "src" / name
+            if source_path.is_file() and archive.read(name) != source_path.read_bytes():
+                raise DistributionError(
+                    f"wheel payload differs from selected source: src/{name}"
+                )
         dist_info = metadata_name.removesuffix("/METADATA")
         if metadata.get("Name") != "devlegate":
             raise DistributionError("wheel metadata has the wrong project name")
@@ -521,6 +529,7 @@ def build_python_artifact(
 
     def build() -> Artifact:
         output.mkdir()
+        build_source = materialize_python_build_source(source, work)
         flag = "--wheel" if kind == "wheel" else "--sdist"
         run(
             [
@@ -531,7 +540,7 @@ def build_python_artifact(
                 flag,
                 "--outdir",
                 str(output),
-                str(source.repo),
+                str(build_source),
             ]
         )
         pattern = "devlegate-*.whl" if kind == "wheel" else "devlegate-*.tar.gz"
@@ -539,6 +548,37 @@ def build_python_artifact(
 
     label = "build wheel" if kind == "wheel" else "build source distribution"
     return _step(reporter, kind, label, build)  # type: ignore[return-value]
+
+
+def materialize_python_build_source(source: Source, work: Path) -> Path:
+    """Copy only selected tracked files into a clean Python build tree."""
+    target = work / "python-source"
+    if target.exists():
+        return target
+    listed = run(
+        [
+            "git",
+            "-C",
+            str(source.repo),
+            "ls-files",
+            "-z",
+            "--recurse-submodules",
+        ]
+    )
+    target.mkdir(parents=True)
+    for value in listed.split("\0"):
+        if not value:
+            continue
+        relative = Path(value)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise DistributionError(f"unsafe tracked source path: {value!r}")
+        source_path = source.repo / relative
+        if not source_path.is_file():
+            raise DistributionError(f"tracked source file is unavailable: {value}")
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination)
+    return target
 
 
 def build_standalone(
