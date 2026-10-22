@@ -1,0 +1,35 @@
+{
+  "code_base_head": "4c236f95592e7e17deb0c85dc56e7f6d4d343bf4",
+  "conclusion": "incomplete",
+  "control_head": "4261c36b54611b76370178f5e935b9649aad2d78",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-088",
+  "execution_id": "e9e0bac3d6c04dc39386045077ea9766",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-088",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run exact checkpoint CI in the configured development environment with the coverage dependency installed.",
+    "Build the canonical Arch artifact from the corrected committed checkpoint, install it on Arch, and repeat the fresh-repository control-init smoke test."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-088",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run exact checkpoint CI in the configured development environment with the coverage dependency installed.",
+      "Build the canonical Arch artifact from the corrected committed checkpoint, install it on Arch, and repeat the fresh-repository control-init smoke test."
+    ],
+    "report": null,
+    "summary": "Prevented stale ignored setuptools build state from entering packaged artifacts by building Python distributions from a tracked-file staging tree and verifying wheel module bytes against the selected source. Strengthened the public control-init regression to prove absent-ref bootstrap, publication, attachment, repeat safety, and unchanged product state."
+  },
+  "workspace_head": "0fa103aac16c06ec0b1788d9c047c2ed83d1ffd6"
+}
