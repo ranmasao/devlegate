@@ -187,12 +187,13 @@ def test_resolve_commit_wraps_runner_os_errors(tmp_path):
 def test_resolve_ref_commit_distinguishes_absent_and_corrupt_refs(tmp_path):
     reference = "refs/devlegate/recovery/control/evidence"
 
-    def absent_runner(_cwd, *_args, **_kwargs):
-        return subprocess.CompletedProcess(
-            [], 128, "", f"fatal: '{reference}' - not a valid ref"
-        )
+    def absent_runner(_cwd, *args, **_kwargs):
+        assert args == ("show-ref", "--verify", "--quiet", reference)
+        return subprocess.CompletedProcess([], 1, "", "localized missing ref")
 
-    def corrupt_runner(_cwd, *_args, **_kwargs):
+    def corrupt_runner(_cwd, *args, **_kwargs):
+        if args == ("show-ref", "--verify", "--quiet", reference):
+            return subprocess.CompletedProcess([], 0, "", "")
         return subprocess.CompletedProcess([], 128, "", "fatal: bad ref")
 
     assert git.resolve_ref_commit(tmp_path, reference, runner=absent_runner) is None
@@ -206,6 +207,8 @@ def test_resolve_ref_commit_refuses_peeled_or_changed_identity(tmp_path):
     resolved_commit = "b" * 40
 
     def inconsistent_runner(_cwd, *args, **_kwargs):
+        if args == ("show-ref", "--verify", "--quiet", reference):
+            return subprocess.CompletedProcess([], 0, "", "")
         if args[:2] == ("show-ref", "--verify"):
             return subprocess.CompletedProcess(
                 [], 0, f"{raw_object} {reference}\n", ""
@@ -216,6 +219,24 @@ def test_resolve_ref_commit_refuses_peeled_or_changed_identity(tmp_path):
 
     with pytest.raises(git.GitObservationError, match="exact commit"):
         git.resolve_ref_commit(tmp_path, reference, runner=inconsistent_runner)
+
+
+def test_resolve_object_observes_exact_ref_before_localized_revision_lookup(tmp_path):
+    reference = "refs/heads/devlegate/control"
+    calls = []
+
+    def fake_runner(_cwd, *args, **_kwargs):
+        calls.append(args)
+        if args == ("show-ref", "--verify", "--quiet", reference):
+            return subprocess.CompletedProcess([], 1, "", "lokalisierter Fehler")
+        if args == ("rev-parse", "--verify", reference):
+            return subprocess.CompletedProcess(
+                [], 128, "", "FATALER FEHLER: Eine Revision wurde erwartet"
+            )
+        raise AssertionError(args)
+
+    assert git.resolve_object(tmp_path, reference, runner=fake_runner) is None
+    assert calls == [("show-ref", "--verify", "--quiet", reference)]
 
 
 @pytest.mark.parametrize(

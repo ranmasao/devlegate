@@ -94,6 +94,50 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     assert invoke(working, "status", "--json", config=config).returncode == 0
     assert invoke(working, "--once", config=config).returncode == 0
 
+
+def test_control_init_ignores_localized_rev_parse_for_absent_exact_ref(
+    tmp_path, monkeypatch
+):
+    working, config, state = fresh_control_fixture(tmp_path)
+    real_git = shutil.which("git")
+    assert real_git is not None
+    shim_dir = tmp_path / "git-shim"
+    shim_dir.mkdir()
+    trace = tmp_path / "git-trace"
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$DEVLEGATE_GIT_TRACE"\n'
+        'case "$*" in\n'
+        '  *"rev-parse --verify refs/heads/devlegate/control")\n'
+        '  printf "%s\\n" "FATALER FEHLER: Eine Revision wurde erwartet" >&2\n'
+        "  exit 128\n"
+        "  ;;\n"
+        "esac\n"
+        f'exec "{real_git}" "$@"\n'
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("DEVLEGATE_GIT_TRACE", str(trace))
+
+    initialized = invoke(working, "control", "init", config=config)
+
+    assert initialized.returncode == 0, initialized.stderr
+    commands = trace.read_text().splitlines()
+    assert any(
+        command.endswith("show-ref --verify --quiet refs/heads/devlegate/control")
+        for command in commands
+    )
+    assert not any(
+        command.endswith("rev-parse --verify refs/heads/devlegate/control")
+        for command in commands
+    )
+    control = next((state / "worktrees").glob("*/control"))
+    assert git(control, "symbolic-ref", "--short", "HEAD").stdout.strip() == (
+        "devlegate/control"
+    )
+    assert git(working, "ls-remote", "origin", "refs/heads/devlegate/control").stdout
+
 def test_control_init_does_not_treat_remote_observation_failure_as_absence(tmp_path):
     working, config, state = fresh_control_fixture(tmp_path)
     config.write_text(

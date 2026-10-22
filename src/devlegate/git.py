@@ -361,6 +361,8 @@ def resolve_ref_commit(
     object cannot be read.  Check ref presence first so callers that authorize
     mutations from absence never treat a corrupt present ref as missing.
     """
+    if not ref_exists(cwd, reference, runner=runner):
+        return None
     try:
         present = runner(cwd, "show-ref", "--verify", reference, check=False)
     except OSError as error:
@@ -368,8 +370,6 @@ def resolve_ref_commit(
             f"cannot inspect Git ref {reference!r}: {error}"
         ) from error
     detail = _stderr(present).strip()
-    if present.returncode and _is_missing_exact_ref_error(reference, detail):
-        return None
     if present.returncode:
         raise GitObservationError(
             f"cannot inspect Git ref {reference!r}: "
@@ -397,6 +397,8 @@ def resolve_object(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
     """Resolve any Git object, including blobs used by durable evidence refs."""
+    if revision.startswith("refs/") and not ref_exists(cwd, revision, runner=runner):
+        return None
     result = runner(cwd, "rev-parse", "--verify", revision, check=False)
     if result.returncode:
         detail = _stderr(result).strip().lower()
@@ -971,11 +973,6 @@ def _is_missing_revision_error(detail: str) -> bool:
             "not a valid object name",
         )
     )
-
-
-def _is_missing_exact_ref_error(reference: str, detail: str) -> bool:
-    """Recognize only ``show-ref --verify``'s exact absent-ref diagnostic."""
-    return detail == f"fatal: '{reference}' - not a valid ref"
 
 
 def _is_object_id(value: str) -> bool:
