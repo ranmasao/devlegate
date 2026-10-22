@@ -93,6 +93,11 @@ written to the build log and printed for non-interactive runs.
 The command never installs a Debian package, uses `sudo`, or publishes an
 artifact.
 
+Python artifacts are built from a temporary copy of the selected checkout's
+tracked files, including pinned submodule files. Ignored checkout state such as
+an older `build/` tree cannot enter the wheel, and validation compares packaged
+Python modules with the selected source before downstream packages are built.
+
 Common options follow the target for the normal command-oriented form:
 
 ```sh

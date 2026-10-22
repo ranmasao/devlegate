@@ -33,10 +33,38 @@ def test_control_init_is_explicit_idempotent_and_nested_observation(tmp_path):
 def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     working, config, state = fresh_control_fixture(tmp_path)
     product_head = git(working, "rev-parse", "HEAD").stdout.strip()
+    product_branch = git(working, "symbolic-ref", "--short", "HEAD").stdout.strip()
+    assert subprocess.run(
+        [
+            "git",
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/devlegate/control",
+        ],
+        cwd=working,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode == 1
+    assert subprocess.run(
+        [
+            "git",
+            "ls-remote",
+            "--exit-code",
+            "origin",
+            "refs/heads/devlegate/control",
+        ],
+        cwd=working,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode == 2
 
     initialized = invoke(working, "control", "init", config=config)
 
     assert initialized.returncode == 0, initialized.stderr
+    assert "Control plane initialized" in initialized.stdout
     control = next((state / "worktrees").glob("*/control"))
     assert git(control, "symbolic-ref", "--short", "HEAD").stdout.strip() == (
         "devlegate/control"
@@ -47,8 +75,17 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     assert not (control / "reviews/.devlegate-review-v1").exists()
     assert not (working / "workflow").exists()
     assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert (
+        git(working, "symbolic-ref", "--short", "HEAD").stdout.strip()
+        == product_branch
+    )
+    assert not git(working, "status", "--porcelain").stdout
     assert git(working, "ls-remote", "origin", "refs/heads/devlegate/control").stdout
-    assert invoke(working, "control", "init", config=config).returncode == 0
+    repeated = invoke(working, "control", "init", config=config)
+    assert repeated.returncode == 0, repeated.stderr
+    assert "Control worktree already attached" in repeated.stdout
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
+    assert not git(working, "status", "--porcelain").stdout
     assert (
         json.loads(invoke(working, "plan", "--json", config=config).stdout)["action"]
         == "none"

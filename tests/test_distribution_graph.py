@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -466,6 +467,63 @@ def test_default_repo_and_output_dir_are_repository_relative(tmp_path):
         ["wheel", "--repo", str(other), "--output-dir", str(explicit)]
     )
     assert GRAPH.output_directory(args.repo, args.output_dir) == explicit.resolve()
+
+
+def test_python_build_uses_tracked_staging_not_ignored_build_state(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text("build/\n")
+    package = repo / "src/devlegate"
+    package.mkdir(parents=True)
+    (package / "git.py").write_text("current = True\n")
+    (repo / "pyproject.toml").write_text("[project]\nname='demo'\nversion='1'\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "source"], cwd=repo, check=True)
+    stale = repo / "build/lib/devlegate/git.py"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("current = False\n")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+    staged = GRAPH.materialize_python_build_source(
+        GRAPH.Source(repo, commit, "1", sys.executable), tmp_path / "work"
+    )
+
+    assert (staged / "src/devlegate/git.py").read_text() == "current = True\n"
+    assert not (staged / "build").exists()
+
+
+def test_wheel_validation_rejects_python_payload_from_stale_build(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    source_file = repo / "src/devlegate/git.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("current = True\n")
+    wheel = tmp_path / "devlegate.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("devlegate/git.py", "current = False\n")
+        archive.writestr(
+            "devlegate-1.dist-info/METADATA",
+            "Name: devlegate\nVersion: 1\nRequires-Python: >=3.12\n",
+        )
+    monkeypatch.setattr(GRAPH, "validate_members", lambda *_args: None)
+
+    with pytest.raises(GRAPH.DistributionError, match="src/devlegate/git.py"):
+        GRAPH.validate_wheel(
+            GRAPH.Artifact(wheel, "wheel"),
+            GRAPH.Source(repo, "a" * 40, "1", sys.executable),
+        )
 
 
 def test_keep_work_preserves_failed_workspace(monkeypatch, capsys):
