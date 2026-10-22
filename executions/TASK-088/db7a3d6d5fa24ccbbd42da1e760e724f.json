@@ -1,0 +1,29 @@
+{
+  "code_base_head": "4c236f95592e7e17deb0c85dc56e7f6d4d343bf4",
+  "conclusion": "completed",
+  "control_head": "922604052f92f321dc540e5c3e2a1d889e4f1a97",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-088",
+  "execution_id": "db7a3d6d5fa24ccbbd42da1e760e724f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-088",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-088",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Exact refs are now observed with locale-independent show-ref status before object resolution, preventing missing control refs from reaching localized rev-parse classification. Added unit and real-CLI regressions for localized missing-ref diagnostics while preserving bootstrap publication and product-checkout safety."
+  },
+  "workspace_head": "efb852661aa29c8aacade1cefc240c471312c38a"
+}
