@@ -5731,10 +5731,24 @@ class ServiceEngine:
                 self._verify_rework_remote_predecessor(
                     manager.ticket_id, previous_base, previous_checkpoint
                 )
-            workspace = manager.prepare_rework(
-                base_head, previous_base, previous_checkpoint
-            )
-            if preparation_stage != "remote_predecessor_installed":
+            if preparation_stage == "remote_predecessor_installed":
+                # The predecessor replacement is already durable.  Re-running
+                # prepare_rework would require the retired checkpoint and reject
+                # the worker's preserved uncommitted edits at this boundary.
+                inspection = self._inspect_bound_execution_workspace(self._state)
+                if (
+                    inspection.classification != "REUSABLE"
+                    or inspection.workspace is None
+                ):
+                    raise ExecutionWorkspaceError(
+                        "published rework workspace cannot be resumed: "
+                        f"{inspection.reason}"
+                    )
+                workspace = inspection.workspace
+            else:
+                workspace = manager.prepare_rework(
+                    base_head, previous_base, previous_checkpoint
+                )
                 self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
@@ -10045,6 +10059,39 @@ class ServiceEngine:
     def _inspect_bound_execution_workspace(
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
+        rework = state.get("rework_provenance")
+        if (
+            isinstance(rework, dict)
+            and rework.get("preparation_stage") == "remote_predecessor_installed"
+        ):
+            previous_execution = rework.get("previous_execution_id")
+            previous_checkpoint = rework.get("previous_report_checkpoint")
+            previous_control = rework.get("previous_control_head")
+            ticket_id = state.get("execution_ticket_id")
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    previous_execution,
+                    previous_checkpoint,
+                    previous_control,
+                    ticket_id,
+                )
+            ):
+                return WorkspaceInspection(
+                    "UNSAFE", "published rework provenance is incomplete"
+                )
+            try:
+                restore_review_binding(
+                    rework.get("review"),
+                    ticket_id=ticket_id,
+                    execution_id=previous_execution,
+                    checkpoint=previous_checkpoint,
+                    control_head=previous_control,
+                )
+            except ReviewProvenanceError as error:
+                return WorkspaceInspection(
+                    "UNSAFE", f"published rework review binding is invalid: {error}"
+                )
         return inspect_bound_workspace(self, state)
 
     @staticmethod
