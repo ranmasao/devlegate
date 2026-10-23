@@ -9,7 +9,7 @@ repositories, and worktrees.
 | idle / before sync | idle plus handled generations | Re-observe Git and continue polling | N/A | No | Restart is inert; invalid Git state blocks |
 | merge_pending before effect | A, B, changed paths, control head | Verify A/B and fast-forward exactly to B | N/A | No | Divergence or rollback is fatal |
 | merge_pending after effect | Same coordinates; local HEAD is B | Recognize local B and finalize synchronization | N/A | No | Unexpected local generation blocks |
-| agent_pending | Ticket, A, immutable control admission, execution id, workspace binding | Revalidate and adopt a compatible control descendant, then resume the admitted workspace and launch once | Yes | One | Divergent history, changed ticket meaning, or unsafe workspace ownership blocks |
+| agent_pending | Ticket, title, body, dependencies, A, immutable control admission, execution id, explicit no-worker marker, workspace binding | Revalidate and adopt a compatible control descendant, then resume the admitted workspace and launch once | Yes | One | Divergent history, changed ticket meaning, omitted ownership marker, or unsafe workspace ownership blocks |
 | worker-launch | agent_running, no worker identity | Keep service alive and blocked | No | No | Ownership cannot be proven absent |
 | worker-running, matching live | Exact worker identity is live | Keep service alive and blocked | No | No | Never signal or duplicate the live worker |
 | worker-running, absent | Exact identity is absent | Normalize process loss and use RESUME policy | No | One RESUME | Product/control generation must still match |
@@ -40,8 +40,8 @@ persisted published predecessor. A foreign remote value remains a conflict.
 
 A dirty workspace at this final pre-worker stage is reusable only when it is
 registered at the deterministic execution path, has the persisted published
-predecessor HEAD, has validated rework provenance, and the durable pending
-state proves no worker was launched. The edits are preserved; no reset, clean,
+predecessor HEAD, has validated rework provenance, and has the explicit durable
+pre-worker `worker_identity: null` marker. The edits are preserved; no reset, clean,
 or replacement occurs. All other dirty or ambiguous workspace states remain
 unsafe and require operator recovery.
 

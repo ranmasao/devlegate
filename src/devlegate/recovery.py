@@ -91,7 +91,9 @@ def validate_execution_binding(
         raise ValueError("persisted execution workspace binding is incomplete")
     if require_pre_worker and state.get("phase") != "agent_pending":
         raise ValueError("automatic workspace recovery is limited to pre-worker state")
-    if state.get("worker_identity") is not None:
+    # ``None`` is a durable pre-launch marker. A missing key is older or
+    # incomplete state, not proof that a worker was never handed off.
+    if "worker_identity" not in state or state.get("worker_identity") is not None:
         raise ValueError("persisted worker ownership prevents workspace recovery")
     if state.get("pending_execution_report") is not None:
         raise ValueError("durable worker result prevents workspace recovery")
