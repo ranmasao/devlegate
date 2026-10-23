@@ -62,6 +62,15 @@ def test_recovery_binding_fails_closed_for_worker_or_result_ownership():
     else:
         raise AssertionError("worker ownership must fail closed")
 
+    state["worker_identity"] = None
+    del state["worker_identity"]
+    try:
+        validate_execution_binding(state, require_pre_worker=True)
+    except ValueError as error:
+        assert "worker ownership" in str(error)
+    else:
+        raise AssertionError("missing worker ownership marker must fail closed")
+
 
 def test_lineage_proofs_reject_merges_and_gate_published_rewrites():
     parents = {"a": ("root",), "b": ("a",), "merge": ("a", "other")}

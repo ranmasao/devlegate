@@ -824,6 +824,32 @@ def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path
     assert "eligibility" in result.stderr
 
 
+def test_bound_pending_generation_blocks_changed_runnable_dependencies(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    assert invoke(working, "--once", config=config).returncode == 1
+    original = state_payload(state)
+    control = next((state / "worktrees").glob("*/control"))
+    (control / "kanban/done/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\ndone\n'
+    )
+    (control / "kanban/todo/T-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "First"\n'
+        '"depends_on":\n  - "D-1"\n---\nwork\n'
+    )
+    git(control, "add", "kanban")
+    git(control, "commit", "-m", "change runnable pending dependencies")
+    git(control, "push", "origin", "devlegate/control")
+
+    result = invoke(working, "--once", config=config)
+
+    payload = state_payload(state)
+    assert result.returncode == 1
+    assert payload["execution_id"] == original["execution_id"]
+    assert payload["execution_control_head"] == original["execution_control_head"]
+    assert "eligibility" in result.stderr
+
+
 def test_bound_pending_generation_blocks_changed_ticket_content(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
