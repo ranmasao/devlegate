@@ -766,6 +766,8 @@ def test_bound_pending_generation_adopts_safe_control_descendant(
         execution_path=str(execution_path),
     )
 
+    assert devlegate.plan_view().action == "run-worker"
+
     result = invoke(working, "--once", config=config)
 
     assert result.returncode == 1
