@@ -75,8 +75,23 @@ def restore_review_binding(
         "transition",
         "sha256",
     }
-    if not isinstance(value, dict) or frozenset(value) != frozenset(required):
+    # Early v1 writers included these two explicit compatibility markers.  They
+    # do not weaken the immutable review binding, but rejecting their known
+    # inert values makes an otherwise valid interrupted execution unrecoverable.
+    legacy = {"legacy", "legacy_boundary"}
+    if not isinstance(value, dict) or not required.issubset(value) or set(value) - (
+        required | legacy
+    ):
         raise ReviewProvenanceError("persisted curator review binding is malformed")
+    if (
+        "legacy" in value
+        and value["legacy"] is not False
+        or "legacy_boundary" in value
+        and value["legacy_boundary"] is not None
+    ):
+        raise ReviewProvenanceError(
+            "persisted curator review compatibility fields are invalid"
+        )
     content = value["content"]
     path = value["path"]
     publication = value["publication"]
