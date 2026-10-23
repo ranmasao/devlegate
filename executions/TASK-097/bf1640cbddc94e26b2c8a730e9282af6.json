@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dd3ca11b0356971ef9320c8778d2500f5f826eec",
+  "conclusion": "completed",
+  "control_head": "0ffac754dc2b2f733b13eadbe3850b92b9ca16c6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-097",
+  "execution_id": "bf1640cbddc94e26b2c8a730e9282af6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-097",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-097",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Strengthened pending recovery ownership and control-descendant identity checks, including immutable dependency metadata. Added a lifecycle recovery contract, updated the recovery matrix, and covered missing worker markers plus runnable dependency changes."
+  },
+  "workspace_head": "71413a239e7e217df124026a1800a490493a76d2"
+}
