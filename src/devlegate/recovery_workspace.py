@@ -77,6 +77,40 @@ def inspect_bound_workspace(
     if topology.classification == "REUSABLE":
         return topology
 
+    # A rework predecessor has already been retired and its replacement has
+    # been published.  At this pre-worker boundary, worker_identity=None is
+    # durable proof that no worker has been launched.  Preserve its interrupted
+    # edits when the registered workspace still names the exact published head;
+    # do not mistake those edits for foreign workspace ownership.
+    if (
+        topology.reason == "execution worktree is dirty"
+        and state.get("phase") == "agent_pending"
+        and state.get("worker_identity") is None
+        and isinstance(state.get("rework_provenance"), dict)
+        and state["rework_provenance"].get("preparation_stage")
+        == "remote_predecessor_installed"
+    ):
+        expected_remote = state.get("execution_remote_head")
+        if not isinstance(expected_remote, str) or not expected_remote:
+            return WorkspaceInspection(
+                "UNSAFE", "rework workspace has no published predecessor identity"
+            )
+        try:
+            registration = manager._registrations().get(manager.path.resolve())
+            workspace = manager._validate_existing(registration, base_head)
+        except (ExecutionWorkspaceError, OSError) as error:
+            return WorkspaceInspection("UNSAFE", str(error))
+        if workspace.head == expected_remote:
+            return WorkspaceInspection(
+                "REUSABLE",
+                "dirty rework workspace is owned at its published predecessor",
+                workspace,
+            )
+        return WorkspaceInspection(
+            "UNSAFE",
+            "dirty rework workspace HEAD differs from its published predecessor",
+        )
+
     branch_ref = f"refs/heads/{manager.branch}"
     try:
         observed = resolve_commit(owner.repo, branch_ref, runner=run_git)

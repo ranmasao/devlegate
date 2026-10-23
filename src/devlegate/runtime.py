@@ -5703,7 +5703,18 @@ class ServiceEngine:
             # Re-observe the exact old remote predecessor before every local
             # mutation boundary.  Evidence publication alone does not reserve
             # the ticket ref against a race while the service was stopped.
-            if rework.get("preparation_stage") in {
+            preparation_stage = rework.get("preparation_stage")
+            if preparation_stage not in {
+                None,
+                "admitted",
+                "remote_evidence_published",
+                "workspace_prepared",
+                "remote_predecessor_installed",
+            }:
+                raise ExecutionWorkspaceError(
+                    "persisted rework preparation stage is invalid"
+                )
+            if preparation_stage in {
                 None,
                 "admitted",
                 "remote_evidence_published",
@@ -5714,13 +5725,15 @@ class ServiceEngine:
                     previous_base,
                     previous_checkpoint,
                 )
-            self._verify_rework_remote_predecessor(
-                manager.ticket_id, previous_base, previous_checkpoint
-            )
+            if preparation_stage != "remote_predecessor_installed":
+                self._verify_rework_remote_predecessor(
+                    manager.ticket_id, previous_base, previous_checkpoint
+                )
             workspace = manager.prepare_rework(
                 base_head, previous_base, previous_checkpoint
             )
-            self._set_rework_preparation_stage("workspace_prepared")
+            if preparation_stage != "remote_predecessor_installed":
+                self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
             )
@@ -5914,12 +5927,26 @@ class ServiceEngine:
                 "control history diverged from the execution admission generation; "
                 "per-execution reconciliation is required"
             )
+        reason = self._control_descendant_adoption_error(candidate, ticket_id)
+        if reason is not None:
+            raise ExecutionWorkspaceError(reason)
+        # Persist the adoption before any worker launch.  Replay repeats this
+        # proof against the immutable admitted_control rather than trusting the
+        # mutable observation.
+        self._save_state(
+            "agent_pending",
+            control_head=candidate,
+            execution_validated_control_head=candidate,
+        )
+
+    def _control_descendant_adoption_error(
+        self, candidate: str, ticket_id: str
+    ) -> str | None:
+        """Return the ticket-level proof failure for a control observation."""
         try:
             ticket_store = self._ticket_store()
-        except TicketError as error:
-            raise ExecutionWorkspaceError(
-                "updated control revision cannot be validated for this execution"
-            ) from error
+        except TicketError:
+            return "updated control revision cannot be validated for this execution"
         ticket = ticket_store.by_id.get(ticket_id)
         selected_body = self._state.get("selected_ticket_body")
         selected_title = self._state.get("selected_ticket_title")
@@ -5930,18 +5957,11 @@ class ServiceEngine:
             or ticket.body != selected_body
             or (isinstance(selected_title, str) and ticket.title != selected_title)
         ):
-            raise ExecutionWorkspaceError(
+            return (
                 "control descendant changed execution ticket eligibility; "
                 "per-execution reconciliation is required"
             )
-        # Persist the adoption before any worker launch.  Replay repeats this
-        # proof against the immutable admitted_control rather than trusting the
-        # mutable observation.
-        self._save_state(
-            "agent_pending",
-            control_head=candidate,
-            execution_validated_control_head=candidate,
-        )
+        return None
 
     def _pin_rework_evidence(
         self, ticket_id: str, execution_id: str, checkpoint: str
@@ -9927,16 +9947,39 @@ class ServiceEngine:
                     and isinstance(control, GitObservation)
                     and bound_control != control.local_head
                 ):
-                    return ExecutionPlan(
-                        "blocked",
-                        "control revision changed after execution was planned; "
-                        "refusing stale execution",
-                        ticket.id,
-                        ticket.title,
-                        ticket.state,
-                        True,
-                        **identity,
-                    )
+                    try:
+                        descendant = is_ancestor(
+                            self.control_worktree,
+                            bound_control,
+                            control.local_head,
+                            runner=_git,
+                        )
+                    except GitAncestryError:
+                        descendant = False
+                        adoption_error = (
+                            "control revision changed and ancestry cannot be proven "
+                            "during preparation"
+                        )
+                    else:
+                        adoption_error = (
+                            self._control_descendant_adoption_error(
+                                control.local_head, ticket.id
+                            )
+                            if descendant
+                            else "control history diverged from the execution "
+                            "admission generation; per-execution reconciliation is "
+                            "required"
+                        )
+                    if not descendant or adoption_error is not None:
+                        return ExecutionPlan(
+                            "blocked",
+                            adoption_error,
+                            ticket.id,
+                            ticket.title,
+                            ticket.state,
+                            True,
+                            **identity,
+                        )
                 inspection = self._inspect_bound_execution_workspace(state)
                 if inspection.classification != "REUSABLE":
                     return ExecutionPlan(
