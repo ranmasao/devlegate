@@ -2816,6 +2816,39 @@ def test_dirty_execution_worktree_is_preserved(tmp_path):
     assert invoke(working, "--once", config=config).returncode == 0
     assert marker.read_text() == "unique worker work\n"
 
+
+def test_dirty_published_rework_workspace_is_reusable_before_worker_launch(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    marker = workspace.path / "interrupted-worker-edit.txt"
+    marker.write_text("preserve\n")
+    bound = {
+        "phase": "agent_pending",
+        "execution_ticket_id": "T-1",
+        "execution_id": "a" * 32,
+        "execution_base_head": base,
+        "execution_branch": workspace.branch,
+        "execution_path": str(workspace.path),
+        "execution_remote_head": workspace.head,
+        "worker_identity": None,
+        "rework_provenance": {"preparation_stage": "remote_predecessor_installed"},
+    }
+
+    inspection = recovery_workspace.inspect_bound_workspace(devlegate, bound)
+
+    assert inspection.classification == "REUSABLE"
+    assert marker.read_text() == "preserve\n"
+
+
 def test_execution_path_conflict_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

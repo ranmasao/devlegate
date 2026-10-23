@@ -9,7 +9,7 @@ repositories, and worktrees.
 | idle / before sync | idle plus handled generations | Re-observe Git and continue polling | N/A | No | Restart is inert; invalid Git state blocks |
 | merge_pending before effect | A, B, changed paths, control head | Verify A/B and fast-forward exactly to B | N/A | No | Divergence or rollback is fatal |
 | merge_pending after effect | Same coordinates; local HEAD is B | Recognize local B and finalize synchronization | N/A | No | Unexpected local generation blocks |
-| agent_pending | Ticket, A, control head, execution id, workspace binding | Resume the admitted workspace and launch once | Yes | One | Changed ticket/control identity blocks |
+| agent_pending | Ticket, A, immutable control admission, execution id, workspace binding | Revalidate and adopt a compatible control descendant, then resume the admitted workspace and launch once | Yes | One | Divergent history, changed ticket meaning, or unsafe workspace ownership blocks |
 | worker-launch | agent_running, no worker identity | Keep service alive and blocked | No | No | Ownership cannot be proven absent |
 | worker-running, matching live | Exact worker identity is live | Keep service alive and blocked | No | No | Never signal or duplicate the live worker |
 | worker-running, absent | Exact identity is absent | Normalize process loss and use RESUME policy | No | One RESUME | Product/control generation must still match |
@@ -28,6 +28,22 @@ repositories, and worktrees.
 | accepted control commit effect | ticket + H + R durable; local=R--C, remote=R | Verify exact C and publish its SHA | N/A | No | Only exact C rooted directly at R is publishable |
 | accepted control push effect | ticket + H + R durable; remote=R--C | Recognize exact C as already published and clear intent | N/A | No | Remote contradiction blocks |
 | mutable receipt after ACK | Receipt is admission evidence only | Preserve receipt; do not dispatch it | N/A | No | New request id is required for liveness |
+
+## Rework Preparation Replay
+
+Rework preparation records each completed side effect. Before the remote
+predecessor is installed, replay requires the previous checkpoint at the
+ticket-scoped remote ref before retiring or moving the local worktree. After
+`remote_predecessor_installed`, that old checkpoint has intentionally been
+replaced: replay instead proves that the registered workspace HEAD matches the
+persisted published predecessor. A foreign remote value remains a conflict.
+
+A dirty workspace at this final pre-worker stage is reusable only when it is
+registered at the deterministic execution path, has the persisted published
+predecessor HEAD, has validated rework provenance, and the durable pending
+state proves no worker was launched. The edits are preserved; no reset, clean,
+or replacement occurs. All other dirty or ambiguous workspace states remain
+unsafe and require operator recovery.
 
 ## Interrupted Fast-Forward Command Traces
 
