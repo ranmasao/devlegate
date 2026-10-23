@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dd3ca11b0356971ef9320c8778d2500f5f826eec",
+  "conclusion": "completed",
+  "control_head": "e625816702d41e2bbe2ef1e244402a6b57256dcc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-097",
+  "execution_id": "4f26119377cf4d50ab094a24f33069c3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-097",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-097/4f26119377cf4d50ab094a24f33069c3.md",
+  "report_sha256": "f0442489b08aea13cc1e747939b59ce422ad86617d44b93bc78f2a84195ae9ba",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-097",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused regression tests, Ruff, compilation, and whitespace checks passed. The broader three-module test command exceeded the 120-second execution limit after progressing through its suite.",
+    "summary": "Made pending-execution recovery transition-aware for compatible control descendants and completed rework predecessor publication. Preserved proven dirty rework workspaces, accepted the known inert review-binding compatibility fields, and documented the replay contract."
+  },
+  "workspace_head": "06b842f938a0cd3f53e735b680b1b7091fe849ae"
+}
