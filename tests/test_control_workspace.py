@@ -2786,6 +2786,103 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     )
 
 
+def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeypatch):
+    """A final rework-preparation replay preserves interrupted worker edits."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    calls = []
+
+    def first_worker(workspace, _prompt, **_kwargs):
+        calls.append("first")
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(devlegate._workers, "run", first_worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n"
+        "-->\n"
+        "Preserve the interrupted worker edit.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "return ticket for rework")
+    git(control, "push", "origin", "devlegate/control")
+    monkeypatch.setattr(
+        devlegate,
+        "_stop_before_admission",
+        lambda: devlegate._state.get("phase") == "agent_pending",
+    )
+    assert run_test_iteration(devlegate) == 0
+
+    original_install = devlegate._prepare_rework_remote_predecessor
+
+    def install_then_crash(*args):
+        original_install(*args)
+        raise RuntimeError("simulated process loss after predecessor publication")
+
+    monkeypatch.setattr(
+        devlegate, "_prepare_rework_remote_predecessor", install_then_crash
+    )
+    with pytest.raises(RuntimeError, match="simulated process loss"):
+        run_test_iteration(devlegate)
+    assert devlegate._state["rework_provenance"]["preparation_stage"] == (
+        "remote_predecessor_installed"
+    )
+    execution = Path(devlegate._state["execution_path"])
+    predecessor = devlegate._state["execution_remote_head"]
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == predecessor
+    marker = execution / "interrupted-worker-edit.txt"
+    marker.write_text("preserve\n")
+    # This is a previously persisted v1 serialization, not new authority.
+    persisted = dict(devlegate._state)
+    rework = dict(persisted["rework_provenance"])
+    rework["review"] = {
+        **rework["review"],
+        "legacy": False,
+        "legacy_boundary": None,
+    }
+    persisted["rework_provenance"] = rework
+    devlegate._runtime_store.replace(persisted)
+
+    # An unrelated control descendant must be validated and adopted, not mask
+    # the compatible workspace replay.
+    (control / "kanban/todo/T-2.md").write_text(ticket("Later ticket", "later"))
+    git(control, "add", "kanban/todo/T-2.md")
+    git(control, "commit", "-m", "add unrelated ticket")
+    git(control, "push", "origin", "devlegate/control")
+
+    restarted = Devlegate(config)
+
+    def resumed_worker(workspace, _prompt, **_kwargs):
+        calls.append("resumed")
+        assert workspace.path == execution
+        assert marker.read_text() == "preserve\n"
+        return WorkerRunResult(0, None, WorkerClaim("blocked", "checked", (), ()), None)
+
+    monkeypatch.setattr(restarted._workers, "run", resumed_worker)
+    assert run_test_iteration(restarted) == 0
+    assert calls == ["first", "resumed"]
+    assert marker.read_text() == "preserve\n"
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == predecessor
+    assert (
+        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1")
+        .stdout.split()[0]
+        == predecessor
+    )
+
+
 def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
     tmp_path,
 ):
