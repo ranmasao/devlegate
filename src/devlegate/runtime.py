@@ -3701,6 +3701,7 @@ class ServiceEngine:
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
             state.pop("selected_ticket_title", None)
+            state.pop("selected_ticket_dependencies", None)
             state.pop("worker_prompt_sha256", None)
             state.pop("worker_prompt_directive", None)
             state.pop("pending_execution_report", None)
@@ -4710,6 +4711,7 @@ class ServiceEngine:
                 selected_ticket_id=selected_ticket.id,
                 selected_ticket_body=selected_ticket.body,
                 selected_ticket_title=selected_ticket.title,
+                selected_ticket_dependencies=list(selected_ticket.depends_on),
                 execution_ticket_id=selected_ticket.id,
                 execution_base_head=execution_base_head,
                 # The effective base may advance before a worker starts, but
@@ -5950,12 +5952,22 @@ class ServiceEngine:
         ticket = ticket_store.by_id.get(ticket_id)
         selected_body = self._state.get("selected_ticket_body")
         selected_title = self._state.get("selected_ticket_title")
+        selected_dependencies = self._state.get("selected_ticket_dependencies")
+        if not isinstance(selected_dependencies, list) or not all(
+            isinstance(dependency, str) for dependency in selected_dependencies
+        ):
+            return (
+                "control descendant cannot prove the admitted ticket dependencies; "
+                "per-execution reconciliation is required"
+            )
         if (
             ticket is None
             or ticket.state != "todo"
             or ticket not in ticket_store.runnable
             or ticket.body != selected_body
             or (isinstance(selected_title, str) and ticket.title != selected_title)
+            or ticket.depends_on
+            != tuple(selected_dependencies)
         ):
             return (
                 "control descendant changed execution ticket eligibility; "
