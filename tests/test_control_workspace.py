@@ -3282,13 +3282,17 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         ("worktree", "add", str(manager.path), manager.branch),
         ("submodule", "update", "--init", "--recursive"),
     ]
-    assert len(recovery_commands) == 54
-    assert len(recovery_commands) - len(effects) == 49
+    assert len(recovery_commands) == 55
+    assert len(recovery_commands) - len(effects) == 50
+    assert recovery_commands[4] == ("show-ref", "--verify", "--quiet", evidence)
+    assert recovery_commands[6] == ("show-ref", "--verify", "--quiet", evidence)
+    assert recovery_commands[7] == ("show-ref", "--verify", evidence)
     assert [command[:2] for command in recovery_commands] == [
         ("rev-parse", "--verify"), ("worktree", "list"),
         ("rev-parse", "--show-toplevel"), ("symbolic-ref", "--quiet"),
         ("show-ref", "--verify"), ("update-ref", evidence),
-        ("show-ref", "--verify"), ("rev-parse", "--verify"),
+        ("show-ref", "--verify"), ("show-ref", "--verify"),
+        ("rev-parse", "--verify"),
         ("rev-parse", "--verify"), ("worktree", "list"),
         ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
         ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),

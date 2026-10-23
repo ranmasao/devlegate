@@ -41,8 +41,8 @@ def _control_lineage_runner(
     def runner(_cwd, *args, check):
         nonlocal evidence_reads
         calls.append(args)
-        if args[:2] == ("show-ref", "--verify"):
-            reference = args[2]
+        if args[:3] == ("show-ref", "--verify", "--quiet"):
+            reference = args[3]
             if reference.startswith("refs/devlegate/recovery/control/"):
                 evidence_reads += 1
                 if unreadable_initially and evidence_reads == 1:
@@ -53,6 +53,11 @@ def _control_lineage_runner(
                     return subprocess.CompletedProcess(
                         [], 128, "", "repository unreadable"
                     )
+            if reference in refs:
+                return subprocess.CompletedProcess([], 0, "", "")
+            return subprocess.CompletedProcess([], 1, "", "")
+        if args[:2] == ("show-ref", "--verify"):
+            reference = args[2]
             if reference in refs:
                 return subprocess.CompletedProcess(
                     [], 0, f"{refs[reference]} {reference}\n", ""
@@ -103,14 +108,27 @@ def test_control_lineage_absent_evidence_is_created_and_reproved(monkeypatch, tm
         (
             None,
             False,
-            ("show-ref", "update-ref", "show-ref", "rev-parse", "reset"),
+            (
+                "show-ref", "update-ref", "show-ref", "show-ref", "rev-parse",
+                "reset",
+            ),
         ),
         (
             "a" * 40,
             False,
-            ("show-ref", "rev-parse", "show-ref", "rev-parse", "reset"),
+            (
+                "show-ref", "show-ref", "rev-parse", "show-ref", "show-ref",
+                "rev-parse", "reset",
+            ),
         ),
-        ("c" * 40, False, ("show-ref", "rev-parse", "show-ref", "rev-parse")),
+        (
+            "c" * 40,
+            False,
+            (
+                "show-ref", "show-ref", "rev-parse", "show-ref", "show-ref",
+                "rev-parse",
+            ),
+        ),
         (None, True, ("show-ref",)),
     ],
 )
