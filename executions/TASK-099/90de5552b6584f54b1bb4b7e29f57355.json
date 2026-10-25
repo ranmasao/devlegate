@@ -1,0 +1,29 @@
+{
+  "code_base_head": "844318e9e14d685d8390a7647d76960f4d009f37",
+  "conclusion": "completed",
+  "control_head": "672d7fad6d95da13fea3700166c3d39a4268672e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-099",
+  "execution_id": "90de5552b6584f54b1bb4b7e29f57355",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-099",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-099",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reworked workspace cleanup eligibility to use current done-state, managed Git identity, dependency checks, and freshly fetched product ancestry instead of historical acceptance-report reconstruction. Added real-Git coverage for zero-delta and changed published done worktrees, and tightened preservation of unregistered checkouts."
+  },
+  "workspace_head": "5df2c557d0326c5238b84e317dcd98d9980b9e6c"
+}
