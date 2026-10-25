@@ -1,0 +1,29 @@
+{
+  "code_base_head": "844318e9e14d685d8390a7647d76960f4d009f37",
+  "conclusion": "completed",
+  "control_head": "25d2e043c0fd39e2336766745708e2d0d2564d00",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-099",
+  "execution_id": "e47dc897c04b426fb3dfa9c2660b40ca",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-099",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-099",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Cleanup now revalidates the unified current-state eligibility proof immediately before local and upstream execution-ref deletion. Added real-Git crash/restart coverage for worktree, local-ref, and upstream-ref retirement boundaries, plus changed-ref rejection after interruption."
+  },
+  "workspace_head": "4b14ae51023a444bf673e1b74830455ed519699d"
+}
