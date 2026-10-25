@@ -6674,12 +6674,15 @@ class ServiceEngine:
         expected_head: str,
         *,
         report: ExecutionReport | None = None,
+        candidate: dict[str, str] | None = None,
     ) -> None:
         """Release only exact, already-published disposable execution refs."""
         if not branch.startswith("devlegate/work/") or not _is_git_identity(
             expected_head
         ):
             raise WorkflowBlockedError("execution ref identity is not canonical")
+        if report is not None and candidate is not None:
+            raise ValueError("execution retirement validation is ambiguous")
         local_ref = f"refs/heads/{branch}"
         local_head = self._resolve_commit_runtime(self.repo, local_ref)
         manager = ExecutionWorkspaceManager(
@@ -6707,6 +6710,11 @@ class ServiceEngine:
                 raise WorkflowBlockedError("local execution ref changed before removal")
             if report is not None:
                 self._revalidate_cleanup_retirement(report)
+            elif candidate is not None:
+                # A worktree can already be absent after an interrupted pass.
+                # Re-prove durable ownership, ref identity, dependencies, and
+                # product ancestry immediately before deleting its local ref.
+                self._observe_cleanup_candidate(candidate, manager._registrations())
             # Recheck the exact observed head before the helper's compare-
             # and-delete transaction.  The helper also rechecks all Git
             # worktree registrations so foreign checkouts are retained.
@@ -6736,6 +6744,20 @@ class ServiceEngine:
             raise WorkflowBlockedError("remote execution ref changed before removal")
         if report is not None:
             self._revalidate_cleanup_retirement(report)
+            remote_head = remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{branch}",
+                runner=self._git_runtime,
+            )
+            if remote_head != expected_head:
+                raise WorkflowBlockedError(
+                    "remote execution ref changed before removal"
+                )
+        elif candidate is not None:
+            # Repeat the unified current-state proof after local-ref retirement;
+            # the upstream lease alone cannot establish lifecycle safety.
+            self._observe_cleanup_candidate(candidate, manager._registrations())
             remote_head = remote_ref(
                 self.repo,
                 self.remote_name,
@@ -7223,7 +7245,9 @@ class ServiceEngine:
                     if current is not None:
                         manager.retire(current, target["head"])
                     self._observe_cleanup_candidate(target, manager._registrations())
-                    self._retire_execution_refs(manager.branch, target["head"])
+                    self._retire_execution_refs(
+                        manager.branch, target["head"], candidate=target
+                    )
                     decision["resources"] = {
                         "worktree": "absent",
                         "local_ref": "absent",

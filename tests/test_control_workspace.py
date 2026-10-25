@@ -734,6 +734,142 @@ def test_done_published_changed_worktree_retires_without_historical_report(
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
 
 
+@pytest.mark.parametrize(
+    ("boundary", "resources"),
+    [
+        ("worktree", {"worktree": False, "local": True, "remote": True}),
+        ("local", {"worktree": False, "local": False, "remote": True}),
+        ("remote", {"worktree": False, "local": False, "remote": False}),
+    ],
+)
+def test_workspace_cleanup_restart_converges_after_each_retirement_boundary(
+    tmp_path, monkeypatch, boundary, resources
+):
+    """A restarted owner resumes from each completed destructive effect."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "boundary-crash")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+
+    if boundary == "worktree":
+        original_retire = ExecutionWorkspaceManager.retire
+
+        def crash_after_worktree(*args, **kwargs):
+            original_retire(*args, **kwargs)
+            raise RuntimeError("crash after worktree retirement")
+
+        monkeypatch.setattr(ExecutionWorkspaceManager, "retire", crash_after_worktree)
+    elif boundary == "local":
+        original_delete = runtime_module.delete_branch_if_unoccupied
+
+        def crash_after_local(*args, **kwargs):
+            original_delete(*args, **kwargs)
+            raise RuntimeError("crash after local ref retirement")
+
+        monkeypatch.setattr(
+            runtime_module, "delete_branch_if_unoccupied", crash_after_local
+        )
+    else:
+        original_push = runtime_module.push_refs
+
+        def crash_after_remote(*args, **kwargs):
+            original_push(*args, **kwargs)
+            raise RuntimeError("crash after remote ref retirement")
+
+        monkeypatch.setattr(runtime_module, "push_refs", crash_after_remote)
+
+    with pytest.raises(RuntimeError, match="crash after"):
+        engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert workspace.path.exists() is resources["worktree"]
+    assert (
+        resolve_commit(working, f"refs/heads/{workspace.branch}") is not None
+    ) is resources["local"]
+    assert bool(
+        git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
+    ) is resources["remote"]
+
+    monkeypatch.undo()
+    restarted = Devlegate(config)
+    restarted.cleanup_workspaces(apply=True, limit=1)
+
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+    assert not git(
+        working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
+    ).stdout
+
+
+def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "changed-ref-crash")
+    assert (
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
+        == 0
+    )
+    original_retire = ExecutionWorkspaceManager.retire
+
+    def crash_after_worktree(*args, **kwargs):
+        original_retire(*args, **kwargs)
+        raise RuntimeError("crash after worktree retirement")
+
+    monkeypatch.setattr(ExecutionWorkspaceManager, "retire", crash_after_worktree)
+    with pytest.raises(RuntimeError, match="crash after worktree"):
+        engine.cleanup_workspaces(apply=True, limit=1)
+    monkeypatch.undo()
+
+    git(working, "checkout", "-b", "external-change", checkpoint)
+    (working / "external.txt").write_text("not published\n")
+    git(working, "add", "external.txt")
+    git(working, "commit", "-m", "external execution ref change")
+    changed = git(working, "rev-parse", "HEAD").stdout.strip()
+    git(working, "branch", "-f", workspace.branch, changed)
+    git(working, "checkout", engine.remote_branch)
+    assert git(
+        working,
+        "push",
+        "--force",
+        "origin",
+        f"{workspace.branch}:refs/heads/{workspace.branch}",
+    ).returncode == 0
+
+    restarted = Devlegate(config)
+    result = restarted.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "blocked"
+    assert result["decisions"][0]["reason"] == (
+        "execution workspace HEAD is not published"
+    )
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") == changed
+    assert git(
+        working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
+    ).stdout
+
+
 def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
