@@ -1677,16 +1677,107 @@ def test_real_service_recovers_zero_delta_accepted_integration_after_control_adv
 
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
-        service.wait_for(
-            lambda: _disk_state(config)["phase"] == "idle"
-            and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+        remote_ref = "refs/devlegate/tests/zero-delta-accepted-control"
+
+        def integration_published():
+            remote = git(
+                engine.control_worktree,
+                "ls-remote",
+                "origin",
+                "refs/heads/devlegate/control",
+            ).stdout.split()
+            if not remote:
+                return False
+            git(
+                engine.control_worktree,
+                "fetch",
+                "origin",
+                f"{remote[0]}:{remote_ref}",
+            )
+            return (
+                _disk_state(config)["phase"] == "idle"
+                and (engine.control_worktree / "kanban/done/T-1.md").is_file()
+                and bool(
+                    git(
+                        engine.control_worktree,
+                        "log",
+                        "-1",
+                        "--format=%H",
+                        remote_ref,
+                        "--",
+                        "kanban/done/T-1.md",
+                    ).stdout.strip()
+                )
+            )
+
+        service.wait_for(integration_published)
+        service.stop()
+        # A later control update must not make the durable integration
+        # transition look like it has a different parent.
+        git(publisher_control, "fetch", "origin", "devlegate/control")
+        git(publisher_control, "reset", "--hard", "origin/devlegate/control")
+        (publisher_control / "post-integration.txt").write_text("preserve update\n")
+        git(publisher_control, "add", "post-integration.txt")
+        git(publisher_control, "commit", "-m", "post-integration control update")
+        git(publisher_control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        remote_control = git(
+            engine.control_worktree,
+            "ls-remote",
+            "origin",
+            "refs/heads/devlegate/control",
+        ).stdout.split()[0]
+        git(
+            engine.control_worktree,
+            "fetch",
+            "origin",
+            f"{remote_control}:{remote_ref}",
         )
-        done_commit = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        integration_commits = git(
+            engine.control_worktree,
+            "log",
+            "--format=%H",
+            remote_ref,
+            "--",
+            "kanban/done/T-1.md",
+        ).stdout.splitlines()
+        control_topology = git(
+            engine.control_worktree,
+            "log",
+            "--graph",
+            "--format=%H %P %s",
+            "-n",
+            "12",
+            remote_ref,
+        ).stdout
+        topology_diagnostic = (
+            f"remote control tip: {remote_control}\n{control_topology}"
+        )
         assert control_head != predecessor
+        assert len(integration_commits) == 1, topology_diagnostic
+        integration_commit = integration_commits[0]
+        assert integration_commit != remote_control
         assert git(
-            engine.control_worktree, "rev-parse", f"{done_commit}^"
-        ).stdout.strip() == predecessor
-        assert (engine.control_worktree / "kanban/backlog/DRAFT-007.md").is_file()
+            engine.control_worktree, "rev-parse", f"{integration_commit}^"
+        ).stdout.strip() == predecessor, topology_diagnostic
+        assert (
+            git(
+                engine.control_worktree,
+                "show",
+                f"{remote_ref}:kanban/backlog/DRAFT-007.md",
+            ).stdout
+            == (
+                '---\n"type": "devlegate.ticket"\n'
+                '"title": "Later ticket"\n---\n\nLater\n'
+            )
+        )
+        assert (
+            git(
+                engine.control_worktree,
+                "show",
+                f"{remote_ref}:post-integration.txt",
+            ).stdout
+            == "preserve update\n"
+        )
         published_product = git(
             git_fixture["working"], "rev-parse", "origin/main"
         ).stdout.strip()
