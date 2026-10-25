@@ -91,10 +91,27 @@ def validate_execution_binding(
         raise ValueError("persisted execution workspace binding is incomplete")
     if require_pre_worker and state.get("phase") != "agent_pending":
         raise ValueError("automatic workspace recovery is limited to pre-worker state")
-    # ``None`` is a durable pre-launch marker. A missing key is older or
-    # incomplete state, not proof that a worker was never handed off.
-    if "worker_identity" not in state or state.get("worker_identity") is not None:
+    if not has_pre_worker_absence_proof(state):
         raise ValueError("persisted worker ownership prevents workspace recovery")
     if state.get("pending_execution_report") is not None:
         raise ValueError("durable worker result prevents workspace recovery")
     return values  # type: ignore[return-value]
+
+
+def has_pre_worker_absence_proof(state: Mapping[str, object]) -> bool:
+    """Return whether durable state proves no worker handoff occurred.
+
+    Versions before ``worker_identity`` was serialized wrote an
+    ``agent_pending`` state immediately before workspace preparation.  The
+    worker protocol durably enters ``agent_running`` before launching a worker,
+    so that exact old layout is a safe migration case.  Do not extend this to
+    staged, reported, or running state: missing ownership is otherwise not a
+    proof of absence.
+    """
+    if "worker_identity" in state:
+        return state.get("worker_identity") is None
+    return (
+        state.get("phase") == "agent_pending"
+        and state.get("execution_stage") is None
+        and state.get("pending_execution_report") is None
+    )

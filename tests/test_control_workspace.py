@@ -2826,6 +2826,10 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
     )
     assert run_test_iteration(devlegate) == 0
 
+    # The first hook creates the durable pending rework state. Allow the next
+    # iteration to execute preparation and crash at the publication boundary.
+    monkeypatch.setattr(devlegate, "_stop_before_admission", lambda: False)
+
     original_install = devlegate._prepare_rework_remote_predecessor
 
     def install_then_crash(*args):
@@ -2858,7 +2862,9 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
 
     # An unrelated control descendant must be validated and adopted, not mask
     # the compatible workspace replay.
-    (control / "kanban/todo/T-2.md").write_text(ticket("Later ticket", "later"))
+    (control / "kanban/todo/T-2.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Later ticket"\n---\nlater\n'
+    )
     git(control, "add", "kanban/todo/T-2.md")
     git(control, "commit", "-m", "add unrelated ticket")
     git(control, "push", "origin", "devlegate/control")
@@ -2875,11 +2881,15 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
     assert run_test_iteration(restarted) == 0
     assert calls == ["first", "resumed"]
     assert marker.read_text() == "preserve\n"
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == predecessor
+    resumed_head = git(execution, "rev-parse", "HEAD").stdout.strip()
+    assert resumed_head != predecessor
+    assert git(execution, "merge-base", predecessor, resumed_head).stdout.strip() == (
+        predecessor
+    )
     assert (
         git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1")
         .stdout.split()[0]
-        == predecessor
+        == resumed_head
     )
 
 

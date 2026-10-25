@@ -106,7 +106,7 @@ from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     run_update_base,
 )
-from devlegate.recovery import classify_stage
+from devlegate.recovery import classify_stage, has_pre_worker_absence_proof
 from devlegate.recovery_transactions import (
     reconcile_control_lineage,
     recover_stranded_execution,
@@ -3232,6 +3232,18 @@ class ServiceEngine:
             raise DevlegateError(str(error)) from error
         if not isinstance(state, dict) or not isinstance(state.get("phase"), str):
             raise DevlegateError(f"invalid state file: {self._state_file}")
+        # Migrate only the old, durably pre-launch layout.  A worker is always
+        # preceded by an agent_running write, so this does not turn uncertain
+        # worker ownership into permission to reuse a workspace.
+        if (
+            "worker_identity" not in state
+            and has_pre_worker_absence_proof(state)
+        ):
+            state["worker_identity"] = None
+            try:
+                self._runtime_store.replace(state)
+            except RuntimeStoreError as error:
+                raise DevlegateError(str(error)) from error
         self._validate_state_invariant(state)
         return state
 
@@ -3697,6 +3709,10 @@ class ServiceEngine:
     ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
+        if phase == "agent_pending" and "worker_identity" not in state:
+            # Every newly written pre-worker state carries explicit ownership
+            # absence; only _load_state handles the constrained legacy layout.
+            state["worker_identity"] = None
         if phase == "idle":
             state.pop("selected_ticket_id", None)
             state.pop("selected_ticket_body", None)
@@ -4203,6 +4219,7 @@ class ServiceEngine:
                     _status_fingerprint(""),
                 ),
             },
+            include_preparation_refusals=True,
         )
         if (
             pending_agent_execution
@@ -4236,6 +4253,7 @@ class ServiceEngine:
                         _status_fingerprint(""),
                     ),
                 },
+                include_preparation_refusals=True,
             )
         self._publish_ticket_projection(
             ticket_store,
@@ -4285,6 +4303,14 @@ class ServiceEngine:
                 execution_plan.control,
             )
         if execution_plan.action == "blocked":
+            if pending_agent_execution and execution_plan.reason.startswith(
+                (
+                    "control revision changed",
+                    "control history diverged",
+                    "control descendant",
+                )
+            ):
+                raise WorkspacePreparationBlockedError(execution_plan.reason)
             raise DevlegateError(execution_plan.reason)
         accepted_integration = self._state.get("accepted_integration")
         if accepted_integration is not None:

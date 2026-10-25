@@ -136,6 +136,8 @@ def persist_agent_running(
         control_head=control_head,
         selected_ticket_id="T-1",
         selected_ticket_body="work\n",
+        selected_ticket_title="Control ticket",
+        selected_ticket_dependencies=[],
         execution_ticket_id="T-1",
         execution_base_head=code_head,
         execution_control_head=control_head,
@@ -326,6 +328,8 @@ def _persist_pending_execution(
         control_head=control_head,
         selected_ticket_id="T-1",
         selected_ticket_body="work\n",
+        selected_ticket_title="Control ticket",
+        selected_ticket_dependencies=[],
         execution_ticket_id="T-1",
         execution_base_head=base_head,
         execution_control_head=control_head,
@@ -334,6 +338,7 @@ def _persist_pending_execution(
         execution_id=execution_id,
         execution_start_head=start_head or getattr(workspace, "head", base_head),
         execution_remote_head=None,
+        worker_identity=None,
     )
 
 def _write_prior_execution_receipt(control, *, execution_id, base, path, head):
