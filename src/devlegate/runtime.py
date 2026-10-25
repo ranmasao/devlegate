@@ -3190,7 +3190,8 @@ class ServiceEngine:
         except BlockingIOError as error:
             handle.close()
             raise DevlegateError(
-                "another devlegate instance is already running for this checkout"
+                "another devlegate instance is already running for this checkout "
+                f"(runtime lock: {lock_file})"
             ) from error
         return handle
 

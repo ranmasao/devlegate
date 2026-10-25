@@ -405,6 +405,24 @@ def _wait_process_death(service):
     service._collect_output()
     service._abruptly_killed = True
     assert service.process.returncode == -signal.SIGKILL
+    # Reaping the service only proves its PID exited. A non-exec descendant
+    # could still retain the inherited flock open-file description.
+    deadline = time.monotonic() + 20
+    while True:
+        with service.locator.lock_path.open("a+") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                return
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "service exited but its runtime lock remains held: "
+                f"{service.locator.lock_path}"
+            )
+        time.sleep(0.02)
 
 def _disk_state(config):
     return ServiceEngine(config)._runtime_store.load()
