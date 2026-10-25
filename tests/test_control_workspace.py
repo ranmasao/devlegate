@@ -591,7 +591,7 @@ def test_unregistered_checkout_keeps_exact_ref_identity_for_independent_cleanup(
     assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") == base
 
 
-def test_proven_done_unregistered_checkout_retires_refs_but_retains_checkout(
+def test_done_unregistered_checkout_retains_all_resources(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -605,26 +605,10 @@ def test_proven_done_unregistered_checkout_retires_refs_but_retains_checkout(
     checkout = engine.execution_worktree_root / "work/T-1"
     checkout.mkdir(parents=True)
     (checkout / "retain.txt").write_text("unknown checkout\n")
-    report = SimpleNamespace(
-        ticket_id="T-1",
-        execution_id="unregistered-cleanup",
-        execution_branch=branch,
-        execution_path=str(checkout),
-        workspace_head=base,
-    )
     monkeypatch.setattr(
         engine,
         "_ticket_store",
         lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
-    )
-    monkeypatch.setattr(engine, "_accepted_execution_report", lambda _ticket_id: report)
-    monkeypatch.setattr(
-        engine,
-        "_find_accepted_integration_commit",
-        lambda _ticket_id, _report: "a" * 40,
-    )
-    monkeypatch.setattr(
-        engine, "_prove_published_product_checkpoint", lambda *_a, **_k: None
     )
 
     result = engine.cleanup_workspaces(apply=True, limit=1)
@@ -633,20 +617,17 @@ def test_proven_done_unregistered_checkout_retires_refs_but_retains_checkout(
         {
             "ticket_id": "T-1",
             "status": "blocked",
-            "reason": (
-                "workspace registration is absent; checkout retained; "
-                "execution refs proven"
-            ),
+            "reason": "workspace registration is absent or ambiguous",
             "resources": {
                 "worktree": "present",
-                "local_ref": "absent",
-                "upstream_ref": "absent",
+                "local_ref": "present",
+                "upstream_ref": "present",
             },
         }
     ]
     assert (checkout / "retain.txt").read_text() == "unknown checkout\n"
-    assert resolve_commit(engine.repo, f"refs/heads/{branch}") is None
-    assert git(working, "ls-remote", "origin", f"refs/heads/{branch}").stdout == ""
+    assert resolve_commit(engine.repo, f"refs/heads/{branch}") == base
+    assert git(working, "ls-remote", "origin", f"refs/heads/{branch}").stdout
 
 
 def test_workspace_cleanup_rejects_symlinked_work_root_without_traversal(tmp_path):
@@ -673,6 +654,84 @@ def test_workspace_cleanup_rejects_symlinked_work_root_without_traversal(tmp_pat
         }
     ]
     assert (external / "T-1" / "retain.txt").read_text() == "retain\n"
+
+
+def test_done_clean_worktree_retires_without_historical_execution_report(
+    tmp_path, monkeypatch
+):
+    """Current Git ownership and product ancestry are sufficient for retirement."""
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_accepted_execution_report",
+        lambda _ticket_id: (_ for _ in ()).throw(
+            AssertionError("history was consulted")
+        ),
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"] == [
+        {
+            "ticket_id": "T-1",
+            "status": "retired",
+            "reason": "done execution is published and disposable",
+            "resources": {
+                "worktree": "absent",
+                "local_ref": "absent",
+                "upstream_ref": "absent",
+            },
+        }
+    ]
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+
+
+def test_done_published_changed_worktree_retires_without_historical_report(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    workspace.path.joinpath("published.txt").write_text("published\n")
+    assert git(workspace.path, "add", "published.txt").returncode == 0
+    assert git(workspace.path, "commit", "-m", "published execution").returncode == 0
+    head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    assert git(
+        workspace.path, "push", "origin", f"{head}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    assert git(
+        workspace.path, "push", "origin", f"{head}:refs/heads/{engine.remote_branch}"
+    ).returncode == 0
+    monkeypatch.setattr(
+        engine,
+        "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+    )
+
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+
+    assert result["decisions"][0]["status"] == "retired"
+    assert not workspace.path.exists()
+    assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
 
 
 def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
@@ -864,19 +923,9 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
             service.wait_for(
                 lambda: (
                     resolve_commit(
-                        working, f"refs/heads/{workspaces['T-1'].branch}"
-                    )
-                    is None
-                    and resolve_commit(
                         working, f"refs/heads/{workspaces['T-2'].branch}"
                     )
                     is None
-                    and not git(
-                        working,
-                        "ls-remote",
-                        "origin",
-                        f"refs/heads/{workspaces['T-1'].branch}",
-                    ).stdout
                     and not git(
                         working,
                         "ls-remote",
@@ -895,7 +944,7 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
     assert (control / "kanban/done/T-1.md").is_file()
 
 
-def test_hosted_cleanup_retires_trailerless_history_and_retains_ambiguous_history(
+def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
     tmp_path,
 ):
     """Legacy exact-parent proof is eligible; an unrelated generation is not."""
@@ -976,13 +1025,13 @@ def test_hosted_cleanup_retires_trailerless_history_and_retains_ambiguous_histor
         assert status.returncode == 0
         assert any(
             item["ticket_id"] == "T-2"
-            and "ambiguous or missing completed execution evidence" in item["reason"]
+            and item["reason"] == "done execution is published and disposable"
             for item in json.loads(status.stdout)["decisions"]
         )
 
 
-def test_hosted_cleanup_retains_requeued_trailerless_generation(tmp_path):
-    """An older trailerless report cannot authorize a later done generation."""
+def test_hosted_cleanup_retires_requeued_done_generation_without_report(tmp_path):
+    """A currently done, published generation does not need legacy report proof."""
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
@@ -1003,8 +1052,7 @@ def test_hosted_cleanup_retains_requeued_trailerless_generation(tmp_path):
         control, workspace, "T-1", checkpoint, "legacy-old", trailers=False
     )
 
-    # The second generation deliberately has no report. Before the stronger
-    # proof this could reuse legacy-old because its control head is ancestral.
+    # The second generation deliberately has no report.
     (control / "kanban/done/T-1.md").rename(control / "kanban/todo/T-1.md")
     git(control, "add", "-A")
     git(control, "commit", "-m", "requeue T-1")
@@ -1027,21 +1075,11 @@ def test_hosted_cleanup_retains_requeued_trailerless_generation(tmp_path):
             )
             is True
         )
-        assert workspace.path.is_dir()
-        assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
-        assert git(
+        assert not workspace.path.exists()
+        assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+        assert not git(
             working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
         ).stdout
-        status = service.cli("clean", "--json")
-        assert status.returncode == 0
-        assert any(
-            item["ticket_id"] == "T-1"
-            and (
-                "accepted integration is not proven" in item["reason"]
-                or "ambiguous or missing completed execution evidence" in item["reason"]
-            )
-            for item in json.loads(status.stdout)["decisions"]
-        )
 
 
 def test_workspace_cleanup_status_is_aggregate_not_last_bounded_pass(tmp_path):
@@ -1184,7 +1222,7 @@ def test_workspace_cleanup_reports_remote_observation_failure(tmp_path, monkeypa
     assert engine._state.get("mutable_receipts", {}) == {}
 
 
-def test_workspace_cleanup_contains_remote_provenance_observation_failure(
+def test_workspace_cleanup_does_not_require_remote_provenance_history(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1219,8 +1257,8 @@ def test_workspace_cleanup_contains_remote_provenance_observation_failure(
     assert result["decisions"] == [
         {
             "ticket_id": "T-1",
-            "status": "skipped",
-            "reason": "upstream execution refs could not be observed",
+            "status": "eligible",
+            "reason": "done execution is published and disposable",
         }
     ]
     assert workspace.path.is_dir()
