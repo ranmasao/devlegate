@@ -58,3 +58,11 @@ If publication/restart behavior at the real-service boundary is changed, add **s
 - Setup: remote target drifts before CAS/lease publication; action: publish; expected: refuse stale write.
 - Setup: crash at `local-pending` and `remote-pending`; action: replay; expected: exact-stage safe continuation or halt.
 - Setup: displaced lineage is pinned but publication is interrupted; action: retry; expected: verify exact evidence and never destroy old history.
+
+## Supplemental reconciliation/recovery architecture focus
+
+The measured 0.5.7 architecture grouped `_reconcile_resume_owned` (~156 LOC), `_normalize_stranded_execution` (~147), `_recover_interrupted_execution` (~189), `_merge_accepted_product_descendant` (~138), and `_integrate_accepted` (~136) under the central engine. The measured `reconciliation_transactions.py` was ~568 LOC. This **does not establish faulty coupling**: these routines legitimately share durable phases and lineage proof obligations.
+
+Expand the transaction inventory into an explicit boundary table: **observation and identity**, **lineage/evidence proof**, **guarded effect** (including rebase, Git ref CAS, remote publication and cleanup), **durable stage**, **re-entry after crash or ambiguous transport outcome**, and **operator disposition**. Identify minimum persisted evidence for recognizing an already completed effect; preserve the exact pre-effect re-observation/lease that excludes races. Prefer narrow typed proof helpers to methods that silently mutate shared `_state` or implicitly fetch Git refs.
+
+Cross-check recovery contracts accepted through TASK-097 rather than creating a parallel recovery architecture. Document concrete semantic or executed-command gains; do not treat a smaller runtime module, fewer import edges or lack of direct self-call cycles as evidence of safety or throughput improvement.

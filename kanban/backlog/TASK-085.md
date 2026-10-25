@@ -23,3 +23,11 @@ Audit and redesign the conceptual boundaries and observability for **autonomous,
 - Do not redo active TASK-083 or TASK-076; assess after their respective behavior is known.
 - Deliver failure-mode matrix, transition/state diagram, diagnostics schema draft, autonomous-reconciliation safety criteria, and phased plan with HitL reduction as measurable objective.
 - Backlog only until current runtime stabilization and scheduling decision.
+
+## Additional recovery-boundary evidence to incorporate
+
+A static architecture scan of the measured 0.5.7 runtime identified a 1,292-line `_run_iteration_body` calling **49 distinct internal methods** and a cross-cutting recovery cluster: `_recover_interrupted_execution` (~189 LOC), `_normalize_stranded_execution` (~147), `_reconcile_resume_owned` (~156), `_prepare_execution_workspace` (~98), alongside `_make_execution_plan`, `_make_status_snapshot` and durable `_save_state`. These counts describe static shape, **not** unsafe behavior or complete call/effect reachability.
+
+Use those entrypoints to map **observation → proof/validation → authorized resolution → disposition** and persistent phase/re-entry boundaries. In particular, track immutable admission identity separately from mutable Git/control observations, exact worker ownership and pre-worker markers, review provenance compatibility, preserved dirty worktree contents, predecessor publication, restart idempotency and diagnosable missing proofs. A safe read-only `status`/`diagnose` projection must not silently acquire mutation authority or treat stale snapshots as current admission evidence.
+
+**Avoid duplicate implementation:** reconcile the proposed failure-mode and autonomous recovery taxonomy with TASK-097's existing recovery contract and actual accepted integrated code when this ticket is scheduled. Explicitly label already-implemented semantics, unresolved gaps and incident-specific failure evidence; do not rewrite recovery solely because the methods are large. The deliverable remains a diagnosis/contract proposal plus narrowly bounded follow-ups, not an immediate systemwide runtime extraction.

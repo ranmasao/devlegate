@@ -57,3 +57,11 @@ If the changed behavior reaches a production-process crash/restart invariant, se
 - Setup: interrupt after branch creation but before worktree registration; action: recover; expected: exact-identity reconciliation or safe stop.
 - Setup: checkpoint commit fails or submodule metadata is inconsistent; action: execute lifecycle; expected: no invalid checkpoint publication.
 - Setup: service owner is lost or shutdown starts; action: attempt workspace mutation; expected: no unauthorized operation.
+
+## Supplemental architecture focus (measured 0.5.7 baseline)
+
+The measured module sizes were `execution_workspace.py` **828 physical lines**, `recovery_workspace.py` **283**, and `runtime.py` **11,351**. `ServiceEngine._prepare_execution_workspace` was ~98 LOC, while `cleanup_workspaces` was ~343 LOC, `_assert_cleanup_has_no_execution_dependency` ~218, `_workspace_cleanup_cohort` ~144, `_retire_execution_refs` ~106 and `_revalidate_cleanup_retirement` ~36. These counts are navigation clues, not refactoring quotas or proof of defects.
+
+For worktree lifecycle, separate **read-only observation/ownership proof**, **admitted preparation/reuse**, **rework predecessor publication**, and **cleanup/ref retirement** in the required inventory. Specifically record when dirty worktrees may be preserved versus when they are unsafe, what evidence protects a previously completed side effect, and which checks must be revalidated immediately before destructive mutation. Analyze cleanup as a distinct **high-risk proof boundary**; do not extract an indiscriminate cleanup manager, move ownership to a background service, or introduce implicit Git reads/writes through helpers.
+
+Keep actual Git effects, persisted state and safety-critical order measurable. The static call graph does not capture inner Git subprocesses or indirect state writes, so the existing executed-command and negative real-worktree tests remain the deciding evidence. Broader cleanup decomposition should be recommended separately after proof review, not silently added to this ticket's scope.

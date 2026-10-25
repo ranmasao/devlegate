@@ -22,3 +22,11 @@ Make Git operation *semantics* owned by a clear Git API, not scattered across or
 - Preserve backward-compatible supported behavior, execution provenance, service lock and restart semantics.
 - Focused local tests/Ruff; exact-checkpoint CI as required by the project. Report the semantic API matrix and changed callers.
 - Backlog only: no automatic admission before review of priority and safe installed-runtime upgrade.
+
+## Additional semantic-boundary evidence from static dependency analysis
+
+At the analyzed 0.5.7 snapshot, `runtime.py` imported **22 internal modules**, including `git`, `control_git_workflow`, `execution_workspace`, `recovery_transactions`, `recovery_workspace`, `reconciliation_transactions`, `review_provenance` and `runtime_store`. `git.py` was ~995 LOC; `execution_workspace.py` ~828; `reconciliation_transactions.py` ~568. These are **static dependency/size observations, not evidence that a particular command call is wrong**.
+
+During the required call-site inventory, distinguish (a) Git process/transport policy and OS failures, (b) typed observations such as absence vs valid negative ancestry vs malformed/unreadable repository, (c) domain-specific evidence, workspace and reconciliation transactions, and (d) the engine's owner/admission/WAL decisions. Preserve domain-specific operations where they are cohesive; avoid replacing them with a generic all-purpose `GitService` or cosmetically forwarding every command through `runtime.py`.
+
+Changing `from devlegate.git import ...` to `from devlegate import git` is **not a semantic boundary** and can alter monkeypatch targets; do not include a global import-style migration. A direct-import graph does not capture executed subprocesses, nested helper effects, dynamic dispatch or runtime mutation: the audit must retain its per-call error, effect, ownership, replay and command-trace proof. Correlate findings with TASK-073's Git story acceptance rather than inventing independent architectural success from fewer imports or fewer source lines.
