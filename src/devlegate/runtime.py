@@ -16,6 +16,7 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 from devlegate import __version__
 from devlegate.agent_protocol import (
@@ -6810,7 +6811,7 @@ class ServiceEngine:
         path = str(Path(report.execution_path).absolute())
         if not all(
             isinstance(value, str) and value
-            for value in (ticket_id, execution_id, checkpoint, branch)
+            for value in (ticket_id, checkpoint, branch)
         ):
             raise WorkflowBlockedError(
                 "accepted execution dependency identity is incomplete"
@@ -6831,10 +6832,15 @@ class ServiceEngine:
                 or active_execution != identity.execution_id
             ):
                 raise WorkflowBlockedError("worker dependency ownership is invalid")
-            if identity.execution_id == execution_id:
+            if execution_id is not None and identity.execution_id == execution_id:
                 raise WorkflowBlockedError(
                     "accepted execution has a live worker dependency"
                 )
+            if execution_id is None and state.get("phase") not in {
+                "agent_pending",
+                "agent_running",
+            }:
+                raise WorkflowBlockedError("worker dependency identity is unavailable")
 
         phase = state.get("phase")
         if phase in {"agent_pending", "agent_running"}:
@@ -6912,12 +6918,13 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "reconciliation dependency identity is invalid"
                 )
-            reconciliation_ownership = (
+            reconciliation_ownership = [
                 ("ticket_id", ticket_id),
-                ("execution_id", execution_id),
                 ("execution_branch", branch),
                 ("execution_path", path),
-            )
+            ]
+            if execution_id is not None:
+                reconciliation_ownership.append(("execution_id", execution_id))
             if any(
                 reconciliation[field] == expected
                 for field, expected in reconciliation_ownership
@@ -6968,7 +6975,9 @@ class ServiceEngine:
                 retry.get("stale_execution_id"),
                 retry.get("fresh_execution_id"),
             }
-            if retry["ticket_id"] == ticket_id or execution_id in retry_ids:
+            if retry["ticket_id"] == ticket_id or (
+                execution_id is not None and execution_id in retry_ids
+            ):
                 raise WorkflowBlockedError(
                     "accepted execution has an automatic retry dependency"
                 )
@@ -7048,6 +7057,83 @@ class ServiceEngine:
                     "workspace registration changed before retirement"
                 )
 
+    def _observe_cleanup_candidate(
+        self, target: dict[str, str], registrations: dict[Path, dict[str, str | None]]
+    ) -> tuple[ExecutionWorkspaceManager, ExecutionWorkspace | None, SimpleNamespace]:
+        """Prove a disposable resource from its current Git identity, not history."""
+        ticket_id = target["ticket_id"]
+        expected_head = target["head"]
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket_id
+        )
+        if (
+            not _is_git_identity(expected_head)
+            or Path(target["path"]).absolute() != manager.path
+            or target["branch"] != manager.branch
+        ):
+            raise WorkflowBlockedError("workspace cleanup target identity is invalid")
+        ticket = self._ticket_store().by_id.get(ticket_id)
+        if ticket is None or ticket.state != "done":
+            raise WorkflowBlockedError("ticket is not durably done")
+        registration = registrations.get(manager.path.resolve())
+        workspace: ExecutionWorkspace | None = None
+        if registration is None:
+            if manager.path.exists() or any(
+                item.get("branch") == manager.branch for item in registrations.values()
+            ):
+                raise WorkflowBlockedError(
+                    "workspace registration is absent or ambiguous"
+                )
+        else:
+            if (
+                registration.get("branch") != manager.branch
+                or registration.get("head") != expected_head
+            ):
+                raise WorkflowBlockedError(
+                    "workspace registration does not match execution SHA"
+                )
+            workspace = manager._validate_existing(registration, expected_head)
+            if workspace.head != expected_head or workspace.dirty:
+                raise WorkflowBlockedError("execution worktree is dirty or changed")
+            manager.verify_submodules(workspace)
+        self._validate_execution_ref_heads(manager.branch, expected_head)
+        binding = SimpleNamespace(
+            ticket_id=ticket_id,
+            execution_id=None,
+            execution_branch=manager.branch,
+            execution_path=str(manager.path),
+            workspace_head=expected_head,
+        )
+        self._assert_cleanup_has_no_execution_dependency(binding)
+        self._prove_published_workspace_head(expected_head)
+        return manager, workspace, binding
+
+    def _prove_published_workspace_head(self, head: str) -> None:
+        """Require the observed execution SHA in a freshly fetched product tip."""
+        if not _is_git_identity(head):
+            raise WorkflowBlockedError("execution workspace SHA is invalid")
+        fetched = fetch_ref(
+            self.repo, self.remote_name, self.remote_branch, runner=self._git_runtime
+        )
+        if fetched.returncode:
+            raise WorkflowBlockedError("cannot refresh published product branch")
+        try:
+            product_head = remote_ref(
+                self.repo,
+                self.remote_name,
+                f"refs/heads/{self.remote_branch}",
+                runner=self._git_runtime,
+            )
+            if product_head is None or not (
+                product_head == head
+                or is_ancestor(self.repo, head, product_head, runner=self._git_runtime)
+            ):
+                raise WorkflowBlockedError("execution workspace HEAD is not published")
+        except (GitAncestryError, GitObservationError) as error:
+            raise WorkflowBlockedError(
+                "published product history could not be observed"
+            ) from error
+
     def cleanup_workspaces(
         self,
         *,
@@ -7116,201 +7202,28 @@ class ServiceEngine:
                 )
                 continue
             ticket_id = target["ticket_id"]
-            path = Path(target["path"]).absolute()
-            registration = registrations.get(path.resolve())
-            if registration is None:
-                branch_is_registered_elsewhere = any(
-                    item.get("branch") == target["branch"]
-                    for item in registrations.values()
-                )
-                if branch_is_registered_elsewhere or (
-                    path.exists() and not target.get("head")
-                ):
-                    decisions.append(
-                        {
-                            "ticket_id": ticket_id,
-                            "status": "skipped",
-                            "reason": "workspace registration changed or is ambiguous",
-                        }
-                    )
-                else:
-                    try:
-                        ticket = self._ticket_store().by_id.get(ticket_id)
-                        if ticket is None or ticket.state != "done":
-                            raise WorkflowBlockedError("ticket is not durably done")
-                        report = self._accepted_execution_report(ticket_id)
-                        if report.workspace_head != target["head"]:
-                            raise WorkflowBlockedError(
-                                "execution ref does not match accepted checkpoint"
-                            )
-                        self._validate_execution_ref_heads(
-                            report.execution_branch, report.workspace_head
-                        )
-                        integration = self._find_accepted_integration_commit(
-                            ticket_id, report
-                        )
-                        if integration is None:
-                            raise WorkflowBlockedError(
-                                "accepted integration is not proven"
-                            )
-                        self._prove_published_product_checkpoint(
-                            report.workspace_head, integration=integration
-                        )
-                        if apply:
-                            self._revalidate_cleanup_retirement(report)
-                            self._retire_execution_refs(
-                                report.execution_branch,
-                                report.workspace_head,
-                                report=report,
-                            )
-                        workspace_state = "present" if path.exists() else "absent"
-                        refs_state = (
-                            {
-                                "worktree": workspace_state,
-                                "local_ref": "absent",
-                                "upstream_ref": "absent",
-                            }
-                            if apply
-                            else None
-                        )
-                        reason = (
-                            "workspace registration is absent; checkout retained; "
-                            "execution refs proven"
-                            if path.exists()
-                            else "workspace absent; execution refs proven"
-                        )
-                        decisions.append(
-                            {
-                                "ticket_id": ticket_id,
-                                "status": (
-                                    "blocked"
-                                    if apply and path.exists()
-                                    else "retired"
-                                    if apply
-                                    else "blocked"
-                                    if path.exists()
-                                    else "eligible"
-                                ),
-                                "reason": reason,
-                                **({"resources": refs_state} if refs_state else {}),
-                            }
-                        )
-                    except (
-                        ExecutionReportError,
-                        GitAncestryError,
-                        GitObservationError,
-                        OSError,
-                        subprocess.SubprocessError,
-                        ValueError,
-                        WorkflowBlockedError,
-                    ) as error:
-                        if apply:
-                            resources = {
-                                "worktree": "absent",
-                                "local_ref": "unknown",
-                                "upstream_ref": "unknown",
-                            }
-                            try:
-                                resources["local_ref"] = (
-                                    "present"
-                                    if self._resolve_commit_runtime(
-                                        self.repo,
-                                        f"refs/heads/{target['branch']}",
-                                    )
-                                    is not None
-                                    else "absent"
-                                )
-                            except (
-                                OSError,
-                                subprocess.SubprocessError,
-                                DevlegateError,
-                            ):
-                                pass
-                            try:
-                                resources["upstream_ref"] = (
-                                    "present"
-                                    if remote_ref(
-                                        self.repo,
-                                        self.remote_name,
-                                        f"refs/heads/{target['branch']}",
-                                        runner=self._git_runtime,
-                                    )
-                                    is not None
-                                    else "absent"
-                                )
-                            except (
-                                GitObservationError,
-                                OSError,
-                                subprocess.SubprocessError,
-                            ):
-                                pass
-                            decisions.append(
-                                {
-                                    "ticket_id": ticket_id,
-                                    "status": "blocked",
-                                    "reason": str(error),
-                                    "resources": resources,
-                                }
-                            )
-                            continue
-                        decisions.append(
-                            {
-                                "ticket_id": ticket_id,
-                                "status": "skipped",
-                                "reason": str(error),
-                            }
-                        )
-                continue
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket_id
             )
             try:
-                ticket = self._ticket_store().by_id.get(ticket_id)
-                if ticket is None or ticket.state != "done":
-                    raise WorkflowBlockedError("ticket is not durably done")
-                # Re-run the same accepted-transition evidence proof used by
-                # normal integration. A report merely present on disk is not
-                # sufficient historical provenance.
-                report = self._accepted_execution_report(ticket_id)
-                if not (
-                    report.execution_branch == manager.branch
-                    and Path(report.execution_path).absolute() == manager.path
-                    and report.workspace_head == target["head"]
-                    and registration.get("branch") == target["branch"]
-                    and registration.get("head") == target["head"]
-                ):
-                    raise WorkflowBlockedError(
-                        "workspace provenance does not match accepted evidence"
-                    )
-                self._validate_execution_ref_heads(
-                    report.execution_branch, report.workspace_head
+                manager, workspace, _binding = self._observe_cleanup_candidate(
+                    target, registrations
                 )
-                integration = self._find_accepted_integration_commit(ticket_id, report)
-                if integration is None:
-                    raise WorkflowBlockedError("accepted integration is not proven")
-                self._prove_published_product_checkpoint(
-                    report.workspace_head, integration=integration
-                )
-                self._assert_cleanup_has_no_execution_dependency(report)
                 decision = {
                     "ticket_id": ticket_id,
                     "status": "eligible",
-                    "reason": "accepted integration proven",
+                    "reason": "done execution is published and disposable",
                 }
                 if apply:
-                    workspace = manager._validate_existing(
-                        registration, report.workspace_head
+                    # Repeat every safety observation after inspection and before
+                    # each destructive stage, so interrupted cleanup converges.
+                    manager, current, _binding = self._observe_cleanup_candidate(
+                        target, manager._registrations()
                     )
-                    # Revalidate after potentially slow workspace inspection,
-                    # directly before the destructive worktree removal.
-                    self._revalidate_cleanup_retirement(report, manager, registration)
-                    manager.retire(workspace, report.workspace_head)
-                    self._revalidate_cleanup_retirement(report)
-                    self._retire_execution_refs(
-                        report.execution_branch,
-                        report.workspace_head,
-                        report=report,
-                    )
+                    if current is not None:
+                        manager.retire(current, target["head"])
+                    self._observe_cleanup_candidate(target, manager._registrations())
+                    self._retire_execution_refs(manager.branch, target["head"])
                     decision["resources"] = {
                         "worktree": "absent",
                         "local_ref": "absent",
