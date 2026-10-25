@@ -1,0 +1,29 @@
+{
+  "code_base_head": "844318e9e14d685d8390a7647d76960f4d009f37",
+  "conclusion": "completed",
+  "control_head": "c28af95954b7ed5de1fcbeabe32f2a7cb7c1fe65",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-099",
+  "execution_id": "19edcd70ec874120b457ba0ef9579337",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-099",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-099",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated the zero-delta accepted-integration recovery test to identify the unique published T-1 done transition rather than assuming the current control tip is the integration commit. The test now simulates a post-integration control update, preserves concurrent updates, and emits published control topology diagnostics on transition failures."
+  },
+  "workspace_head": "99ca4d27a2ebc8accb5e43653ad793ee583cba01"
+}
