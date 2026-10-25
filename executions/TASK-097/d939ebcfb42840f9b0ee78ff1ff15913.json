@@ -1,0 +1,29 @@
+{
+  "code_base_head": "dd3ca11b0356971ef9320c8778d2500f5f826eec",
+  "conclusion": "completed",
+  "control_head": "4eeaf481ee39485227630d51761194587e167429",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-097",
+  "execution_id": "d939ebcfb42840f9b0ee78ff1ff15913",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-097",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-097",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Crash-recovery tests now wait for actual advisory-lock release after reaping a killed service, preventing restarts from racing inherited lock ownership. Lock refusals identify the affected runtime lock path for actionable diagnostics."
+  },
+  "workspace_head": "844318e9e14d685d8390a7647d76960f4d009f37"
+}
