@@ -64,12 +64,16 @@ def test_recovery_binding_fails_closed_for_worker_or_result_ownership():
 
     state["worker_identity"] = None
     del state["worker_identity"]
+    # Historical pre-launch records did not serialize worker_identity. The
+    # phase protocol itself proves this narrow layout predates worker handoff.
+    assert validate_execution_binding(state, require_pre_worker=True)[0] == "TASK-1"
+    state["execution_stage"] = "worker-running"
     try:
         validate_execution_binding(state, require_pre_worker=True)
     except ValueError as error:
         assert "worker ownership" in str(error)
     else:
-        raise AssertionError("missing worker ownership marker must fail closed")
+        raise AssertionError("staged state without ownership marker must fail closed")
 
 
 def test_lineage_proofs_reject_merges_and_gate_published_rewrites():
