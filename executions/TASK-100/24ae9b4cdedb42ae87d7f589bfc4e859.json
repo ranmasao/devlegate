@@ -1,0 +1,29 @@
+{
+  "code_base_head": "99ca4d27a2ebc8accb5e43653ad793ee583cba01",
+  "conclusion": "completed",
+  "control_head": "248fb27c4f9f37f67a21315e5605f149a6895faf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-100",
+  "execution_id": "24ae9b4cdedb42ae87d7f589bfc4e859",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-100",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-100",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added shared validation for canonical and proven rewritten reconciliation evidence identities. Resolved update-base rewrites now retain displacement provenance, and cleanup no longer blocks unrelated completed workspaces. Added producer, cleanup, and malformed-identity regression coverage."
+  },
+  "workspace_head": "801f4986660e11a61858c55a543244af1b309817"
+}
