@@ -1,0 +1,29 @@
+{
+  "code_base_head": "99ca4d27a2ebc8accb5e43653ad793ee583cba01",
+  "conclusion": "completed",
+  "control_head": "31e68da7fe7263bcb5e3b565ca52727dcfdf918d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-100",
+  "execution_id": "cc86d3238ca44523a1a7f19357c88048",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-100",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-100",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Adjusted rewritten reconciliation identity validation to accept the complete legacy resolved update-base form when its optional resolution class is absent. Extended focused regression coverage so unrelated cleanup retires while retaining the legacy reconciliation binding and both evidence refs."
+  },
+  "workspace_head": "1805e4185638f66a2f3084a945f62154aa25a71c"
+}
