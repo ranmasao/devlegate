@@ -30,6 +30,13 @@ def test_rewritten_evidence_identity_accepts_resolved_update_base_provenance():
     assert has_valid_evidence_identity(_rewritten_reconciliation())
 
 
+def test_rewritten_evidence_identity_accepts_legacy_resolved_provenance():
+    reconciliation = _rewritten_reconciliation()
+    reconciliation.pop("resolution_class")
+
+    assert has_valid_evidence_identity(reconciliation)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

@@ -1483,6 +1483,23 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
         == 0
     )
     historical_checkpoint = git(control, "rev-parse", "HEAD").stdout.strip()
+    historical_evidence_ref = engine._reconciliation_evidence_ref(
+        "T-3", "historical-execution"
+    )
+    rewritten_historical_evidence_ref = f"{historical_evidence_ref}-rewritten"
+    assert (
+        git(working, "update-ref", historical_evidence_ref, historical_checkpoint).returncode
+        == 0
+    )
+    assert (
+        git(
+            working,
+            "update-ref",
+            rewritten_historical_evidence_ref,
+            historical_checkpoint,
+        ).returncode
+        == 0
+    )
 
     # T-2 is live and T-3's resolved reconciliation remains durable history.
     # Neither record names T-1's checkout, branch, execution, or checkpoint.
@@ -1513,15 +1530,11 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
                 "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
-                "evidence_ref": (
-                    "refs/devlegate/reconciliation/T-3/"
-                    "historical-execution-rewritten"
-                ),
-                "displaced_evidence_ref": engine._reconciliation_evidence_ref(
-                    "T-3", "historical-execution"
-                ),
+                # This is the complete older resolved rewrite shape: it has
+                # neither resolution_class nor rewritten_evidence_ref.
+                "evidence_ref": rewritten_historical_evidence_ref,
+                "displaced_evidence_ref": historical_evidence_ref,
                 "resolution": "update-base",
-                "resolution_class": "update-base with published-lineage rewrite",
             },
         }
     )
@@ -1531,6 +1544,12 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     assert result["decisions"][0]["status"] == "retired"
     assert not workspace.path.exists()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
+    assert engine._state["reconciliation"]["ticket_id"] == "T-3"
+    assert resolve_commit(working, historical_evidence_ref) == historical_checkpoint
+    assert (
+        resolve_commit(working, rewritten_historical_evidence_ref)
+        == historical_checkpoint
+    )
 
 
 def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path):

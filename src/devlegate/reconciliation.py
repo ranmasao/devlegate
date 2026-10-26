@@ -49,12 +49,18 @@ def has_valid_evidence_identity(value: Mapping[str, object]) -> bool:
     canonical = reconciliation_evidence_ref(ticket_id, execution_id)
     if recorded == canonical:
         return True
+    resolution_class = value.get("resolution_class")
     return (
         recorded == rewritten_evidence_ref(ticket_id, execution_id)
         and value.get("status") == "resolved"
         and value.get("resolution") == "update-base"
-        and value.get("resolution_class")
-        in {"update-base", "update-base with published-lineage rewrite"}
+        # Older resolved rewrite records predate this optional classification.
+        # If it was recorded, it must still describe a supported update-base flow.
+        and (
+            "resolution_class" not in value
+            or resolution_class
+            in {"update-base", "update-base with published-lineage rewrite"}
+        )
         and value.get("displaced_evidence_ref") == canonical
     )
 
