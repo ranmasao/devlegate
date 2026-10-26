@@ -21,6 +21,44 @@ class LineageProof:
     reason: str
 
 
+def reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
+    """Return the immutable evidence ref for one execution."""
+    return f"refs/devlegate/reconciliation/{ticket_id}/{execution_id}"
+
+
+def rewritten_evidence_ref(ticket_id: str, execution_id: str) -> str:
+    """Return the evidence ref retained for a proven execution rewrite."""
+    return f"{reconciliation_evidence_ref(ticket_id, execution_id)}-rewritten"
+
+
+def has_valid_evidence_identity(value: Mapping[str, object]) -> bool:
+    """Prove that reconciliation evidence belongs to its recorded execution.
+
+    A rewritten checkpoint is valid only after update-base retained the original
+    evidence ref as its displacement provenance.  This keeps arbitrary suffixes
+    and partially written rewrite records from claiming another execution.
+    """
+    ticket_id = value.get("ticket_id")
+    execution_id = value.get("execution_id")
+    recorded = value.get("evidence_ref")
+    if not all(
+        isinstance(part, str) and part
+        for part in (ticket_id, execution_id, recorded)
+    ):
+        return False
+    canonical = reconciliation_evidence_ref(ticket_id, execution_id)
+    if recorded == canonical:
+        return True
+    return (
+        recorded == rewritten_evidence_ref(ticket_id, execution_id)
+        and value.get("status") == "resolved"
+        and value.get("resolution") == "update-base"
+        and value.get("resolution_class")
+        in {"update-base", "update-base with published-lineage rewrite"}
+        and value.get("displaced_evidence_ref") == canonical
+    )
+
+
 def prove_linear_lineage(
     root: str, commits: Sequence[str], parents: Mapping[str, Sequence[str]]
 ) -> LineageProof:

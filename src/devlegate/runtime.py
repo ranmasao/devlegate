@@ -102,7 +102,11 @@ from devlegate.git import (
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
-from devlegate.reconciliation import same_parent_replacement
+from devlegate.reconciliation import (
+    has_valid_evidence_identity,
+    reconciliation_evidence_ref,
+    same_parent_replacement,
+)
 from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     run_update_base,
@@ -6932,10 +6936,7 @@ class ServiceEngine:
                 != f"devlegate/work/{reconciliation['ticket_id']}"
                 or Path(reconciliation["execution_path"]).absolute()
                 != self.execution_worktree_root / "work" / reconciliation["ticket_id"]
-                or reconciliation["evidence_ref"]
-                != self._reconciliation_evidence_ref(
-                    reconciliation["ticket_id"], reconciliation["execution_id"]
-                )
+                or not has_valid_evidence_identity(reconciliation)
             ):
                 raise WorkflowBlockedError(
                     "reconciliation dependency identity is invalid"
@@ -7851,7 +7852,7 @@ class ServiceEngine:
 
     @staticmethod
     def _reconciliation_evidence_ref(ticket_id: str, execution_id: str) -> str:
-        return f"refs/devlegate/reconciliation/{ticket_id}/{execution_id}"
+        return reconciliation_evidence_ref(ticket_id, execution_id)
 
     @staticmethod
     def _drop_evidence_ref(ticket_id: str, execution_id: str) -> str:

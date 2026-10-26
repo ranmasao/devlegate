@@ -1513,9 +1513,15 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
                 "control_head": historical_checkpoint,
                 "execution_branch": "devlegate/work/T-3",
                 "execution_path": str(engine.execution_worktree_root / "work/T-3"),
-                "evidence_ref": engine._reconciliation_evidence_ref(
+                "evidence_ref": (
+                    "refs/devlegate/reconciliation/T-3/"
+                    "historical-execution-rewritten"
+                ),
+                "displaced_evidence_ref": engine._reconciliation_evidence_ref(
                     "T-3", "historical-execution"
                 ),
+                "resolution": "update-base",
+                "resolution_class": "update-base with published-lineage rewrite",
             },
         }
     )
