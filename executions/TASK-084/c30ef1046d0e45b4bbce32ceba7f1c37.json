@@ -1,0 +1,29 @@
+{
+  "code_base_head": "1805e4185638f66a2f3084a945f62154aa25a71c",
+  "conclusion": "completed",
+  "control_head": "525303e790a11974bc7db545cb10a60a90572554",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-084",
+  "execution_id": "c30ef1046d0e45b4bbce32ceba7f1c37",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-084",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-084",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added strict Git patch-equivalence semantics and routed execution rework and workspace recovery ancestry decisions through typed fail-closed helpers. Documented the Git semantic API audit, mutation and publication replay rules, and cleanup fetch measurement. Added unit and real-Git coverage for ancestry, ref absence, patch output validation, and CAS races."
+  },
+  "workspace_head": "40e41c4b60f3c929d9b25a256c3d7d53e34ebaaf"
+}
