@@ -11,7 +11,14 @@ import subprocess
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
-from devlegate.git import resolve_commit, run_git
+from devlegate.git import (
+    GitAncestryError,
+    GitObservationError,
+    is_ancestor,
+    patch_equivalence,
+    resolve_commit,
+    run_git,
+)
 from devlegate.tickets import is_canonical_ticket_name
 
 
@@ -168,23 +175,18 @@ class ExecutionWorkspaceManager:
                 f"{current.stderr.strip() or 'unknown git error'}"
             )
         current_head = current.stdout.strip()
-        predecessor = _git(
-            self.repo,
-            "merge-base",
-            "--is-ancestor",
-            previous_base,
-            previous_checkpoint,
-            check=False,
-        )
-        if predecessor.returncode == 1:
+        try:
+            predecessor = is_ancestor(
+                self.repo, previous_base, previous_checkpoint, runner=_git
+            )
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot prove previous execution ancestry: {error}"
+            ) from error
+        if not predecessor:
             raise ExecutionWorkspaceConflict(
                 "rework preparation conflict: previous checkpoint is not descended "
                 "from its reported base"
-            )
-        if predecessor.returncode:
-            raise ExecutionWorkspaceError(
-                "cannot prove previous execution ancestry: "
-                f"{predecessor.stderr.strip() or 'unknown git error'}"
             )
         commits = _git(
             self.repo,
@@ -208,14 +210,15 @@ class ExecutionWorkspaceManager:
                 "rework preparation conflict: previous implementation is not a "
                 "linear worker delta"
             )
-        already_integrated = not _git(
-            self.repo,
-            "merge-base",
-            "--is-ancestor",
-            previous_checkpoint,
-            base_head,
-            check=False,
-        ).returncode
+        try:
+            already_integrated = is_ancestor(
+                self.repo, previous_checkpoint, base_head, runner=_git
+            )
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                "cannot prove whether the previous implementation is integrated: "
+                f"{error}"
+            ) from error
         if current_head == previous_checkpoint:
             registrations = self._registrations()
             registration = registrations.get(self.path.resolve())
@@ -245,43 +248,38 @@ class ExecutionWorkspaceManager:
         elif current_head != base_head:
             # A completed replay must contain exactly the old patch series and
             # nothing else.  This rejects a foreign descendant after a crash.
-            replay_ancestry = _git(
-                self.repo,
-                "merge-base",
-                "--is-ancestor",
-                base_head,
-                current_head,
-                check=False,
-            )
-            if replay_ancestry.returncode == 1:
+            try:
+                replay_ancestry = is_ancestor(
+                    self.repo, base_head, current_head, runner=_git
+                )
+            except GitAncestryError as error:
+                raise ExecutionWorkspaceError(
+                    f"cannot prove replay ancestry: {error}"
+                ) from error
+            if not replay_ancestry:
                 raise ExecutionWorkspaceConflict(
                     "execution branch changed during rework preparation"
-                )
-            if replay_ancestry.returncode:
-                raise ExecutionWorkspaceError(
-                    "cannot prove replay ancestry: "
-                    f"{replay_ancestry.stderr.strip() or 'unknown git error'}"
                 )
             replay = _git(
                 self.repo, "rev-list", "--reverse", f"{base_head}..{current_head}",
                 check=False,
             )
             replay_delta = [commit for commit in replay.stdout.splitlines() if commit]
-            equivalent = _git(
-                self.repo,
-                "cherry",
-                previous_checkpoint,
-                current_head,
-                base_head,
-                check=False,
-            )
-            if (
-                replay.returncode
-                or equivalent.returncode
-                or len(replay_delta) != len(delta)
-                or [line[:1] for line in equivalent.stdout.splitlines()]
-                != ["-"] * len(delta)
-            ):
+            try:
+                equivalent = patch_equivalence(
+                    self.repo,
+                    previous_checkpoint,
+                    current_head,
+                    base_head,
+                    runner=_git,
+                )
+            except GitObservationError as error:
+                raise ExecutionWorkspaceError(
+                    f"cannot prove replay patch equivalence: {error}"
+                ) from error
+            if replay.returncode or len(replay_delta) != len(delta) or equivalent != (
+                "-",
+            ) * len(delta):
                 raise ExecutionWorkspaceConflict(
                     "rework preparation conflict: execution branch is not the exact "
                     "proven transplanted implementation"
@@ -658,15 +656,13 @@ class ExecutionWorkspaceManager:
                 )
 
     def _validate_branch(self, base_head: str) -> None:
-        ancestor = _git(
-            self.repo,
-            "merge-base",
-            "--is-ancestor",
-            base_head,
-            self.branch,
-            check=False,
-        )
-        if ancestor.returncode:
+        try:
+            ancestor = is_ancestor(self.repo, base_head, self.branch, runner=_git)
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot prove execution branch ancestry: {error}"
+            ) from error
+        if not ancestor:
             raise ExecutionWorkspaceConflict(
                 f"execution branch {self.branch} is unrelated to planned code "
                 f"revision {base_head}"

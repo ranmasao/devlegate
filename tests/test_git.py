@@ -340,6 +340,94 @@ def test_is_ancestor_distinguishes_negative_answer_from_git_error(tmp_path):
     ]
 
 
+def test_is_ancestor_wraps_runner_os_errors(tmp_path):
+    def unavailable(*_args, **_kwargs):
+        raise OSError("Git executable unavailable")
+
+    with pytest.raises(git.GitAncestryError, match="Git executable unavailable"):
+        git.is_ancestor(tmp_path, "base", "head", runner=unavailable)
+
+
+def test_patch_equivalence_preserves_cherry_argument_order_and_markers(tmp_path):
+    original = "a" * 40
+    replay = "b" * 40
+    base = "c" * 40
+    calls = []
+
+    def fake_runner(cwd, *args, check):
+        calls.append((cwd, args, check))
+        return subprocess.CompletedProcess([], 0, f"- {replay}\n+ {original}\n", "")
+
+    assert git.patch_equivalence(
+        tmp_path, original, replay, base, runner=fake_runner
+    ) == ("-", "+")
+    assert calls == [
+        (tmp_path, ("cherry", original, replay, base), False),
+    ]
+
+
+@pytest.mark.parametrize(
+    "output", ["-\n", f"? {'a' * 40}\n", "- not-an-object\n"]
+)
+def test_patch_equivalence_rejects_malformed_output(tmp_path, output):
+    def fake_runner(*_args, **_kwargs):
+        return subprocess.CompletedProcess([], 0, output, "")
+
+    with pytest.raises(git.GitObservationError, match="malformed"):
+        git.patch_equivalence(tmp_path, "a", "b", "c", runner=fake_runner)
+
+
+def test_patch_equivalence_rejects_execution_errors(tmp_path):
+    def fake_runner(*_args, **_kwargs):
+        return subprocess.CompletedProcess([], 128, "", "repository unreadable")
+
+    with pytest.raises(git.GitObservationError, match="repository unreadable"):
+        git.patch_equivalence(tmp_path, "a", "b", "c", runner=fake_runner)
+
+
+def test_real_git_ancestry_ref_absence_patch_equivalence_and_cas(tmp_path):
+    def command(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+    command("init", "-b", "main")
+    command("config", "user.name", "Test User")
+    command("config", "user.email", "test@example.com")
+    (tmp_path / "tracked.txt").write_text("base\n")
+    command("add", "tracked.txt")
+    command("commit", "-m", "base")
+    base = command("rev-parse", "HEAD").stdout.strip()
+    command("switch", "-c", "original")
+    (tmp_path / "tracked.txt").write_text("base\nchange\n")
+    command("commit", "-am", "original patch")
+    original = command("rev-parse", "HEAD").stdout.strip()
+    command("switch", "-c", "replay", base)
+    (tmp_path / "tracked.txt").write_text("base\nchange\n")
+    command("commit", "-am", "replayed patch")
+    replay = command("rev-parse", "HEAD").stdout.strip()
+
+    assert git.is_ancestor(tmp_path, base, replay)
+    assert not git.is_ancestor(tmp_path, replay, original)
+    assert not git.ref_exists(tmp_path, "refs/heads/missing")
+    assert git.patch_equivalence(tmp_path, original, replay, base) == ("-",)
+
+    assert git.create_ref_if_absent(tmp_path, "refs/heads/race", base).returncode == 0
+    assert git.compare_and_swap_ref(
+        tmp_path, "refs/heads/race", replay, original
+    ).returncode != 0
+    assert git.compare_and_swap_ref(
+        tmp_path, "refs/heads/race", replay, base
+    ).returncode == 0
+    assert git.compare_and_swap_ref(
+        tmp_path, "refs/heads/race", original, base
+    ).returncode != 0
+    assert git.resolve_ref_commit(tmp_path, "refs/heads/race") == replay
+
+
 def test_common_dir_resolves_relative_output_from_repository(tmp_path):
     repo = tmp_path / "checkout"
     repo.mkdir()
