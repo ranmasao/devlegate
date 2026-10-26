@@ -19,8 +19,10 @@ from devlegate.execution_workspace import (
     WorkspaceInspection,
 )
 from devlegate.git import (
+    GitAncestryError,
     GitObservationError,
     create_ref_if_absent,
+    is_ancestor,
     resolve_commit,
     resolve_ref_commit,
     run_git,
@@ -160,24 +162,18 @@ def inspect_bound_workspace(
     # An attached worktree at another path remains an ownership conflict even
     # when its branch happens to descend from the admitted base.
     if not prior and topology.reason == "execution worktree is missing":
-        ancestry = run_git(
-            owner.repo,
-            "merge-base",
-            "--is-ancestor",
-            base_head,
-            old_head,
-            check=False,
-        )
-        if ancestry.returncode == 0:
+        try:
+            ancestry = is_ancestor(owner.repo, base_head, old_head, runner=run_git)
+        except GitAncestryError:
+            ancestry = False
+        if ancestry:
             return WorkspaceInspection(
                 "RECOVERABLE",
                 "persisted execution branch is a descendant of its admitted base",
             )
-        if ancestry.returncode:
-            return WorkspaceInspection(
-                "UNSAFE",
-                "cannot prove persisted execution branch ancestry",
-            )
+        return WorkspaceInspection(
+            "UNSAFE", "cannot prove persisted execution branch ancestry"
+        )
     if len(prior) != 1:
         return WorkspaceInspection(
             "UNSAFE",
@@ -230,15 +226,13 @@ def repair_bound_workspace(
         topology = manager.inspect(base_head)
         if topology.reason != "execution worktree is missing":
             raise ValueError(topology.reason)
-        ancestry = run_git(
-            owner.repo,
-            "merge-base",
-            "--is-ancestor",
-            base_head,
-            old_head,
-            check=False,
-        )
-        if ancestry.returncode:
+        try:
+            ancestry = is_ancestor(owner.repo, base_head, old_head, runner=run_git)
+        except GitAncestryError as error:
+            raise ValueError(
+                "cannot prove persisted execution branch ancestry"
+            ) from error
+        if not ancestry:
             raise ValueError("cannot prove persisted execution branch ancestry")
         manager.prepare(base_head)
         return

@@ -426,14 +426,20 @@ def is_ancestor(
     Git uses exit status 1 for a valid negative answer. Any other non-zero
     status is an observation failure and must not be treated as ``False``.
     """
-    result = runner(
-        cwd,
-        "merge-base",
-        "--is-ancestor",
-        ancestor,
-        descendant,
-        check=False,
-    )
+    try:
+        result = runner(
+            cwd,
+            "merge-base",
+            "--is-ancestor",
+            ancestor,
+            descendant,
+            check=False,
+        )
+    except OSError as error:
+        raise GitAncestryError(
+            f"cannot determine whether {ancestor} is an ancestor of {descendant}: "
+            f"{error}"
+        ) from error
     if result.returncode == 0:
         return True
     if result.returncode == 1:
@@ -443,6 +449,46 @@ def is_ancestor(
         f"cannot determine whether {ancestor} is an ancestor of {descendant}: "
         f"{detail}"
     )
+
+
+def patch_equivalence(
+    cwd: Path,
+    original_tip: str,
+    replay_tip: str,
+    base: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
+) -> tuple[str, ...]:
+    """Classify replay commits against an original patch series.
+
+    This is ``git cherry original_tip replay_tip base``.  Each returned item is
+    ``+`` when the commit after ``base`` has no equivalent patch reachable from
+    ``original_tip`` and ``-`` when it does.  A malformed record or every
+    non-zero exit is an observation failure, never an equivalence result.
+    """
+    try:
+        result = runner(
+            cwd,
+            "cherry",
+            original_tip,
+            replay_tip,
+            base,
+            check=False,
+        )
+    except OSError as error:
+        raise GitObservationError(f"cannot compare Git patches: {error}") from error
+    if result.returncode:
+        raise GitObservationError(
+            "cannot compare Git patches: "
+            f"{_stderr(result).strip() or 'unknown Git error'}"
+        )
+    markers: list[str] = []
+    for line in result.stdout.splitlines():
+        marker, separator, object_id = line.partition(" ")
+        if marker not in {"+", "-"} or not separator or not _is_object_id(object_id):
+            raise GitObservationError("Git returned malformed patch equivalence output")
+        markers.append(marker)
+    return tuple(markers)
 
 
 def merge_base(
