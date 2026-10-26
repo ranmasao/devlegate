@@ -19,6 +19,7 @@ from devlegate.reconciliation import (
     LineageProof,
     prove_linear_lineage,
     rewrite_is_authorized,
+    rewritten_evidence_ref,
 )
 
 
@@ -274,9 +275,18 @@ def _clear_rewrite(
 
 
 def _resolve(owner: Any, ticket_id: str, reconciliation: dict[str, object],
-             target: str, checkpoint: str, remote: str | None, evidence: str) -> int:
+              target: str, checkpoint: str, remote: str | None, evidence: str) -> int:
     resolved = {
-        **reconciliation,
+        **_clear_rewrite(
+            reconciliation,
+            {
+                "rewrite_stage",
+                "rewrite_checkpoint",
+                "rewrite_expected_remote",
+                "rewrite_target",
+                "rewrite_count",
+            },
+        ),
         "status": "resolved",
         "resolution": "update-base",
         "resolution_class": (
@@ -491,8 +501,8 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         "rewrite_authorized": bool(rewrite_published),
         "rewrite_expected_remote": execution_remote,
         "displaced_evidence_ref": admission.evidence_ref,
-        "rewritten_evidence_ref": (
-            f"refs/devlegate/reconciliation/{ticket_id}/{reconciliation['execution_id']}-rewritten"
+        "rewritten_evidence_ref": rewritten_evidence_ref(
+            ticket_id, str(reconciliation["execution_id"])
         ),
         "rewrite_target": admission.target,
         "rewrite_count": len(lineage),
@@ -555,7 +565,7 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
     publish_rewritten_lineage(owner, branch=manager.branch, rewritten_head=updated.head,
                               expected_remote=execution_remote,
                               evidence_ref=rewritten_evidence)
-    return _resolve(owner, ticket_id, reconciliation, admission.target, updated.head,
+    return _resolve(owner, ticket_id, operation, admission.target, updated.head,
                     updated.head if execution_remote is not None else None,
                     rewritten_evidence)
 

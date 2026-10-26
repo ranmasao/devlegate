@@ -1976,6 +1976,8 @@ def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
     assert resolved["status"] == "resolved"
     assert resolved["resolution"] == "update-base"
     assert resolved["effective_base"] == target
+    assert resolved["displaced_evidence_ref"] == evidence
+    assert resolved["rewritten_evidence_ref"] == resolved["evidence_ref"]
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
     assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
     assert resolved["evidence_ref"] != evidence
