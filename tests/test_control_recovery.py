@@ -62,14 +62,12 @@ def _control_lineage_runner(
                 return subprocess.CompletedProcess(
                     [], 0, f"{refs[reference]} {reference}\n", ""
                 )
-            return subprocess.CompletedProcess(
-                [], 128, "", f"fatal: '{reference}' - not a valid ref"
-            )
+            return subprocess.CompletedProcess([], 128, "", "opaque diagnostic")
         if args[:2] == ("rev-parse", "--verify"):
             reference = args[2].removesuffix("^{commit}")
             if reference in refs:
                 return subprocess.CompletedProcess([], 0, f"{refs[reference]}\n", "")
-            return subprocess.CompletedProcess([], 128, "", "unknown revision")
+            return subprocess.CompletedProcess([], 128, "", "opaque diagnostic")
         if args[0] == "update-ref":
             _, reference, object_id, _expected_old = args
             if race is not None:

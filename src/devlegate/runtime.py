@@ -1838,7 +1838,13 @@ class ServiceEngine:
                 "requested reconciliation target is a hexadecimal commit prefix; "
                 "use at least 4 characters"
             )
-        canonical = resolve_commit(self.repo, value, runner=_git)
+        try:
+            canonical = resolve_commit(self.repo, value, runner=_git)
+        except GitObservationError as error:
+            raise DevlegateError(
+                "requested reconciliation target is not a valid commit; "
+                "use a full SHA or a unique hexadecimal prefix of at least 4 characters"
+            ) from error
         if canonical is None:
             raise DevlegateError(
                 "requested reconciliation target is not a valid commit; "
@@ -2019,7 +2025,9 @@ class ServiceEngine:
                 f"cannot freshly fetch control branch: {fetch.stderr.strip()}"
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
-        observed_remote = resolve_commit(self.control_worktree, remote_ref, runner=_git)
+        observed_remote = resolve_commit(
+            self.control_worktree, f"refs/remotes/{remote_ref}", runner=_git
+        )
         if observed_remote is None:
             raise DevlegateError(f"control remote branch not found: {remote_ref}")
         if observed_remote != to_head:
@@ -2958,6 +2966,8 @@ class ServiceEngine:
 
     def _resolve_commit_runtime(self, repo: Path, revision: str) -> str | None:
         """Resolve one commit through the runtime Git interruption seam."""
+        if revision.startswith(f"{self.remote_name}/"):
+            revision = f"refs/remotes/{revision}"
         return resolve_commit(repo, revision, runner=self._git_runtime)
 
     def _branch_runtime(self, repo: Path) -> str | None:
@@ -8814,7 +8824,9 @@ class ServiceEngine:
                     f"{fetched.stderr.strip() or 'unknown git error'}"
                 )
             remote_ref = f"{self.remote_name}/{self.control_branch}"
-            remote_head = resolve_commit(self.control_worktree, remote_ref, runner=_git)
+            remote_head = resolve_commit(
+                self.control_worktree, f"refs/remotes/{remote_ref}", runner=_git
+            )
             if remote_head is None:
                 raise WorkflowBlockedError("control remote branch is unavailable")
             local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
@@ -10948,7 +10960,9 @@ class ServiceEngine:
                 "cannot freshly observe product remote before interrupted recovery: "
                 f"{product_fetch.stderr.strip() or 'unknown git error'}"
             )
-        current_remote = resolve_commit(self.repo, remote_ref, runner=_git)
+        current_remote = resolve_commit(
+            self.repo, f"refs/remotes/{remote_ref}", runner=_git
+        )
         if current_remote != state["remote_head"]:
             raise DevlegateError(
                 "product remote generation changed since interrupted execution"
@@ -10968,7 +10982,9 @@ class ServiceEngine:
             )
         control_remote_ref = f"{self.remote_name}/{self.control_branch}"
         current_control_remote = resolve_commit(
-            self.control_worktree, control_remote_ref, runner=_git
+            self.control_worktree,
+            f"refs/remotes/{control_remote_ref}",
+            runner=_git,
         )
         if current_control_remote != state["control_head"]:
             raise DevlegateError(

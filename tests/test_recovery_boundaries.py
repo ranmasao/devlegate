@@ -210,13 +210,19 @@ def test_workspace_inspection_fails_closed_when_ancestry_cannot_be_observed(
         def recovery_workspace_manager(self, _ticket_id):
             return ExistingBranchManager()
 
-        def recovery_git(self, _cwd, *_args, check=False):
+        def recovery_git(self, _cwd, *args, check=False):
             class Result:
                 returncode = 0
-                stdout = "a" * 40 + "\n"
+                stdout = ""
                 stderr = ""
 
-            return Result()
+            result = Result()
+            reference = "refs/heads/devlegate/TASK-1"
+            if args == ("show-ref", "--verify", reference):
+                result.stdout = f"{'a' * 40} {reference}\n"
+            elif args == ("rev-parse", "--verify", f"{reference}^{{commit}}"):
+                result.stdout = "a" * 40 + "\n"
+            return result
 
     state = {
         "phase": "agent_pending",
