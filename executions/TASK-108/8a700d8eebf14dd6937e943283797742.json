@@ -1,0 +1,37 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "56e5dd3a747391fe9d61b45eedd897e4b86bb9ec",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "8a700d8eebf14dd6937e943283797742",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the runtime-wide call-site and nested-helper inventory, including independently permitted preflight and status exceptions.",
+    "Audit and harden remaining recovery, accepted integration, lifecycle, rework, workspace proof, and cleanup Git bypasses, with appropriate interruption and shutdown tests.",
+    "Verify the completed implementation in exact-checkpoint GitHub CI."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the runtime-wide call-site and nested-helper inventory, including independently permitted preflight and status exceptions.",
+      "Audit and harden remaining recovery, accepted integration, lifecycle, rework, workspace proof, and cleanup Git bypasses, with appropriate interruption and shutdown tests.",
+      "Verify the completed implementation in exact-checkpoint GitHub CI."
+    ],
+    "report": null,
+    "summary": "Routed drop disposition, evidence pinning, and branch retirement Git operations through the owner-aware runtime runner while preserving admitted-drain and replay ordering. Added wrong-thread and real remote-deletion interruption coverage and documented the drop command ledger."
+  },
+  "workspace_head": "056d2f39d5a20a83273557c5e0c3bd41a08b85b3"
+}
