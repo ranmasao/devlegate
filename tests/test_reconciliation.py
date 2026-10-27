@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Reconciliation evidence identity proofs."""
 
+import subprocess
 import threading
 from types import SimpleNamespace
 
@@ -91,3 +92,47 @@ def test_product_evidence_rejects_unowned_or_stopped_git(
     monkeypatch.setattr("devlegate.runtime._git", unexpected_git)
     with pytest.raises(ShutdownInterrupted if shutdown else DevlegateError):
         engine._persist_product_reconciliation(report, product, "checkpoint")
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_checkpoint_push_rejects_unowned_or_stopped_git(
+    tmp_path, monkeypatch, shutdown
+):
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine.repo = tmp_path
+    engine.remote_name = "origin"
+    engine._host_owner_thread_id = None if shutdown else -1
+    engine._stop_event = threading.Event()
+    if shutdown:
+        engine._stop_event.set()
+    workspace = SimpleNamespace(path=tmp_path, branch="work")
+    monkeypatch.setattr(engine, "_resolve_commit_runtime", lambda *_: "checkpoint")
+    monkeypatch.setattr(engine, "_execution_remote_head", lambda *_: None)
+    monkeypatch.setattr(
+        "devlegate.runtime._git", lambda *args, **kwargs: pytest.fail("Git spawned")
+    )
+
+    with pytest.raises(ShutdownInterrupted if shutdown else DevlegateError):
+        engine._publish_execution_branch(workspace, "checkpoint", None)
+
+
+def test_checkpoint_ambiguous_push_reobserves_remote(tmp_path, monkeypatch):
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine.repo = tmp_path
+    engine.remote_name = "origin"
+    engine._host_owner_thread_id = None
+    engine._stop_event = None
+    workspace = SimpleNamespace(path=tmp_path, branch="work")
+    monkeypatch.setattr(engine, "_resolve_commit_runtime", lambda *_: "checkpoint")
+    observations = iter([None, "checkpoint"])
+    monkeypatch.setattr(engine, "_execution_remote_head", lambda *_: next(observations))
+    calls = []
+
+    def failed_push(repo, *args, check=False):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, "", "connection lost")
+
+    monkeypatch.setattr("devlegate.runtime._git", failed_push)
+    engine._publish_execution_branch(workspace, "checkpoint", None)
+    assert len(calls) == 1
+    assert calls[0][0] == "push"
