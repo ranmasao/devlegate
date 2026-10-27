@@ -2965,6 +2965,70 @@ def test_operator_recovery_keeps_current_remote_predecessor_for_publication(
     ).stdout.split()[0]
     assert execution_remote == git(manager.path, "rev-parse", "HEAD").stdout.strip()
 
+@pytest.mark.parametrize("diverged", [False, True])
+def test_operator_recovery_replays_local_pin_before_remote_evidence(
+    tmp_path, monkeypatch, diverged
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    (workspace.path / "old.txt").write_text("old\n")
+    git(workspace.path, "add", "old.txt")
+    git(workspace.path, "commit", "-m", "old generation")
+    observed = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    git(workspace.path, "push", "origin", f"{observed}:refs/heads/{workspace.branch}")
+    engine = Devlegate(config)
+    _persist_pending_execution(
+        engine, state, workspace, base, "current", start_head=observed
+    )
+    engine._save_state(
+        "agent_pending",
+        operator_recovery={
+            "ticket_id": "T-1", "execution_id": "current", "observed_head": observed
+        },
+    )
+    evidence = "refs/devlegate/recovery/operator/T-1/current"
+
+    def crash(_branch):
+        raise RuntimeError("after local pin")
+
+    monkeypatch.setattr(engine, "_execution_remote_head", crash)
+    with pytest.raises(RuntimeError, match="after local pin"):
+        engine._recover_unsafe_bound_execution_workspace("T-1", "current", observed)
+    assert git(working, "rev-parse", evidence).stdout.strip() == observed
+    assert not git(working, "ls-remote", "origin", evidence).stdout.strip()
+    if diverged:
+        git(working, "push", "origin", f"{base}:{evidence}")
+
+    restarted = Devlegate(config)
+    if diverged:
+        with pytest.raises(
+            DevlegateError, match="remote recovery evidence has conflicting"
+        ):
+            restarted._recover_unsafe_bound_execution_workspace(
+                "T-1", "current", observed
+            )
+        assert git(working, "ls-remote", "origin", evidence).stdout.split()[0] == base
+        remote_branch = git(
+            working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
+        ).stdout.split()[0]
+        assert remote_branch == observed
+    else:
+        restarted._recover_unsafe_bound_execution_workspace("T-1", "current", observed)
+        remote_evidence = git(
+            working, "ls-remote", "origin", evidence
+        ).stdout.split()[0]
+        assert remote_evidence == observed
+        assert restarted._state["execution_id"] == "current"
+        assert "operator_recovery" not in restarted._state
+        assert restarted.plan_view().action == "run-worker"
+
+
 def test_operator_recovery_replays_after_local_reconstruction_boundary(
     tmp_path, monkeypatch
 ):
@@ -3218,8 +3282,9 @@ def test_operator_recovery_rejects_remote_drift_after_observation(
     def drift_after_observe(branch):
         nonlocal observed
         value = real_observe(branch)
-        observed += 1
-        if observed == 2:
+        if branch == manager.branch:
+            observed += 1
+        if branch == manager.branch and observed == 2:
             git(
                 working,
                 "push",
