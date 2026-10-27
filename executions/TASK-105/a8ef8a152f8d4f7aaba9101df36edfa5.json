@@ -1,0 +1,29 @@
+{
+  "code_base_head": "295b7f04366979567090cc2bbe32a4cae0bb926a",
+  "conclusion": "completed",
+  "control_head": "a63244f43eb57ed41f7cec697678b9c9bb4cccac",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-105",
+  "execution_id": "a8ef8a152f8d4f7aaba9101df36edfa5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-105",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-105",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added the first evidence-linked ServiceEngine decomposition audit at docs/architecture/runtime-decomposition-audit.md. It inventories high-impact runtime responsibilities, distinguishes duplicated choreography from necessary safety gates, and defines three bounded extraction seams with retain decisions and risks."
+  },
+  "workspace_head": "901a4d1a7ce526211badea62cdfd70eaa40bb217"
+}
