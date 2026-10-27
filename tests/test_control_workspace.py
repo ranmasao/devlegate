@@ -1488,8 +1488,9 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     )
     rewritten_historical_evidence_ref = f"{historical_evidence_ref}-rewritten"
     assert (
-        git(working, "update-ref", historical_evidence_ref, historical_checkpoint).returncode
-        == 0
+        git(
+            working, "update-ref", historical_evidence_ref, historical_checkpoint
+        ).returncode == 0
     )
     assert (
         git(
@@ -2604,6 +2605,81 @@ def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
         ported.path, "rev-list", f"{new_base}..HEAD"
     ).stdout.splitlines()
     assert len(ported_commits) == 2
+
+
+def test_rework_failed_ancestry_does_not_retire_or_move_workspace(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(old_base)
+    (workspace.path / "implementation.txt").write_text("checkpoint\n")
+    git(workspace.path, "add", "implementation.txt")
+    git(workspace.path, "commit", "-m", "checkpoint")
+    old_checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    (working / "new-base.txt").write_text("new base\n")
+    git(working, "add", "new-base.txt")
+    git(working, "commit", "-m", "advance product")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    original_git = execution_workspace_module._git
+
+    def failed_ancestry(cwd, *args, **kwargs):
+        if args[:2] == ("merge-base", "--is-ancestor"):
+            return subprocess.CompletedProcess(args, 128, "", "repository unreadable")
+        return original_git(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(execution_workspace_module, "_git", failed_ancestry)
+
+    with pytest.raises(
+        ExecutionWorkspaceError, match="cannot prove previous execution"
+    ):
+        manager.prepare_rework(new_base, old_base, old_checkpoint)
+
+    assert workspace.path.exists()
+    branch_head = git(
+        working, "rev-parse", f"refs/heads/{workspace.branch}"
+    ).stdout.strip()
+    assert branch_head == old_checkpoint
+
+
+def test_rework_malformed_patch_proof_does_not_move_replayed_workspace(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(old_base)
+    (workspace.path / "implementation.txt").write_text("checkpoint\n")
+    git(workspace.path, "add", "implementation.txt")
+    git(workspace.path, "commit", "-m", "checkpoint")
+    old_checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    (working / "new-base.txt").write_text("new base\n")
+    git(working, "add", "new-base.txt")
+    git(working, "commit", "-m", "advance product")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    replayed = manager.prepare_rework(new_base, old_base, old_checkpoint)
+    original_git = execution_workspace_module._git
+
+    def malformed_patch_proof(cwd, *args, **kwargs):
+        if args[:1] == ("cherry",):
+            return subprocess.CompletedProcess(args, 0, "not a cherry record\n", "")
+        return original_git(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(execution_workspace_module, "_git", malformed_patch_proof)
+
+    with pytest.raises(ExecutionWorkspaceError, match="cannot prove replay patch"):
+        manager.prepare_rework(new_base, old_base, old_checkpoint)
+
+    assert replayed.path.exists()
+    branch_head = git(
+        working, "rev-parse", f"refs/heads/{replayed.branch}"
+    ).stdout.strip()
+    assert branch_head == replayed.head
 
 
 @pytest.mark.parametrize(

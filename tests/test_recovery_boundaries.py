@@ -6,6 +6,7 @@ from pathlib import Path
 
 from devlegate import reconciliation_transactions, recovery_workspace
 from devlegate.execution_workspace import WorkspaceInspection
+from devlegate.git import GitAncestryError
 from devlegate.reconciliation import (
     prove_linear_lineage,
     rewrite_is_authorized,
@@ -196,6 +197,51 @@ def test_workspace_inspection_allows_only_unattached_missing_branch_rebuild(
     result = inspect_bound_workspace(_WorkspaceOwner(), state)
 
     assert result.classification == "RECOVERABLE"
+
+
+def test_workspace_inspection_fails_closed_when_ancestry_cannot_be_observed(
+    monkeypatch,
+):
+    class ExistingBranchManager(_WorkspaceManager):
+        def inspect(self, _base, _expected):
+            return WorkspaceInspection("UNSAFE", "execution worktree is missing")
+
+    class ExistingBranchOwner(_WorkspaceOwner):
+        def recovery_workspace_manager(self, _ticket_id):
+            return ExistingBranchManager()
+
+        def recovery_git(self, _cwd, *_args, check=False):
+            class Result:
+                returncode = 0
+                stdout = "a" * 40 + "\n"
+                stderr = ""
+
+            return Result()
+
+    state = {
+        "phase": "agent_pending",
+        "execution_ticket_id": "TASK-1",
+        "execution_id": "exec-1",
+        "execution_base_head": "base",
+        "execution_branch": "devlegate/TASK-1",
+        "execution_path": "/tmp/execution",
+        "worker_identity": None,
+        "pending_execution_report": None,
+    }
+
+    monkeypatch.setattr(
+        recovery_workspace, "run_git", ExistingBranchOwner().recovery_git
+    )
+    monkeypatch.setattr(
+        recovery_workspace,
+        "is_ancestor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(GitAncestryError("unreadable")),
+    )
+
+    result = inspect_bound_workspace(ExistingBranchOwner(), state)
+
+    assert result.classification == "UNSAFE"
+    assert "cannot prove" in result.reason
 
 
 class _LineageOwner:
