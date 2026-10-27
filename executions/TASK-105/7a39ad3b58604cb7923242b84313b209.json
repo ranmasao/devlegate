@@ -1,0 +1,29 @@
+{
+  "code_base_head": "295b7f04366979567090cc2bbe32a4cae0bb926a",
+  "conclusion": "completed",
+  "control_head": "543ef1896460cdb10d0cffc25d1292194af0764d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-105",
+  "execution_id": "7a39ad3b58604cb7923242b84313b209",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-105",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-105",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Appended Version 4 of the runtime decomposition audit with current-source partitions for scheduler and state validation regions. The report identifies bounded private/pure extraction seams, retained engine authority, invariants, focused regression coverage, and a finite prioritized shortlist."
+  },
+  "workspace_head": "5dafb38bb20ef998e56f00941d3c08b3c9064af0"
+}
