@@ -1605,9 +1605,11 @@ class ServiceEngine:
         branch = state.get("execution_branch")
         if not isinstance(branch, str) or not branch:
             raise DevlegateError("persisted execution branch identity is incomplete")
-        current = resolve_commit(self.repo, f"refs/heads/{branch}", runner=_git)
+        current = resolve_commit(
+            self.repo, f"refs/heads/{branch}", runner=self._git_runtime
+        )
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
-        evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
+        evidence = resolve_commit(self.repo, evidence_ref, runner=self._git_runtime)
         replay = evidence == observed_head and current == state.get(
             "execution_base_head"
         )
@@ -1632,8 +1634,8 @@ class ServiceEngine:
             raise DevlegateError("persisted execution workspace binding is invalid")
         branch_ref = f"refs/heads/{branch}"
         evidence_ref = f"refs/devlegate/recovery/operator/{ticket_id}/{execution_id}"
-        current_head = resolve_commit(self.repo, branch_ref, runner=_git)
-        existing = resolve_commit(self.repo, evidence_ref, runner=_git)
+        current_head = resolve_commit(self.repo, branch_ref, runner=self._git_runtime)
+        existing = resolve_commit(self.repo, evidence_ref, runner=self._git_runtime)
         authorized_replay = existing == observed_head and current_head == str(base_head)
         if current_head is None or (
             current_head != observed_head and not authorized_replay
@@ -1643,7 +1645,7 @@ class ServiceEngine:
             raise DevlegateError("operator recovery evidence has conflicting identity")
         if existing is None:
             pinned = create_ref_if_absent(
-                self.repo, evidence_ref, observed_head, runner=_git
+                self.repo, evidence_ref, observed_head, runner=self._git_runtime
             )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve the authorized branch HEAD")
@@ -1672,25 +1674,38 @@ class ServiceEngine:
                 remote_evidence = self._workspace_recovery_ref(
                     ticket_id, prior[0].execution_id
                 )
-            remote_existing = resolve_commit(self.repo, remote_evidence, runner=_git)
+            remote_existing = resolve_commit(
+                self.repo, remote_evidence, runner=self._git_runtime
+            )
             if remote_existing is not None and remote_existing != remote_head:
                 raise DevlegateError(
                     "operator recovery evidence has conflicting identity"
                 )
             if remote_existing is None:
                 preserved = create_ref_if_absent(
-                    self.repo, remote_evidence, remote_head, runner=_git
+                    self.repo, remote_evidence, remote_head, runner=self._git_runtime
                 )
                 if preserved.returncode:
                     raise DevlegateError("cannot preserve the remote branch HEAD")
+            published_head = self._execution_remote_head(remote_evidence)
+            if published_head not in {None, remote_head}:
+                raise DevlegateError(
+                    "remote recovery evidence has conflicting identity"
+                )
+            if published_head is None:
                 published = push_refs(
                     self.repo,
                     self.remote_name,
                     f"{remote_head}:{remote_evidence}",
-                    runner=_git,
+                    options=(f"--force-with-lease={remote_evidence}:",),
+                    runner=self._git_runtime,
                 )
-                if published.returncode:
+                if published.returncode and self._execution_remote_head(
+                    remote_evidence
+                ) != remote_head:
                     raise DevlegateError("cannot publish remote recovery evidence")
+            if self._execution_remote_head(remote_evidence) != remote_head:
+                raise DevlegateError("cannot verify remote recovery evidence")
             remote_again = self._execution_remote_head(branch)
             if remote_again != remote_head:
                 raise DevlegateError(
@@ -1701,7 +1716,7 @@ class ServiceEngine:
                 self.remote_name,
                 f"{base_head}:refs/heads/{branch}",
                 options=(f"--force-with-lease=refs/heads/{branch}:{remote_head}",),
-                runner=_git,
+                runner=self._git_runtime,
             )
             if retired.returncode:
                 raise DevlegateError(
@@ -1732,10 +1747,12 @@ class ServiceEngine:
             workspace = manager._validate_existing(registration, expected_worktree_head)
             if workspace.head != expected_worktree_head or workspace.dirty:
                 raise DevlegateError("authorized execution worktree is not clean")
-            removed = remove_worktree(self.repo, manager.path, force=True, runner=_git)
+            removed = remove_worktree(
+                self.repo, manager.path, force=True, runner=self._git_runtime
+            )
             if removed.returncode:
                 raise DevlegateError("cannot remove authorized execution worktree")
-        current_head = resolve_commit(self.repo, branch_ref, runner=_git)
+        current_head = resolve_commit(self.repo, branch_ref, runner=self._git_runtime)
         if current_head is None or (
             current_head != observed_head
             and not (authorized_replay and current_head == str(base_head))
@@ -1743,7 +1760,8 @@ class ServiceEngine:
             raise DevlegateError("execution branch changed during explicit recovery")
         if current_head == observed_head:
             moved = compare_and_swap_ref(
-                self.repo, branch_ref, str(base_head), observed_head, runner=_git
+                self.repo, branch_ref, str(base_head), observed_head,
+                runner=self._git_runtime,
             )
             if moved.returncode:
                 raise DevlegateError(
