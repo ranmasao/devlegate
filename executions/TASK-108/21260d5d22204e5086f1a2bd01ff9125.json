@@ -1,0 +1,39 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "1d537c2dbb0d005b018ab58cf71fe97f05ec4fe1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "21260d5d22204e5086f1a2bd01ff9125",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the full runtime Git call-site and nested-helper inventory, including justified standalone exceptions.",
+    "Harden remaining accepted integration, lifecycle, drop, cleanup, and observation paths while preserving WAL and interruption semantics.",
+    "Add real ambiguous remote-success and restart tests for checkpoint and rework publication boundaries.",
+    "Obtain a successful exact-checkpoint GitHub CI result."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the full runtime Git call-site and nested-helper inventory, including justified standalone exceptions.",
+      "Harden remaining accepted integration, lifecycle, drop, cleanup, and observation paths while preserving WAL and interruption semantics.",
+      "Add real ambiguous remote-success and restart tests for checkpoint and rework publication boundaries.",
+      "Obtain a successful exact-checkpoint GitHub CI result."
+    ],
+    "report": null,
+    "summary": "Hardened rework evidence pinning and publication through the owner/stop-aware Git capability, and reject checkpoint publication when shutdown is already requested. Added focused interruption and replay coverage and a partial transaction ledger with grouped follow-up work."
+  },
+  "workspace_head": "637ae9d3d91fe173ac281a9baf14ecd8a4eab8b3"
+}
