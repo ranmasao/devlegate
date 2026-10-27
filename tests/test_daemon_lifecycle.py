@@ -43,8 +43,33 @@ def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
 def test_drop_rejects_lifecycle_drain_before_owner_admission(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     engine.request_lifecycle("stop", "stop-request")
+    def unexpected_git(*args, **kwargs):
+        pytest.fail("Git must not run before drop admission")
+
+    monkeypatch.setattr(engine, "_git_runtime", unexpected_git)
     with pytest.raises(DevlegateError, match="service is draining"):
         engine.submit_drop("T-1", "execution-1", request_id="drop-request")
+
+def test_drop_disposition_wrong_thread_never_spawns_git(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.begin_hosted_owner()
+    calls = []
+    monkeypatch.setattr("devlegate.runtime._git", lambda *a, **k: calls.append(a))
+    errors = []
+
+    def observe():
+        try:
+            engine._read_drop_disposition("T-1", "execution-1")
+        except DevlegateError as error:
+            errors.append(str(error))
+
+    thread = threading.Thread(target=observe)
+    thread.start()
+    thread.join(5)
+    engine.end_hosted_owner()
+    assert not thread.is_alive()
+    assert errors and "owner thread" in errors[0]
+    assert calls == []
 
 def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -61,7 +86,10 @@ def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch
 
 @pytest.mark.parametrize(
     "fault_stage",
-    ["after-evidence", "after-disposition", "after-remote", "after-worktree"],
+    [
+        "after-evidence", "after-disposition", "after-remote", "after-worktree",
+        "push-ambiguous",
+    ],
 )
 def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
     tmp_path, monkeypatch, fault_stage, capsys
@@ -148,6 +176,19 @@ def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
     elif fault_stage == "after-disposition":
         monkeypatch.setattr(engine, "_retire_drop_workspace", crash_after_disposition)
         expected_error = "after disposition"
+    elif fault_stage == "push-ambiguous":
+        original_git_runtime = engine._git_runtime
+
+        def interrupt_after_push(repo, *args, **kwargs):
+            result = original_git_runtime(repo, *args, **kwargs)
+            if args[0] == "push" and any(
+                arg.startswith(":refs/heads/") for arg in args
+            ):
+                raise RuntimeError("simulated crash after actual push")
+            return result
+
+        monkeypatch.setattr(engine, "_git_runtime", interrupt_after_push)
+        expected_error = "after actual push"
     else:
         monkeypatch.setattr(engine, "_retire_drop_workspace", crash_after_remote)
         expected_error = f"after-{fault_stage.removeprefix('after-')}"
