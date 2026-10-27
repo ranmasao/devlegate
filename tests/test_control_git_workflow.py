@@ -13,6 +13,43 @@ import devlegate.control_git_workflow as control_git_workflow
 from devlegate.control_git_workflow import sync_control
 from devlegate.runtime import ShutdownInterrupted
 
+_SYNC_OBSERVATIONS = frozenset(
+    {
+        "cat-file",
+        "diff",
+        "for-each-ref",
+        "log",
+        "merge-base",
+        "rev-list",
+        "rev-parse",
+        "show",
+        "show-ref",
+        "status",
+        "symbolic-ref",
+    }
+)
+
+
+def _sync_effect(command: tuple[str, ...]) -> str:
+    """Classify sync calls; unknown commands are never harmless by default."""
+    if command[0] == "fetch":
+        return "network"
+    if command[0] == "merge":
+        return "mutation"
+    if command[0] in _SYNC_OBSERVATIONS:
+        return "observation"
+    return "unapproved"
+
+
+def _assert_sync_effects(
+    trace: list[tuple[str, ...]], expected: list[tuple[str, ...]]
+) -> None:
+    """Permit added observations while retaining the complete effect boundary."""
+    assert not [command for command in trace if _sync_effect(command) == "unapproved"]
+    assert [
+        command for command in trace if _sync_effect(command) in {"network", "mutation"}
+    ] == expected
+
 
 def test_sync_control_trace_fetches_then_fast_forwards_once() -> None:
     trace: list[tuple[str, ...]] = []
@@ -39,13 +76,13 @@ def test_sync_control_trace_fetches_then_fast_forwards_once() -> None:
     )
 
     assert result == ("remote-head", "remote-head")
-    effects = [
-        command for command in trace if command[0] in {"fetch", "merge"}
-    ]
-    assert effects == [
-        ("fetch", "--prune", "origin", "devlegate/control"),
-        ("merge", "--ff-only", "origin/devlegate/control"),
-    ]
+    _assert_sync_effects(
+        trace,
+        [
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("merge", "--ff-only", "origin/devlegate/control"),
+        ],
+    )
 
 
 def test_sync_control_does_not_merge_an_already_current_checkout() -> None:
@@ -72,8 +109,12 @@ def test_sync_control_does_not_merge_an_already_current_checkout() -> None:
     )
 
     assert result == ("same-head", "same-head")
-    assert ("fetch", "--prune", "origin", "devlegate/control") in trace
-    assert not any(command[:2] == ("merge", "--ff-only") for command in trace)
+    _assert_sync_effects(
+        trace,
+        [
+            ("fetch", "--prune", "origin", "devlegate/control"),
+        ],
+    )
 
 
 def test_sync_control_does_not_retry_an_interrupted_merge() -> None:
@@ -106,10 +147,48 @@ def test_sync_control_does_not_retry_an_interrupted_merge() -> None:
             log=lambda _message: None,
         )
 
-    assert ("fetch", "--prune", "origin", "devlegate/control") in trace
-    assert [command for command in trace if command[:2] == ("merge", "--ff-only")] == [
-        ("merge", "--ff-only", "origin/devlegate/control")
-    ]
+    _assert_sync_effects(
+        trace,
+        [
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("merge", "--ff-only", "origin/devlegate/control"),
+        ],
+    )
+
+
+def test_sync_effect_boundary_tolerates_an_extra_observation() -> None:
+    _assert_sync_effects(
+        [
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("rev-parse", "--verify", "HEAD^{commit}"),
+            ("merge", "--ff-only", "origin/devlegate/control"),
+        ],
+        [
+            ("fetch", "--prune", "origin", "devlegate/control"),
+            ("merge", "--ff-only", "origin/devlegate/control"),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "unexpected",
+    [
+        ("reset", "--hard", "HEAD"),
+        ("update-ref", "refs/heads/devlegate/control", "new", "old"),
+        ("push", "origin", "HEAD:devlegate/control"),
+    ],
+)
+def test_sync_effect_boundary_rejects_unexpected_mutation(
+    unexpected: tuple[str, ...],
+) -> None:
+    with pytest.raises(AssertionError):
+        _assert_sync_effects(
+            [
+                ("fetch", "--prune", "origin", "devlegate/control"),
+                unexpected,
+            ],
+            [("fetch", "--prune", "origin", "devlegate/control")],
+        )
 
 
 def test_attach_existing_control_owns_fetch_validation_and_worktree_add(
