@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import os
 import subprocess
 
 import pytest
@@ -26,25 +27,16 @@ def test_run_git_preserves_command_and_result_options(monkeypatch, tmp_path):
     )
 
     assert result is expected
-    assert captured == {
-        "args": (
-            [
-                "git",
-                "-C",
-                str(tmp_path),
-                "update-ref",
-                "refs/heads/main",
-                "new",
-                "old",
-            ],
-        ),
-        "kwargs": {
-            "input": "payload",
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        },
-    }
+    assert captured["args"] == (
+        ["git", "-C", str(tmp_path), "update-ref", "refs/heads/main", "new", "old"],
+    )
+    assert captured["kwargs"].items() >= {
+        "input": "payload",
+        "text": True,
+        "capture_output": True,
+        "check": False,
+    }.items()
+    assert captured["kwargs"]["env"] == {**os.environ, "LC_ALL": "C"}
 
 
 def test_typed_ref_operations_keep_create_cas_and_unconditional_distinct(tmp_path):
@@ -113,44 +105,46 @@ def test_typed_transport_and_worktree_operations_preserve_effectful_trace(tmp_pa
     ]
 
 
-def test_resolve_commit_normalizes_success_and_missing_revision(tmp_path):
+def test_resolve_commit_normalizes_success_and_exact_ref_absence(tmp_path):
     calls = []
+    reference = "refs/heads/missing"
 
     def fake_runner(cwd, *args, check):
         calls.append((cwd, args, check))
-        if args[2] == "missing^{commit}":
-            return subprocess.CompletedProcess([], 128, "", "missing")
+        if args == ("show-ref", "--verify", "--quiet", reference):
+            return subprocess.CompletedProcess([], 1, "", "missing")
         return subprocess.CompletedProcess([], 0, " abc123 \n", "")
 
     assert git.resolve_commit(
         tmp_path, "HEAD", runner=fake_runner
     ) == "abc123"
     assert git.resolve_commit(
-        tmp_path, "missing", runner=fake_runner
+        tmp_path, reference, runner=fake_runner
     ) is None
     assert calls == [
         (tmp_path, ("rev-parse", "--verify", "HEAD^{commit}"), False),
-        (tmp_path, ("rev-parse", "--verify", "missing^{commit}"), False),
+        (tmp_path, ("show-ref", "--verify", "--quiet", reference), False),
     ]
 
 
 def test_commit_parents_normalizes_parent_list_and_failures(tmp_path):
     calls = []
+    missing = "a" * 40
 
     def fake_runner(cwd, *args, check):
         calls.append((cwd, args, check))
-        if args[-1] == "missing":
-            return subprocess.CompletedProcess([], 128, "", "missing")
+        if args == ("cat-file", "-e", missing):
+            return subprocess.CompletedProcess([], 1, "", "missing")
         return subprocess.CompletedProcess([], 0, "commit parent-a parent-b\n", "")
 
     assert git.commit_parents(tmp_path, "commit", runner=fake_runner) == (
         "parent-a",
         "parent-b",
     )
-    assert git.commit_parents(tmp_path, "missing", runner=fake_runner) is None
+    assert git.commit_parents(tmp_path, missing, runner=fake_runner) is None
     assert calls == [
         (tmp_path, ("rev-list", "--parents", "-n", "1", "commit"), False),
-        (tmp_path, ("rev-list", "--parents", "-n", "1", "missing"), False),
+        (tmp_path, ("cat-file", "-e", missing), False),
     ]
 
 
@@ -161,19 +155,15 @@ def test_commit_parents_returns_empty_tuple_for_root_commit(tmp_path):
     assert git.commit_parents(tmp_path, "root", runner=fake_runner) == ()
 
 
-def test_resolve_commit_distinguishes_missing_revision_from_git_failure(tmp_path):
+@pytest.mark.parametrize("diagnostic", ["unknown revision", "Грешка", "opaque"])
+def test_resolve_commit_never_inferrs_absence_from_revision_diagnostic(
+    tmp_path, diagnostic
+):
     def fake_runner(cwd, *args, check):
-        if args[-1] == "missing^{commit}":
-            return subprocess.CompletedProcess([], 128, "", "unknown revision")
-        return subprocess.CompletedProcess([], 128, "", "fatal: repository unreadable")
+        return subprocess.CompletedProcess([], 128, "", diagnostic)
 
-    assert git.resolve_commit(tmp_path, "missing", runner=fake_runner) is None
-    try:
-        git.resolve_commit(tmp_path, "broken", runner=fake_runner)
-    except git.GitObservationError as error:
-        assert "repository unreadable" in str(error)
-    else:
-        raise AssertionError("Git observation failures must not look like missing refs")
+    with pytest.raises(git.GitObservationError):
+        git.resolve_commit(tmp_path, "missing", runner=fake_runner)
 
 
 def test_resolve_commit_wraps_runner_os_errors(tmp_path):
@@ -194,10 +184,10 @@ def test_resolve_ref_commit_distinguishes_absent_and_corrupt_refs(tmp_path):
     def corrupt_runner(_cwd, *args, **_kwargs):
         if args == ("show-ref", "--verify", "--quiet", reference):
             return subprocess.CompletedProcess([], 0, "", "")
-        return subprocess.CompletedProcess([], 128, "", "fatal: bad ref")
+        return subprocess.CompletedProcess([], 128, "", "opaque diagnostic")
 
     assert git.resolve_ref_commit(tmp_path, reference, runner=absent_runner) is None
-    with pytest.raises(git.GitObservationError, match="bad ref"):
+    with pytest.raises(git.GitObservationError):
         git.resolve_ref_commit(tmp_path, reference, runner=corrupt_runner)
 
 
@@ -414,6 +404,13 @@ def test_real_git_ancestry_ref_absence_patch_equivalence_and_cas(tmp_path):
     assert not git.is_ancestor(tmp_path, replay, original)
     assert not git.ref_exists(tmp_path, "refs/heads/missing")
     assert git.patch_equivalence(tmp_path, original, replay, base) == ("-",)
+    tracked_object = command("rev-parse", "HEAD:tracked.txt").stdout.strip()
+    assert git.path_object(tmp_path, "HEAD", "tracked.txt") == tracked_object
+    assert git.path_object(tmp_path, "HEAD", "missing") is None
+    assert git.read_path(tmp_path, "HEAD", "tracked.txt") == "base\nchange\n"
+    assert git.read_path(tmp_path, "HEAD", "missing") is None
+    assert git.read_object(tmp_path, "0" * 40) is None
+    assert git.commit_parents(tmp_path, "0" * 40) is None
 
     assert git.create_ref_if_absent(tmp_path, "refs/heads/race", base).returncode == 0
     assert git.compare_and_swap_ref(
@@ -469,23 +466,94 @@ def test_worktree_paths_rejects_malformed_output(tmp_path):
 
 def test_read_object_does_not_treat_repository_failure_as_absence(tmp_path):
     def fake_runner(cwd, *args, check):
-        return subprocess.CompletedProcess([], 128, "", "fatal: not a git repository")
+        return subprocess.CompletedProcess([], 128, "", "opaque diagnostic")
 
-    try:
+    with pytest.raises(git.GitObservationError):
         git.read_object(tmp_path, "missing", runner=fake_runner)
-    except git.GitObservationError as error:
-        assert "not a git repository" in str(error)
-    else:
-        raise AssertionError("repository failures must not look like missing objects")
 
 
 def test_read_path_does_not_treat_repository_failure_as_absence(tmp_path):
     def fake_runner(cwd, *args, check):
-        return subprocess.CompletedProcess([], 128, "", "fatal: not a git repository")
+        return subprocess.CompletedProcess([], 128, "", "opaque diagnostic")
 
-    try:
+    with pytest.raises(git.GitObservationError):
         git.read_path(tmp_path, "HEAD", "file", runner=fake_runner)
-    except git.GitObservationError as error:
-        assert "not a git repository" in str(error)
-    else:
-        raise AssertionError("repository failures must not look like missing paths")
+
+
+@pytest.mark.parametrize("diagnostic", ["missing", "Грешка", "opaque"])
+def test_exact_ref_and_object_absence_ignore_diagnostic_language(tmp_path, diagnostic):
+    reference = "refs/heads/missing"
+    object_id = "a" * 40
+
+    def ref_runner(_cwd, *args, **_kwargs):
+        assert args == ("show-ref", "--verify", "--quiet", reference)
+        return subprocess.CompletedProcess([], 1, "", diagnostic)
+
+    def object_runner(_cwd, *args, **_kwargs):
+        assert args == ("cat-file", "-e", object_id)
+        return subprocess.CompletedProcess([], 1, "", diagnostic)
+
+    assert git.resolve_commit(tmp_path, reference, runner=ref_runner) is None
+    assert git.read_object(tmp_path, object_id, runner=object_runner) is None
+
+
+@pytest.mark.parametrize("diagnostic", ["fatal", "Грешка", "opaque"])
+def test_nonsemantic_statuses_fail_closed_for_ref_and_object(tmp_path, diagnostic):
+    object_id = "a" * 40
+
+    def ref_runner(_cwd, *_args, **_kwargs):
+        return subprocess.CompletedProcess([], 128, "", diagnostic)
+
+    def object_runner(_cwd, *_args, **_kwargs):
+        return subprocess.CompletedProcess([], 128, "", diagnostic)
+
+    with pytest.raises(git.GitObservationError):
+        git.resolve_commit(tmp_path, "refs/heads/missing", runner=ref_runner)
+    with pytest.raises(git.GitObservationError):
+        git.read_object(tmp_path, object_id, runner=object_runner)
+
+
+@pytest.mark.parametrize("diagnostic", ["does not exist", "Грешка", "opaque"])
+def test_path_absence_uses_empty_ls_tree_output_not_diagnostic(tmp_path, diagnostic):
+    def fake_runner(_cwd, *args, **_kwargs):
+        assert args == (
+            "ls-tree", "-z", "--format=%(objectname)", "HEAD", "--", "missing"
+        )
+        return subprocess.CompletedProcess([], 0, "", diagnostic)
+
+    assert git.path_object(tmp_path, "HEAD", "missing", runner=fake_runner) is None
+    assert git.read_path(tmp_path, "HEAD", "missing", runner=fake_runner) is None
+
+
+def test_remote_exists_uses_structured_remote_listing(tmp_path):
+    def present_runner(_cwd, *args, **_kwargs):
+        assert args == ("remote",)
+        return subprocess.CompletedProcess([], 0, "origin\nbackup\n", "opaque")
+
+    def broken_runner(_cwd, *args, **_kwargs):
+        assert args == ("remote",)
+        return subprocess.CompletedProcess([], 2, "", "Грешка")
+
+    assert git.remote_exists(tmp_path, "origin", runner=present_runner)
+    assert not git.remote_exists(tmp_path, "missing", runner=present_runner)
+    with pytest.raises(git.GitObservationError):
+        git.remote_exists(tmp_path, "origin", runner=broken_runner)
+
+
+@pytest.mark.parametrize("locale_name", ["C", "C.UTF-8"])
+def test_git_porcelain_locale_smoke(tmp_path, locale_name):
+    available = subprocess.run(
+        ["locale", "-a"], text=True, capture_output=True, check=True
+    ).stdout.splitlines()
+    if locale_name.lower() not in {name.lower() for name in available}:
+        pytest.skip(f"{locale_name} is not installed")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "tracked").write_text("data\n")
+    result = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--porcelain"],
+        text=True,
+        capture_output=True,
+        check=True,
+        env={**os.environ, "LC_ALL": locale_name},
+    )
+    assert result.stdout == "?? tracked\n"

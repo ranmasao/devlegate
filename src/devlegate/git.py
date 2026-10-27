@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -30,13 +31,21 @@ def _stderr(result: subprocess.CompletedProcess[str]) -> str:
 def run_git(
     cwd: Path, *args: str, check: bool = True, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Run Git in ``cwd`` while preserving subprocess result semantics."""
+    """Run Git in ``cwd`` with reproducible diagnostics.
+
+    Semantic helpers never parse those diagnostics, but forcing Git's locale in
+    this child-only environment keeps forwarded operator errors reproducible.
+    Other subprocesses retain the caller environment.
+    """
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
     return subprocess.run(
         ["git", "-C", str(cwd), *args],
         input=input_text,
         text=True,
         capture_output=True,
         check=check,
+        env=environment,
     )
 
 
@@ -320,7 +329,14 @@ def resolve_commit(
     check: bool = False,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
-    """Resolve a revision to its commit object name, or return ``None`` when absent."""
+    """Resolve a revision to its commit object name.
+
+    Only exact refs have a portable absence signal.  An arbitrary revision's
+    ``rev-parse`` failure can also mean corruption or malformed input, so it is
+    an observation failure rather than absence.
+    """
+    if revision.startswith("refs/"):
+        return resolve_ref_commit(cwd, revision, runner=runner)
     try:
         result = runner(
             cwd, "rev-parse", "--verify", f"{revision}^{{commit}}", check=check
@@ -330,15 +346,6 @@ def resolve_commit(
             f"cannot resolve Git revision {revision!r}: {error}"
         ) from error
     if result.returncode:
-        detail = _stderr(result).strip().lower()
-        # Some lightweight test seams expose only returncode/stdout.  Preserve
-        # their historical absent-ref signal without broadening real Git error
-        # classification, where rev-parse uses status 128 for a missing ref.
-        missing = (result.returncode == 1 and not detail) or _is_missing_revision_error(
-            detail
-        )
-        if missing:
-            return None
         raise GitObservationError(
             f"cannot resolve Git revision {revision!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
@@ -380,9 +387,17 @@ def resolve_ref_commit(
         raise GitObservationError(
             f"Git returned malformed ref identity for {reference!r}"
         )
-    resolved = resolve_commit(cwd, reference, runner=runner)
-    if resolved is None:
-        raise GitObservationError(f"Git ref {reference!r} became unreadable")
+    resolved_result = runner(
+        cwd, "rev-parse", "--verify", f"{reference}^{{commit}}", check=False
+    )
+    if resolved_result.returncode:
+        raise GitObservationError(
+            f"cannot resolve Git ref {reference!r}: "
+            f"{_stderr(resolved_result).strip() or 'unknown Git error'}"
+        )
+    resolved = resolved_result.stdout.strip()
+    if not _is_object_id(resolved):
+        raise GitObservationError(f"Git returned malformed commit for {reference!r}")
     if resolved != fields[0]:
         raise GitObservationError(
             f"Git ref {reference!r} changed or does not name an exact commit"
@@ -397,13 +412,11 @@ def resolve_object(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
     """Resolve any Git object, including blobs used by durable evidence refs."""
-    if revision.startswith("refs/") and not ref_exists(cwd, revision, runner=runner):
-        return None
+    if revision.startswith("refs/"):
+        if not ref_exists(cwd, revision, runner=runner):
+            return None
     result = runner(cwd, "rev-parse", "--verify", revision, check=False)
     if result.returncode:
-        detail = _stderr(result).strip().lower()
-        if _is_missing_revision_error(detail):
-            return None
         raise GitObservationError(
             f"cannot resolve Git object {revision!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
@@ -517,12 +530,11 @@ def commit_parents(
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> tuple[str, ...] | None:
-    """Return a commit's parents, or ``None`` when the commit is absent."""
+    """Return a commit's parents, or ``None`` for a proven absent object."""
+    if _is_object_id(commit) and _object_is_absent(cwd, commit, runner=runner):
+        return None
     result = runner(cwd, "rev-list", "--parents", "-n", "1", commit, check=False)
     if result.returncode:
-        detail = _stderr(result).strip().lower()
-        if _is_missing_revision_error(detail):
-            return None
         raise GitObservationError(
             f"cannot read parents for {commit!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
@@ -676,11 +688,9 @@ def remote_exists(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> bool:
     """Return whether a configured remote exists; fail on unreadable config."""
-    result = runner(cwd, "remote", "get-url", remote, check=False)
+    result = runner(cwd, "remote", check=False)
     if result.returncode == 0:
-        return bool(result.stdout.strip())
-    if result.returncode == 2 or "no such remote" in _stderr(result).lower():
-        return False
+        return remote in result.stdout.splitlines()
     raise GitObservationError(
         f"cannot observe Git remote {remote!r}: "
         f"{_stderr(result).strip() or 'unknown Git error'}"
@@ -913,19 +923,26 @@ def path_object(
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
-    """Return a path's blob/tree object name at a commit, or ``None`` absent."""
-    result = runner(cwd, "rev-parse", f"{commit}:{path}", check=False)
+    """Return a path's blob/tree object name at a commit, or ``None`` absent.
+
+    ``ls-tree`` returns status zero with empty structured output for a missing
+    path.  Invalid commits and unreadable trees remain nonzero observations.
+    """
+    result = runner(
+        cwd, "ls-tree", "-z", "--format=%(objectname)", commit, "--", path,
+        check=False,
+    )
     if result.returncode:
-        if result.returncode == 128 and _is_missing_path_error(_stderr(result)):
-            return None
         raise GitObservationError(
             f"cannot inspect {path!r} at {commit!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
         )
-    value = result.stdout.strip()
-    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
+    values = result.stdout.split("\0")
+    if values == [""]:
+        return None
+    if len(values) != 2 or values[1] or not _is_object_id(values[0]):
         raise GitObservationError("Git returned malformed path object output")
-    return value
+    return values[0]
 
 
 def ahead_behind(
@@ -962,12 +979,10 @@ def read_object(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> tuple[str, str] | None:
     """Return an object's type and contents, or ``None`` when it is absent."""
+    if _is_object_id(object_id) and _object_is_absent(cwd, object_id, runner=runner):
+        return None
     object_type = runner(cwd, "cat-file", "-t", object_id, check=False)
     if object_type.returncode:
-        if object_type.returncode == 128 and _is_missing_object_error(
-            _stderr(object_type)
-        ):
-            return None
         raise GitObservationError(
             f"cannot read Git object {object_id!r}: "
             f"{_stderr(object_type).strip() or 'unknown Git error'}"
@@ -992,10 +1007,11 @@ def read_path(
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> str | None:
     """Read a path from a commit, returning ``None`` when it is absent."""
-    result = runner(cwd, "show", f"{commit}:{path}", check=False)
+    object_id = path_object(cwd, commit, path, runner=runner)
+    if object_id is None:
+        return None
+    result = runner(cwd, "cat-file", "-p", object_id, check=False)
     if result.returncode:
-        if result.returncode == 128 and _is_missing_path_error(_stderr(result)):
-            return None
         raise GitObservationError(
             f"cannot read {path!r} at {commit!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
@@ -1003,39 +1019,23 @@ def read_path(
     return result.stdout
 
 
-def _is_missing_revision_error(detail: str) -> bool:
-    """Recognize Git's revision lookup failures, not repository failures."""
-    if "not a git repository" in detail or "cannot open" in detail:
-        return False
-    if detail.strip() == "missing":
-        return True
-    return any(
-        marker in detail
-        for marker in (
-            "unknown revision",
-            "ambiguous argument",
-            "bad object",
-            "needed a single revision",
-            "not a valid object name",
-        )
-    )
-
-
 def _is_object_id(value: str) -> bool:
     return len(value) == 40 and all(char in "0123456789abcdef" for char in value)
 
 
-def _is_missing_object_error(detail: str) -> bool:
-    normalized = detail.strip().lower()
-    if "not a git repository" in normalized or "cannot open" in normalized:
+def _object_is_absent(
+    cwd: Path,
+    object_id: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> bool:
+    """Use ``cat-file -e`` status to prove an exact object id is absent."""
+    result = runner(cwd, "cat-file", "-e", object_id, check=False)
+    if result.returncode == 0:
         return False
-    return "not a valid object name" in normalized or "bad object" in normalized
-
-
-def _is_missing_path_error(detail: str) -> bool:
-    normalized = detail.strip().lower()
-    if "not a git repository" in normalized or "cannot open" in normalized:
-        return False
-    return (
-        "path '" in normalized and "does not exist" in normalized
-    ) or "exists on disk, but not in" in normalized
+    if result.returncode == 1:
+        return True
+    raise GitObservationError(
+        f"cannot inspect Git object {object_id!r}: "
+        f"{_stderr(result).strip() or 'unknown Git error'}"
+    )

@@ -79,3 +79,40 @@ fetch coalescing. Each needs transaction-specific proof and cannot be safely fol
 into this first bounded semantic boundary change. Focused downstream work should add
 executed command tracing for cleanup cohorts, then remediate one runtime publication
 transaction at a time without changing scheduler ownership.
+
+## Locale-independent observation update
+
+TASK-101 removed the remaining diagnostic-text classifiers from `git.py`.
+`resolve_commit` and `resolve_object` use `show-ref --verify --quiet` before
+resolving exact `refs/*` names; arbitrary revision failures are observation
+errors because `rev-parse` status 128 cannot prove absence. `commit_parents`
+and `read_object` use `cat-file -e <full-object-id>`, where status 1 is the
+documented absent-object result and every other nonzero result is an error.
+`path_object` and `read_path` use `ls-tree -z --format=%(objectname)`, for
+which empty structured output is the valid missing-path result. `remote_exists`
+uses the successful structured output of `git remote`, not `get-url` errors.
+
+| Function | Previous language assumption | Replacement observation | Failure handling |
+| --- | --- | --- | --- |
+| `resolve_commit`, `resolve_object` | `rev-parse` diagnostics such as unknown revision | `show-ref --verify --quiet` for exact `refs/*` | Only status 1 from quiet `show-ref` is absent; arbitrary revision failure is an observation error. |
+| `commit_parents`, `read_object` | `rev-list`/`cat-file` bad-object text | `cat-file -e <full-object-id>` | Only status 1 for a full object id is absent; status 128 and malformed output fail closed. |
+| `path_object`, `read_path` | `rev-parse`/`show` path-does-not-exist text | `ls-tree -z --format=%(objectname) <commit> -- <path>` | Empty NUL-delimited structured output is absent; nonzero and malformed output fail closed. |
+| `remote_exists` | `remote get-url` no-such-remote text | successful `git remote` line protocol | Membership is a valid negative; config/read failure is an observation error. |
+| `run_git` | none; diagnostics were forwarded to operators | child-only `LC_ALL=C` environment | Diagnostics remain human-facing only. No global environment is changed. |
+
+Representative local-read trace delta: an exact-ref commit resolution changes from
+`rev-parse --verify <ref>^{commit}` to quiet `show-ref`, verbose `show-ref`, then
+`rev-parse`; object reads add `cat-file -e <oid>` before `cat-file -t/-p`; path
+reads change from `show <commit>:<path>` to `ls-tree -z` followed by
+`cat-file -p <oid>`. Remote existence changes from `remote get-url <name>` to
+`remote`. All added commands are local reads, with no fetch, network, ref, index,
+or worktree mutation.
+
+The added local reads are one `cat-file -e` before exact object parent/content
+reads and one `ls-tree` before path content reads. They do not fetch, contact a
+remote, or mutate Git state. `run_git` copies the caller environment and sets
+`LC_ALL=C` only for Git subprocesses so forwarded diagnostics are reproducible;
+this is defense in depth and is never a semantic parser dependency. True
+Bulgarian Git diagnostic validation requires a host with `bg_BG.UTF-8` generated
+and Git translations installed. Deterministic tests inject Bulgarian and opaque
+diagnostics independently of host locale.
