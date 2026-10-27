@@ -1,0 +1,29 @@
+{
+  "code_base_head": "1805e4185638f66a2f3084a945f62154aa25a71c",
+  "conclusion": "completed",
+  "control_head": "cc22ccd25c485f8f2ffb6bcab2cf93ee0365a3fd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-084",
+  "execution_id": "9e225ccd700e4b4b872b896046966d9e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-084",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-084",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Expanded the Git semantic audit into a traceable caller, command, outcome, authority, and replay matrix. Added fail-closed rework and recovery consumer regressions, and corrected the reported Ruff formatting violation."
+  },
+  "workspace_head": "0b0a699b218e5241aef51b9098695945f60df6c3"
+}
