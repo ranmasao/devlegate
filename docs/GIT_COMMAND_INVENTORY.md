@@ -105,6 +105,46 @@ subprocess alone. A control merge has no corresponding retry branch: its trace
 ends at `M(interrupted)`, and a later fresh control sync re-observes state
 before performing one normal merge.
 
+## Reconciliation Transaction Boundary
+
+TASK-081 completes the reconciliation-specific inventory. `run_update_base`
+is called by the serialized `ServiceEngine` path; its optional lock is the
+owner lock, and all owner callbacks retain the runtime runner's shutdown
+interruption behavior. `reconciliation_transactions` neither obtains authority
+nor writes shared state except through owner capabilities. An observation error
+is translated to `ReconciliationTransactionError`, never to an empty history or
+an absent ref.
+
+| Boundary | Executed commands and effect tier | Durable/re-entry proof and operator disposition |
+| --- | --- | --- |
+| Observation and identity: admission | Owner observations of pending WAL, product local/remote tip, ancestry/same-parent proof, evidence identity, and workspace binding. These owner operations are Tier 1 or Tier 2 according to their implementation; no helper fetches. | The service lock, pending ticket, clean workspace, exact checkpoint, and fresh product identity are required before a rewrite can start. Any failed observation rejects the request. |
+| Lineage/evidence proof: `prove_workspace_lineage` | `rev-list --reverse root..tip` (T1), then `rev-list --parents -n 1 commit` (T1) for every returned commit. | The range must be non-empty, end at `tip`, and each result must have exactly the preceding parent. Root commits are represented by an empty parent list and are rejected if offered as a delta commit; a root is valid as the range boundary. Merge, side branch, malformed output, unreadable history, or a gap rejects proof. The retained per-commit parent observation is unchanged from before; no whole-range parent format has been substituted without equivalent merge and boundary proof. |
+| Guarded local rewrite | `rebase --onto target original-base` (T3); on a conflict `rebase --abort` (T3), `rev-parse --verify HEAD^{commit}` (T1), and `status --porcelain` (T1). Invalid replay recovery uses `reset --hard checkpoint` (T3). | `local-pending`, target, count, exact checkpoint, and both evidence-ref names are durable before rebase. A conflict is accepted only after abort and exact HEAD/cleanliness re-observation restore the checkpoint. A failed abort or restoration leaves the pending WAL visible and blocks speculative publication. |
+| Guarded evidence and publication | Owner pins the rewritten evidence ref before its owner-supplied lease/CAS push (both T3 when applicable). The owner re-observes the remote tip immediately before the lease push. | `remote-pending` plus `rewrite_checkpoint` is durable before publication. The canonical displaced ref and `-rewritten` ref remain separate identity evidence; historical resolved records may omit `resolution_class`. Lease refusal or transport ambiguity is re-entered through remote-pending, not retried blindly. |
+| Re-entry: `local-pending` | If required: `rebase --abort` (T3), `rev-list --reverse target..HEAD` (T1), then one `rev-list --parents -n 1 commit` (T1) per result; `reset --hard checkpoint` (T3). | Re-entry proves the exact recorded count and linear topology before restoring. Failed proof, abort, or reset is a blocked reconciliation with durable state retained. |
+| Re-entry: `remote-pending` | Fresh owner remote observation; on unchanged remote, `reset --hard checkpoint` (T3). On a candidate completed push: exact evidence reads are, per ref, `show-ref --verify --quiet ref`, `show-ref --verify ref`, `rev-parse --verify ref^{commit}` (all T1), then `rev-list --reverse target..rewrite-checkpoint` (T1) and one parent observation per commit (T1). | Remote equality with the pre-push lease proves no publication and permits restoration. Remote equality with the exact rewritten checkpoint is accepted only after both displaced and rewritten evidence refs and the rewritten chain are re-proven. Drift, missing evidence, malformed output, or unreadable Git state blocks and never publishes. |
+| Cleanup/resolution | No Git command in this module; owner writes the resolved WAL/state only after the preceding exact proof. | Resolution removes rewrite-only WAL fields and retains the exact rewritten evidence reference. Cleanup cannot delete protected canonical or rewritten evidence refs. |
+
+The full reconciliation paths below include nested transaction helpers. `R` is a
+Tier 1 local observation, `W` a local Tier 3 worktree/history mutation, `U` a
+local Tier 3 ref write, and `P` a Tier 3 remote publication. Owner admission
+and remote observations are shown as `O` because their underlying command trace
+belongs to the service capability and is unchanged here.
+
+| Path | Before trace | After trace | Delta |
+| --- | --- | --- | --- |
+| Fresh unpublished update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence)` | unchanged | No added command or network access. |
+| Fresh published update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence), O(lease re-observation), P(lease push)` | unchanged | No added command; evidence remains before publication. |
+| Local-pending replay | `O, [W(rebase abort)], R(range), R(parent)*N, [W(reset)],` then fresh trace | unchanged | No added command. |
+| Remote-pending, remote unchanged | `O, W(reset)` | unchanged | No added command. |
+| Remote-pending, remote at rewrite checkpoint | `O, R(rev-parse displaced), R(rev-parse rewritten), R(range), R(parent)*N` | `O, R(show-ref quiet), R(show-ref), R(rev-parse displaced), R(show-ref quiet), R(show-ref), R(rev-parse rewritten), R(range), R(parent)*N` | Four added Tier 1 local identity observations. They distinguish an absent exact evidence ref from a present-but-unreadable ref before accepting an ambiguous push as complete. No remote call or mutation is added. |
+
+`commit_parents(..., absent_is_none=False)` is used only after `commit_range`
+has supplied each commit. This preserves one parent command per range entry;
+the helper's optional absent-object probe is intentionally disabled so TASK-081
+does not add a hidden N+1 observation. The standard helper default remains
+available for callers that need to classify an exact object absence.
+
 ## Source Delta
 
 The new `control_git_workflow.py` contains the extracted control

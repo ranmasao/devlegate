@@ -338,9 +338,14 @@ class _RewriteOwner:
     def reconciliation_git(_cwd, *args, check=False):
         command = list(args)
         if command[:2] == ["rev-list", "--reverse"]:
-            return type("Result", (), {"returncode": 0, "stdout": "one\ntwo\n"})()
+            return type(
+                "Result", (), {"returncode": 0, "stdout": f"{'1' * 40}\n{'2' * 40}\n"}
+            )()
         commit = command[-1]
-        parents = {"one": "one root\n", "two": "two one\n"}
+        parents = {
+            "1" * 40: f"{'1' * 40} root\n",
+            "2" * 40: f"{'2' * 40} {'1' * 40}\n",
+        }
         return type(
             "Result",
             (),
@@ -414,15 +419,53 @@ def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip(
         reconciliation_transactions, "_git", owner.reconciliation_git
     )
 
-    assert prove_workspace_lineage(owner, workspace, "root", "two") == (
-        "one",
-        "two",
+    assert prove_workspace_lineage(owner, workspace, "root", "2" * 40) == (
+        "1" * 40,
+        "2" * 40,
     )
     try:
         authorize_workspace_rewrite(
-            owner, workspace, "root", "two", "one", rewrite_published=False
+        owner, workspace, "root", "2" * 40, "1" * 40, rewrite_published=False
         )
     except ReconciliationTransactionError as error:
         assert "authorization" in str(error)
     else:
         raise AssertionError("published lineage rewrite must require authorization")
+
+
+def test_workspace_lineage_rejects_history_observation_failure(monkeypatch):
+    workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
+
+    def unavailable(_cwd, *_args, check=False):
+        return type(
+            "Result", (), {"returncode": 128, "stdout": "", "stderr": "bad repo"}
+        )()
+
+    monkeypatch.setattr(reconciliation_transactions, "_git", unavailable)
+
+    try:
+        prove_workspace_lineage(_RewriteOwner(), workspace, "root", "2" * 40)
+    except ReconciliationTransactionError as error:
+        assert "cannot prove workspace lineage" in str(error)
+        assert "bad repo" in str(error)
+    else:
+        raise AssertionError("unreadable history must not be treated as empty")
+
+
+def test_workspace_lineage_rejects_malformed_parent_observation(monkeypatch):
+    workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
+    commit = "2" * 40
+
+    def malformed(_cwd, *args, check=False):
+        if args[:2] == ("rev-list", "--reverse"):
+            return type("Result", (), {"returncode": 0, "stdout": f"{commit}\n"})()
+        return type("Result", (), {"returncode": 0, "stdout": "unexpected-parent\n"})()
+
+    monkeypatch.setattr(reconciliation_transactions, "_git", malformed)
+
+    try:
+        prove_workspace_lineage(_RewriteOwner(), workspace, "root", commit)
+    except ReconciliationTransactionError as error:
+        assert "malformed parents" in str(error)
+    else:
+        raise AssertionError("malformed parent output must not prove lineage")

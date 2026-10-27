@@ -12,9 +12,19 @@ before those capabilities may be used.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from typing import Any, Protocol
 
-from devlegate.git import run_git
+from devlegate.git import (
+    GitObservationError,
+    commit_parents,
+    commit_range,
+    reset_hard,
+    resolve_commit,
+    resolve_ref_commit,
+    run_git,
+    working_tree_status,
+)
 from devlegate.reconciliation import (
     LineageProof,
     prove_linear_lineage,
@@ -175,23 +185,29 @@ def prove_workspace_lineage(
     initial reconciliation admission and replay after a crash, so neither path
     can accidentally weaken the merge/side-branch checks.
     """
-    result = _git(
-        workspace.path, "rev-list", "--reverse", f"{root}..{tip}", check=False
-    )
-    commits = result.stdout.splitlines() if result.returncode == 0 else []
+    try:
+        commits = commit_range(
+            workspace.path, f"{root}..{tip}", reverse=True, runner=_git
+        )
+    except GitObservationError as error:
+        raise ReconciliationTransactionError(
+            f"cannot prove workspace lineage: {error}"
+        ) from error
     parents: dict[str, tuple[str, ...]] = {}
     for commit in commits:
-        parent_result = _git(
-            workspace.path,
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            commit,
-            check=False,
-        )
-        fields = parent_result.stdout.split()
-        parents[commit] = tuple(fields[1:]) if parent_result.returncode == 0 else ()
+        try:
+            observed = commit_parents(
+                workspace.path, commit, absent_is_none=False, runner=_git
+            )
+        except GitObservationError as error:
+            raise ReconciliationTransactionError(
+                f"cannot prove workspace lineage: {error}"
+            ) from error
+        if observed is None:
+            raise ReconciliationTransactionError(
+                "cannot prove workspace lineage: commit parent is unavailable"
+            )
+        parents[commit] = observed
     proof = prove_linear_lineage(root, commits, parents)
     if not proof.valid or (commits and commits[-1] != tip):
         reason = (
@@ -335,7 +351,7 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
     observed = owner._execution_remote_head(manager.branch)
     expected = reconciliation.get("rewrite_expected_remote")
     if observed == expected:
-        restored = _git(workspace.path, "reset", "--hard", checkpoint)
+        restored = reset_hard(workspace.path, checkpoint, runner=_git)
         if restored.returncode:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite could not be safely aborted"
@@ -359,27 +375,49 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
         raise ReconciliationTransactionError(
             "execution branch remote changed during interrupted rewrite"
         )
-    displaced = _git(owner.repo, "rev-parse", "--verify",
-                     str(reconciliation.get("displaced_evidence_ref")))
-    rewritten = _git(owner.repo, "rev-parse", "--verify",
-                     str(reconciliation.get("rewritten_evidence_ref")))
-    if (displaced.returncode or displaced.stdout.strip() != checkpoint or
-            rewritten.returncode or rewritten.stdout.strip() != rewrite_checkpoint):
+    displaced_ref = reconciliation.get("displaced_evidence_ref")
+    rewritten_ref = reconciliation.get("rewritten_evidence_ref")
+    if not isinstance(displaced_ref, str) or not isinstance(rewritten_ref, str):
         raise ReconciliationTransactionError(
             "interrupted execution rewrite evidence is invalid"
         )
-    rewritten_commits = _git(workspace.path, "rev-list", "--reverse",
-                             f"{admission.target}..{rewrite_checkpoint}")
-    commits = rewritten_commits.stdout.splitlines()
-    if rewritten_commits.returncode or not commits:
+    try:
+        displaced = resolve_ref_commit(owner.repo, displaced_ref, runner=_git)
+        rewritten = resolve_ref_commit(owner.repo, rewritten_ref, runner=_git)
+    except GitObservationError as error:
+        raise ReconciliationTransactionError(
+            f"cannot inspect interrupted execution rewrite evidence: {error}"
+        ) from error
+    if displaced != checkpoint or rewritten != rewrite_checkpoint:
+        raise ReconciliationTransactionError(
+            "interrupted execution rewrite evidence is invalid"
+        )
+    try:
+        commits = commit_range(
+            workspace.path,
+            f"{admission.target}..{rewrite_checkpoint}",
+            reverse=True,
+            runner=_git,
+        )
+    except GitObservationError as error:
+        raise ReconciliationTransactionError(
+            f"cannot inspect interrupted execution rewrite: {error}"
+        ) from error
+    if not commits:
         raise ReconciliationTransactionError(
             "interrupted execution rewrite result is invalid"
         )
     previous = admission.target
     for commit in commits:
-        parents = _git(workspace.path, "rev-list", "--parents", "-n", "1", commit)
-        fields = parents.stdout.split()
-        if len(fields) != 2 or fields[1] != previous:
+        try:
+            parents = commit_parents(
+                workspace.path, commit, absent_is_none=False, runner=_git
+            )
+        except GitObservationError as error:
+            raise ReconciliationTransactionError(
+                f"cannot inspect interrupted execution rewrite: {error}"
+            ) from error
+        if parents is None or len(parents) != 1 or parents[0] != previous:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite is not linear"
             )
@@ -417,15 +455,23 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
             )
         workspace = owner._execution_workspace_for_rewrite_recovery(manager)
     if workspace.head != checkpoint:
-        result = _git(workspace.path, "rev-list", "--reverse",
-                      f"{admission.target}..{workspace.head}")
-        commits = result.stdout.splitlines()
-        if (result.returncode or len(commits) != reconciliation.get("rewrite_count") or
+        try:
+            commits = commit_range(
+                workspace.path,
+                f"{admission.target}..{workspace.head}",
+                reverse=True,
+                runner=_git,
+            )
+        except GitObservationError as error:
+            raise ReconciliationTransactionError(
+                f"cannot inspect interrupted execution rewrite: {error}"
+            ) from error
+        if (len(commits) != reconciliation.get("rewrite_count") or
                 not _linear(owner, workspace.path, admission.target, commits)):
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite cannot be safely aborted"
             )
-        restored = _git(workspace.path, "reset", "--hard", checkpoint)
+        restored = reset_hard(workspace.path, checkpoint, runner=_git)
         if restored.returncode:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite could not be safely aborted"
@@ -441,12 +487,16 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
     return start_fresh_rewrite(owner, ticket_id, admission, rewrite_published)
 
 
-def _linear(owner: Any, workspace: Any, root: str, commits: list[str]) -> bool:
+def _linear(owner: Any, workspace: Any, root: str, commits: Sequence[str]) -> bool:
     previous = root
     for commit in commits:
-        result = _git(workspace, "rev-list", "--parents", "-n", "1", commit)
-        fields = result.stdout.split()
-        if result.returncode or len(fields) != 2 or fields[1] != previous:
+        try:
+            parents = commit_parents(
+                workspace, commit, absent_is_none=False, runner=_git
+            )
+        except GitObservationError:
+            return False
+        if parents is None or len(parents) != 1 or parents[0] != previous:
             return False
         previous = commit
     return True
@@ -516,8 +566,13 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         if rebased.returncode:
             _git(workspace.path, "rebase", "--abort")
             owner._state["execution_base_head"] = previous_execution_base
-            restored = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-            clean = not _git(workspace.path, "status", "--porcelain").stdout
+            try:
+                restored = resolve_commit(workspace.path, "HEAD", runner=_git)
+                clean = not working_tree_status(workspace.path, runner=_git)
+            except GitObservationError as error:
+                raise ReconciliationTransactionError(
+                    f"reconciliation conflict could not be safely observed: {error}"
+                ) from error
             if restored != admission.checkpoint or not clean:
                 raise ReconciliationTransactionError(
                     "reconciliation conflict could not be safely aborted"
@@ -541,7 +596,7 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         rewrite_error = str(error)
     if (updated.dirty or rewrite_error or len(rewritten) != len(lineage) or
             updated.head == admission.target):
-        restored = _git(workspace.path, "reset", "--hard", admission.checkpoint)
+        restored = reset_hard(workspace.path, admission.checkpoint, runner=_git)
         owner._state["execution_base_head"] = previous_execution_base
         if restored.returncode:
             raise ReconciliationTransactionError(
