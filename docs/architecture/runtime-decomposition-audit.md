@@ -569,3 +569,173 @@ shutdown behavior for every direct `_git` call and whether an ordinary
 execution-branch push needs more explicit ambiguous-success coverage. Those
 questions should gate only the ranked narrow tickets, not another broad
 decomposition study.
+
+## Version 4: internal scheduler and state-proof structure
+
+**Scope and snapshot.** This reviewer-directed pass answers only whether the
+internal contiguous regions of `_run_iteration_body` and
+`_validate_state_invariant` have cohesive extraction boundaries. No production
+code changed. Observations are from the current workspace/product checkpoint
+`4ff27df00224bc1495451552322fbf76537212c6` (`TASK-105: Iteratively audit
+runtime decomposition and DRY boundaries before final Git story acceptance`).
+Line references and physical LOC below are measured at this checkpoint.
+Versions 1-3, including the **KEEP SEPARATE** decision for normal versus replay
+checkpoint/publication state machines, remain valid.
+
+### `_run_iteration_body`: actual contiguous regions
+
+The method is 1,305 physical LOC (`src/devlegate/runtime.py:3888-5192`). It is
+one scheduler authority, but not one indivisible operation. The table divides
+it at actual returns, durable transitions, and capability boundaries rather
+than by superficial local variables.
+
+| Range (physical LOC) | Entry and exit behavior | State/lock/effect dependencies | Ownership conclusion |
+| --- | --- | --- | --- |
+| `3889-3918` (30) | Publishes `processing`, restores an admitted forced retry, refuses a stop, or resolves a persisted unsafe workspace and returns `0`. | Reads `force_retry_authorization`, `phase`, `operator_recovery`; publishes status; invokes recovery effect path. Owner serialization is supplied by the caller of `run_iteration`, not this function. | Essential scheduler pre-dispatch. Keep in place. A result callback would hide the distinction between stop and unsafe-workspace recovery. |
+| `3919-3993` (75) | Proves product checkout branch, dispatches accepted-integration/reconciliation/checkpoint-publication/lifecycle recovery, or converts a stranded execution into automatic authorization. Every recovery branch returns before ordinary planning. | Reads `phase`, accepted/reconciliation/WAL stage and worker identity; invokes engine recovery/lifecycle methods and backlog cleanup. | Essential lifecycle dispatch. Keep in place: it is the point that chooses normal work versus the stricter replay state machine. |
+| `3994-4206` (213) | Refuses dirty product state, observes/synchronizes control and product, resumes a pending merge, or returns `0/1` on stop, fetch, merge, or topology failure. | Product/control Git observations and effects through `_git_runtime`; `_save_state` writes `merge_pending`, `agent_pending`, or `idle`; stop gates occur before effects. | Owner synchronization policy. The repeated pending/non-pending fast-forward branches share primitives but have different persisted lineage checks (`4035-4151` versus `4152-4204`). Do not fold them into a generic merge helper. |
+| `4207-4320` (114) | Loads tickets/context, creates a stable execution plan, repairs a recoverable bound workspace once, publishes projections, and applies retry authorization only after fresh observations. | Ticket store, project-context observation, plan/worker ownership policy, status publication; no new worker or workspace effect. | Plan/admission coordination. Keep in place; `_make_execution_plan` is already the read-only policy capability. |
+| `4321-4411` (91) | Rejects blocked plans; completes a pending accepted integration or begins and completes a newly selected accepted integration, then returns `0`. | `accepted_integration` WAL, `_integrate_accepted` multi-worktree effect, ticket/control/product proofs, cleanup event and status effects. | Owner-only accepted-publication dispatch. Its two paths are intentionally different: the first validates persisted recovery evidence (`4331-4359`), the second first writes durable intent (`4375-4388`). |
+| `4412-4792` (381) | Selects a ticket, refuses stale/unauthorized retries, binds rework feedback, allocates execution identity, then saves `agent_pending`; returns on no work or stop. | Ticket store, report store, review provenance, retry/failed-execution fields, all admission identities, `_save_state`; Git proof only while resolving prior rework lineage. | Essential policy and WAL admission. It is too coupled for a narrow extraction: a proposed input would contain plan, snapshots, authorization, report/review history, and mutable state, recreating an admission state machine. |
+| `4793-4905` (113) | Prepares the execution worktree, decides fresh/rework/resume directive, restores review content, constructs/persists the prompt artifact, and stops before `agent_running`. | `ExecutionWorkspaceManager` through `_prepare_execution_workspace`, persisted execution/rework fields, prompt filesystem artifact, stop gate. | A cohesive pre-worker setup region, but leave in the coordinator initially. Splitting it would require a large mutable context merely to return workspace, prompt, directive, artifact, and execution identity. |
+| `4906-5037` (132) | Durably enters `worker-launch`, runs one worker, always publishes post-worker status, proves worker-group retirement and submodules, builds a report, writes `checkpointing`, checkpoints, then writes `post-checkpoint`. `WorkerAdmissionClosed` returns `0`; post-worker integrity errors record failure then raise. | `_state` stages/worker identity/interruption field; worker-supervisor effect; prompt-delivery artifact callback; workspace Git checkpoint effect via manager; status publication. No new lock is acquired. | Cohesive inner operation. A small engine-private method is viable because it has one caller and its effects remain under engine methods and the injected manager runner. |
+| `5038-5150` (113) | Honors lifecycle drain after checkpoint; observes product and either returns blocked, records a zero-delta lifecycle retry, permits the safe descendant, or pins reconciliation evidence and returns blocked. | `post-checkpoint` WAL/report, product fetch observation, evidence-ref mutation, reconciliation state write, lifecycle/status publication. | Mixed but deliberately ordered product-decision policy. The inlined evidence/state sequence duplicates `_persist_product_reconciliation` (`5094-5138` and `8402-8460`); only that local deduplication is justified. |
+| `5151-5192` (42) | Writes publishing intent, publishes execution ref, writes post-publication/lifecycle, applies control lifecycle, finalizes, logs, and maps result to `0/1`. | WAL stages, execution-ref Git effect, control lifecycle effects, final state and snapshot. | Essential ordered tail. Keep in place with the Version 3 normal/replay separation; this is not a standalone transaction without a parallel state machine. |
+
+The visibly repeated operations inside the method are not automatically
+interchangeable. The two accepted-integration tails at `4357-4374` and
+`4390-4411` both call integration/save/cleanup, but only the latter has to
+make accepted intent durable first. The two plan calculations at `4214-4239`
+and `4248-4273` are a retry after a specific repair, not duplicated planning
+policy. The normal reconciliation sequence at `5094-5138` and
+`_persist_product_reconciliation` at `8402-8460` is the demonstrated same
+proof/evidence/state choreography: both reject a mismatched evidence ref, pin
+the checkpoint with `update-ref`, construct pending reconciliation, then save
+idle state. That remains the only direct internal duplication conclusion.
+
+#### Private worker-through-checkpoint seam
+
+`4906-5037` can become a private engine method such as
+`_run_worker_through_checkpoint(...) -> WorkerCheckpointOutcome`. Its minimum
+explicit inputs are the prepared workspace, selected ticket, execution ID,
+prompt, prompt artifact, initial product/remote heads, and observed execution
+remote head. Its typed result needs `report`, `worker_run`, `manager`, and
+`checkpoint`; it must return the `WorkerAdmissionClosed` outcome distinctly so
+the caller preserves its `0` result. It must re-raise the current
+`DevlegateError` wrapping for checkpoint errors and must retain the
+post-worker-failure recording behavior for submodule/integrity errors.
+
+This would add one engine-private call edge and no protocol/import edge. It
+would contain state mutation and worker/Git effects, but only through existing
+engine authority and `ExecutionWorkspaceManager(..., runner=self._git_runtime)`
+(`4961-4968`). It must not write later product/reconciliation/publication
+state, fetch product, or choose lifecycle policy. The caller must keep the
+ordering `agent_running/worker-launch` -> worker group retired ->
+`post-worker` -> submodule proof -> `checkpointing` -> checkpoint ->
+`post-checkpoint`, and retain its snapshot refreshes. This is a structural
+seam, not a new transaction owner.
+
+### `_validate_state_invariant`: proof groups and dependencies
+
+The validator is 448 physical LOC (`runtime.py:3267-3714`). It has no Git,
+workspace, lock, runner, `_save_state`, or store effect. It is called before a
+loaded state is accepted (`3263`), before `_save_state` replaces the store
+(`3777-3782`), and for a fresh status-store observation (`9334-9343`). Thus its
+only authority is rejection; transition and persistence authority already stay
+in `ServiceEngine`.
+
+| Range | Proof group and dependencies | Pure-decomposition assessment |
+| --- | --- | --- |
+| `3268-3306` | Phase enum, cleanup snapshot/event shape. | Independent shallow schema proof. Its meaning is not used to authorize another group. |
+| `3307-3379` | Reconciliation status/identity/optional fields plus retained `ExecutionReport` exact binding. | Cohesive pure proof. It depends only on the raw reconciliation mapping and `ExecutionReport.from_dict`; it does not depend on current phase or execution fields. |
+| `3380-3484` | Failed execution metadata, nested automatic-retry status/field-set/identity checks, worker identity, interruption kind, manual retry marker. | Mostly independent payload proofs. Automatic-retry validation is already a local pure helper (`3399-3454`), demonstrating the useful granularity. |
+| `3485-3562` | Idle has no live worker; accepted integration is idle-only and its optional product transition has exact allowed shapes. | Cross-field phase proof. Keep adjacent to the phase discriminator; separating it creates an unnecessary phase-policy interface. |
+| `3563-3647` | Early return for idle/merge-pending; active sync coordinates, selected-ticket binding, execution-stage enum, worker identity/stage relation, and pending report checkpoint relation. | This is the central state-machine proof and should remain one local control-flow region. Its ordering intentionally prevents later active-execution checks from accepting idle/merge states. |
+| `3648-3714` | Active execution binding and remote-head shape; optional rework provenance plus `restore_review_binding` exact predecessor/report/control binding. | The execution binding is phase-dependent; rework proof depends on it. Keep with the active-state region. |
+
+The only current candidate that reduces complexity rather than displacing a
+large block unchanged is a private static
+`_validate_reconciliation_state(reconciliation: object) -> None` for
+`3307-3379`. It has one new call edge from `_validate_state_invariant`, no
+state mutation or effects, and preserves `DevlegateError` translation of
+`ExecutionReportError`. Its immutable input is raw untrusted state and its
+only output is normal return or `DevlegateError`; introducing a mutable typed
+state object would add conversion semantics without evidence of a consumer.
+It would permit direct tests of reconciliation shape/report binding without
+constructing unrelated phase state. A broader state-schema module is not
+justified: all remaining groups are used only here, and moving them would add
+an import edge to `ExecutionReport` and review provenance while retaining the
+same 448-line state machine.
+
+### Three concrete comparisons
+
+| Candidate | Existing block -> proposed owner | Contract, edges, effects, and test seam | Decision |
+| --- | --- | --- | --- |
+| Reconciliation validator | `runtime.py:3307-3379` -> private static method on `ServiceEngine` (or a small dependency-free validation module only if a second consumer appears). | Input `object`; normal return or `DevlegateError`; one new call edge. No `_state` mutation, store action, lock, Git, or worker effect. Unit seam is malformed identity and retained-report exact binding. Predicted displacement is about 73 physical LOC, which is not the success criterion; it isolates one independently meaningful proof. | **Independent, low-risk candidate.** |
+| Worker through checkpoint | `4906-5037` -> small engine-private method. | Inputs/outcome as above; one new call edge; no import/protocol edge. It owns existing worker and checkpoint effects plus current stage saves, but cannot decide product/retry/publication. Unit seam is outcome mapping and stage/effect order with injected worker/manager. Predicted displacement is about 132 LOC. | **Independent only after the reconciliation local-dedup ticket, medium risk.** It must preserve ordering, shutdown visibility, and exception behavior exactly. |
+| Pre-worker admission/plan | `4207-4792` -> hypothetical planner/admission object. | Would require snapshots, ticket store, authorization, mutable state, report store, review provenance, stop checks, and a result covering no-work/reject/admit. It adds multiple calls and a new state-machine contract while still requiring engine `_save_state`. | **KEEP in place.** Its 586 LOC spans real scheduler policy, not a coherent domain operation. |
+
+The validation candidate and worker/checkpoint candidate do not depend on one
+another. The worker/checkpoint effect ordering remains coupled to the existing
+normal/replay boundary: recovery must continue to use
+`recovery_workflow.recover_checkpoint_publication`, not the new private normal
+helper. Neither candidate permits a new Git subprocess, a direct `_git`
+bypass, a durable state write outside `_save_state`, or a wider Protocol.
+
+### Invariants and focused regression set
+
+For a reconciliation validator extraction, retain failure on malformed
+reconciliation identity, malformed retained report, and every mismatched
+report binding. Existing direct evidence is
+`tests/test_control_recovery.py:1853-1880`; automatic-retry shape has focused
+coverage at `1416-1420`, and active workspace identity at
+`tests/test_cli_cross_layer.py:673-702`. Add only a direct unit test for an
+otherwise valid reconciliation with each optional invalid enum/type, if the
+new function makes those cases separately addressable.
+
+For worker-through-checkpoint, retain: no post-worker action while the worker
+group is unretired; `WorkerAdmissionClosed` returns before a live worker stage
+survives; checkpoint intent is durable before the Git checkpoint; exactly one
+clean/replayable checkpoint is recorded afterwards; and a lifecycle drain
+after checkpoint returns without product observation/publication. Existing
+focused coverage includes worker non-retirement in
+`tests/test_daemon_recovery.py:615-619`, checkpoint/replay proof in
+`tests/test_control_recovery.py:955-1058`, and drain-at-checkpoint boundaries
+in `tests/test_daemon_lifecycle.py:670-694`. An extraction ticket should add
+one injected-worker call-order test that asserts the stage sequence and one
+submodule-failure test that verifies `_record_post_worker_failure` remains
+before the raised error. It should not duplicate broad end-to-end recovery
+tests.
+
+Owner/shutdown invariants remain: the outer scheduler decides all pre-admission
+stops (`4000-4006`, `4788-4792`); the worker helper may only observe the
+already supplied stop event; the normal post-checkpoint drain check stays in
+the caller (`5038-5046`); replay dispatch remains earlier in the caller
+(`3949-3957`). This avoids a helper that accidentally treats a drain as either
+an ordinary worker failure or permission to skip a replay proof.
+
+### Finite prioritized implementation shortlist
+
+1. Make normal changed-product handling call the existing
+   `_persist_product_reconciliation` helper. This is the previously validated
+   same-owner duplication; preserve evidence-pin-before-idle-save and add the
+   targeted drift/evidence regression identified in Version 3.
+2. Extract the pure reconciliation-state validator as one private static
+   helper. Acceptance: unchanged accepted/rejected payload matrix and no new
+   imports/effects/state writes.
+3. Reconcile `WorkflowRecoveryCapabilities` with calls already made by the
+   recovery workflow and add a declaration/conformance check. This remains an
+   existing-contract repair, not a normal-flow abstraction.
+4. Extract the engine-private worker-through-checkpoint operation only with
+   an explicit stage/effect ledger and the focused worker, integrity, replay,
+   and drain tests above. Do not use it from recovery.
+5. Audit direct checkpoint/publication `_git` calls for owner/shutdown routing
+   only after their interruption contract is specified, as established in
+   Version 3.
+
+No ticket should extract plan/admission, accepted integration dispatch, normal
+publication/lifecycle, or the complete state validator wholesale. The
+remaining uncertainty is whether the worker/checkpoint helper's snapshot
+publication belongs inside its outcome contract or should remain visibly at
+the scheduler call site; resolve that with a before/after effect ledger in a
+narrow implementation ticket, not another broad runtime decomposition pass.
