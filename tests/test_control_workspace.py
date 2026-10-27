@@ -3855,6 +3855,11 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     real_git = runtime._git
 
     def observe_effect(repo, *args, **kwargs):
+        # This is deliberately irrelevant to recovery.  The assertions below
+        # must tolerate validation gaining another safe observation.
+        observation = ("rev-parse", "--verify", "HEAD^{commit}")
+        commands.append(observation)
+        real_git(repo, *observation, check=False)
         commands.append(args)
         if args[:2] == (
             "update-ref",
@@ -3920,6 +3925,34 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     assert not any(
         command[0] in {"fetch", "push", "ls-remote"} for command in recovery_commands
     )
+    allowed_writes = [
+        ("update-ref", evidence, old_head, ""),
+        ("worktree", "remove", "--force", str(manager.path)),
+        ("update-ref", f"refs/heads/{manager.branch}", new_base, old_head),
+        ("worktree", "add", str(manager.path), manager.branch),
+        ("submodule", "update", "--init", "--recursive"),
+    ]
+    writes = [
+        command
+        for command in recovery_commands
+        if command[0]
+        in {
+            "branch",
+            "checkout",
+            "commit",
+            "merge",
+            "reset",
+            "switch",
+            "update-ref",
+        }
+        or command[:2]
+        in {
+            ("worktree", "add"),
+            ("worktree", "remove"),
+            ("submodule", "update"),
+        }
+    ]
+    assert writes == allowed_writes
 
     assert git(working, "rev-parse", evidence).stdout.strip() == old_head
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
