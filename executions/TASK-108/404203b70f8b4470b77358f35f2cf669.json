@@ -1,0 +1,35 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "bdf23bd9e59225b7b8633106d286e424eed36aca",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "404203b70f8b4470b77358f35f2cf669",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain green exact-checkpoint GitHub CI through Devlegate before resuming the remaining Git authority audit.",
+    "Complete the function-by-function runtime Git inventory, address remaining unsafe bypasses, and produce the executed command/effect ledger with focused interruption proofs."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Obtain green exact-checkpoint GitHub CI through Devlegate before resuming the remaining Git authority audit.",
+      "Complete the function-by-function runtime Git inventory, address remaining unsafe bypasses, and produce the executed command/effect ledger with focused interruption proofs."
+    ],
+    "report": null,
+    "summary": "Restored shutdown drain for checkpoint publication and reconciliation evidence belonging to the admitted execution while preserving owner checks and remote re-observation after ambiguous publication. Added focused tests for mismatched admission and shutdown during an ambiguous push."
+  },
+  "workspace_head": "87bc1c8914175dd86e6b1f70954b4394dc2e72f2"
+}
