@@ -1,0 +1,29 @@
+{
+  "code_base_head": "0b0a699b218e5241aef51b9098695945f60df6c3",
+  "conclusion": "completed",
+  "control_head": "3dcde7174428ee2c5571565923098e552cdd5ec4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-101",
+  "execution_id": "68da7e70c0604a63a2da19e90783685f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-101",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-101",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Hardened exact-ref resolution against cleanup races by requiring a fresh locale-independent absence probe at each ref observation boundary. Reworked impacted Git trace tests to assert safety-critical observations, ordering, effects, and leases instead of brittle full command snapshots."
+  },
+  "workspace_head": "fe02e8149df3ac0697e044ea225d844f039259d7"
+}
