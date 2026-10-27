@@ -237,3 +237,132 @@ a single explicit sequence can preserve the stricter replay proofs. A second
 valuable alternative is to map cleanup ownership races from cohort admission
 through every destructive stage and decide whether a proof-result executor
 has a real contract. No runtime refactor is justified from this report alone.
+
+## Version 2: cleanup post-proof executor investigation
+
+**Scope and snapshot.** This is the reviewer-directed second pass. It answers
+only whether zero-delta retirement, accepted-integration retirement, and
+generic cleanup can share post-admission destructive choreography. No runtime
+code was changed. Sources and tests were re-read at workspace HEAD
+`4ecb6d1c39214380c0b82f6b4cc225810a15d514` (`TASK-105: Iteratively audit
+runtime decomposition and DRY boundaries before final Git story acceptance`).
+The prior Version 1 snapshot remains historical evidence; its reported
+integrated product HEAD was `295b7f04366979567090cc2bbe32a4cae0bb926a`.
+Line references in this version are measured at the Version 2 snapshot.
+
+### Actual cleanup flows
+
+The shared calls do not establish a common transaction. In each case,
+`ExecutionWorkspaceManager.retire` owns only a validated, clean worktree
+removal (`src/devlegate/execution_workspace.py:383-429`), and
+`_retire_execution_refs` owns the local compare-and-delete plus remote
+lease-delete sequence (`src/devlegate/runtime.py:6690-6818`). Neither owns
+admission or its durable consequence.
+
+|  | Zero-delta retry | Accepted integration | Generic cleanup |
+| --- | --- | --- | --- |
+| Caller and entry | `_complete_execution_lifecycle` dispatches to `_resolve_zero_delta_retry` when a pending retry exists (`runtime.py:5371-5389`); it invokes retirement at `5496`. | The accepted-integration path records `_pending_integrated_cleanup` after `_complete_accepted` (`runtime.py:6578-6590`), then `_finish_integrated_workspace_cleanup` invokes it (`6592-6630`). Restart instead enters accepted-integration recovery before idle cleanup (`3929-3939`). | Operator/admitted command supplies its immutable cohort, or the idle backlog calls `_reconcile_workspace_backlog` then `cleanup_workspaces` (`runtime.py:3938-3939,5194-5280,7176-7350`). |
+| Precondition and durable stage | `automatic_retry` must be pending and exactly bind ticket, stale execution, base, and checkpoint (`5467-5487`). Historical report persistence and current product-drift proof happen before retirement (`5481-5496`). The state remains an active lifecycle/automatic-retry record until `_finalize_execution_lifecycle` after retirement (`5508-5536`). | Product/control publication and the accepted-to-done transition must already be complete; cleanup is deliberately optional after that durable publication (`6592-6629`). `_retire_integrated_workspace` proves exact accepted provenance and requires ticket `done` (`6631-6664`). | Admission bounds `targets` to the receipt cohort and `limit`; it rejects malformed target identities before effects (`7183-7249`). Each target must now be `done`, correctly bound to its canonical path/branch/SHA, published, and not resource-live (`7099-7148`). |
+| Worktree registration/topology and local SHA proof | Constructs manager with the report ticket and injected owner runner, reads registrations, validates the canonical registration at `checkpoint`, or refuses an extant/branch-attached ambiguous path (`5437-5465`). `retire` itself rechecks path, branch, clean status, symlinks, registrations, submodules, and expected HEAD (`execution_workspace.py:383-429`). | Binds report path and branch exactly to the canonical manager (`6654-6663`), then requires a registration or proves nothing ambiguous remains (`6665-6679`). Before removal it repeats accepted evidence, ref, product, dependency, and registration proof (`6680-6684,7062-7097`); `retire` repeats its own local worktree proof. | `_observe_cleanup_candidate` proves canonical target binding, ticket state, registration head/branch, clean worktree, submodules, exact local/remote ref heads, no dependency, and published ancestry (`7099-7148`). Apply repeats the complete observation immediately before worktree removal and again before ref retirement (`7259-7270`). |
+| Effects and ordering | Remove worktree if registered; then remove local ref if it still equals checkpoint and is unattached; then observe remote SHA and remove it with an expected-SHA lease (`5453-5465,6690-6818`). There is no generic-candidate re-observation between worktree and ref removal. | After the pre-removal revalidation, remove worktree, then use `_retire_execution_refs` with the report proof mode (`6683-6687`). That method repeats `_revalidate_cleanup_retirement` immediately before local deletion and again before remote deletion, then repeats remote observation before the lease delete (`6728-6818`). | If present, remove worktree only after a fresh observation; re-observe after removal; call `_retire_execution_refs` in candidate proof mode. That method re-observes the candidate after local deletion and again before remote lease delete (`7260-7270,6733-6789`). |
+| Durable record and retry | No cleanup-specific durable completion is written between effects. A crash preserves the pending retry/lifecycle state; replay re-enters the same retirement before finalizing lifecycle. The focused crash-before-retirement test proves no duplicate admission and later fresh admission (`tests/test_control_recovery.py:1610-1657`). | No per-stage durable record is written. Success/blocked result becomes the in-memory `workspace_cleanup_event`; a cleanup failure cannot recreate pending accepted integration (`6599-6629`). A process loss before retirement leaves published done resources for startup/backlog discovery (`tests/test_control_cross_layer.py:194-257`); a loss before state clear instead replays accepted integration first (`132-191`). | Per-target result contains resource observations after error, but is returned/status-published rather than a per-effect WAL transition (`7289-7350`). Re-entry reconstructs/adopts a new bounded cohort and treats absent worktree/local ref as a valid partial completion only after fresh proof. Crash convergence at each destructive boundary is covered by `tests/test_control_workspace.py:774-859`. |
+| Intentional absence | No `done`-ticket requirement, accepted-integration evidence, `_assert_cleanup_has_no_execution_dependency`, generic product fetch, or per-resource result. Those would reject the retry that this flow is still resolving. | No arbitrary cohort, dry-run, or partial-resource response. The exact accepted report and integration commit are stronger than generic current-state eligibility. | No accepted-report requirement and no zero-delta retry lifecycle transition. It permits a historical `done` resource without a report when current Git ownership/product ancestry prove it (`tests/test_control_workspace.py:681-760`). |
+
+### Freshness and authority boundary
+
+The minimum useful immutable input is not a `CleanupTarget` alone. A possible
+internal effect-only input would be:
+
+```
+RetirementEffectsInput(
+    ticket_id, branch, canonical_path, expected_head,
+    worktree_present_at_last_proof,
+    proof_mode,  # zero_delta | accepted_report | generic_candidate
+)
+```
+
+It would need an owner-supplied `reobserve_before_worktree()` and
+`reobserve_before_ref_stage()` that either return an exact current binding or
+raise `WorkflowBlockedError`. Its output could only be immutable resource
+facts: `worktree_absent`, `local_ref_absent`, `remote_ref_absent`, or a
+blocked reason. It must not return permission to retry a remote deletion.
+
+That contract is insufficient as a standalone reusable executor today. The
+fresh proofs cannot be captured at admission:
+
+- The worktree registration, canonical path, clean/dirty state, symlink
+  checks, submodules, and local expected SHA must be read again immediately
+  before `retire` (`execution_workspace.py:383-417`). A changed/moved or
+  symlinked registration refuses removal.
+- Local ref occupancy and expected SHA must be observed immediately before
+  `delete_branch_if_unoccupied`; the helper independently prevents a race
+  with a foreign worktree (`runtime.py:6713-6754`).
+- Remote ref must still equal `expected_head` immediately before the
+  `--force-with-lease` deletion; after a failed push the code observes remote
+  state and only accepts an already-absent ref (`6761-6818`). A present,
+  changed remote ref is a refusal, not a retry.
+- Generic candidate proof must freshly fetch and prove the checkpoint is in
+  published product (`7147-7174`). Accepted cleanup instead freshly proves
+  the exact accepted report/integration commit and published checkpoint
+  (`7068-7091`). Zero-delta instead freshly proves its active retry's product
+  drift before starting (`5481-5487`). These are not interchangeable proof
+  callbacks.
+
+`ServiceEngine` must retain the owner lock/serialized runner, cohort scope,
+ticket-store reads, `_state` and WAL transitions, and all dependency policy.
+In particular, `_assert_cleanup_has_no_execution_dependency` remains the
+engine authority for active worker, reconciliation, automatic-retry, and
+accepted-integration bindings (`6838-7060`). Passing it as a generic callback
+would obscure that zero-delta intentionally cannot use it while its own retry
+is live. A shutdown between effects has the same consequence as another
+exception: stop the sequence, leave observed resources intact, and require
+fresh re-entry proof. No path should cache a remote/ref/registration proof
+across an effect.
+
+### Extraction decision
+
+| Common part | Decision | Evidence and consequence |
+| --- | --- | --- |
+| Validated worktree removal | **KEEP SEPARATE** at orchestration level; retain existing `ExecutionWorkspaceManager.retire`. | The lower-level worktree transaction is already shared. Moving its callers into a new executor would delete only the two calls at `runtime.py:5453-5454` and `6683-6684` plus the guarded generic call at `7262-7267`, while introducing proof-mode adapters that conceal materially different authority. |
+| Local/remote ref deletion | **LOCAL-DEDUP ONLY**. | `_retire_execution_refs` is already the shared executor and supplies occupancy, CAS, lease, and post-effect observations. Its `report` and `candidate` branches show that proof is caller-specific (`6690-6818`); extracting a second wrapper would be cosmetic. No new Protocol is justified. |
+| Combined post-admission choreography and partial-result handling | **KEEP SEPARATE**. | Generic cleanup owns a user-visible per-resource partial result; integrated cleanup owns optional best-effort logging/event state; zero-delta failure blocks an active lifecycle and must replay before finalization. A single result adapter would need state mutation and three policy modes, increasing WAL/coupling rather than reducing it. |
+
+Therefore no new adapter or Protocol is recommended. The only concrete code
+that a composite executor could remove is the short repeated call ordering
+listed above; it would add proof callbacks, result translation, and a new
+cross-module import edge. That is net coupling, not a defensible ownership
+boundary. The existing two primitives are the appropriate local deduplication
+level.
+
+### Provisional negative regression matrix
+
+These are required invariants for any future narrow extraction ticket. They
+are negative tests: refusal retains resources and evidence rather than
+continuing with a weaker proof.
+
+| Condition | Required outcome | Existing evidence / future focused coverage |
+| --- | --- | --- |
+| Local deletion blocked or CAS ref move | Keep local ref; do not attempt an unproven remote deletion. | Covered by `tests/test_control_workspace.py:192-213,237-313`; retain for every caller proof mode if code moves. |
+| Worktree occupied by foreign registration | Keep ref and foreign worktree; no forced deletion. | Covered before and during CAS by `tests/test_control_workspace.py:215-235,316-353`. |
+| Dirty, moved, or symlinked worktree | Refuse worktree effect and retain refs; never traverse the substituted path. | Generic clean/binding proof is `runtime.py:7117-7137`; root symlink refusal is tested at `tests/test_control_workspace.py:655-679`. Add focused accepted and zero-delta tests if their orchestration is touched. |
+| Remote drift or lease race | Leave changed remote ref; no blind second delete. Local deletion may already be complete, and later re-entry must re-prove the remote ref. | Covered by `tests/test_control_workspace.py:356-485` and restart changed-ref refusal at `861-924`. |
+| Interrupted deletion after worktree, local ref, or remote ref | Treat already-absent resources as partial completion only after fresh ownership/provenance proof; converge without expanding cohort. | Covered for generic cleanup at `tests/test_control_workspace.py:774-859`. Keep accepted process-loss recovery at `tests/test_control_cross_layer.py:132-257`; add direct zero-delta boundary tests only if this sequence changes. |
+| Already-completed partial cleanup | Do not infer success from absence alone when a conflicting registration/ref or dependency remains. Re-observe ticket state, topology, SHA, publication, and mode-specific durable evidence. | Generic candidate re-entry proof is `runtime.py:7119-7148`; accepted revalidation is `7062-7097`. A future test should exercise the exact proposed executor input with an absent worktree and changed remote ref. |
+
+### Risks and remaining questions
+
+The Version 1 direct `runner=_git` anomalies remain observable technical debt,
+not scope for this audit: accepted product synchronization uses `_git` at
+`runtime.py:6566-6573`, and other cleanup/publication direct-runner findings
+remain recorded at Version 1:213-216. A cleanup adapter must not become a
+route around the owner/shutdown runner.
+
+The material unknown is whether an interruption request can be observed
+between each cleanup effect under every host mode and, if so, which existing
+owner boundary records or translates it. This pass did not map that broader
+shutdown propagation because the requested question was post-proof effect
+sharing. Also unmeasured are the exact command/effect ledger for each path
+under a hypothetical extraction; any implementation ticket must demonstrate
+unchanged `retire`, local CAS delete, remote lease delete, and re-observation
+order. No further cleanup composite-executor study is recommended unless a
+reviewer identifies a concrete new common durable contract.
