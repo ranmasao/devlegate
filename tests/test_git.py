@@ -191,6 +191,35 @@ def test_resolve_ref_commit_distinguishes_absent_and_corrupt_refs(tmp_path):
         git.resolve_ref_commit(tmp_path, reference, runner=corrupt_runner)
 
 
+@pytest.mark.parametrize("diagnostic", ["fatal: bad object", "Грешка", "opaque"])
+def test_resolve_ref_commit_accepts_only_freshly_proven_absence_after_race(
+    tmp_path, diagnostic
+):
+    reference = "refs/heads/devlegate/work/T-1"
+    object_id = "a" * 40
+    calls = []
+
+    def race_runner(_cwd, *args, **_kwargs):
+        calls.append(args)
+        if args == ("show-ref", "--verify", "--quiet", reference):
+            return subprocess.CompletedProcess(
+                [], 0 if len(calls) == 1 else 1, "", diagnostic
+            )
+        if args == ("show-ref", "--verify", reference):
+            return subprocess.CompletedProcess([], 0, f"{object_id} {reference}\n", "")
+        if args == ("rev-parse", "--verify", f"{reference}^{{commit}}"):
+            return subprocess.CompletedProcess([], 128, "", diagnostic)
+        raise AssertionError(args)
+
+    assert git.resolve_ref_commit(tmp_path, reference, runner=race_runner) is None
+    assert calls == [
+        ("show-ref", "--verify", "--quiet", reference),
+        ("show-ref", "--verify", reference),
+        ("rev-parse", "--verify", f"{reference}^{{commit}}"),
+        ("show-ref", "--verify", "--quiet", reference),
+    ]
+
+
 def test_resolve_ref_commit_refuses_peeled_or_changed_identity(tmp_path):
     reference = "refs/devlegate/recovery/control/evidence"
     raw_object = "a" * 40

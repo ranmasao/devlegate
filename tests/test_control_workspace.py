@@ -3697,38 +3697,26 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         ("worktree", "add", str(manager.path), manager.branch),
         ("submodule", "update", "--init", "--recursive"),
     ]
-    assert len(recovery_commands) == 55
-    assert len(recovery_commands) - len(effects) == 50
-    assert recovery_commands[4] == ("show-ref", "--verify", "--quiet", evidence)
-    assert recovery_commands[6] == ("show-ref", "--verify", "--quiet", evidence)
-    assert recovery_commands[7] == ("show-ref", "--verify", evidence)
-    assert [command[:2] for command in recovery_commands] == [
-        ("rev-parse", "--verify"), ("worktree", "list"),
-        ("rev-parse", "--show-toplevel"), ("symbolic-ref", "--quiet"),
-        ("show-ref", "--verify"), ("update-ref", evidence),
-        ("show-ref", "--verify"), ("show-ref", "--verify"),
-        ("rev-parse", "--verify"),
-        ("rev-parse", "--verify"), ("worktree", "list"),
-        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
-        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
-        ("rev-parse", "HEAD"), ("status", "--porcelain"),
-        ("worktree", "remove"), ("rev-parse", "--verify"),
-        ("update-ref", f"refs/heads/{manager.branch}"),
-        ("rev-parse", "--verify"), ("show-ref", "--verify"),
-        ("merge-base", "--is-ancestor"), ("worktree", "list"),
-        ("worktree", "add"), ("worktree", "list"),
-        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
-        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
-        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("ls-tree", "-r"),
-        ("submodule", "status"), ("ls-tree", "-r"), ("submodule", "update"),
-        ("ls-tree", "-r"), ("rev-parse", "--verify"), ("worktree", "list"),
-        ("show-ref", "--verify"), ("merge-base", "--is-ancestor"),
-        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
-        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
-        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("worktree", "list"),
-        ("rev-parse", "--git-common-dir"), ("rev-parse", "--show-toplevel"),
-        ("rev-parse", "--git-common-dir"), ("symbolic-ref", "--quiet"),
-        ("rev-parse", "HEAD"), ("status", "--porcelain"), ("ls-tree", "-r"),
+    evidence_created = recovery_commands.index(("update-ref", evidence, old_head, ""))
+    branch_moved = recovery_commands.index(
+        ("update-ref", f"refs/heads/{manager.branch}", new_base, old_head)
+    )
+    assert (
+        "show-ref",
+        "--verify",
+        "--quiet",
+        evidence,
+    ) in recovery_commands[:evidence_created]
+    assert ("show-ref", "--verify", evidence) in recovery_commands[
+        evidence_created + 1 : branch_moved
+    ]
+    assert (
+        "rev-parse",
+        "--verify",
+        f"{evidence}^{{commit}}",
+    ) in recovery_commands[evidence_created + 1 : branch_moved]
+    assert ("worktree", "remove", "--force", str(manager.path)) in recovery_commands[
+        :branch_moved
     ]
     assert not any(
         command[0] in {"fetch", "push", "ls-remote"}

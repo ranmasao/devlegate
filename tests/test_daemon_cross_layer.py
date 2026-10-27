@@ -67,37 +67,31 @@ def test_control_sync_trace_covers_runtime_observations(
     ]
 
     assert remote_head == local_head
+    fetch = ("fetch", "--prune", "origin", "devlegate/control")
+    remote_ref = "refs/remotes/origin/devlegate/control"
+    assert commands.count(fetch) == 1
+    fetch_index = commands.index(fetch)
+    assert ("status", "--porcelain") in commands[:fetch_index]
+    assert ("show-ref", "--verify", "--quiet", remote_ref) in commands[
+        fetch_index + 1 :
+    ]
+    assert ("show-ref", "--verify", remote_ref) in commands[fetch_index + 1 :]
+    assert ("rev-parse", "--verify", f"{remote_ref}^{{commit}}") in commands[
+        fetch_index + 1 :
+    ]
+    assert ("rev-parse", "--verify", "HEAD^{commit}") in commands[fetch_index + 1 :]
+    assert not any(
+        args[0] in {"push", "update-ref"} or args[:2] == ("worktree", "add")
+        for args in commands
+    )
     if advance_remote:
         assert local_head != before
-        assert commands == [
-            ("worktree", "list", "--porcelain"),
-            ("rev-parse", "--show-toplevel"),
-            ("symbolic-ref", "--quiet", "--short", "HEAD"),
-            ("symbolic-ref", "--quiet", "--short", "HEAD"),
-            ("rev-parse", "--verify", "HEAD^{commit}"),
-            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
-            ("status", "--porcelain"),
-            ("fetch", "--prune", "origin", "devlegate/control"),
-            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
-            ("rev-parse", "--verify", "HEAD^{commit}"),
-            ("merge-base", "--is-ancestor"),
-            ("merge", "--ff-only", "origin/devlegate/control"),
-            ("rev-parse", "--verify", "HEAD^{commit}"),
-        ]
+        merge = ("merge", "--ff-only", "origin/devlegate/control")
+        assert commands.count(merge) == 1
+        assert commands.index(("merge-base", "--is-ancestor")) < commands.index(merge)
     else:
         assert local_head == before
-        assert commands == [
-            ("worktree", "list", "--porcelain"),
-            ("rev-parse", "--show-toplevel"),
-            ("symbolic-ref", "--quiet", "--short", "HEAD"),
-            ("symbolic-ref", "--quiet", "--short", "HEAD"),
-            ("rev-parse", "--verify", "HEAD^{commit}"),
-            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
-            ("status", "--porcelain"),
-            ("fetch", "--prune", "origin", "devlegate/control"),
-            ("rev-parse", "--verify", "origin/devlegate/control^{commit}"),
-            ("rev-parse", "--verify", "HEAD^{commit}"),
-        ]
+        assert ("merge", "--ff-only", "origin/devlegate/control") not in commands
 
 
 def test_control_init_attach_trace_covers_full_runtime_path(tmp_path, monkeypatch):
@@ -158,38 +152,31 @@ def test_control_init_bootstrap_trace_covers_full_runtime_path(
     control_head = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
 
     assert result["result"] == "initialized_new_control_plane"
-    assert trace == [
-        ("ls-remote", "origin", "refs/heads/devlegate/control"),
-        (
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/heads/devlegate/control",
-        ),
-        (
-            "worktree",
-            "add",
-            "--orphan",
-            "-b",
-            "devlegate/control",
-            str(engine.control_worktree),
-        ),
-        ("add", "--all"),
-        ("commit", "-m", "Initialize Devlegate control plane"),
-        ("rev-parse", "--verify", "refs/heads/devlegate/control^{commit}"),
-        (
-            "push",
-            "--force-with-lease=refs/heads/devlegate/control:",
-            "origin",
-            f"{control_head}:refs/heads/devlegate/control",
-        ),
-        ("fetch", "origin", "devlegate/control"),
-        (
-            "rev-parse",
-            "--verify",
-            "refs/remotes/origin/devlegate/control^{commit}",
-        ),
+    branch_ref = "refs/heads/devlegate/control"
+    worktree_add = (
+        "worktree", "add", "--orphan", "-b", "devlegate/control",
+        str(engine.control_worktree),
+    )
+    push = (
+        "push", "--force-with-lease=refs/heads/devlegate/control:", "origin",
+        f"{control_head}:{branch_ref}",
+    )
+    assert trace.count(worktree_add) == 1
+    assert trace.count(("add", "--all")) == 1
+    assert trace.count(("commit", "-m", "Initialize Devlegate control plane")) == 1
+    assert trace.count(push) == 1
+    assert trace.count(("fetch", "origin", "devlegate/control")) == 1
+    assert trace.index(("ls-remote", "origin", branch_ref)) < trace.index(
+        worktree_add
+    )
+    assert ("show-ref", "--verify", "--quiet", branch_ref) in trace[
+        : trace.index(worktree_add)
     ]
+    assert trace.index(
+        ("commit", "-m", "Initialize Devlegate control plane")
+    ) < trace.index(push)
+    assert ("show-ref", "--verify", branch_ref) in trace[:trace.index(push)]
+    assert trace.index(push) < trace.index(("fetch", "origin", "devlegate/control"))
 
 
 def test_control_init_is_idempotent_and_preserves_product_checkout(

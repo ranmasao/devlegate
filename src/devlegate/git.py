@@ -378,6 +378,10 @@ def resolve_ref_commit(
         ) from error
     detail = _stderr(present).strip()
     if present.returncode:
+        # The ref can be deleted between the quiet presence probe and this
+        # identity read. Only a fresh exact-ref absence observation is benign.
+        if not ref_exists(cwd, reference, runner=runner):
+            return None
         raise GitObservationError(
             f"cannot inspect Git ref {reference!r}: "
             f"{detail or 'unknown Git error'}"
@@ -391,6 +395,11 @@ def resolve_ref_commit(
         cwd, "rev-parse", "--verify", f"{reference}^{{commit}}", check=False
     )
     if resolved_result.returncode:
+        # The ref can be deleted after show-ref supplied its object identity.
+        # A fresh exact-ref probe distinguishes that harmless observation race
+        # from a present ref whose object cannot be resolved.
+        if not ref_exists(cwd, reference, runner=runner):
+            return None
         raise GitObservationError(
             f"cannot resolve Git ref {reference!r}: "
             f"{_stderr(resolved_result).strip() or 'unknown Git error'}"
