@@ -1,0 +1,39 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "55a972af48134bed491b5ba23873807723f05f03",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "a1601b834f524449a7853615565db84d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the exhaustive raw, default, and indirect Git call-site register and prove standalone status and preflight exceptions.",
+    "Resolve and test recovery replay after local evidence pinning and before remote evidence publication.",
+    "Harden accepted integration, control lifecycle, recovery, cleanup, and other remaining runtime Git boundaries with owner-aware admission and targeted interruption regressions.",
+    "Verify exact-checkpoint CI when it completes."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the exhaustive raw, default, and indirect Git call-site register and prove standalone status and preflight exceptions.",
+      "Resolve and test recovery replay after local evidence pinning and before remote evidence publication.",
+      "Harden accepted integration, control lifecycle, recovery, cleanup, and other remaining runtime Git boundaries with owner-aware admission and targeted interruption regressions.",
+      "Verify exact-checkpoint CI when it completes."
+    ],
+    "report": null,
+    "summary": "Expanded the runtime Git authority audit with source-reviewed transaction boundaries, nested helper subprocesses, replay constraints, and prioritized implementation families. Identified an unresolved recovery window between local evidence pinning and remote evidence publication."
+  },
+  "workspace_head": "e2bcadf69af1fc53cecf96a3f4eac5a5b42d0b77"
+}
