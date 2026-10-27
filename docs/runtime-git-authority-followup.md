@@ -1,5 +1,32 @@
 # Runtime Git authority: partial audit and follow-up
 
+## Operator recovery replay correction
+
+The rework WAL remains at `admitted` until remote evidence is verified.
+`_pin_rework_evidence` rechecks the exact local pin on entry, and
+`_prepare_rework_remote_evidence` independently observes the exact remote ref,
+uses an empty lease if absent, verifies it, and only then saves
+`remote_evidence_published`. A local pin alone does not advance that stage.
+
+Operator recovery had a different gap: it published remote evidence only when
+the selected local evidence ref was absent. A crash after local pin therefore
+allowed a restart to retire the remote branch without publishing its evidence.
+The recovery test now interrupts at that boundary and restarts from the durable
+operator recovery state against a bare remote. A competing remote evidence ref
+is also tested and must remain unchanged while the branch remains untouched.
+
+Before: exact local branch/evidence observations and conditional create-only
+pin; remote branch observation; exact local remote-evidence observation and
+conditional pin plus unleased push only when absent; remote branch re-observation
+and leased branch push; worktree removal and local expected-old CAS.
+After: the same local and branch effects, but the selected remote evidence is
+always observed independently, created only with an empty remote lease when
+absent, and re-observed before branch retirement. These extra remote reads are
+necessary to close the replay gap and prove ambiguous publication. A divergent
+remote evidence identity fails closed. The recovery Git operations now use the
+owner-aware runner; admitted recovery continues draining without a new stop gate.
+The broader owner and stop audit below remains unfinished.
+
 This is a partial TASK-108 audit, not an assertion that all runtime subprocesses
 are owner/stop protected. The existing `GIT_COMMAND_INVENTORY.md` describes the
 typed commands, but its assertion that every effect uses the service runner is
@@ -92,7 +119,7 @@ has been changed by this documentation update.
 | `_validate_force_retry_admission` (1381) | `merge-base --is-ancestor` (tier 1), owner admission, not a standalone view. Must use the runtime capability. |
 | `_force_retry_transition` (1470-1475) | Exact evidence resolution (tier 1), conditional create-only `update-ref ref checkpoint ""` (tier 3), then save retry state. An interrupted pin must be re-observed by exact identity before state is advanced. The checkpoint precedes the pin. |
 | `_validate_recover_admission` (1608-1610) | Two exact-ref resolutions (tier 1) establish authorized branch and evidence identities; fresh operator admission must refuse shutdown before it begins. |
-| `_recover_unsafe_bound_execution_workspace` (1635-1746) | Exact branch/evidence resolution; create-only local evidence; conditional remote evidence resolution and create-only pin; conditional evidence push; remote re-observation and leased branch push; registered-worktree proof and forced removal; branch re-observation and expected-old `update-ref`; manager preparation (tiers 1-3). This is one recovery family, not independent substitutions: interruption after evidence push, branch push, worktree removal or CAS requires exact re-observation on re-entry. In particular, remote evidence publication is conditional on local evidence being absent; whether a crash between local pin and remote evidence push can safely resume is an explicit unresolved question. |
+| `_recover_unsafe_bound_execution_workspace` (1635-1746) | Exact branch/evidence resolution; create-only local evidence; conditional remote evidence resolution and create-only pin; remote evidence observation and conditional create-only leased push; remote re-observation and leased branch push; registered-worktree proof and forced removal; branch re-observation and expected-old `update-ref`; manager preparation (tiers 1-3). Interruption after evidence push, branch push, worktree removal or CAS requires exact re-observation on re-entry. The local-pin replay gap is addressed as described above; other interruption boundaries still require proof. |
 | `_canonical_reconcile_assertion`, `_automatic_zero_delta_authorization` (1845, 1939) | `rev-parse --verify` of a user revision and `merge-base --is-ancestor` (tier 1), respectively. Both authorize work rather than being standalone status; fresh admission and already-admitted drain must be distinguished. |
 | `_validate_control_reconcile_admission` (2014-2044) | Resolve local HEAD; `fetch --prune` control branch (tier 3, updates tracking refs); exact remote tracking ref resolution; one or two ancestry tests (tier 1). Operator admission is not a read-only exception even though it is named validation. |
 | `_workspace_cleanup_cohort` (2398, 2429) | `for-each-ref` (tier 1) and `ls-remote` wildcard (tier 2), after manager worktree registration observation. It serves cleanup inventory; whether a standalone dry-run caller may bypass hosted owner must be proven at all callers before retaining raw transport. Apply decisions cannot rely on unowned observations. |
@@ -151,8 +178,8 @@ subprocess:
    fetch and push. Exercise re-entry after local commit, reset and remote success,
    and wrong-owner/fresh-stop refusal. Preserve admitted drain.
 3. Operator and stranded recovery, including local/remote evidence publication,
-   worktree removal and ref CAS. First resolve the local-pin/remote-push replay
-   question above, then prove each ambiguous effect and exact identity on re-entry.
+   worktree removal and ref CAS. Prove each remaining ambiguous effect and exact
+   identity on re-entry.
 4. Cleanup, including cohort discovery, worktree proof, remote leases and the
    multi-command branch deletion/restoration helper. Test interruption after
    deletion and restoration, wrong owner and fresh-stop admission.
