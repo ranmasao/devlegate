@@ -1,5 +1,31 @@
 # Runtime Decomposition Audit
 
+## TASK-106 reconciliation persistence follow-up
+
+At integrated base `5dafb38bb20ef998e56f00941d3c08b3c9064af0`, both
+normal execution and recovery used `resolve_commit(..., runner=_git)` and
+`update_ref(..., runner=_git)` directly. They now share that same engine-owned
+implementation; neither call has been migrated to the runtime runner. The
+normal path retains its base-head fallback, while recovery still requires a
+nonempty observed remote and product identity.
+
+The following counts apply to the reconciliation persistence seam, both before
+and after this change, for each caller:
+
+| Evidence condition | Git subprocesses | Git effects | State saves |
+| --- | --- | --- | --- |
+| Ref absent | 1 quiet `show-ref`, 1 `update-ref` | 1 ref update | 1 |
+| Ref present and matching | 1 quiet `show-ref`, 1 `show-ref`, 1 `rev-parse`, 1 `update-ref` | 1 ref update | 1 |
+| Ref present and conflicting | 1 quiet `show-ref`, 1 `show-ref`, 1 `rev-parse` | 0 | 0 |
+| Initial ref probe unreadable | 1 quiet `show-ref` | 0 | 0 |
+| Pin fails | observation as above plus 1 failed `update-ref` | 0 successful updates | 0 |
+
+If a ref disappears during identity resolution, the existing helper performs
+one additional quiet `show-ref` to distinguish absence from unreadable
+evidence. The existing check-then-unconditional-update identity policy is
+unchanged, including its race characteristics. No new Git commands or WAL
+writes are introduced. A missing checkpoint now fails before a ref update.
+
 ## Version 1: first execution
 
 **Scope.** This is a structural audit, not an implementation change. It answers

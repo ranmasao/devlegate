@@ -5060,7 +5060,6 @@ class ServiceEngine:
             self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
             _log(reason)
             return 1
-        current_product_remote = product["remote_head"]
         if not product["stable"]:
             if self._is_zero_delta_stale_product_drift(
                 workspace.base_head, checkpoint.after_head, product
@@ -5084,56 +5083,8 @@ class ServiceEngine:
                     execution_validated_product_head=product["remote_head"],
                 )
             else:
-                reconciliation_product = (
-                    product["local_head"]
-                    if product["local_head"] != workspace.base_head
-                    else current_product_remote
-                )
-                if not reconciliation_product:
-                    reconciliation_product = workspace.base_head
-                evidence_ref = self._reconciliation_evidence_ref(
-                    selected_ticket.id, execution_id
-                )
-                existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
-                if (
-                    existing_evidence is not None
-                    and existing_evidence != checkpoint.after_head
-                ):
-                    raise DevlegateError("reconciliation evidence ref is inconsistent")
-                pinned = update_ref(
-                    self.repo, evidence_ref, checkpoint.after_head, runner=_git
-                )
-                if pinned.returncode:
-                    raise DevlegateError(
-                        "cannot pin reconciliation worker checkpoint evidence"
-                    )
-                reconciliation = {
-                    "status": "pending",
-                    "reason": product["reason"],
-                    "resolution": None,
-                    "ticket_id": selected_ticket.id,
-                    "execution_id": execution_id,
-                    "original_base": workspace.base_head,
-                    "observed_product": reconciliation_product,
-                    "worker_checkpoint": checkpoint.after_head,
-                    "execution_remote_head": execution_remote_head,
-                    "product_remote_head": current_product_remote,
-                    "control_head": str(self._state["execution_control_head"]),
-                    "execution_branch": workspace.branch,
-                    "execution_path": str(workspace.path),
-                    "evidence_ref": evidence_ref,
-                    "product_branch": product["branch"] or "",
-                    "product_local_head": product["local_head"],
-                    "product_dirty": product["dirty"],
-                    "product_observation": product["reason"],
-                    "product_target_eligible": product["target_eligible"],
-                    "execution_report": report.as_dict(),
-                }
-                self._save_state(
-                    "idle",
-                    handled_remote_head=current_product_remote,
-                    handled_control_head=str(self._state["control_head"]),
-                    reconciliation=reconciliation,
+                reconciliation_product = self._persist_product_reconciliation(
+                    report, product, execution_remote_head, allow_base_fallback=True
                 )
                 self._refresh_published_status()
                 reason = (
@@ -8404,9 +8355,13 @@ class ServiceEngine:
         report: ExecutionReport,
         product: dict[str, object],
         execution_remote_head: object,
-    ) -> None:
+        *,
+        allow_base_fallback: bool = False,
+    ) -> str:
         product_remote_head = product["remote_head"]
-        if not isinstance(product_remote_head, str) or not product_remote_head:
+        if not allow_base_fallback and (
+            not isinstance(product_remote_head, str) or not product_remote_head
+        ):
             raise WorkflowBlockedError(
                 "changed product lacks an observed remote identity"
             )
@@ -8415,8 +8370,12 @@ class ServiceEngine:
             if product["local_head"] != report.code_base_head
             else product_remote_head
         )
+        if allow_base_fallback and not observed_product:
+            observed_product = report.code_base_head
         if not isinstance(observed_product, str) or not observed_product:
             raise WorkflowBlockedError("changed product lacks an observed identity")
+        if not isinstance(report.workspace_head, str) or not report.workspace_head:
+            raise WorkflowBlockedError("execution checkpoint identity is missing")
         evidence_ref = self._reconciliation_evidence_ref(
             report.ticket_id, report.execution_id
         )
@@ -8424,7 +8383,7 @@ class ServiceEngine:
         if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
         pinned = update_ref(
-            self.repo, evidence_ref, str(report.workspace_head), runner=_git
+            self.repo, evidence_ref, report.workspace_head, runner=_git
         )
         if pinned.returncode:
             raise WorkflowBlockedError(
@@ -8432,7 +8391,7 @@ class ServiceEngine:
             )
         reconciliation = {
             "status": "pending",
-            "reason": str(product["reason"]),
+            "reason": product["reason"],
             "resolution": None,
             "ticket_id": report.ticket_id,
             "execution_id": report.execution_id,
@@ -8458,6 +8417,7 @@ class ServiceEngine:
             handled_control_head=str(self._state["control_head"]),
             reconciliation=reconciliation,
         )
+        return observed_product
 
     def _report_matches_execution_state(self, report: ExecutionReport) -> None:
         self._report_matches_execution_binding(report)

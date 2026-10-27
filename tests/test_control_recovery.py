@@ -1341,11 +1341,117 @@ def test_check_does_not_treat_orphan_worker_as_runtime_owner(
         helper.kill()
         helper.wait(timeout=10)
 
+def _capture_reconciliation_save(engine, monkeypatch):
+    saves = []
+    save = engine._save_state
+
+    def checked(phase, **values):
+        reconciliation = values.get("reconciliation")
+        if (
+            not saves
+            and isinstance(reconciliation, dict)
+            and reconciliation.get("status") == "pending"
+        ):
+            report = reconciliation["execution_report"]
+            assert (
+                git(engine.repo, "rev-parse", reconciliation["evidence_ref"])
+                .stdout.strip()
+                == report["workspace_head"]
+            )
+            assert reconciliation == {
+                "status": "pending",
+                "reason": reconciliation["product_observation"],
+                "resolution": None,
+                "ticket_id": report["ticket_id"],
+                "execution_id": report["execution_id"],
+                "original_base": report["code_base_head"],
+                "observed_product": (
+                    reconciliation["product_local_head"]
+                    if reconciliation["product_local_head"] != report["code_base_head"]
+                    else reconciliation["product_remote_head"]
+                ),
+                "worker_checkpoint": report["workspace_head"],
+                "execution_remote_head": engine._state["execution_remote_head"],
+                "product_remote_head": reconciliation["product_remote_head"],
+                "control_head": engine._state["execution_control_head"],
+                "execution_branch": report["execution_branch"],
+                "execution_path": report["execution_path"],
+                "evidence_ref": engine._reconciliation_evidence_ref(
+                    report["ticket_id"], report["execution_id"]
+                ),
+                "product_branch": "main",
+                "product_local_head": reconciliation["product_local_head"],
+                "product_dirty": reconciliation["product_dirty"],
+                "product_observation": reconciliation["product_observation"],
+                "product_target_eligible": reconciliation["product_target_eligible"],
+                "execution_report": report,
+            }
+            assert phase == "idle"
+            assert (
+                values["handled_remote_head"] == reconciliation["product_remote_head"]
+            )
+            assert values["handled_control_head"] == engine._state["control_head"]
+            saves.append(reconciliation)
+        return save(phase, **values)
+
+    monkeypatch.setattr(engine, "_save_state", checked)
+    return saves
+
+
+@pytest.mark.parametrize("failure", ["conflict", "unreadable"])
+@pytest.mark.parametrize("recovery", [False, True])
+def test_reconciliation_fails_closed_on_bad_evidence(
+    tmp_path, monkeypatch, failure, recovery
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    original_git = runtime._git
+
+    def worker(workspace, *_args, **_kwargs):
+        (workspace.path / "worker-progress.txt").write_text("worker work\n")
+        evidence = engine._reconciliation_evidence_ref(
+            "T-1", engine._state["execution_id"]
+        )
+        if failure == "conflict":
+            git(working, "update-ref", evidence, workspace.base_head)
+        (working / "product-change.txt").write_text("product B\n")
+        git(working, "add", "product-change.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD:main")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    def failing_git(cwd, *args, **kwargs):
+        if (
+            failure == "unreadable"
+            and args[:3] == ("show-ref", "--verify", "--quiet")
+            and args[3].startswith("refs/devlegate/reconciliation/")
+        ):
+            return subprocess.CompletedProcess(args, 128, "", "unreadable")
+        return original_git(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    if recovery:
+        monkeypatch.setattr(
+            engine, "_observe_product_generation",
+            lambda _base: {"classification": "unobservable"},
+        )
+        assert run_test_iteration(engine) == 1
+        engine = Devlegate(config)
+    monkeypatch.setattr(runtime, "_git", failing_git)
+    with pytest.raises((DevlegateError, runtime.GitObservationError)):
+        run_test_iteration(engine)
+    assert state_payload(state).get("reconciliation") is None
+    assert state_payload(state)["execution_stage"] == "post-checkpoint"
+
+
 def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
+    saves = _capture_reconciliation_save(devlegate, monkeypatch)
     observed = []
 
     def worker(workspace, prompt, **_kwargs):
@@ -1362,6 +1468,7 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = devlegate._state["reconciliation"]
+    assert saves == [reconciliation]
     assert reconciliation["status"] == "pending"
     assert reconciliation["original_base"] != reconciliation["observed_product"]
     assert reconciliation["worker_checkpoint"]
@@ -1531,16 +1638,21 @@ def test_post_checkpoint_unobservable_remote_resumes_after_observation_returns(
         control = next((state / "worktrees").glob("*/control"))
         assert not (control / "kanban/todo/T-1.md").exists()
     else:
+        engine = Devlegate(config)
+        saves = _capture_reconciliation_save(engine, monkeypatch)
         with pytest.raises(WorkflowBlockedError, match="reconciliation required"):
             run_test_iteration(engine)
         recovered = state_payload(state)
         reconciliation = recovered["reconciliation"]
+        assert saves == [reconciliation]
         assert recovered["execution_id"] == execution_id
         assert reconciliation["worker_checkpoint"] == checkpoint
         assert reconciliation["execution_report"]["execution_id"] == execution_id
         assert reconciliation["product_remote_head"] == changed_head
         assert reconciliation["product_remote_head"]
         assert reconciliation["original_base"] == base
+        restarted = Devlegate(config)
+        assert restarted._state["reconciliation"] == reconciliation
 
 def test_zero_delta_without_product_drift_does_not_retry(
     tmp_path, monkeypatch
