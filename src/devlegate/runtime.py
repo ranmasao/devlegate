@@ -2879,11 +2879,14 @@ class ServiceEngine:
             raise ShutdownInterrupted
 
     def _git_runtime(
-        self, repo: Path, *args: str, check: bool = True
+        self, repo: Path, *args: str, check: bool = True, input_text: str | None = None
     ) -> subprocess.CompletedProcess[str]:
         """Run Git under the foreground shutdown policy for this runtime region."""
         self._assert_repository_owner()
-        result = _git(repo, *args, check=False)
+        if input_text is None:
+            result = _git(repo, *args, check=False)
+        else:
+            result = _git(repo, *args, check=False, input_text=input_text)
         if result.returncode:
             self._raise_on_shutdown_interruption(result)
         if check:
@@ -7850,10 +7853,10 @@ class ServiceEngine:
         self, ticket_id: str, execution_id: str
     ) -> dict[str, object] | None:
         ref = self._drop_disposition_ref(ticket_id, execution_id)
-        object_id = resolve_object(self.repo, ref, runner=_git)
+        object_id = resolve_object(self.repo, ref, runner=self._git_runtime)
         if object_id is None:
             return None
-        object = read_object(self.repo, object_id, runner=_git)
+        object = read_object(self.repo, object_id, runner=self._git_runtime)
         if object is None or object[0] != "blob":
             raise DevlegateError("drop disposition ref does not point to a blob")
         try:
@@ -7907,14 +7910,14 @@ class ServiceEngine:
                 raise DevlegateError("drop disposition intent is inconsistent")
             return
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        blob = hash_object(self.repo, encoded, runner=_git)
+        blob = hash_object(self.repo, encoded, runner=self._git_runtime)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition intent")
         updated = update_ref(
             self.repo,
             self._drop_disposition_ref(report.ticket_id, report.execution_id),
             blob.stdout.strip(),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if updated.returncode:
             reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
@@ -7926,13 +7929,17 @@ class ServiceEngine:
         if not isinstance(checkpoint, str) or not checkpoint:
             raise DevlegateError("drop execution checkpoint identity is missing")
         evidence_ref = self._drop_evidence_ref(report.ticket_id, report.execution_id)
-        observed = resolve_commit(self.repo, evidence_ref, runner=_git)
+        observed = resolve_commit(self.repo, evidence_ref, runner=self._git_runtime)
         if observed is not None and observed != checkpoint:
             raise DevlegateError("drop execution evidence ref is inconsistent")
         if observed is None:
-            pinned = update_ref(self.repo, evidence_ref, checkpoint, runner=_git)
+            pinned = update_ref(
+                self.repo, evidence_ref, checkpoint, runner=self._git_runtime
+            )
             if pinned.returncode:
-                reread = resolve_commit(self.repo, evidence_ref, runner=_git)
+                reread = resolve_commit(
+                    self.repo, evidence_ref, runner=self._git_runtime
+                )
                 if reread != checkpoint:
                     raise DevlegateError("cannot pin drop execution evidence")
         payload = self._drop_disposition_payload(report, checkpoint)
@@ -7943,14 +7950,14 @@ class ServiceEngine:
             if existing.get("disposition") not in {"dropping", "dropped"}:
                 raise DevlegateError("drop disposition evidence is inconsistent")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-        blob = hash_object(self.repo, encoded, runner=_git)
+        blob = hash_object(self.repo, encoded, runner=self._git_runtime)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition evidence")
         disposition_ref = self._drop_disposition_ref(
             report.ticket_id, report.execution_id
         )
         updated = update_ref(
-            self.repo, disposition_ref, blob.stdout.strip(), runner=_git
+            self.repo, disposition_ref, blob.stdout.strip(), runner=self._git_runtime
         )
         if updated.returncode:
             reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
@@ -7973,7 +7980,7 @@ class ServiceEngine:
         evidence = resolve_commit(
             self.repo,
             self._drop_evidence_ref(ticket_id, execution_id),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if evidence != payload.get("checkpoint"):
             raise DevlegateError("completed drop has inconsistent checkpoint evidence")
@@ -8014,7 +8021,7 @@ class ServiceEngine:
             evidence = resolve_commit(
                 self.repo,
                 self._drop_evidence_ref(ticket_id, execution_id),
-                runner=_git,
+                runner=self._git_runtime,
             )
             if evidence != report.workspace_head:
                 raise DevlegateError("retired execution checkpoint evidence is invalid")
@@ -8083,7 +8090,7 @@ class ServiceEngine:
                 options=(
                     f"--force-with-lease=refs/heads/{report.execution_branch}:{expected}",
                 ),
-                runner=_git,
+                runner=self._git_runtime,
             )
             if deleted.returncode:
                 remaining = self._execution_remote_head(report.execution_branch)
@@ -8109,7 +8116,9 @@ class ServiceEngine:
         if local_head is not None and local_head != expected:
             raise DevlegateError("local execution branch changed before drop")
         if local_head is not None:
-            removed = delete_branch(self.repo, report.execution_branch, runner=_git)
+            removed = delete_branch(
+                self.repo, report.execution_branch, runner=self._git_runtime
+            )
             if removed.returncode:
                 raise DevlegateError(
                     removed.stderr.strip() or "cannot retire local execution branch"

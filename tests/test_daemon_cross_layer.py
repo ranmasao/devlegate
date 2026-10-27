@@ -540,15 +540,14 @@ def test_drop_retirement_workspace_error_does_not_kill_owner_loop(
     assert service_thread.is_alive()
     assert engine._state["phase"] == "agent_running"
     assert engine._state["execution_stage"] == "lifecycle"
-    assert engine._read_drop_disposition("T-1", command.execution_id)[
-        "disposition"
-    ] == "dropped"
-
     stop_event.set()
     engine.wake()
     service_thread.join(timeout=5)
     assert not service_thread.is_alive()
     assert served == [0]
+    assert engine._read_drop_disposition("T-1", command.execution_id)[
+        "disposition"
+    ] == "dropped"
 
     engine._automatic_drop_recovery_execution = None
     with pytest.raises(DevlegateError, match="cannot retire execution worktree"):
