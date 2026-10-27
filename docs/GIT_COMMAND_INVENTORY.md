@@ -109,17 +109,20 @@ before performing one normal merge.
 
 TASK-081 completes the reconciliation-specific inventory. `run_update_base`
 is called by the serialized `ServiceEngine` path; its optional lock is the
-owner lock, and all owner callbacks retain the runtime runner's shutdown
-interruption behavior. `reconciliation_transactions` neither obtains authority
-nor writes shared state except through owner capabilities. An observation error
-is translated to `ReconciliationTransactionError`, never to an empty history or
-an absent ref.
+owner lock. Every transaction Git read and write receives the explicit
+`reconciliation_git` capability, which delegates to `_git_runtime` and rejects
+wrong-thread access or an already-requested shutdown before spawning Git.
+Standalone reconciliation execution has no default generic runner. Owner
+callbacks retain the same runtime enforcement. `reconciliation_transactions`
+neither obtains authority nor writes shared state except through owner
+capabilities. An observation error is translated to
+`ReconciliationTransactionError`, never to an empty history or an absent ref.
 
 | Boundary | Executed commands and effect tier | Durable/re-entry proof and operator disposition |
 | --- | --- | --- |
-| Observation and identity: admission | Owner observations of pending WAL, product local/remote tip, ancestry/same-parent proof, evidence identity, and workspace binding. These owner operations are Tier 1 or Tier 2 according to their implementation; no helper fetches. | The service lock, pending ticket, clean workspace, exact checkpoint, and fresh product identity are required before a rewrite can start. Any failed observation rejects the request. |
+| Observation and identity: admission | Owner observations of pending WAL, product local/remote tip, ancestry/same-parent proof, evidence identity, and workspace binding. These owner operations are Tier 1 or Tier 2 according to their implementation; no helper fetches. All Git subprocesses use the owner-bound `reconciliation_git` capability. | The service lock, pending ticket, clean workspace, exact checkpoint, and fresh product identity are required before a rewrite can start. Any failed observation rejects the request. |
 | Lineage/evidence proof: `prove_workspace_lineage` | `rev-list --reverse root..tip` (T1), then `rev-list --parents -n 1 commit` (T1) for every returned commit. | The range must be non-empty, end at `tip`, and each result must have exactly the preceding parent. Root commits are represented by an empty parent list and are rejected if offered as a delta commit; a root is valid as the range boundary. Merge, side branch, malformed output, unreadable history, or a gap rejects proof. The retained per-commit parent observation is unchanged from before; no whole-range parent format has been substituted without equivalent merge and boundary proof. |
-| Guarded local rewrite | `rebase --onto target original-base` (T3); on a conflict `rebase --abort` (T3), `rev-parse --verify HEAD^{commit}` (T1), and `status --porcelain` (T1). Invalid replay recovery uses `reset --hard checkpoint` (T3). | `local-pending`, target, count, exact checkpoint, and both evidence-ref names are durable before rebase. A conflict is accepted only after abort and exact HEAD/cleanliness re-observation restore the checkpoint. A failed abort or restoration leaves the pending WAL visible and blocks speculative publication. |
+| Guarded local rewrite | `rebase --onto target original-base` (T3); on a conflict `rebase --abort` (T3), `rev-parse --verify HEAD^{commit}` (T1), and `status --porcelain` (T1). Invalid replay recovery uses `reset --hard checkpoint` (T3). | `local-pending`, target, count, exact checkpoint, and both evidence-ref names are durable before rebase. The owner-bound runner checks repository ownership and shutdown before every command. A conflict is accepted only after abort and exact HEAD/cleanliness re-observation restore the checkpoint. A failed abort or restoration leaves the pending WAL visible and blocks speculative publication. |
 | Guarded evidence and publication | Owner pins the rewritten evidence ref before its owner-supplied lease/CAS push (both T3 when applicable). The owner re-observes the remote tip immediately before the lease push. | `remote-pending` plus `rewrite_checkpoint` is durable before publication. The canonical displaced ref and `-rewritten` ref remain separate identity evidence; historical resolved records may omit `resolution_class`. Lease refusal or transport ambiguity is re-entered through remote-pending, not retried blindly. |
 | Re-entry: `local-pending` | If required: `rebase --abort` (T3), `rev-list --reverse target..HEAD` (T1), then one `rev-list --parents -n 1 commit` (T1) per result; `reset --hard checkpoint` (T3). | Re-entry proves the exact recorded count and linear topology before restoring. Failed proof, abort, or reset is a blocked reconciliation with durable state retained. |
 | Re-entry: `remote-pending` | Fresh owner remote observation; on unchanged remote, `reset --hard checkpoint` (T3). On a candidate completed push: exact evidence reads are, per ref, `show-ref --verify --quiet ref`, `show-ref --verify ref`, `rev-parse --verify ref^{commit}` (all T1), then `rev-list --reverse target..rewrite-checkpoint` (T1) and one parent observation per commit (T1). | Remote equality with the pre-push lease proves no publication and permits restoration. Remote equality with the exact rewritten checkpoint is accepted only after both displaced and rewritten evidence refs and the rewritten chain are re-proven. Drift, missing evidence, malformed output, or unreadable Git state blocks and never publishes. |
@@ -133,8 +136,8 @@ belongs to the service capability and is unchanged here.
 
 | Path | Before trace | After trace | Delta |
 | --- | --- | --- | --- |
-| Fresh unpublished update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence)` | unchanged | No added command or network access. |
-| Fresh published update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence), O(lease re-observation), P(lease push)` | unchanged | No added command; evidence remains before publication. |
+| Fresh unpublished update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence)` | unchanged | No added command or network access; each transaction command now crosses the owner-bound runner. |
+| Fresh published update-base | `O, R(range), R(parent)*N, O, O, W(rebase), R(range), R(parent)*N, R(parent)*N, U(evidence), O(lease re-observation), P(lease push)` | unchanged | No added command; evidence remains before publication and all reconciliation subprocesses enforce owner/shutdown authority. |
 | Local-pending replay | `O, [W(rebase abort)], R(range), R(parent)*N, [W(reset)],` then fresh trace | unchanged | No added command. |
 | Remote-pending, remote unchanged | `O, W(reset)` | unchanged | No added command. |
 | Remote-pending, remote at rewrite checkpoint | `O, R(rev-parse displaced), R(rev-parse rewritten), R(range), R(parent)*N` | `O, R(show-ref quiet), R(show-ref), R(rev-parse displaced), R(show-ref quiet), R(show-ref), R(rev-parse rewritten), R(range), R(parent)*N` | Four added Tier 1 local identity observations. They distinguish an absent exact evidence ref from a present-but-unreadable ref before accepting an ambiguous push as complete. No remote call or mutation is added. |

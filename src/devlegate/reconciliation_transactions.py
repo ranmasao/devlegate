@@ -22,7 +22,6 @@ from devlegate.git import (
     reset_hard,
     resolve_commit,
     resolve_ref_commit,
-    run_git,
     working_tree_status,
 )
 from devlegate.reconciliation import (
@@ -53,7 +52,9 @@ class UpdateBaseAdmission:
 
 
 class UpdateBaseCapabilities(Protocol):
-    """Narrow owner observations used by the admission transaction."""
+    """Owner-bound observations and Git execution used by reconciliation."""
+
+    def reconciliation_git(self, cwd: Any, *args: str, check: bool = False) -> Any: ...
 
     def reconciliation_pending(self) -> dict[str, object]: ...
 
@@ -187,7 +188,10 @@ def prove_workspace_lineage(
     """
     try:
         commits = commit_range(
-            workspace.path, f"{root}..{tip}", reverse=True, runner=_git
+            workspace.path,
+            f"{root}..{tip}",
+            reverse=True,
+            runner=owner.reconciliation_git,
         )
     except GitObservationError as error:
         raise ReconciliationTransactionError(
@@ -197,7 +201,10 @@ def prove_workspace_lineage(
     for commit in commits:
         try:
             observed = commit_parents(
-                workspace.path, commit, absent_is_none=False, runner=_git
+                workspace.path,
+                commit,
+                absent_is_none=False,
+                runner=owner.reconciliation_git,
             )
         except GitObservationError as error:
             raise ReconciliationTransactionError(
@@ -275,11 +282,6 @@ def run_update_base(
         return start_fresh_rewrite(owner, ticket_id, admission, rewrite_published)
 
 
-def _git(cwd: Any, *args: str, check: bool = False) -> Any:
-    """Keep reconciliation's historical non-raising Git result semantics."""
-    return run_git(cwd, *args, check=check)
-
-
 def _clear_rewrite(
     reconciliation: dict[str, object], fields: set[str]
 ) -> dict[str, object]:
@@ -351,7 +353,9 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
     observed = owner._execution_remote_head(manager.branch)
     expected = reconciliation.get("rewrite_expected_remote")
     if observed == expected:
-        restored = reset_hard(workspace.path, checkpoint, runner=_git)
+        restored = reset_hard(
+            workspace.path, checkpoint, runner=owner.reconciliation_git
+        )
         if restored.returncode:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite could not be safely aborted"
@@ -382,8 +386,12 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
             "interrupted execution rewrite evidence is invalid"
         )
     try:
-        displaced = resolve_ref_commit(owner.repo, displaced_ref, runner=_git)
-        rewritten = resolve_ref_commit(owner.repo, rewritten_ref, runner=_git)
+        displaced = resolve_ref_commit(
+            owner.repo, displaced_ref, runner=owner.reconciliation_git
+        )
+        rewritten = resolve_ref_commit(
+            owner.repo, rewritten_ref, runner=owner.reconciliation_git
+        )
     except GitObservationError as error:
         raise ReconciliationTransactionError(
             f"cannot inspect interrupted execution rewrite evidence: {error}"
@@ -397,7 +405,7 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
             workspace.path,
             f"{admission.target}..{rewrite_checkpoint}",
             reverse=True,
-            runner=_git,
+            runner=owner.reconciliation_git,
         )
     except GitObservationError as error:
         raise ReconciliationTransactionError(
@@ -411,7 +419,10 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
     for commit in commits:
         try:
             parents = commit_parents(
-                workspace.path, commit, absent_is_none=False, runner=_git
+                workspace.path,
+                commit,
+                absent_is_none=False,
+                runner=owner.reconciliation_git,
             )
         except GitObservationError as error:
             raise ReconciliationTransactionError(
@@ -448,7 +459,7 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
             "interrupted execution rewrite target does not match the requested target"
         )
     if workspace.dirty:
-        aborted = _git(workspace.path, "rebase", "--abort")
+        aborted = owner.reconciliation_git(workspace.path, "rebase", "--abort")
         if aborted.returncode:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite workspace is dirty"
@@ -460,7 +471,7 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
                 workspace.path,
                 f"{admission.target}..{workspace.head}",
                 reverse=True,
-                runner=_git,
+                runner=owner.reconciliation_git,
             )
         except GitObservationError as error:
             raise ReconciliationTransactionError(
@@ -471,7 +482,9 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite cannot be safely aborted"
             )
-        restored = reset_hard(workspace.path, checkpoint, runner=_git)
+        restored = reset_hard(
+            workspace.path, checkpoint, runner=owner.reconciliation_git
+        )
         if restored.returncode:
             raise ReconciliationTransactionError(
                 "interrupted execution rewrite could not be safely aborted"
@@ -492,7 +505,10 @@ def _linear(owner: Any, workspace: Any, root: str, commits: Sequence[str]) -> bo
     for commit in commits:
         try:
             parents = commit_parents(
-                workspace, commit, absent_is_none=False, runner=_git
+                workspace,
+                commit,
+                absent_is_none=False,
+                runner=owner.reconciliation_git,
             )
         except GitObservationError:
             return False
@@ -561,14 +577,23 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
     owner._save_state("idle", reconciliation=operation)
     owner._state["execution_base_head"] = admission.target
     try:
-        rebased = _git(workspace.path, "rebase", "--onto", admission.target,
-                       admission.original_base)
+        rebased = owner.reconciliation_git(
+            workspace.path,
+            "rebase",
+            "--onto",
+            admission.target,
+            admission.original_base,
+        )
         if rebased.returncode:
-            _git(workspace.path, "rebase", "--abort")
+            owner.reconciliation_git(workspace.path, "rebase", "--abort")
             owner._state["execution_base_head"] = previous_execution_base
             try:
-                restored = resolve_commit(workspace.path, "HEAD", runner=_git)
-                clean = not working_tree_status(workspace.path, runner=_git)
+                restored = resolve_commit(
+                    workspace.path, "HEAD", runner=owner.reconciliation_git
+                )
+                clean = not working_tree_status(
+                    workspace.path, runner=owner.reconciliation_git
+                )
             except GitObservationError as error:
                 raise ReconciliationTransactionError(
                     f"reconciliation conflict could not be safely observed: {error}"
@@ -596,7 +621,9 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         rewrite_error = str(error)
     if (updated.dirty or rewrite_error or len(rewritten) != len(lineage) or
             updated.head == admission.target):
-        restored = reset_hard(workspace.path, admission.checkpoint, runner=_git)
+        restored = reset_hard(
+            workspace.path, admission.checkpoint, runner=owner.reconciliation_git
+        )
         owner._state["execution_base_head"] = previous_execution_base
         if restored.returncode:
             raise ReconciliationTransactionError(

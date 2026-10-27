@@ -54,6 +54,7 @@ from devlegate.execution_workspace import (
 from devlegate.git import (
     GitAncestryError,
     GitObservationError,
+    GitRunner,
     add_all,
     ahead_behind,
     branch_name,
@@ -730,12 +731,14 @@ def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
 
 
-def _is_same_parent_replacement(repo: Path, original: str, target: str) -> bool:
+def _is_same_parent_replacement(
+    repo: Path, original: str, target: str, *, runner: GitRunner = _git
+) -> bool:
     """Prove that two distinct commits are single-parent replacements."""
     parent_map: dict[str, tuple[str, ...]] = {}
     for commit in (original, target):
         try:
-            parents = commit_parents(repo, commit, runner=_git)
+            parents = commit_parents(repo, commit, runner=runner)
         except GitObservationError:
             return False
         if parents is None:
@@ -8164,11 +8167,14 @@ class ServiceEngine:
         self._owned_execution_id = None
         self._save_state("idle", clear_execution=True)
 
-    def _observe_product_generation(self, admitted_head: str) -> dict[str, object]:
+    def _observe_product_generation(
+        self, admitted_head: str, *, runner: GitRunner | None = None
+    ) -> dict[str, object]:
+        runner = self._git_runtime if runner is None else runner
         try:
-            branch = self._branch_runtime(self.repo)
-            local_head = self._resolve_commit_runtime(self.repo, "HEAD") or ""
-            dirty = bool(self._status_runtime(self.repo))
+            branch = branch_name(self.repo, runner=runner)
+            local_head = resolve_commit(self.repo, "HEAD", runner=runner) or ""
+            dirty = bool(working_tree_status(self.repo, runner=runner))
         except GitObservationError:
             branch = None
             local_head = ""
@@ -8178,11 +8184,11 @@ class ServiceEngine:
             self.remote_name,
             self.remote_branch,
             prune=True,
-            runner=_git,
+            runner=runner,
         )
         remote_head = (
-            self._resolve_commit_runtime(
-                self.repo, f"{self.remote_name}/{self.remote_branch}"
+            resolve_commit(
+                self.repo, f"{self.remote_name}/{self.remote_branch}", runner=runner
             )
             if fetch.returncode == 0
             else None
@@ -10480,6 +10486,14 @@ class ServiceEngine:
     # These observations form the capability boundary for the lineage
     # transaction.  The transaction module owns their ordering; the service
     # remains the only owner of Git, state, and workspace authority.
+    def reconciliation_git(
+        self, cwd: Path, *args: str, check: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a reconciliation Git command under service ownership policy."""
+        if self._stop_requested():
+            raise ShutdownInterrupted
+        return self._git_runtime(cwd, *args, check=check)
+
     def reconciliation_pending(self) -> dict[str, object]:
         reconciliation = self._state.get("reconciliation")
         if (
@@ -10492,7 +10506,9 @@ class ServiceEngine:
         return reconciliation
 
     def reconciliation_target(self, value: str) -> str:
-        resolved = resolve_commit(self.repo, value, check=False, runner=_git)
+        resolved = resolve_commit(
+            self.repo, value, check=False, runner=self.reconciliation_git
+        )
         if resolved is None:
             raise ReconciliationTransactionError(
                 "requested reconciliation target is not a commit"
@@ -10500,7 +10516,9 @@ class ServiceEngine:
         return resolved
 
     def reconciliation_product(self, base: str) -> dict[str, object]:
-        product = self._observe_product_generation(base)
+        product = self._observe_product_generation(
+            base, runner=self.reconciliation_git
+        )
         if product.get("branch") != self.current_branch:
             raise ReconciliationTransactionError(
                 "product checkout is on the wrong branch"
@@ -10509,12 +10527,16 @@ class ServiceEngine:
 
     def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
         try:
-            return is_ancestor(self.repo, base, target, runner=_git)
+            return is_ancestor(
+                self.repo, base, target, runner=self.reconciliation_git
+            )
         except GitAncestryError as error:
             raise ReconciliationTransactionError(str(error)) from error
 
     def reconciliation_same_parent_replacement(self, base: str, target: str) -> bool:
-        return _is_same_parent_replacement(self.repo, base, target)
+        return _is_same_parent_replacement(
+            self.repo, base, target, runner=self.reconciliation_git
+        )
 
     def reconciliation_evidence_matches(self, reference: str, checkpoint: str) -> bool:
         return self._resolve_commit_runtime(self.repo, reference) == checkpoint
@@ -10554,7 +10576,7 @@ class ServiceEngine:
             self.remote_name,
             f"{rewritten_head}:refs/heads/{branch}",
             options=(f"--force-with-lease=refs/heads/{branch}:{expected_remote}",),
-            runner=_git,
+            runner=self.reconciliation_git,
         )
         observed = self._execution_remote_head(branch)
         if pushed.returncode and observed != rewritten_head:
@@ -10568,7 +10590,11 @@ class ServiceEngine:
         self, reference: str, rewritten_head: str
     ) -> None:
         pinned = compare_and_swap_ref(
-            self.repo, reference, rewritten_head, "0" * 40, runner=_git
+            self.repo,
+            reference,
+            rewritten_head,
+            "0" * 40,
+            runner=self.reconciliation_git,
         )
         if pinned.returncode:
             existing = self._resolve_commit_runtime(self.repo, reference)

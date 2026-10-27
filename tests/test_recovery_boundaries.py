@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from devlegate import reconciliation_transactions, recovery_workspace
+from devlegate import recovery_workspace
 from devlegate.execution_workspace import WorkspaceInspection
 from devlegate.git import GitAncestryError
 from devlegate.reconciliation import (
@@ -415,9 +415,6 @@ def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip(
 ):
     owner = _RewriteOwner()
     workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
-    monkeypatch.setattr(
-        reconciliation_transactions, "_git", owner.reconciliation_git
-    )
 
     assert prove_workspace_lineage(owner, workspace, "root", "2" * 40) == (
         "1" * 40,
@@ -434,6 +431,7 @@ def test_rewrite_boundary_proves_chain_and_rejects_unapproved_published_tip(
 
 
 def test_workspace_lineage_rejects_history_observation_failure(monkeypatch):
+    owner = _RewriteOwner()
     workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
 
     def unavailable(_cwd, *_args, check=False):
@@ -441,10 +439,10 @@ def test_workspace_lineage_rejects_history_observation_failure(monkeypatch):
             "Result", (), {"returncode": 128, "stdout": "", "stderr": "bad repo"}
         )()
 
-    monkeypatch.setattr(reconciliation_transactions, "_git", unavailable)
+    monkeypatch.setattr(owner, "reconciliation_git", unavailable)
 
     try:
-        prove_workspace_lineage(_RewriteOwner(), workspace, "root", "2" * 40)
+        prove_workspace_lineage(owner, workspace, "root", "2" * 40)
     except ReconciliationTransactionError as error:
         assert "cannot prove workspace lineage" in str(error)
         assert "bad repo" in str(error)
@@ -453,6 +451,7 @@ def test_workspace_lineage_rejects_history_observation_failure(monkeypatch):
 
 
 def test_workspace_lineage_rejects_malformed_parent_observation(monkeypatch):
+    owner = _RewriteOwner()
     workspace = type("Workspace", (), {"path": Path("/tmp/execution")})()
     commit = "2" * 40
 
@@ -461,10 +460,10 @@ def test_workspace_lineage_rejects_malformed_parent_observation(monkeypatch):
             return type("Result", (), {"returncode": 0, "stdout": f"{commit}\n"})()
         return type("Result", (), {"returncode": 0, "stdout": "unexpected-parent\n"})()
 
-    monkeypatch.setattr(reconciliation_transactions, "_git", malformed)
+    monkeypatch.setattr(owner, "reconciliation_git", malformed)
 
     try:
-        prove_workspace_lineage(_RewriteOwner(), workspace, "root", commit)
+        prove_workspace_lineage(owner, workspace, "root", commit)
     except ReconciliationTransactionError as error:
         assert "malformed parents" in str(error)
     else:

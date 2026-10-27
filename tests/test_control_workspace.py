@@ -7,6 +7,7 @@
 import dataclasses
 import json
 import subprocess
+import threading
 from types import SimpleNamespace
 
 from _control_support import *  # noqa: F403,F405
@@ -2462,6 +2463,60 @@ def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
         devlegate.reconcile_update_base("T-1", target)
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == first
+
+
+def test_reconciliation_git_rejects_nonowner_mutation_before_git(
+    tmp_path, monkeypatch
+):
+    devlegate, _working, _state, execution, _reconciliation, _first, second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    calls = []
+    original_git = runtime_module._git
+
+    def trace(repo, *args, check=True):
+        calls.append((repo, args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", trace)
+    devlegate.begin_hosted_owner()
+    errors = []
+
+    def mutate_from_nonowner():
+        try:
+            devlegate.reconciliation_git(execution, "reset", "--hard", "HEAD^")
+        except DevlegateError as error:
+            errors.append(str(error))
+
+    worker = threading.Thread(target=mutate_from_nonowner)
+    worker.start()
+    worker.join()
+
+    assert errors == ["hosted repository access is restricted to the owner thread"]
+    assert calls == []
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+
+
+def test_reconciliation_git_rejects_shutdown_before_mutation(tmp_path, monkeypatch):
+    devlegate, _working, _state, execution, _reconciliation, _first, second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    calls = []
+    original_git = runtime_module._git
+
+    def trace(repo, *args, check=True):
+        calls.append((repo, args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", trace)
+    stop = threading.Event()
+    stop.set()
+    with devlegate._stop_context(stop):
+        with pytest.raises(runtime_module.ShutdownInterrupted):
+            devlegate.reconciliation_git(execution, "rebase", "--abort")
+
+    assert calls == []
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
 
 
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
