@@ -1,0 +1,29 @@
+{
+  "code_base_head": "295b7f04366979567090cc2bbe32a4cae0bb926a",
+  "conclusion": "completed",
+  "control_head": "fab6a2e0c91195fa5f944c23abf43da2bd67ae9a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-105",
+  "execution_id": "493134f593e0456ca25cd1b56971fa73",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-105",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-105",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Appended Version 2 of the runtime decomposition audit with an evidence-linked comparison of zero-delta, accepted-integration, and generic cleanup. The report concludes that the existing worktree and ref primitives are sufficient local deduplication and a composite cleanup executor should remain separate."
+  },
+  "workspace_head": "ad30959e320d76a05b8f08a1e14d5b104438e46c"
+}
