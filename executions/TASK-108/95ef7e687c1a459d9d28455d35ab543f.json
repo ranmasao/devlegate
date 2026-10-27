@@ -1,0 +1,39 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "8e8e7ff4aad2eef98add1302d211bacaa951bc9c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "95ef7e687c1a459d9d28455d35ab543f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the call-site inventory and before/after command/effect ledger, including nested helpers and independently permitted preflight exceptions.",
+    "Harden remaining runtime-owned raw Git paths, including accepted integration, lifecycle publication, rework publication, drop cleanup, and recovery, with transaction-specific interruption and replay proofs.",
+    "Cover shutdown before all checkpoint publication observations and add boundary-level wrong-thread, shutdown, and ambiguous-effect tests for the remaining workflows.",
+    "Verify exact-checkpoint GitHub CI after it finishes; the previous checkpoint run was still in progress."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the call-site inventory and before/after command/effect ledger, including nested helpers and independently permitted preflight exceptions.",
+      "Harden remaining runtime-owned raw Git paths, including accepted integration, lifecycle publication, rework publication, drop cleanup, and recovery, with transaction-specific interruption and replay proofs.",
+      "Cover shutdown before all checkpoint publication observations and add boundary-level wrong-thread, shutdown, and ambiguous-effect tests for the remaining workflows.",
+      "Verify exact-checkpoint GitHub CI after it finishes; the previous checkpoint run was still in progress."
+    ],
+    "report": null,
+    "summary": "Checkpoint publication now uses the existing owner- and shutdown-aware capability for ancestry checks and the leased push. Focused tests cover refusal before the push and re-observation after an ambiguous push failure."
+  },
+  "workspace_head": "b0a5024710eb037369b361840ad1a9185eaa3fe2"
+}
