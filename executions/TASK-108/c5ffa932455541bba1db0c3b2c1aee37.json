@@ -1,0 +1,37 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "7b2e828805362517b1cadab3357f3014462dec2d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "c5ffa932455541bba1db0c3b2c1aee37",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the call-site inventory and before/after command and effect ledger for all runtime Git transports, including justified preflight exceptions.",
+    "Harden remaining runtime Git bypasses in checkpoint publication, accepted integration, lifecycle, drop cleanup, and other affected workflows while preserving recovery semantics.",
+    "Add focused ambiguous-outcome and crash-replay tests for changed publication and cleanup boundaries, and verify exact-checkpoint CI."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the call-site inventory and before/after command and effect ledger for all runtime Git transports, including justified preflight exceptions.",
+      "Harden remaining runtime Git bypasses in checkpoint publication, accepted integration, lifecycle, drop cleanup, and other affected workflows while preserving recovery semantics.",
+      "Add focused ambiguous-outcome and crash-replay tests for changed publication and cleanup boundaries, and verify exact-checkpoint CI."
+    ],
+    "report": null,
+    "summary": "Routed product reconciliation evidence lookup and pinning through the existing owner- and shutdown-aware reconciliation Git capability. Added wrong-thread and pre-command shutdown regression checks for that boundary."
+  },
+  "workspace_head": "0376928ddc52b5347c854abca14d7bc47aa5fd47"
+}
