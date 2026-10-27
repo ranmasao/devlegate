@@ -6211,7 +6211,7 @@ class ServiceEngine:
                     workspace.path,
                     expected_remote_head,
                     checkpoint_head,
-                    runner=_git,
+                    runner=self.reconciliation_git,
                 )
             except GitAncestryError as error:
                 raise DevlegateError(
@@ -6227,7 +6227,7 @@ class ServiceEngine:
             self.remote_name,
             f"{checkpoint_head}:refs/heads/{workspace.branch}",
             options=(f"--force-with-lease={lease}",),
-            runner=_git,
+            runner=self.reconciliation_git,
         )
         if pushed.returncode:
             current_remote_head = self._execution_remote_head(workspace.branch)
