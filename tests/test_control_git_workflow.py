@@ -39,7 +39,10 @@ def test_sync_control_trace_fetches_then_fast_forwards_once() -> None:
     )
 
     assert result == ("remote-head", "remote-head")
-    assert trace == [
+    effects = [
+        command for command in trace if command[0] in {"fetch", "merge"}
+    ]
+    assert effects == [
         ("fetch", "--prune", "origin", "devlegate/control"),
         ("merge", "--ff-only", "origin/devlegate/control"),
     ]
@@ -69,7 +72,8 @@ def test_sync_control_does_not_merge_an_already_current_checkout() -> None:
     )
 
     assert result == ("same-head", "same-head")
-    assert trace == [("fetch", "--prune", "origin", "devlegate/control")]
+    assert ("fetch", "--prune", "origin", "devlegate/control") in trace
+    assert not any(command[:2] == ("merge", "--ff-only") for command in trace)
 
 
 def test_sync_control_does_not_retry_an_interrupted_merge() -> None:
@@ -102,9 +106,9 @@ def test_sync_control_does_not_retry_an_interrupted_merge() -> None:
             log=lambda _message: None,
         )
 
-    assert trace == [
-        ("fetch", "--prune", "origin", "devlegate/control"),
-        ("merge", "--ff-only", "origin/devlegate/control"),
+    assert ("fetch", "--prune", "origin", "devlegate/control") in trace
+    assert [command for command in trace if command[:2] == ("merge", "--ff-only")] == [
+        ("merge", "--ff-only", "origin/devlegate/control")
     ]
 
 

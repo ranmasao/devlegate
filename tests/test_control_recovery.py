@@ -101,39 +101,30 @@ def test_control_lineage_absent_evidence_is_created_and_reproved(monkeypatch, tm
 
 
 @pytest.mark.parametrize(
-    ("existing", "unreadable", "expected"),
+    ("existing", "unreadable", "expected_writes"),
     [
         (
             None,
             False,
-            (
-                "show-ref", "update-ref", "show-ref", "show-ref", "rev-parse",
-                "reset",
-            ),
+            "create-and-adopt",
         ),
         (
             "a" * 40,
             False,
-            (
-                "show-ref", "show-ref", "rev-parse", "show-ref", "show-ref",
-                "rev-parse", "reset",
-            ),
+            "adopt-existing",
         ),
         (
             "c" * 40,
             False,
-            (
-                "show-ref", "show-ref", "rev-parse", "show-ref", "show-ref",
-                "rev-parse",
-            ),
+            "reject-conflict",
         ),
-        (None, True, ("show-ref",)),
+        (None, True, "reject-unreadable"),
     ],
 )
-def test_control_lineage_command_trace_has_only_guarded_local_effects(
-    monkeypatch, tmp_path, existing, unreadable, expected
+def test_control_lineage_effects_follow_proven_evidence(
+    monkeypatch, tmp_path, existing, unreadable, expected_writes
 ):
-    """Record the full transaction seam for absence, replay, conflict, and failure."""
+    """Evidence probes may evolve; the guarded writes and their proof may not."""
     source, target = "a" * 40, "b" * 40
     evidence = f"refs/devlegate/recovery/control/{source}-{target}"
     refs = {} if existing is None else {evidence: existing}
@@ -142,7 +133,8 @@ def test_control_lineage_command_trace_has_only_guarded_local_effects(
     )
     monkeypatch.setattr(recovery_transactions, "run_git", runner)
 
-    if not unreadable and (existing is None or existing == source):
+    succeeds = not unreadable and (existing is None or existing == source)
+    if succeeds:
         recovery_transactions.reconcile_control_lineage(
             _ControlLineageOwner(), source, target,
             repo=tmp_path, control_worktree=tmp_path, take_lock=True,
@@ -154,18 +146,24 @@ def test_control_lineage_command_trace_has_only_guarded_local_effects(
                 repo=tmp_path, control_worktree=tmp_path, take_lock=True,
             )
 
-    assert tuple(call[0] for call in calls) == expected
     assert not any(call[0] in {"fetch", "push", "ls-remote"} for call in calls)
     writes = [call for call in calls if call[0] in {"update-ref", "reset"}]
-    if existing is None and not unreadable:
+    if expected_writes == "create-and-adopt":
         assert writes == [
             ("update-ref", evidence, source, ""),
             ("reset", "--hard", target),
         ]
-    elif existing == source:
+    elif expected_writes == "adopt-existing":
         assert writes == [("reset", "--hard", target)]
     else:
         assert writes == []
+
+    if succeeds:
+        reset_at = calls.index(("reset", "--hard", target))
+        assert ("show-ref", "--verify", evidence) in calls[:reset_at]
+        assert (
+            "rev-parse", "--verify", f"{evidence}^{{commit}}"
+        ) in calls[:reset_at]
 
 
 @pytest.mark.parametrize("existing", ["a" * 40, "c" * 40])

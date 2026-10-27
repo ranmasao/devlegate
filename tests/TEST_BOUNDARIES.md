@@ -24,6 +24,24 @@ SQLite, worktrees, and subprocesses used as a test driver do not by themselves
 prove service topology. Tests may inspect durable files directly from pytest;
 that is observation, not a production client bypass.
 
+### Recovery Trace Design
+
+Recovery tests assert durable evidence, revision bindings, allowed writes, and
+the ordering of proofs before the writes they authorize. A read-only Git probe
+can be required for a particular proof, but unrelated observations may be
+added as validation improves. Tests therefore record the exact mutating
+operations and safety-critical order while avoiding snapshots of every
+read-only command. This keeps recovery coverage sensitive to missing evidence,
+missing reproof, or an unauthorized mutation without tying it to incidental
+implementation traces.
+
+The recovery trace audit rewrote the prior-generation workspace test's total
+Git-call/read-only-call snapshots and the control-lineage full command trace.
+Those tests now use evidence state, required proof probes, write allowlists,
+and safety-critical order. Exact command assertions remain in `test_git.py`
+for the Git adapter's public command construction, and effect-only sequences
+remain where a transport or mutation order is itself the contract.
+
 ### Taxonomy
 
 | Layer | Actual execution path | Proves | Does not prove |
