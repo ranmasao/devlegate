@@ -1,0 +1,35 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "435672f1c35ce6ff63bdc5fe24050eb25e56163b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "37d5f8c77c4c4941b5849a4c4f960233",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve the shutdown safety ambiguity in multi-command branch deletion and restoration, then complete the exhaustive Git transport inventory and transaction-family hardening with focused interruption and owner/shutdown tests.",
+    "Verify the final checkpoint in GitHub CI after the remaining implementation is complete."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve the shutdown safety ambiguity in multi-command branch deletion and restoration, then complete the exhaustive Git transport inventory and transaction-family hardening with focused interruption and owner/shutdown tests.",
+      "Verify the final checkpoint in GitHub CI after the remaining implementation is complete."
+    ],
+    "report": null,
+    "summary": "Hardened operator recovery to publish and verify exact remote evidence with a create-only lease before retiring the remote branch, and routed its Git operations through the owner-aware runner. Added restart and remote-divergence regressions and documented the recovery ledger and rework replay invariant."
+  },
+  "workspace_head": "b0a6381f7b2c9b04a711c782d0413251a440f83f"
+}
