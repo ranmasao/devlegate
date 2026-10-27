@@ -1,0 +1,29 @@
+{
+  "code_base_head": "fe02e8149df3ac0697e044ea225d844f039259d7",
+  "conclusion": "completed",
+  "control_head": "bfdc1e6b87770f6d0de6d0b2d4f91deecc327f48",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-080",
+  "execution_id": "2dcf8da3669a49b8bcc128e8a8d900c5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-080",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-080",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Execution workspace Git operations now accept an injected runner, and every ServiceEngine/recovery construction supplies the owner- and shutdown-aware runtime capability. Branch observation now distinguishes unreadable Git state from absence, preventing unsafe creation. The Git command inventory documents lifecycle ownership and unchanged subprocess/effect accounting."
+  },
+  "workspace_head": "e6a73970b56552ef5ce8aaf3cee39817b51f858f"
+}
