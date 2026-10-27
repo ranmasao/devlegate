@@ -14,8 +14,10 @@ from devlegate.commit_messages import checkpoint_message
 from devlegate.git import (
     GitAncestryError,
     GitObservationError,
+    GitRunner,
     is_ancestor,
     patch_equivalence,
+    ref_exists,
     resolve_commit,
     run_git,
 )
@@ -62,10 +64,19 @@ type WorktreeRegistration = dict[str, str | None]
 _git = run_git
 
 
+def _default_git_runner(
+    cwd: Path, *args: str, **kwargs: object
+) -> subprocess.CompletedProcess[str]:
+    """Preserve the injectable module seam for standalone callers and tests."""
+    return _git(cwd, *args, **kwargs)
+
+
 class ExecutionWorkspaceManager:
     """Materialize one deterministic worktree without owning worker changes."""
 
-    def __init__(self, repo: Path, root: Path, ticket_id: str) -> None:
+    def __init__(
+        self, repo: Path, root: Path, ticket_id: str, *, runner: GitRunner | None = None
+    ) -> None:
         if not is_canonical_ticket_name(f"{ticket_id}.md"):
             raise ExecutionWorkspaceError(
                 f"invalid ticket ID for execution workspace: {ticket_id}"
@@ -76,6 +87,9 @@ class ExecutionWorkspaceManager:
         # Keep managed components lexical so symlink substitution is observable.
         self.root = root.absolute()
         self.path = self.root / "work" / ticket_id
+        # Standalone inspection remains available, while service callers inject
+        # their owner- and shutdown-aware Git capability.
+        self._runner = _default_git_runner if runner is None else runner
 
     def prepare(self, base_head: str) -> ExecutionWorkspace:
         self._validate_base(base_head)
@@ -117,7 +131,7 @@ class ExecutionWorkspaceManager:
             )
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        created = _git(
+        created = self._runner(
             self.repo, "worktree", "add", str(self.path), self.branch, check=False
         )
         if created.returncode:
@@ -155,7 +169,7 @@ class ExecutionWorkspaceManager:
         self._validate_base(previous_base)
         self._validate_base(previous_checkpoint)
         branch_ref = f"refs/heads/{self.branch}"
-        current = _git(
+        current = self._runner(
             self.repo,
             "for-each-ref",
             "--format=%(objectname)",
@@ -177,7 +191,7 @@ class ExecutionWorkspaceManager:
         current_head = current.stdout.strip()
         try:
             predecessor = is_ancestor(
-                self.repo, previous_base, previous_checkpoint, runner=_git
+                self.repo, previous_base, previous_checkpoint, runner=self._runner
             )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
@@ -188,7 +202,7 @@ class ExecutionWorkspaceManager:
                 "rework preparation conflict: previous checkpoint is not descended "
                 "from its reported base"
             )
-        commits = _git(
+        commits = self._runner(
             self.repo,
             "rev-list",
             "--reverse",
@@ -198,7 +212,7 @@ class ExecutionWorkspaceManager:
         if commits.returncode:
             raise ExecutionWorkspaceError("cannot inspect previous execution delta")
         delta = [commit for commit in commits.stdout.splitlines() if commit]
-        merges = _git(
+        merges = self._runner(
             self.repo,
             "rev-list",
             "--merges",
@@ -212,7 +226,7 @@ class ExecutionWorkspaceManager:
             )
         try:
             already_integrated = is_ancestor(
-                self.repo, previous_checkpoint, base_head, runner=_git
+                self.repo, previous_checkpoint, base_head, runner=self._runner
             )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
@@ -233,7 +247,7 @@ class ExecutionWorkspaceManager:
                     "checkpoint"
                 )
             self.retire(workspace, previous_checkpoint)
-            moved = _git(
+            moved = self._runner(
                 self.repo,
                 "update-ref",
                 branch_ref,
@@ -250,7 +264,7 @@ class ExecutionWorkspaceManager:
             # nothing else.  This rejects a foreign descendant after a crash.
             try:
                 replay_ancestry = is_ancestor(
-                    self.repo, base_head, current_head, runner=_git
+                    self.repo, base_head, current_head, runner=self._runner
                 )
             except GitAncestryError as error:
                 raise ExecutionWorkspaceError(
@@ -260,8 +274,11 @@ class ExecutionWorkspaceManager:
                 raise ExecutionWorkspaceConflict(
                     "execution branch changed during rework preparation"
                 )
-            replay = _git(
-                self.repo, "rev-list", "--reverse", f"{base_head}..{current_head}",
+            replay = self._runner(
+                self.repo,
+                "rev-list",
+                "--reverse",
+                f"{base_head}..{current_head}",
                 check=False,
             )
             replay_delta = [commit for commit in replay.stdout.splitlines() if commit]
@@ -271,26 +288,28 @@ class ExecutionWorkspaceManager:
                     previous_checkpoint,
                     current_head,
                     base_head,
-                    runner=_git,
+                    runner=self._runner,
                 )
             except GitObservationError as error:
                 raise ExecutionWorkspaceError(
                     f"cannot prove replay patch equivalence: {error}"
                 ) from error
-            if replay.returncode or len(replay_delta) != len(delta) or equivalent != (
-                "-",
-            ) * len(delta):
+            if (
+                replay.returncode
+                or len(replay_delta) != len(delta)
+                or equivalent != ("-",) * len(delta)
+            ):
                 raise ExecutionWorkspaceConflict(
                     "rework preparation conflict: execution branch is not the exact "
                     "proven transplanted implementation"
                 )
         prepared = self.prepare(base_head)
         if delta and not already_integrated and prepared.head == base_head:
-            transplanted = _git(
+            transplanted = self._runner(
                 prepared.path, "cherry-pick", "--no-edit", *delta, check=False
             )
             if transplanted.returncode:
-                _git(prepared.path, "cherry-pick", "--abort", check=False)
+                self._runner(prepared.path, "cherry-pick", "--abort", check=False)
                 raise ExecutionWorkspaceConflict(
                     "rework preparation conflict: previous checkpoint cannot be "
                     "applied to the new product base"
@@ -310,14 +329,7 @@ class ExecutionWorkspaceManager:
         try:
             self._validate_base(base_head)
             registrations = self._registrations()
-            branch = _git(
-                self.repo,
-                "show-ref",
-                "--verify",
-                f"refs/heads/{self.branch}",
-                check=False,
-            )
-            if branch.returncode:
+            if not self._branch_exists():
                 return WorkspaceInspection("RECOVERABLE", "execution branch is missing")
             try:
                 self._validate_branch(base_head)
@@ -362,7 +374,10 @@ class ExecutionWorkspaceManager:
 
     def verify_submodules(self, workspace: ExecutionWorkspace) -> None:
         """Verify immutable submodules after worker execution."""
-        self._validate_workspace(workspace)
+        # A worker normally leaves intentional superproject edits. Validate its
+        # identity here without duplicating the caller's checkpoint cleanliness
+        # decision; submodule verification itself is still strict.
+        self._validate_workspace(workspace, verify_status=False)
         self._verify_submodules(workspace.path)
 
     def retire(self, workspace: ExecutionWorkspace, expected_head: str) -> None:
@@ -400,7 +415,7 @@ class ExecutionWorkspaceManager:
             raise ExecutionWorkspaceError("execution worktree changed before removal")
         self._validate_submodule_paths(self.path)
         self._verify_submodules(self.path)
-        removed = _git(
+        removed = self._runner(
             self.repo, "worktree", "remove", "--force", str(self.path), check=False
         )
         if removed.returncode:
@@ -417,7 +432,7 @@ class ExecutionWorkspaceManager:
         try:
             self._validate_submodule_paths(path)
             self._observe_initialized_submodules(path)
-            updated = _git(
+            updated = self._runner(
                 path, "submodule", "update", "--init", "--recursive", check=False
             )
             if updated.returncode:
@@ -450,7 +465,7 @@ class ExecutionWorkspaceManager:
                 )
 
     def _observe_initialized_submodules(self, repo: Path) -> None:
-        result = _git(repo, "submodule", "status", "--recursive", check=False)
+        result = self._runner(repo, "submodule", "status", "--recursive", check=False)
         if result.returncode:
             # No .gitmodules is a valid repository without submodules. Other
             # failures are observations that cannot safely be treated as empty.
@@ -474,8 +489,8 @@ class ExecutionWorkspaceManager:
             candidate = repo / path
             if not candidate.is_dir():
                 continue
-            initialized = _git(candidate, "rev-parse", "--git-dir", check=False)
-            initialized_root = _git(
+            initialized = self._runner(candidate, "rev-parse", "--git-dir", check=False)
+            initialized_root = self._runner(
                 candidate, "rev-parse", "--show-toplevel", check=False
             )
             if (
@@ -489,8 +504,8 @@ class ExecutionWorkspaceManager:
                         f"submodule {path} has an unsafe existing checkout"
                     )
                 continue
-            head = _git(candidate, "rev-parse", "HEAD", check=False)
-            status = _git(candidate, "status", "--porcelain", check=False)
+            head = self._runner(candidate, "rev-parse", "HEAD", check=False)
+            status = self._runner(candidate, "status", "--porcelain", check=False)
             expected = self._expected_gitlink(repo, path)
             if head.returncode or status.returncode:
                 raise ExecutionWorkspaceError(
@@ -505,9 +520,8 @@ class ExecutionWorkspaceManager:
                 )
             self._observe_initialized_submodules(candidate)
 
-    @staticmethod
-    def _gitlink_paths(repo: Path) -> list[Path]:
-        result = _git(repo, "ls-tree", "-r", "-z", "HEAD")
+    def _gitlink_paths(self, repo: Path) -> list[Path]:
+        result = self._runner(repo, "ls-tree", "-r", "-z", "HEAD")
         paths: list[Path] = []
         for entry in result.stdout.split("\0"):
             if not entry:
@@ -531,9 +545,9 @@ class ExecutionWorkspaceManager:
                     f"submodule {path} is not initialized safely"
                 )
             expected_sha = self._expected_gitlink(repo, path)
-            head = _git(candidate, "rev-parse", "HEAD", check=False)
-            root = _git(candidate, "rev-parse", "--show-toplevel", check=False)
-            status = _git(candidate, "status", "--porcelain", check=False)
+            head = self._runner(candidate, "rev-parse", "HEAD", check=False)
+            root = self._runner(candidate, "rev-parse", "--show-toplevel", check=False)
+            status = self._runner(candidate, "status", "--porcelain", check=False)
             if (
                 head.returncode
                 or root.returncode
@@ -554,9 +568,8 @@ class ExecutionWorkspaceManager:
                 )
             self._verify_submodules(candidate)
 
-    @staticmethod
-    def _expected_gitlink(repo: Path, path: Path) -> str:
-        output = _git(repo, "ls-tree", "-r", "-z", "HEAD").stdout
+    def _expected_gitlink(self, repo: Path, path: Path) -> str:
+        output = self._runner(repo, "ls-tree", "-r", "-z", "HEAD").stdout
         for entry in output.split("\0"):
             metadata, separator, name = entry.partition("\t")
             fields = metadata.split()
@@ -576,21 +589,23 @@ class ExecutionWorkspaceManager:
         title: str = "",
         summary: str = "",
     ) -> ExecutionCheckpoint:
-        self._validate_workspace(workspace)
-        before_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        self._validate_workspace(workspace, verify_status=False)
+        before_head = self._runner(workspace.path, "rev-parse", "HEAD").stdout.strip()
         if before_head != workspace.head:
             raise ExecutionWorkspaceError(
                 "execution Git history changed while worker was running"
             )
-        _git(workspace.path, "add", "-A")
-        staged = _git(workspace.path, "diff", "--cached", "--quiet", check=False)
+        self._runner(workspace.path, "add", "-A")
+        staged = self._runner(
+            workspace.path, "diff", "--cached", "--quiet", check=False
+        )
         if staged.returncode not in {0, 1}:
             raise ExecutionWorkspaceError(
                 f"cannot inspect staged execution changes: {staged.stderr.strip()}"
             )
         commit_created = staged.returncode == 1
         if commit_created:
-            committed = _git(
+            committed = self._runner(
                 workspace.path,
                 "commit",
                 "-m",
@@ -602,10 +617,12 @@ class ExecutionWorkspaceManager:
                     f"cannot create execution checkpoint: "
                     f"{committed.stderr.strip() or 'unknown git error'}"
                 )
-        after_head = _git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        after_head = self._runner(workspace.path, "rev-parse", "HEAD").stdout.strip()
         return ExecutionCheckpoint(before_head, after_head, commit_created)
 
-    def _validate_workspace(self, workspace: ExecutionWorkspace) -> ExecutionWorkspace:
+    def _validate_workspace(
+        self, workspace: ExecutionWorkspace, *, verify_status: bool = True
+    ) -> ExecutionWorkspace:
         if not isinstance(workspace, ExecutionWorkspace):
             raise TypeError("execution workspace must be ExecutionWorkspace")
         if (
@@ -622,12 +639,19 @@ class ExecutionWorkspaceManager:
             raise self._path_conflict("is a symlink")
         registrations = self._registrations()
         registration = registrations.get(self.path.resolve())
-        return self._validate_existing(registration, workspace.base_head)
+        return self._validate_existing(
+            registration, workspace.base_head, verify_status=verify_status
+        )
 
     def _validate_base(self, base_head: str) -> None:
-        resolved = resolve_commit(
-            self.repo, base_head, check=False, runner=_git
-        )
+        try:
+            resolved = resolve_commit(
+                self.repo, base_head, check=False, runner=self._runner
+            )
+        except GitObservationError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot observe planned code revision {base_head}: {error}"
+            ) from error
         if resolved != base_head:
             raise ExecutionWorkspaceError(
                 f"planned code revision {base_head} is not available in the "
@@ -635,29 +659,31 @@ class ExecutionWorkspaceManager:
             )
 
     def _ensure_branch(self, base_head: str) -> None:
-        existing = _git(
-            self.repo, "show-ref", "--verify", f"refs/heads/{self.branch}", check=False
-        )
-        if existing.returncode == 0:
+        if self._branch_exists():
             return
-        created = _git(self.repo, "branch", self.branch, base_head, check=False)
+        created = self._runner(self.repo, "branch", self.branch, base_head, check=False)
         if created.returncode:
-            observed = _git(
-                self.repo,
-                "show-ref",
-                "--verify",
-                f"refs/heads/{self.branch}",
-                check=False,
-            )
-            if observed.returncode:
+            if not self._branch_exists():
                 raise ExecutionWorkspaceError(
                     f"cannot create execution branch {self.branch}: "
                     f"{created.stderr.strip() or 'unknown git error'}"
                 )
 
+    def _branch_exists(self) -> bool:
+        try:
+            return ref_exists(
+                self.repo, f"refs/heads/{self.branch}", runner=self._runner
+            )
+        except GitObservationError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot observe execution branch {self.branch}: {error}"
+            ) from error
+
     def _validate_branch(self, base_head: str) -> None:
         try:
-            ancestor = is_ancestor(self.repo, base_head, self.branch, runner=_git)
+            ancestor = is_ancestor(
+                self.repo, base_head, self.branch, runner=self._runner
+            )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
                 f"cannot prove execution branch ancestry: {error}"
@@ -736,20 +762,29 @@ class ExecutionWorkspaceManager:
         return entries
 
     def _registrations(self) -> dict[Path, WorktreeRegistration]:
-        result = _git(self.repo, "worktree", "list", "--porcelain")
+        result = self._runner(self.repo, "worktree", "list", "--porcelain", check=False)
+        if result.returncode:
+            raise ExecutionWorkspaceError(
+                "cannot observe execution worktree registrations: "
+                f"{result.stderr.strip() or 'unknown git error'}"
+            )
         return self._parse_worktree_porcelain(result.stdout)
 
     def _validate_existing(
-        self, registration: dict[str, str | None] | None, base_head: str
+        self,
+        registration: dict[str, str | None] | None,
+        base_head: str,
+        *,
+        verify_status: bool = True,
     ) -> ExecutionWorkspace:
         if registration is None or not self.path.is_dir():
             raise ExecutionWorkspaceError(
                 f"expected execution worktree {self.path} is not registered and "
                 "cannot be reused"
             )
-        common = _git(self.path, "rev-parse", "--git-common-dir", check=False)
-        root = _git(self.path, "rev-parse", "--show-toplevel", check=False)
-        expected_common = _git(
+        common = self._runner(self.path, "rev-parse", "--git-common-dir", check=False)
+        root = self._runner(self.path, "rev-parse", "--show-toplevel", check=False)
+        expected_common = self._runner(
             self.repo, "rev-parse", "--git-common-dir"
         ).stdout.strip()
 
@@ -767,14 +802,14 @@ class ExecutionWorkspaceManager:
             or resolve_git_path(self.path, root.stdout.strip()) != self.path.resolve()
         ):
             raise self._path_conflict("belongs to another repository")
-        branch = _git(
+        branch = self._runner(
             self.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         )
         if branch.returncode or branch.stdout.strip() != self.branch:
             raise self._path_conflict(
                 f"is on branch {branch.stdout.strip() or '<detached>'}"
             )
-        head = _git(self.path, "rev-parse", "HEAD").stdout.strip()
+        head = self._runner(self.path, "rev-parse", "HEAD").stdout.strip()
         if head != registration["head"]:
             raise ExecutionWorkspaceError(
                 f"execution worktree {self.path} registration HEAD does not "
@@ -782,18 +817,31 @@ class ExecutionWorkspaceManager:
             )
         if registration["branch"] != self.branch:
             raise self._path_conflict("has the wrong registered branch")
+        status = ""
+        if verify_status:
+            observed_status = self._runner(
+                self.path, "status", "--porcelain", check=False
+            )
+            if observed_status.returncode:
+                raise ExecutionWorkspaceError(
+                    "cannot observe execution worktree status: "
+                    f"{observed_status.stderr.strip() or 'unknown git error'}"
+                )
+            status = observed_status.stdout
         return ExecutionWorkspace(
             self.ticket_id,
             self.branch,
             self.path,
             head,
             base_head,
-            bool(_git(self.path, "status", "--porcelain").stdout),
+            bool(status),
         )
 
     def _prune_expected_stale_registration(self) -> None:
         # `worktree remove` removes only this missing registration, unlike prune.
-        removed = _git(self.repo, "worktree", "remove", str(self.path), check=False)
+        removed = self._runner(
+            self.repo, "worktree", "remove", str(self.path), check=False
+        )
         if removed.returncode:
             raise ExecutionWorkspaceError(
                 f"cannot remove stale execution worktree registration {self.path}: "

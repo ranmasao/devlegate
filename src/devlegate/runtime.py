@@ -1404,7 +1404,7 @@ class ServiceEngine:
         if not all(isinstance(value, str) and value for value in (branch, path, base)):
             raise DevlegateError("persisted execution workspace identity is incomplete")
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("retained execution workspace topology is invalid")
@@ -1440,7 +1440,7 @@ class ServiceEngine:
         old_control = str(state["execution_control_head"])
         current_control, _remote_head = self._sync_control()
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         registration = manager._registrations().get(manager.path.resolve())
         if registration is None:
@@ -1623,7 +1623,7 @@ class ServiceEngine:
         ):
             raise DevlegateError("persisted execution workspace identity is incomplete")
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("persisted execution workspace binding is invalid")
@@ -2330,7 +2330,7 @@ class ServiceEngine:
         """Capture a bounded, independently observed execution-resource set."""
         self._workspace_cleanup_observation_error = None
         registrations = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, "T-1"
+            self.repo, self.execution_worktree_root, "T-1", runner=self._git_runtime
         )._registrations()
         # Check the configured path before resolving it. Resolving first would
         # follow a substituted work root and make an external directory look
@@ -3251,10 +3251,7 @@ class ServiceEngine:
         # Migrate only the old, durably pre-launch layout.  A worker is always
         # preceded by an agent_running write, so this does not turn uncertain
         # worker ownership into permission to reuse a workspace.
-        if (
-            "worker_identity" not in state
-            and has_pre_worker_absence_proof(state)
-        ):
+        if "worker_identity" not in state and has_pre_worker_absence_proof(state):
             state["worker_identity"] = None
             try:
                 self._runtime_store.replace(state)
@@ -4677,8 +4674,7 @@ class ServiceEngine:
                 not pending_agent_execution
                 and rework_provenance is None
                 and not (
-                    authorization is not None
-                    and authorization.is_zero_delta_retry
+                    authorization is not None and authorization.is_zero_delta_retry
                 )
             ):
                 try:
@@ -4961,7 +4957,10 @@ class ServiceEngine:
             )
         try:
             manager = ExecutionWorkspaceManager(
-                self.repo, self.execution_worktree_root, selected_ticket.id
+                self.repo,
+                self.execution_worktree_root,
+                selected_ticket.id,
+                runner=self._git_runtime,
             )
             manager.verify_submodules(workspace)
         except (ExecutionWorkspaceError, OSError) as error:
@@ -5439,7 +5438,10 @@ class ServiceEngine:
                 "zero-delta execution checkpoint is not its base"
             )
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, report.ticket_id
+            self.repo,
+            self.execution_worktree_root,
+            report.ticket_id,
+            runner=self._git_runtime,
         )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
@@ -5712,7 +5714,10 @@ class ServiceEngine:
                 "planned code revision changed during preparation"
             )
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, plan.ticket_id
+            self.repo,
+            self.execution_worktree_root,
+            plan.ticket_id,
+            runner=self._git_runtime,
         )
         if isinstance(bound_base, str):
             base_head = self._adopt_unstarted_product_descendant(
@@ -6022,8 +6027,7 @@ class ServiceEngine:
             or ticket not in ticket_store.runnable
             or ticket.body != selected_body
             or (isinstance(selected_title, str) and ticket.title != selected_title)
-            or ticket.depends_on
-            != tuple(selected_dependencies)
+            or ticket.depends_on != tuple(selected_dependencies)
         ):
             return (
                 "control descendant changed execution ticket eligibility; "
@@ -6056,9 +6060,7 @@ class ServiceEngine:
         self, artifact: Path, execution_id: str, prompt_digest: str
     ) -> None:
         """Record successful stdin delivery separately from diagnostic I/O."""
-        _log(
-            f"worker prompt sent: execution={execution_id} sha256={prompt_digest}"
-        )
+        _log(f"worker prompt sent: execution={execution_id} sha256={prompt_digest}")
         try:
             mark_worker_prompt_sent(artifact)
         except (OSError, ValueError) as error:
@@ -6647,7 +6649,7 @@ class ServiceEngine:
         if ticket is None or ticket.state != "done":
             raise WorkflowBlockedError("ticket is not durably done")
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         expected_path = Path(report.execution_path).absolute()
         if expected_path != manager.path:
@@ -6703,6 +6705,7 @@ class ServiceEngine:
             self.repo,
             self.execution_worktree_root,
             branch.removeprefix("devlegate/work/"),
+            runner=self._git_runtime,
         )
         try:
             registrations = manager._registrations()
@@ -7097,7 +7100,7 @@ class ServiceEngine:
         ticket_id = target["ticket_id"]
         expected_head = target["head"]
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if (
             not _is_git_identity(expected_head)
@@ -7178,7 +7181,7 @@ class ServiceEngine:
         if limit < 1:
             raise ValueError("workspace cleanup limit must be positive")
         registrations = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, "T-1"
+            self.repo, self.execution_worktree_root, "T-1", runner=self._git_runtime
         )._registrations()
         decisions: list[dict[str, object]] = []
         if targets is None:
@@ -7236,7 +7239,10 @@ class ServiceEngine:
                 continue
             ticket_id = target["ticket_id"]
             manager = ExecutionWorkspaceManager(
-                self.repo, self.execution_worktree_root, ticket_id
+                self.repo,
+                self.execution_worktree_root,
+                ticket_id,
+                runner=self._git_runtime,
             )
             try:
                 manager, workspace, _binding = self._observe_cleanup_candidate(
@@ -8062,7 +8068,7 @@ class ServiceEngine:
         ):
             raise DevlegateError("drop execution workspace binding is incomplete")
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if branch != manager.branch or Path(path) != manager.path:
             raise DevlegateError("drop execution workspace binding is invalid")
@@ -8119,7 +8125,10 @@ class ServiceEngine:
                         or "cannot retire execution remote branch"
                     )
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, report.ticket_id
+            self.repo,
+            self.execution_worktree_root,
+            report.ticket_id,
+            runner=self._git_runtime,
         )
         try:
             manager.retire(workspace, expected)
@@ -8517,7 +8526,7 @@ class ServiceEngine:
                 "execution workspace recovery binding is incomplete"
             )
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if branch != manager.branch or Path(path) != manager.path:
             raise WorkflowBlockedError("execution workspace binding is invalid")
@@ -10442,7 +10451,7 @@ class ServiceEngine:
     def recovery_workspace_manager(self, ticket_id: str):
         """Provide the workspace capability without exposing the coordinator."""
         return ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
 
     def recovery_reports(self, ticket_id: str) -> list[ExecutionReport]:
@@ -10514,7 +10523,7 @@ class ServiceEngine:
         self, ticket_id: str, value: dict[str, object]
     ) -> bool:
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         return (
             value.get("execution_branch") == manager.branch
@@ -10526,7 +10535,7 @@ class ServiceEngine:
 
     def reconciliation_workspace_manager(self, ticket_id: str):
         return ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
 
     def reconciliation_todo_fingerprint(self) -> str:
@@ -10623,7 +10632,10 @@ class ServiceEngine:
             if ticket is None or ticket.state not in {"todo", "review"}:
                 raise DevlegateError("reconciliation ticket is no longer compatible")
             manager = ExecutionWorkspaceManager(
-                self.repo, self.execution_worktree_root, ticket_id
+                self.repo,
+                self.execution_worktree_root,
+                ticket_id,
+                runner=self._git_runtime,
             )
             if (
                 reconciliation["execution_branch"] != manager.branch
@@ -10834,7 +10846,10 @@ class ServiceEngine:
             raise DevlegateError("persisted execution ticket is not safely recoverable")
         base_head = str(state["execution_base_head"])
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, str(state["execution_ticket_id"])
+            self.repo,
+            self.execution_worktree_root,
+            str(state["execution_ticket_id"]),
+            runner=self._git_runtime,
         )
         if (
             state["execution_branch"] != manager.branch
@@ -11013,7 +11028,7 @@ class ServiceEngine:
             raise DevlegateError("todo workflow changed since interrupted execution")
         base_head = state["execution_base_head"]
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id
+            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
         if (
             state["execution_branch"] != manager.branch

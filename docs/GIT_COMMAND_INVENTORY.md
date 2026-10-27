@@ -121,3 +121,29 @@ longer have duplicate runtime implementations. The executed Git count is
 unchanged because the workflows pass the same owner-bound runner and preserve
 the same ordering. No direct subprocess call sites were added; the new module
 calls the existing named Git operations only.
+
+## Execution Workspace Boundary
+
+TASK-080 inventories the direct commands in `execution_workspace.py`. The
+manager remains the domain owner for execution branch/worktree lifecycle. Its
+optional runner is a capability: standalone inspection uses `run_git`, while
+every `ServiceEngine` and recovery-workflow construction supplies
+`_git_runtime`. That runner asserts the hosted owner thread and converts an
+intentional shutdown signal into the runtime interruption path. The injection
+does not add a subprocess or grant mutation authority to standalone callers.
+
+| Group and manager operation | Commands | Authority and failure semantics | Executed subprocesses/effects |
+| --- | --- | --- | --- |
+| Branch/ref observation: `_validate_base`, `_ensure_branch`, `_validate_branch`, rework predecessor/replay proof | `rev-parse --verify`, `show-ref --verify`, `merge-base --is-ancestor`, `for-each-ref`, `rev-list`, `cherry` | `prepare`/`prepare_rework` are admitted lifecycle calls; `inspect` is read-only. Exact absence is only `show-ref --verify --quiet` in shared helpers; Git errors and malformed output fail closed. | One per listed observation; branch-create race adds one re-observation. No effects. |
+| Worktree registration and identity: `_registrations`, `_validate_existing`, path checks | `worktree list --porcelain`, `rev-parse --git-common-dir`, `rev-parse --show-toplevel`, `symbolic-ref --quiet --short HEAD`, `rev-parse HEAD`, `status --porcelain` | Registration parsing rejects duplicate/malformed/detached/wrong-repository state. `inspect` reports unsafe rather than absence for observation errors. `prepare`, `retire`, and `checkpoint` revalidate exact path, branch, HEAD, and cleanliness before effects. | Registration is one command. Existing-checkout proof is six commands. No effects. |
+| Lifecycle mutation: `_ensure_branch`, `prepare`, `_prune_expected_stale_registration`, `retire`, rework transplant | `branch`, `worktree add`, `worktree remove [--force]`, `update-ref` CAS, `cherry-pick [--abort]` | Only admitted service/recovery paths receive the owner runner. Every mutation has prior topology proof; add failure re-observes registration, CAS refusal is a conflict, and removal is followed by registration/path confirmation. | One mutation each. Branch creation failure adds one observation; failed add adds one registration observation; failed cherry-pick adds one abort. No uniformity-only calls. |
+| Checkpoint: `checkpoint` | `rev-parse HEAD`, `add -A`, `diff --cached --quiet`, `commit -m` | The caller must supply a currently validated workspace. A non-0/1 diff or failed commit rejects publication; the post-commit HEAD is returned only after the effect. | Three commands for a clean checkpoint, five when committing. `add` and `commit` are local Tier 3 effects. |
+| Submodule validation/materialization: `_gitlink_paths`, `_observe_initialized_submodules`, `_prepare_submodules`, `_verify_submodules` | `ls-tree -r -z HEAD`, `submodule status --recursive`, `rev-parse`, `status --porcelain`, `submodule update --init --recursive` | Gitlink paths, symlink components, checkout roots, expected SHAs, and dirtiness are proven before update and before removal. Missing `.gitmodules` is the sole empty-submodule case; unreadable or malformed metadata is an error. | Per repository: one gitlink listing; initialized submodule observation adds up to five commands per nested checkout; verification adds four plus its gitlink listing. Materialization adds exactly one update. The recursion follows submodule topology, not an added loop. |
+
+The before/after trace for every row is identical: the same commands, order,
+and local/remote effect tiers run through a different runner reference. This
+change adds zero Git subprocesses and zero mutations. `execution_workspace.py`
+retains specialized worktree, identity, submodule, checkpoint, and rework
+commands because their proofs depend on that domain's ordered state; only
+shared ancestry, commit resolution, and patch-equivalence semantics use typed
+`git.py` helpers.

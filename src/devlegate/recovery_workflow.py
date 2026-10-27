@@ -31,6 +31,9 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_state(self) -> dict[str, object]: ...
     def recovery_report_matches_binding(self, report: ExecutionReport) -> None: ...
     def recovery_workspace(self) -> Any: ...
+    def recovery_workspace_manager(
+        self, ticket_id: str
+    ) -> ExecutionWorkspaceManager: ...
     def recovery_product(self, base: str) -> dict[str, object]: ...
     def recovery_prove_product(self) -> None: ...
     def recovery_zero_delta(
@@ -97,8 +100,8 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         owner.recovery_prove_product()
         if workspace.head == start_head:
             try:
-                checkpoint = ExecutionWorkspaceManager(
-                    owner.repo, owner.execution_worktree_root, report.ticket_id
+                checkpoint = owner.recovery_workspace_manager(
+                    report.ticket_id
                 ).checkpoint(
                     workspace,
                     report.execution_id,

@@ -58,6 +58,7 @@ def _publish_done_execution(
         )
     git(control, "commit", "-m", message)
 
+
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -68,6 +69,7 @@ def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
     assert result.returncode == 1
     assert "control working tree is dirty" in result.stdout
     assert git(working, "rev-parse", "HEAD").stdout.strip() == before
+
 
 def test_once_prepares_exact_product_execution_workspace_without_cross_plane_changes(
     tmp_path,
@@ -182,8 +184,7 @@ def test_proven_execution_resource_retirement_removes_local_and_remote_refs(tmp_
     assert not workspace.path.exists()
     assert resolve_commit(working, f"refs/heads/{manager.branch}") is None
     assert (
-        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
-        == ""
+        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout == ""
     )
 
 
@@ -279,16 +280,19 @@ def test_local_execution_ref_move_during_delete_cas_is_preserved(tmp_path, monke
 
     (working / "cas-race.txt").write_text("moved\n")
     git(working, "add", "cas-race.txt")
-    assert git(
-        working,
-        "-c",
-        "user.name=Test User",
-        "-c",
-        "user.email=test@example.com",
-        "commit",
-        "-m",
-        "move disposable ref during delete",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "move disposable ref during delete",
+        ).returncode
+        == 0
+    )
     moved = git(working, "rev-parse", "HEAD").stdout.strip()
     original_runtime = engine._git_runtime
     moved_during_delete = False
@@ -328,9 +332,10 @@ def test_local_execution_ref_foreign_worktree_added_during_delete_is_preserved(
     def interleave(repo, *args, **kwargs):
         nonlocal added
         if args[:3] == ("update-ref", "-d", f"refs/heads/{manager.branch}"):
-            assert git(
-                working, "worktree", "add", str(foreign), manager.branch
-            ).returncode == 0
+            assert (
+                git(working, "worktree", "add", str(foreign), manager.branch).returncode
+                == 0
+            )
             added = True
         return original_runtime(repo, *args, **kwargs)
 
@@ -356,35 +361,44 @@ def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
         engine.repo, engine.execution_worktree_root, "T-1"
     )
     workspace = manager.prepare(base)
-    assert git(
-        working,
-        "push",
-        "origin",
-        f"{manager.branch}:refs/heads/{manager.branch}",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{manager.branch}:refs/heads/{manager.branch}",
+        ).returncode
+        == 0
+    )
     manager.retire(workspace, base)
 
     (working / "remote-ref-moved.txt").write_text("moved\n")
     git(working, "add", "remote-ref-moved.txt")
-    assert git(
-        working,
-        "-c",
-        "user.name=Test User",
-        "-c",
-        "user.email=test@example.com",
-        "commit",
-        "-m",
-        "move remote disposable ref",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "move remote disposable ref",
+        ).returncode
+        == 0
+    )
     moved = git(working, "rev-parse", "HEAD").stdout.strip()
     assert git(working, "branch", "-f", manager.branch, moved).returncode == 0
-    assert git(
-        working,
-        "push",
-        "--force",
-        "origin",
-        f"{manager.branch}:refs/heads/{manager.branch}",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "--force",
+            "origin",
+            f"{manager.branch}:refs/heads/{manager.branch}",
+        ).returncode
+        == 0
+    )
     assert git(working, "branch", "-f", manager.branch, base).returncode == 0
 
     with pytest.raises(WorkflowBlockedError, match="remote execution ref"):
@@ -392,8 +406,9 @@ def test_remote_execution_ref_move_is_blocked_before_cleanup(tmp_path):
 
     assert resolve_commit(working, f"refs/heads/{manager.branch}") == base
     assert (
-        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
-        .split()[0]
+        git(
+            working, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+        ).stdout.split()[0]
         == moved
     )
 
@@ -410,26 +425,32 @@ def test_remote_execution_ref_move_during_leased_delete_is_preserved(
         engine.repo, engine.execution_worktree_root, "T-1"
     )
     workspace = manager.prepare(base)
-    assert git(
-        working,
-        "push",
-        "origin",
-        f"{manager.branch}:refs/heads/{manager.branch}",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{manager.branch}:refs/heads/{manager.branch}",
+        ).returncode
+        == 0
+    )
     manager.retire(workspace, base)
 
     (working / "remote-delete-race.txt").write_text("moved\n")
     git(working, "add", "remote-delete-race.txt")
-    assert git(
-        working,
-        "-c",
-        "user.name=Test User",
-        "-c",
-        "user.email=test@example.com",
-        "commit",
-        "-m",
-        "move remote disposable ref during delete",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "move remote disposable ref during delete",
+        ).returncode
+        == 0
+    )
     moved = git(working, "rev-parse", "HEAD").stdout.strip()
     original_runtime = engine._git_runtime
     moved_during_delete = False
@@ -437,13 +458,16 @@ def test_remote_execution_ref_move_during_leased_delete_is_preserved(
     def interleave(repo, *args, **kwargs):
         nonlocal moved_during_delete
         if args[0] == "push" and f":refs/heads/{manager.branch}" in args:
-            assert git(
-                working,
-                "push",
-                "--force",
-                "origin",
-                f"{moved}:refs/heads/{manager.branch}",
-            ).returncode == 0
+            assert (
+                git(
+                    working,
+                    "push",
+                    "--force",
+                    "origin",
+                    f"{moved}:refs/heads/{manager.branch}",
+                ).returncode
+                == 0
+            )
             moved_during_delete = True
         return original_runtime(repo, *args, **kwargs)
 
@@ -454,8 +478,9 @@ def test_remote_execution_ref_move_during_leased_delete_is_preserved(
     assert moved_during_delete
     assert resolve_commit(working, f"refs/heads/{manager.branch}") is None
     assert (
-        git(working, "ls-remote", "origin", f"refs/heads/{manager.branch}").stdout
-        .split()[0]
+        git(
+            working, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+        ).stdout.split()[0]
         == moved
     )
 
@@ -513,9 +538,7 @@ def test_historical_cleanup_binds_product_proof_to_control_checkpoint(tmp_path):
     integration = git(control, "rev-parse", "HEAD").stdout.strip()
 
     with pytest.raises(WorkflowBlockedError, match="canonical integration"):
-        engine._prove_published_product_checkpoint(
-            "0" * 40, integration=integration
-        )
+        engine._prove_published_product_checkpoint("0" * 40, integration=integration)
     engine._prove_published_product_checkpoint(base, integration=integration)
 
 
@@ -591,9 +614,7 @@ def test_unregistered_checkout_keeps_exact_ref_identity_for_independent_cleanup(
     assert resolve_commit(engine.repo, "refs/heads/devlegate/work/T-1") == base
 
 
-def test_done_unregistered_checkout_retains_all_resources(
-    tmp_path, monkeypatch
-):
+def test_done_unregistered_checkout_retains_all_resources(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     engine = Devlegate(config)
@@ -667,9 +688,15 @@ def test_done_clean_worktree_retires_without_historical_execution_report(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(base)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     monkeypatch.setattr(
         engine,
         "_ticket_store",
@@ -715,12 +742,21 @@ def test_done_published_changed_worktree_retires_without_historical_report(
     assert git(workspace.path, "add", "published.txt").returncode == 0
     assert git(workspace.path, "commit", "-m", "published execution").returncode == 0
     head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-    assert git(
-        workspace.path, "push", "origin", f"{head}:refs/heads/{workspace.branch}"
-    ).returncode == 0
-    assert git(
-        workspace.path, "push", "origin", f"{head}:refs/heads/{engine.remote_branch}"
-    ).returncode == 0
+    assert (
+        git(
+            workspace.path, "push", "origin", f"{head}:refs/heads/{workspace.branch}"
+        ).returncode
+        == 0
+    )
+    assert (
+        git(
+            workspace.path,
+            "push",
+            "origin",
+            f"{head}:refs/heads/{engine.remote_branch}",
+        ).returncode
+        == 0
+    )
     monkeypatch.setattr(
         engine,
         "_ticket_store",
@@ -754,9 +790,15 @@ def test_workspace_cleanup_restart_converges_after_each_retirement_boundary(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "boundary-crash")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -797,9 +839,12 @@ def test_workspace_cleanup_restart_converges_after_each_retirement_boundary(
     assert (
         resolve_commit(working, f"refs/heads/{workspace.branch}") is not None
     ) is resources["local"]
-    assert bool(
-        git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
-    ) is resources["remote"]
+    assert (
+        bool(
+            git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
+        )
+        is resources["remote"]
+    )
 
     monkeypatch.undo()
     restarted = Devlegate(config)
@@ -823,9 +868,15 @@ def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "changed-ref-crash")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -849,13 +900,16 @@ def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
     changed = git(working, "rev-parse", "HEAD").stdout.strip()
     git(working, "branch", "-f", workspace.branch, changed)
     git(working, "checkout", engine.remote_branch)
-    assert git(
-        working,
-        "push",
-        "--force",
-        "origin",
-        f"{workspace.branch}:refs/heads/{workspace.branch}",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "--force",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
 
     restarted = Devlegate(config)
     result = restarted.cleanup_workspaces(apply=True, limit=1)
@@ -865,9 +919,7 @@ def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
         "execution workspace HEAD is not published"
     )
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == changed
-    assert git(
-        working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
-    ).stdout
+    assert git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
 
 
 def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
@@ -901,8 +953,7 @@ def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_p
     base = git(working, "rev-parse", "HEAD").stdout.strip()
     for ticket_id in ("T-1", "T-2"):
         (control / f"kanban/todo/{ticket_id}.md").write_text(
-            '---\n"type": "devlegate.ticket"\n'
-            f'"title": "{ticket_id}"\n---\nwork\n'
+            f'---\n"type": "devlegate.ticket"\n"title": "{ticket_id}"\n---\nwork\n'
         )
     git(control, "add", "kanban/todo")
     git(control, "commit", "-m", "add cleanup candidates")
@@ -915,12 +966,15 @@ def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_p
         )
         workspace = manager.prepare(base)
         workspaces[ticket_id] = workspace
-        assert git(
-            working,
-            "push",
-            "origin",
-            f"{workspace.branch}:refs/heads/{workspace.branch}",
-        ).returncode == 0
+        assert (
+            git(
+                working,
+                "push",
+                "origin",
+                f"{workspace.branch}:refs/heads/{workspace.branch}",
+            ).returncode
+            == 0
+        )
         ExecutionReportStore(control).write(
             build_execution_report(
                 execution_id=f"cleanup-{ticket_id}",
@@ -1016,12 +1070,15 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
         )
         workspace = manager.prepare(checkpoint)
         workspaces[ticket_id] = workspace
-        assert git(
-            working,
-            "push",
-            "origin",
-            f"{workspace.branch}:refs/heads/{workspace.branch}",
-        ).returncode == 0
+        assert (
+            git(
+                working,
+                "push",
+                "origin",
+                f"{workspace.branch}:refs/heads/{workspace.branch}",
+            ).returncode
+            == 0
+        )
         _publish_done_execution(
             control, workspace, ticket_id, checkpoint, f"recovery-{ticket_id}"
         )
@@ -1049,18 +1106,16 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
         with LiveService(working, config) as service:
             service.wait_ready()
             service.wait_for(
-                lambda: resolve_commit(
-                    working, f"refs/heads/{workspaces['T-1'].branch}"
+                lambda: (
+                    resolve_commit(working, f"refs/heads/{workspaces['T-1'].branch}")
+                    == checkpoint
                 )
-                == checkpoint
             )
             offline.rename(remote)
             service.restart()
             service.wait_for(
                 lambda: (
-                    resolve_commit(
-                        working, f"refs/heads/{workspaces['T-2'].branch}"
-                    )
+                    resolve_commit(working, f"refs/heads/{workspaces['T-2'].branch}")
                     is None
                     and not git(
                         working,
@@ -1102,12 +1157,15 @@ def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
             ticket_id,
         ).prepare(checkpoint)
         workspaces[ticket_id] = workspace
-        assert git(
-            working,
-            "push",
-            "origin",
-            f"{workspace.branch}:refs/heads/{workspace.branch}",
-        ).returncode == 0
+        assert (
+            git(
+                working,
+                "push",
+                "origin",
+                f"{workspace.branch}:refs/heads/{workspace.branch}",
+            ).returncode
+            == 0
+        )
     _publish_done_execution(
         control, workspaces["T-1"], "T-1", checkpoint, "legacy-exact", trailers=False
     )
@@ -1140,9 +1198,7 @@ def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
         service.wait_for(
             lambda: (
                 not workspaces["T-1"].path.exists()
-                and resolve_commit(
-                    working, f"refs/heads/{workspaces['T-1'].branch}"
-                )
+                and resolve_commit(working, f"refs/heads/{workspaces['T-1'].branch}")
                 is None
                 and not git(
                     working,
@@ -1178,12 +1234,15 @@ def test_hosted_cleanup_retires_requeued_done_generation_without_report(tmp_path
         state / "worktrees" / next(state.glob("worktrees/*")).name,
         "T-1",
     ).prepare(checkpoint)
-    assert git(
-        working,
-        "push",
-        "origin",
-        f"{workspace.branch}:refs/heads/{workspace.branch}",
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(
         control, workspace, "T-1", checkpoint, "legacy-old", trailers=False
     )
@@ -1206,10 +1265,10 @@ def test_hosted_cleanup_retires_requeued_done_generation_without_report(tmp_path
     with LiveService(working, config) as service:
         service.wait_ready()
         service.wait_for(
-            lambda: json.loads(service.cli("clean", "--json").stdout).get(
-                "scan_complete"
+            lambda: (
+                json.loads(service.cli("clean", "--json").stdout).get("scan_complete")
+                is True
             )
-            is True
         )
         assert not workspace.path.exists()
         assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
@@ -1460,8 +1519,7 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
     ]
     assert not workspace.path.exists()
     assert (
-        resolve_commit(engine.repo, f"refs/heads/{workspace.branch}")
-        == workspace.head
+        resolve_commit(engine.repo, f"refs/heads/{workspace.branch}") == workspace.head
     )
 
 
@@ -1474,9 +1532,15 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1490,7 +1554,8 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     assert (
         git(
             working, "update-ref", historical_evidence_ref, historical_checkpoint
-        ).returncode == 0
+        ).returncode
+        == 0
     )
     assert (
         git(
@@ -1562,9 +1627,15 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1622,9 +1693,15 @@ def test_workspace_cleanup_retains_matching_resolved_reconciliation(tmp_path):
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1734,9 +1811,15 @@ def test_workspace_cleanup_retains_published_pending_candidate_integration(tmp_p
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1770,9 +1853,15 @@ def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1820,9 +1909,15 @@ def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1838,9 +1933,7 @@ def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
             monkeypatch.setattr(
                 engine,
                 "_ticket_store",
-                lambda: SimpleNamespace(
-                    by_id={"T-1": SimpleNamespace(state="review")}
-                ),
+                lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="review")}),
             )
         return original_validate(*args, **kwargs)
 
@@ -1867,9 +1960,15 @@ def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    assert git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    ).returncode == 0
+    assert (
+        git(
+            working,
+            "push",
+            "origin",
+            f"{workspace.branch}:refs/heads/{workspace.branch}",
+        ).returncode
+        == 0
+    )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1965,6 +2064,7 @@ def test_historical_integration_lookup_is_bound_to_execution_generation(
     newer = dataclasses.replace(report, execution_id="execution-new")
     assert engine._find_accepted_integration_commit("T-1", newer) is None
 
+
 def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -1992,6 +2092,7 @@ def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monke
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
     assert not list((control / "executions").glob("T-1/*.json"))
+
 
 @pytest.mark.parametrize("expected_absent", [False, True])
 def test_execution_publication_lease_rejects_intervening_remote_generation(
@@ -2069,6 +2170,7 @@ def test_execution_publication_lease_rejects_intervening_remote_generation(
         == external
     )
 
+
 def test_zero_delta_product_drift_preserves_old_report_and_admits_fresh_execution(
     tmp_path, monkeypatch
 ):
@@ -2123,6 +2225,7 @@ def test_zero_delta_product_drift_preserves_old_report_and_admits_fresh_executio
     assert restarted._state.get("reconciliation") is None
     assert restarted._state["last_automatic_retry"]["status"] == "completed"
 
+
 def test_post_checkpoint_unobservable_remote_retains_execution_binding(
     tmp_path, monkeypatch
 ):
@@ -2175,9 +2278,8 @@ def test_post_checkpoint_unobservable_remote_retains_execution_binding(
     assert recovered["pending_execution_report"] == retained["pending_execution_report"]
     assert "reconciliation" not in recovered
 
-def test_zero_delta_ticket_state_change_skips_fresh_execution(
-    tmp_path, monkeypatch
-):
+
+def test_zero_delta_ticket_state_change_skips_fresh_execution(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2213,9 +2315,11 @@ def test_zero_delta_ticket_state_change_skips_fresh_execution(
     assert run_test_iteration(restarted) == 0
     assert restarted._state.get("automatic_retry") is None
     assert restarted._state["last_automatic_retry"]["status"] == "not_admitted"
-    assert restarted._state["last_automatic_retry"]["stale_execution_id"] == (
-        pending["stale_execution_id"]
+    assert (
+        restarted._state["last_automatic_retry"]["stale_execution_id"]
+        == (pending["stale_execution_id"])
     )
+
 
 def test_update_base_transplants_multiple_unpublished_checkpoints(
     tmp_path, monkeypatch
@@ -2262,9 +2366,8 @@ def test_update_base_transplants_multiple_unpublished_checkpoints(
     assert len(rewritten) == 2
     assert git(execution, "rev-parse", f"{rewritten[0]}^").stdout.strip() == target
 
-def test_update_base_rejects_published_execution_outside_lineage(
-    tmp_path, monkeypatch
-):
+
+def test_update_base_rejects_published_execution_outside_lineage(tmp_path, monkeypatch):
     devlegate, working, _state, execution, reconciliation, _first, second, target = (
         _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
     )
@@ -2290,6 +2393,7 @@ def test_update_base_rejects_published_execution_outside_lineage(
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
     assert git(working, "rev-parse", "HEAD").stdout.strip() == target
     assert second != outside
+
 
 def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
     devlegate, _working, _state, execution, reconciliation, first, _second, target = (
@@ -2323,6 +2427,7 @@ def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
         devlegate.reconcile_update_base("T-1", target)
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == merge
 
+
 def test_update_base_conflict_restores_multi_checkpoint_workspace(
     tmp_path, monkeypatch
 ):
@@ -2343,6 +2448,7 @@ def test_update_base_conflict_restores_multi_checkpoint_workspace(
         == second
     )
 
+
 def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
     devlegate, working, _state, execution, reconciliation, first, second, _target = (
         _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
@@ -2356,6 +2462,7 @@ def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
         devlegate.reconcile_update_base("T-1", target)
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == first
+
 
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
@@ -2384,6 +2491,7 @@ def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
     assert reconciliation["product_dirty"] is True
+
 
 def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
@@ -2414,6 +2522,7 @@ def test_product_checkout_head_mutation_stops_lifecycle_before_checkpoint(
     assert (control / "kanban/todo/T-1.md").exists()
     assert reconciliation["product_target_eligible"] is True
 
+
 def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
 ):
@@ -2441,6 +2550,7 @@ def test_product_checkout_branch_switch_stops_lifecycle_before_checkpoint(
         == reconciliation["worker_checkpoint"]
     )
     assert (control / "kanban/todo/T-1.md").exists()
+
 
 def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
     tmp_path, monkeypatch
@@ -2479,6 +2589,7 @@ def test_product_status_observation_failure_stops_lifecycle_before_checkpoint(
         == reconciliation["worker_checkpoint"]
     )
 
+
 def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     tmp_path, monkeypatch
 ):
@@ -2502,9 +2613,7 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     control = next((state / "worktrees").glob("*/control"))
     previous_report = ExecutionReportStore(control).list("T-1")[0]
     review_feedback = "Fix the five submodule worktree-removal regressions exactly."
-    review_artifact = (
-        control / "reviews" / "T-1" / f"{previous_report.execution_id}.md"
-    )
+    review_artifact = control / "reviews" / "T-1" / f"{previous_report.execution_id}.md"
     review_artifact.parent.mkdir(parents=True)
     review_artifact.write_text(
         "<!-- devlegate-review-v1\n"
@@ -2534,9 +2643,7 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
         if report.execution_id != previous_report.execution_id
     )
     second_feedback = "The second generation still mishandles nested submodules."
-    second_artifact = (
-        control / "reviews" / "T-1" / f"{second_report.execution_id}.md"
-    )
+    second_artifact = control / "reviews" / "T-1" / f"{second_report.execution_id}.md"
     second_artifact.write_text(
         "<!-- devlegate-review-v1\n"
         "ticket: T-1\n"
@@ -2567,9 +2674,12 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     assert (execution / "attempt-1.txt").exists()
     assert (execution / "attempt-2.txt").exists()
     assert (execution / "attempt-3.txt").exists()
-    assert git(execution, "log", "--format=%s").stdout.splitlines().count(
-        "T-1: Control ticket"
-    ) == 3
+    assert (
+        git(execution, "log", "--format=%s")
+        .stdout.splitlines()
+        .count("T-1: Control ticket")
+        == 3
+    )
     assert len(list((control / "executions/T-1").glob("*.json"))) == 3
     reports = ExecutionReportStore(control).list("T-1")
     assert len({report.execution_id for report in reports}) == 3
@@ -2732,18 +2842,14 @@ def test_unattributed_or_mismatched_review_blocks_before_worker_launch(
     git(control, "commit", "-m", "publish malformed review")
     git(control, "push", "origin", "devlegate/control")
 
-    with pytest.raises(
-        runtime_module.WorkflowBlockedError, match=error
-    ):
+    with pytest.raises(runtime_module.WorkflowBlockedError, match=error):
         run_test_iteration(devlegate)
     assert calls == 1
     assert devlegate._state["phase"] == "idle"
 
 
 @pytest.mark.parametrize("deferred", [False, True])
-def test_missing_review_artifact_fails_closed(
-    tmp_path, monkeypatch, deferred
-):
+def test_missing_review_artifact_fails_closed(tmp_path, monkeypatch, deferred):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2775,9 +2881,7 @@ def test_missing_review_artifact_fails_closed(
     assert devlegate._state["phase"] == "idle"
 
 
-def test_historical_marker_does_not_enable_feedback_free_rework(
-    tmp_path, monkeypatch
-):
+def test_historical_marker_does_not_enable_feedback_free_rework(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2907,9 +3011,7 @@ def test_forged_newer_completed_report_blocks_rework_before_worker_launch(
     git(control, "commit", "-m", "forge newer completed report")
     git(control, "push", "origin", "devlegate/control")
 
-    with pytest.raises(
-        WorkflowBlockedError, match="lacks exact lifecycle provenance"
-    ):
+    with pytest.raises(WorkflowBlockedError, match="lacks exact lifecycle provenance"):
         run_test_iteration(devlegate)
     assert calls == 1
     assert devlegate._state["phase"] == "idle"
@@ -2941,9 +3043,7 @@ def test_independently_published_headerless_review_is_rejected(tmp_path, monkeyp
     git(control, "commit", "-m", "return historical review for rework")
     git(control, "push", "origin", "devlegate/control")
 
-    with pytest.raises(
-        WorkflowBlockedError, match="malformed attribution header"
-    ):
+    with pytest.raises(WorkflowBlockedError, match="malformed attribution header"):
         run_test_iteration(devlegate)
     assert len(prompts) == 1
 
@@ -3162,8 +3262,9 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
         predecessor
     )
     assert (
-        git(working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1")
-        .stdout.split()[0]
+        git(
+            working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+        ).stdout.split()[0]
         == resumed_head
     )
 
@@ -3186,6 +3287,7 @@ def test_unchanged_generation_does_not_recreate_missing_execution_worktree(
 
     assert result.returncode == 0
     assert not execution.exists()
+
 
 def test_dirty_execution_worktree_is_preserved(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -3245,6 +3347,7 @@ def test_execution_path_conflict_fails_closed(tmp_path):
     assert "not a registered execution worktree" in result.stderr
     assert (expected / "do-not-delete").read_text() == "foreign\n"
 
+
 def test_read_only_plan_does_not_materialize_execution_workspace(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3253,6 +3356,7 @@ def test_read_only_plan_does_not_materialize_execution_workspace(tmp_path):
 
     assert result.returncode == 0
     assert not list((state / "worktrees").glob("*/work/*"))
+
 
 def test_worktree_porcelain_parser_rejects_ambiguous_records():
     output = "\n".join(
@@ -3266,6 +3370,7 @@ def test_worktree_porcelain_parser_rejects_ambiguous_records():
     )
     with pytest.raises(ExecutionWorkspaceError, match="duplicate"):
         parse_worktree_porcelain(output)
+
 
 def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -3285,6 +3390,7 @@ def test_stale_execution_registration_is_repaired_without_global_prune(tmp_path)
     assert workspace.path == execution
     assert execution.is_dir()
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+
 
 def test_product_advance_does_not_rebind_execution_base(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -3312,6 +3418,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     assert payload["execution_base_head"] == original_base
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
     assert git(working, "rev-parse", "HEAD").stdout.strip() != execution_head
+
 
 def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
@@ -3356,6 +3463,7 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
     assert state_payload(state)["execution_base_head"] == original_base
 
+
 def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3366,6 +3474,7 @@ def test_unrelated_detached_worktree_does_not_break_preparation(tmp_path):
 
     assert result.returncode == 1
     assert next((state / "worktrees").glob("*/work/T-1"), None) is not None
+
 
 def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
@@ -3387,6 +3496,7 @@ def test_expected_detached_execution_worktree_fails_closed(tmp_path, monkeypatch
     assert execution.is_dir()
     assert devlegate._state["execution_base_head"] == base
 
+
 def test_expected_execution_worktree_on_wrong_branch_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3399,6 +3509,7 @@ def test_expected_execution_worktree_on_wrong_branch_fails_closed(tmp_path):
 
     with pytest.raises(ExecutionWorkspaceError, match="on branch wrong-execution"):
         manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+
 
 def test_execution_branch_attached_to_unexpected_worktree_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -3415,6 +3526,7 @@ def test_execution_branch_attached_to_unexpected_worktree_fails_closed(tmp_path)
 
     with pytest.raises(ExecutionWorkspaceError, match="unexpected worktree"):
         manager.prepare(branch)
+
 
 def test_existing_execution_branch_unrelated_to_base_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -3436,6 +3548,7 @@ def test_existing_execution_branch_unrelated_to_base_fails_closed(tmp_path):
     with pytest.raises(ExecutionWorkspaceError, match="unrelated"):
         manager.prepare(base)
 
+
 def test_execution_leaf_symlink_fails_closed_without_following_target(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3450,6 +3563,7 @@ def test_execution_leaf_symlink_fails_closed_without_following_target(tmp_path):
         manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
     assert target.is_dir()
 
+
 def test_managed_execution_work_root_symlink_fails_closed(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3461,6 +3575,7 @@ def test_managed_execution_work_root_symlink_fails_closed(tmp_path):
 
     with pytest.raises(ExecutionWorkspaceError, match="symlinked workspace root"):
         manager.prepare(git(working, "rev-parse", "HEAD").stdout.strip())
+
 
 def test_existing_branch_and_worktree_are_rediscovered_after_finalization_boundary(
     tmp_path,
@@ -3478,6 +3593,7 @@ def test_existing_branch_and_worktree_are_rediscovered_after_finalization_bounda
 
     assert rediscovered.path == execution
     assert rediscovered.head == base
+
 
 def test_branch_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
@@ -3500,6 +3616,31 @@ def test_branch_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypa
 
     assert raced
     assert workspace.head == base
+
+
+def test_unreadable_execution_branch_is_not_permission_to_create(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    calls = []
+
+    def unreadable(repo, *args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("show-ref", "--verify"):
+            return subprocess.CompletedProcess([], 128, "", "repository unreadable")
+        return execution_workspace._git(repo, *args, **kwargs)
+
+    manager = ExecutionWorkspaceManager(working, key, "T-1", runner=unreadable)
+
+    with pytest.raises(
+        ExecutionWorkspaceError, match="cannot observe execution branch"
+    ):
+        manager.prepare(base)
+
+    assert ("branch", "devlegate/work/T-1", base) not in calls
+    assert not (key / "work" / "T-1").exists()
+
 
 def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
@@ -3524,6 +3665,7 @@ def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkey
     assert workspace.path.is_dir()
     assert workspace.head == base
 
+
 @pytest.mark.parametrize(
     "command",
     [("status",), ("status", "--json"), ("plan",), ("plan", "--json"), ("check",)],
@@ -3541,6 +3683,7 @@ def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_
     assert result.returncode in {0, 1}
     assert state_payload(state) == before
     assert not execution.exists()
+
 
 def test_pending_workspace_plan_is_reusable_only_for_exact_binding(
     tmp_path, monkeypatch
@@ -3565,6 +3708,7 @@ def test_pending_workspace_plan_is_reusable_only_for_exact_binding(
         devlegate._inspect_bound_execution_workspace(devlegate._state).classification
         == "REUSABLE"
     )
+
 
 def test_unattributable_pending_branch_is_unsafe_and_untouched(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
@@ -3593,6 +3737,7 @@ def test_unattributable_pending_branch_is_unsafe_and_untouched(tmp_path, monkeyp
     assert "unsafe" in plan.reason
     assert devlegate.status_view().plan.reason == plan.reason
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == unrelated
+
 
 def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     tmp_path, monkeypatch
@@ -3647,8 +3792,7 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     assert devlegate.plan_view().action == "blocked"
     assert "recoverable" in devlegate.plan_view().reason
     assert [
-        report.workspace_head
-        for report in ExecutionReportStore(control).list("T-1")
+        report.workspace_head for report in ExecutionReportStore(control).list("T-1")
     ] == [old_head]
     effects = []
     commands = []
@@ -3719,8 +3863,7 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         :branch_moved
     ]
     assert not any(
-        command[0] in {"fetch", "push", "ls-remote"}
-        for command in recovery_commands
+        command[0] in {"fetch", "push", "ls-remote"} for command in recovery_commands
     )
 
     assert git(working, "rev-parse", evidence).stdout.strip() == old_head
@@ -3795,6 +3938,7 @@ def test_workspace_repair_invalid_evidence_ref_never_mutates(
     ).stdout.strip()
     assert repaired_head == old_head
 
+
 def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
     tmp_path, monkeypatch
 ):
@@ -3815,6 +3959,7 @@ def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
     assert inspection.classification == "UNSAFE"
     assert devlegate.plan_view().action == "blocked"
     assert "unsafe" in devlegate.plan_view().reason
+
 
 def test_automatic_repair_refuses_branch_drift_before_cas(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
