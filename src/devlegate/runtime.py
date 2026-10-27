@@ -5994,7 +5994,9 @@ class ServiceEngine:
     ) -> str:
         """Pin previous code before any ticket-scoped execution ref changes."""
         evidence = self._workspace_recovery_ref(ticket_id, execution_id)
-        existing = resolve_ref_commit(self.repo, evidence, runner=_git)
+        existing = resolve_ref_commit(
+            self.repo, evidence, runner=self.reconciliation_git
+        )
         if existing not in {None, checkpoint}:
             raise ExecutionWorkspaceError(
                 "rework evidence ref has conflicting identity"
@@ -6002,11 +6004,14 @@ class ServiceEngine:
         if (
             existing is None
             and create_ref_if_absent(
-                self.repo, evidence, checkpoint, runner=_git
+                self.repo, evidence, checkpoint, runner=self.reconciliation_git
             ).returncode
         ):
             raise ExecutionWorkspaceError("cannot preserve previous rework checkpoint")
-        if resolve_ref_commit(self.repo, evidence, runner=_git) != checkpoint:
+        if (
+            resolve_ref_commit(self.repo, evidence, runner=self.reconciliation_git)
+            != checkpoint
+        ):
             raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
         return evidence
 
@@ -6064,7 +6069,7 @@ class ServiceEngine:
                 self.remote_name,
                 f"{previous_checkpoint}:{evidence}",
                 options=(f"--force-with-lease={evidence}:",),
-                runner=_git,
+                runner=self.reconciliation_git,
             )
             if (
                 pushed.returncode
@@ -6176,7 +6181,7 @@ class ServiceEngine:
                 options=(
                     f"--force-with-lease=refs/heads/{manager.branch}:{previous_checkpoint}",
                 ),
-                runner=_git,
+                runner=self.reconciliation_git,
             )
             if (
                 pushed.returncode
@@ -6197,6 +6202,8 @@ class ServiceEngine:
         checkpoint_head: str,
         expected_remote_head: str | None,
     ) -> None:
+        if self._stop_requested():
+            raise ShutdownInterrupted
         observed = self._resolve_commit_runtime(workspace.path, "HEAD")
         if observed != checkpoint_head:
             raise DevlegateError("execution HEAD changed before branch publication")
