@@ -8379,11 +8379,16 @@ class ServiceEngine:
         evidence_ref = self._reconciliation_evidence_ref(
             report.ticket_id, report.execution_id
         )
-        existing_evidence = resolve_commit(self.repo, evidence_ref, runner=_git)
+        existing_evidence = resolve_commit(
+            self.repo, evidence_ref, runner=self.reconciliation_git
+        )
         if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
         pinned = update_ref(
-            self.repo, evidence_ref, report.workspace_head, runner=_git
+            self.repo,
+            evidence_ref,
+            report.workspace_head,
+            runner=self.reconciliation_git,
         )
         if pinned.returncode:
             raise WorkflowBlockedError(
