@@ -117,6 +117,19 @@ def test_checkpoint_push_rejects_unowned_or_stopped_git(
         engine._publish_execution_branch(workspace, "checkpoint", None)
 
 
+def test_stopped_execution_cannot_publish_another_branch(tmp_path, monkeypatch):
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine._host_owner_thread_id = None
+    engine._stop_event = threading.Event()
+    engine._stop_event.set()
+    engine._state = {"phase": "agent_running", "execution_branch": "admitted"}
+    workspace = SimpleNamespace(path=tmp_path, branch="other")
+    monkeypatch.setattr(runtime, "_git", lambda *a, **k: pytest.fail("Git spawned"))
+
+    with pytest.raises(ShutdownInterrupted):
+        engine._publish_execution_branch(workspace, "checkpoint", None)
+
+
 def test_checkpoint_ambiguous_push_reobserves_remote(tmp_path, monkeypatch):
     engine = ServiceEngine.__new__(ServiceEngine)
     engine.repo = tmp_path
@@ -137,6 +150,33 @@ def test_checkpoint_ambiguous_push_reobserves_remote(tmp_path, monkeypatch):
     engine._publish_execution_branch(workspace, "checkpoint", None)
     assert len(calls) == 1
     assert calls[0][0] == "push"
+
+
+def test_admitted_checkpoint_stop_during_ambiguous_push_reobserves(
+    tmp_path, monkeypatch
+):
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine.repo = tmp_path
+    engine.remote_name = "origin"
+    engine._host_owner_thread_id = None
+    engine._stop_event = threading.Event()
+    engine._state = {"phase": "agent_running", "execution_branch": "work"}
+    workspace = SimpleNamespace(path=tmp_path, branch="work")
+    monkeypatch.setattr(engine, "_resolve_commit_runtime", lambda *_: "checkpoint")
+    observations = iter([None, "checkpoint"])
+    monkeypatch.setattr(engine, "_execution_remote_head", lambda *_: next(observations))
+    calls = []
+
+    def interrupted_push(repo, *args, check=False):
+        calls.append(args)
+        engine._stop_event.set()
+        return subprocess.CompletedProcess(args, 1, "", "connection lost")
+
+    monkeypatch.setattr(runtime, "_git", interrupted_push)
+    engine._publish_execution_branch(workspace, "checkpoint", None)
+    assert len(calls) == 1
+    assert calls[0][0] == "push"
+    assert next(observations, "exhausted") == "exhausted"
 
 
 @pytest.mark.parametrize("shutdown", [False, True])
