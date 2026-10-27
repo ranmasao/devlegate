@@ -366,3 +366,206 @@ under a hypothetical extraction; any implementation ticket must demonstrate
 unchanged `retire`, local CAS delete, remote lease delete, and re-observation
 order. No further cleanup composite-executor study is recommended unless a
 reviewer identifies a concrete new common durable contract.
+
+## Version 3: checkpoint, publication, and lifecycle boundary
+
+**Scope and snapshot.** This reviewer-directed pass investigates only the
+execution checkpoint through execution-branch publication and lifecycle
+transition, including recovery of `checkpointing`, `post-checkpoint`,
+`publishing`, and `post-publication`. No production code changed. Observations
+are from workspace/product checkpoint
+`b3380f12924f7656f4d94c3a7ad249c8bf11bb4b` (`TASK-105: Iteratively audit
+runtime decomposition and DRY boundaries before final Git story acceptance`).
+The Version 1 and Version 2 snapshots remain historical evidence. Source line
+references in this version are measured at this checkpoint.
+
+### Flow ownership and durable boundary
+
+`ServiceEngine._run_iteration_body` owns the normal execution tail. After the
+worker group's retirement and submodule proof, it creates an in-memory report,
+then makes the first durable boundary before the checkpoint effect
+(`runtime.py:4961-5009`). The normal path writes each subsequent WAL stage
+itself at `5004-5031` and `5151-5170`. It alone has the live `worker_run`, the
+service lifecycle drain decision, and the normal return/error mapping
+(`5038-5046,5153-5175,5179-5192`).
+
+`recovery_workflow.recover_checkpoint_publication` owns replay sequencing,
+not the state store or Git runner (`recovery_workflow.py:4-9,72-208`).
+`ServiceEngine` supplies observations, state writes, workspace manager, and
+effects through recovery capabilities (`runtime.py:10339-10461`). Startup
+dispatch chooses that workflow only for the `checkpoint-publication` stage
+class, then separately proves the lifecycle report and calls the engine's
+lifecycle coordinator (`runtime.py:3949-3957`). The small engine wrappers only
+map `WorkflowRecoveryError` to `WorkflowBlockedError`
+(`runtime.py:8616-8626`). This is a meaningful existing domain boundary, not a
+second implementation of normal scheduling.
+
+`ExecutionWorkspaceManager.checkpoint` owns the local worktree checkpoint
+effect: validate binding, verify its initial HEAD, stage, detect a delta,
+optionally commit, and return the final HEAD
+(`execution_workspace.py:584-621`). `_publish_execution_branch` owns one
+execution-ref publication attempt: re-observe workspace HEAD and remote tip,
+prove predecessor ancestry, lease-push, then resolve an ambiguous failed push
+(`runtime.py:6243-6289`). `_apply_execution_lifecycle` remains an engine-owned
+control-worktree transaction: it proves the published execution report,
+fetches/reproves control state, commits the lifecycle transition, and retries a
+racing control push at most three times (`runtime.py:8811-8960`).
+
+### Normal and replay state/effect matrix
+
+"Evidence" below is the smallest durable or re-observable fact that permits
+the next action. It is not a claim that a state record alone proves a Git
+effect. Every replay begins under the serialized owner path; the source does
+not give `recovery_workflow` an independent lock or runner.
+
+| Stage | Normal flow: WAL before effect and effect | Recovery/re-entry proof and action | Shared and deliberately different parts | Minimum completion evidence / new observation after ambiguity |
+| --- | --- | --- | --- |
+| Post-worker admission | `agent_running/checkpointing` stores the report with no workspace head before checkpoint (`5004-5008`). The worker group must already be retired and submodules verified (`4947-4989`). | Startup dispatch never resumes a live/unknown worker through this workflow; stage classification reaches it only after stranded-execution handling (`3949-3988`; `recovery_transactions.py:116-162`). | Both require report-to-state identity later. Only normal has a live worker return, its interruption kind, and a shutdown drain decision. | Durable execution binding plus pending report; recovery freshly validates the workspace and report binding (`recovery_workflow.py:74-88`). |
+| Checkpoint | `checkpointing` precedes `manager.checkpoint`; on success `post-checkpoint` persists report `workspace_head` (`5011-5031`). Manager may run `add -A` and `commit` after checking original HEAD. | If HEAD is still `execution_start_head`, recovery first proves the admitted product generation, then may checkpoint. Otherwise it requires exactly one clean, single-parent checkpoint directly on start head (`100-138`; `runtime.py:8594-8614`). | The manager effect and resulting report field can be shared. Recovery's product proof and exact-history gate are necessarily stricter because a crash makes the commit outcome ambiguous. | `post-checkpoint` report with exact checkpoint; if the stage write crashed, re-observe clean workspace HEAD and prove either no commit or exactly the one allowed checkpoint. |
+| Product generation decision | Normal observes product after checkpoint. Unobservable/unsafe-local returns blocked without publication; changed history either records zero-delta lifecycle retry, accepts a safe descendant, or pins reconciliation evidence and saves `idle/reconciliation` (`5047-5150`). | Replay observes product at `post-checkpoint` and at the continuation point. It turns zero delta into lifecycle retry, persists reconciliation through the engine capability for changed history, and raises a blocked recovery error (`140-164`). | Observation and reconciliation persistence should be shared through `_observe_product_generation` and `_persist_product_reconciliation`. Normal's safe-running-descendant exception is a worker-time policy branch, not a replay shortcut. | Reconciliation requires the checkpoint evidence ref to resolve to the report checkpoint before `idle` state is saved (`runtime.py:8402-8460`). After interruption, fetch/re-observe local and remote product identity; no cached pre-checkpoint observation authorizes publication. |
+| Execution-branch publication | `agent_running/publishing` is durable before `_publish_execution_branch`; success records `post-publication` (`5151-5164`). | From `post-checkpoint` or `publishing`, recovery requires clean workspace HEAD equal to report checkpoint, re-observes the execution remote, pushes only when it still equals the persisted predecessor, then re-observes exact remote checkpoint before recording `post-publication` (`165-190`). | The same publish helper performs both lease push and ambiguous-success handling. Recovery must additionally prove the report/workspace identity before deciding whether to push. | The remote execution ref exactly equals `report.workspace_head`. A failed push is accepted only if fresh remote observation already equals that checkpoint; predecessor equality means the effect did not complete and is an error/retry, while any third value is drift (`6249-6289`). |
+| Lifecycle admission | Normal writes `agent_running/lifecycle`, including report and worker interruption kind, only after the execution ref is published (`5165-5170`). It then applies lifecycle and finalizes state (`5173-5177`). | `post-publication` replay rechecks workspace and remote exactness, writes `lifecycle`, then `_recover_lifecycle_report` validates report/state before `_complete_execution_lifecycle` (`191-207`; `runtime.py:3955-3957`). | Both use the same engine lifecycle operation and finalizer. Recovery must rebuild/validate report evidence if the pending report is absent and reprove publication before allowing control effects. | Durable lifecycle stage plus report binding and exact remote checkpoint. An ambiguous control push is handled inside `_apply_execution_lifecycle` by fresh control fetch, existing lifecycle-commit proof, and bounded retry (`8824-8959`). |
+| Final lifecycle state | `_finalize_execution_lifecycle` computes failure/interruption metadata, todo fingerprint, retry completion, and performs the final `idle` save (`5543-5644`). | Recovery calls the same engine finalizer through `recovery_finalize_lifecycle` after report proof and lifecycle completion (`recovery_workflow.py:210-251`; `runtime.py:10417-10423`). | This is shared engine policy, not a candidate recovery-owned state machine. It maps `operator_abort` and `service_shutdown` to durable interrupted failure only when the report conclusion is failed (`5568-5604`). | The control lifecycle commit must be exact or recovered from the report store; re-entry freshly observes product/control before accepting report state (`recovery_workflow.py:226-251`). |
+
+### Lease, runner, shutdown, and effect accounting
+
+The normal execution publication order is: persist `publishing`; resolve local
+execution HEAD; observe remote execution ref; optionally prove ancestry;
+`push --force-with-lease`; and, only on a nonzero push, re-observe the remote
+ref (`runtime.py:5151-5163,6249-6289`). The helper's result cases are precise:
+
+- Remote equals the expected predecessor before push and equals checkpoint
+  after an unsuccessful push: ambiguous success is accepted.
+- Remote still equals predecessor after an unsuccessful push: publication is
+  not inferred; the helper raises its transport error.
+- Remote differs from both: lease/drift is a refusal, not a retry.
+
+Recovery adds an exact remote observation before deciding to invoke that
+helper and another after it (`recovery_workflow.py:165-190`). Thus the durable
+`publishing` stage is intent, never proof that the push happened. The
+`post-publication` record is written only after the exact remote observation.
+This preserves WAL-before-effect and gives a fresh observation for every
+ambiguous push outcome.
+
+Known command/effect accounting is bounded by existing source inventory, not
+a new instrumented trace. `checkpoint` executes `rev-parse`, `add -A`,
+`diff --cached --quiet`, and final `rev-parse`; a nonempty delta additionally
+executes `commit` (`GIT_COMMAND_INVENTORY.md:183`). Publication's documented
+operation subset is `R, R, R, P, R` and remains unchanged
+(`GIT_COMMAND_INVENTORY.md:71`): helper-internal observations include local
+HEAD, remote ref, and optional ancestry; `P` is the leased remote effect; the
+last read occurs only on a nonzero push. Product observation includes a
+state-changing `fetch`, rather than a read-only proof
+(`runtime.py:8170-8232`; `GIT_COMMAND_INVENTORY.md:3-7,25`). Lifecycle adds a
+control fetch, possibly ancestry/reset/fast-forward/commit effects, and an
+unleased control push with its bounded reconciliation loop
+(`runtime.py:8824-8959`). Any extraction must retain this order and these
+conditional calls, including the helper-internal re-observations.
+
+There is an actual runner-authority anomaly, separate from a hypothetical
+extraction risk. `_publish_execution_branch` passes `runner=_git` to both
+`is_ancestor` and `push_refs` (`6259-6279`), even though its caller constructs
+the workspace manager with `_git_runtime` (`4961-4967`) and the documented
+runner seam is meant to enforce owner thread and shutdown policy
+(`GIT_COMMAND_INVENTORY.md:33-36`). Recovery calls the same helper through
+`recovery_publish_execution` (`runtime.py:10389-10392`), so it inherits the
+same bypass. Direct `_git` also remains in normal/replay reconciliation
+evidence pinning (`5097-5105,8423-8428`) and lifecycle effects
+(`8829-8835,8947-8952`). These are current-baseline audit findings; this
+docs-only ticket neither changes them nor asserts that every one is unsafe.
+An implementation ticket must classify each call by the exact owner-thread and
+shutdown behavior before replacement.
+
+Normal shutdown is explicitly observed after checkpoint and before product
+observation (`5038-5046`), so a drain leaves `post-checkpoint` durable for
+re-entry. It is not checked by the direct publication helper itself. Recovery
+dispatch returns early if stop is already requested (`3900-3901,3950-3951`),
+but a stop arriving between direct helper subprocesses is not separately
+persisted there. This is a test gap and a reason not to move this sequence
+behind another callback layer.
+
+### Architecture decision: KEEP SEPARATE
+
+**Decision: KEEP SEPARATE** for the normal checkpoint-to-lifecycle orchestration
+and crash replay. Retain `recover_checkpoint_publication` as the existing
+meaningful replay transaction. It already removes recovery-only stage dispatch
+and sequencing from the engine while keeping owner mutation authority in
+`ServiceEngine`.
+
+Extracting a common new transaction would not remove one coherent normal
+block. The proposed caller would have to provide, at minimum, immutable
+`ExecutionCheckpointPublicationInput` containing execution/report binding,
+start/checkpoint heads, branch/path, expected remote predecessor, product
+generation, and interruption state; mutable callbacks for state saves,
+workspace validation/checkpoint, product/reconciliation decisions, publication,
+lifecycle, status refresh, shutdown, and exception translation; and a result
+that represents `blocked`, `reconciliation`, `zero_delta_retry`, `published`,
+or `lifecycle_complete`. That is a parallel state machine rather than a
+transaction boundary. It would remove normal blocks around
+`runtime.py:5004-5177` but introduce a wide protocol beyond the existing
+recovery capabilities (`recovery_workflow.py:27-69`) and obscure which caller
+owns every `_state` mutation.
+
+The limited local deduplication already justified by evidence is unchanged:
+normal reconciliation persistence at `runtime.py:5094-5137` should eventually
+call `_persist_product_reconciliation` (`8402-8460`) in a narrow separate
+ticket. That preserves the evidence-pin-before-`_save_state` invariant without
+turning normal scheduling into a recovery callback. It does not justify moving
+checkpoint/publication sequencing.
+
+The current protocol also demonstrates the growth risk: the workflow invokes
+`recovery_checkpoint_exact`, `recovery_persist_reconciliation`, and
+`recovery_report_matches_state` (`recovery_workflow.py:122,159,250`), but
+they are absent from `WorkflowRecoveryCapabilities` (`27-69`) despite being
+implemented by the engine (`runtime.py:10359-10406`). Adding a shared normal
+transaction before repairing/validating this declared boundary would compound
+unchecked capability drift and potential circular imports.
+
+### Tests, gaps, and finite implementation shortlist
+
+Existing focused regressions cover checkpoint recreation without rerunning a
+worker (`tests/test_control_recovery.py:955-994`), exact-versus-dirty checkpoint
+re-entry (`996-1058`), publication recovery without a worker (`1060-1100`),
+stale product refusal before recovery side effects (`1153-1201`), and recovery
+from a crash after the remote publication but before the WAL transition
+(`1203-1243`). The normal/recovery product-drift and retained reconciliation
+paths are also covered at `tests/test_control_recovery.py:1422-1564` and
+`tests/test_control_cross_layer.py:564-649`. Reconciliation lease drift is
+covered separately at `tests/test_control_cross_layer.py:702-747`; it is not
+direct coverage of ordinary checkpoint publication.
+
+Future narrow tickets need only targeted cases, not another end-to-end suite:
+
+- Crash immediately after checkpoint effect and before `post-checkpoint` save,
+  with a changed product remote, must prove the exact checkpoint or refuse.
+- Product drift after `post-checkpoint` must pin the evidence ref before saving
+  reconciliation; add a direct assertion through the shared persistence helper
+  if the Version 1 local dedup is implemented.
+- Evidence/ref publication must not occur after an unproven changed execution
+  remote. Add ordinary `_publish_execution_branch` lease-drift and ambiguous
+  successful-push tests; the current explicit lease test is only for rewrite.
+- A changed execution remote between recovery's observation and push must
+  remain a failed-closed `publishing` replay, with no lifecycle transition.
+- A shutdown requested immediately before and during publication must leave a
+  replayable stage and must not cause an unowned subprocess; this requires a
+  defined expectation for the direct-runner calls before testing it.
+- Protocol conformance/static coverage must detect recovery methods called but
+  omitted from `WorkflowRecoveryCapabilities`.
+
+Ranked finite opportunities after three passes are:
+
+| Rank | Narrow scope | Benefit / risk / dependency | Acceptance accounting |
+| --- | --- | --- | --- |
+| 1 | Make normal changed-product handling call `_persist_product_reconciliation`. | Removes demonstrated same-owner duplicated state/evidence choreography. Low risk, independent of checkpoint replay. | Same evidence ref, `update-ref`, reconciliation payload, and one final `_save_state`; targeted evidence-before-state and drift tests. |
+| 2 | Reconcile `WorkflowRecoveryCapabilities` with its actual calls and add static/conformance coverage. | Makes the existing replay ownership contract reviewable. Moderate protocol-growth risk; do not add normal-flow callbacks. | No Git/state ordering change; type/static check proves every invoked capability is declared. |
+| 3 | Audit and, only where justified, route checkpoint-publication direct `_git` calls through the owner/shutdown runner. | Addresses an observed authorization-bypass candidate without changing transaction ownership. Higher risk because interruption timing changes behavior; depends on an explicit per-call shutdown contract. | Instrument normal and replay command order, including failed push re-observation and lease outcomes; preserve all WAL stages and exact remote proofs. |
+
+No composite checkpoint/publication extraction is recommended. Keep the normal
+scheduler, state-save authority, lifecycle finalization, and exception/shutdown
+translation in `ServiceEngine`; keep crash replay sequencing in
+`recovery_workflow`; keep local checkpoint and execution-ref effect semantics
+in their present domain owners. The remaining uncertainty is the intended
+shutdown behavior for every direct `_git` call and whether an ordinary
+execution-branch push needs more explicit ambiguous-success coverage. Those
+questions should gate only the ranked narrow tickets, not another broad
+decomposition study.
