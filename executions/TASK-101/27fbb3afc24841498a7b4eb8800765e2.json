@@ -1,0 +1,29 @@
+{
+  "code_base_head": "0b0a699b218e5241aef51b9098695945f60df6c3",
+  "conclusion": "completed",
+  "control_head": "ba4e812cf28d359a811282c21ced3e0940702ae2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-101",
+  "execution_id": "27fbb3afc24841498a7b4eb8800765e2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-101",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-101",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced Git diagnostic-text state classification with documented exit-status and structured-output probes, including local child-process locale control. Updated remote tracking resolution and recovery validation to preserve fail-closed behavior. Added locale-independent regression coverage and documented the semantic inventory and command-trace delta."
+  },
+  "workspace_head": "ded7f2dadcb99e1c49dd361ae9e9d079aceb3130"
+}
