@@ -537,10 +537,15 @@ def commit_parents(
     cwd: Path,
     commit: str,
     *,
+    absent_is_none: bool = True,
     runner: Callable[..., subprocess.CompletedProcess[str]] = run_git,
 ) -> tuple[str, ...] | None:
     """Return a commit's parents, or ``None`` for a proven absent object."""
-    if _is_object_id(commit) and _object_is_absent(cwd, commit, runner=runner):
+    if (
+        absent_is_none
+        and _is_object_id(commit)
+        and _object_is_absent(cwd, commit, runner=runner)
+    ):
         return None
     result = runner(cwd, "rev-list", "--parents", "-n", "1", commit, check=False)
     if result.returncode:
