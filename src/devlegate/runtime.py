@@ -6202,8 +6202,15 @@ class ServiceEngine:
         checkpoint_head: str,
         expected_remote_head: str | None,
     ) -> None:
+        # An already admitted execution must drain its checkpoint publication.
+        # Other callers must not begin publication after shutdown is requested.
         if self._stop_requested():
-            raise ShutdownInterrupted
+            state = getattr(self, "_state", {})
+            if (
+                state.get("phase") != "agent_running"
+                or state.get("execution_branch") != workspace.branch
+            ):
+                raise ShutdownInterrupted
         observed = self._resolve_commit_runtime(workspace.path, "HEAD")
         if observed != checkpoint_head:
             raise DevlegateError("execution HEAD changed before branch publication")
@@ -6218,7 +6225,7 @@ class ServiceEngine:
                     workspace.path,
                     expected_remote_head,
                     checkpoint_head,
-                    runner=self.reconciliation_git,
+                    runner=self._git_runtime,
                 )
             except GitAncestryError as error:
                 raise DevlegateError(
@@ -6234,7 +6241,7 @@ class ServiceEngine:
             self.remote_name,
             f"{checkpoint_head}:refs/heads/{workspace.branch}",
             options=(f"--force-with-lease={lease}",),
-            runner=self.reconciliation_git,
+            runner=self._git_runtime,
         )
         if pushed.returncode:
             current_remote_head = self._execution_remote_head(workspace.branch)
@@ -8365,6 +8372,14 @@ class ServiceEngine:
         *,
         allow_base_fallback: bool = False,
     ) -> str:
+        if self._stop_requested():
+            state = getattr(self, "_state", {})
+            if (
+                state.get("phase") != "agent_running"
+                or state.get("execution_id") != report.execution_id
+                or state.get("execution_ticket_id") != report.ticket_id
+            ):
+                raise ShutdownInterrupted
         product_remote_head = product["remote_head"]
         if not allow_base_fallback and (
             not isinstance(product_remote_head, str) or not product_remote_head
@@ -8387,7 +8402,7 @@ class ServiceEngine:
             report.ticket_id, report.execution_id
         )
         existing_evidence = resolve_commit(
-            self.repo, evidence_ref, runner=self.reconciliation_git
+            self.repo, evidence_ref, runner=self._git_runtime
         )
         if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
@@ -8395,7 +8410,7 @@ class ServiceEngine:
             self.repo,
             evidence_ref,
             report.workspace_head,
-            runner=self.reconciliation_git,
+            runner=self._git_runtime,
         )
         if pinned.returncode:
             raise WorkflowBlockedError(
