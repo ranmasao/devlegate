@@ -10,15 +10,16 @@ Before the final 0.5.7 release, identify and remove temporary design/audit/resea
 Execute **after** implementation/decomposition and Git story review, but **before** release packaging/tag. Do not queue early while other tickets still use these artifacts. Coordinate with release checklist.
 
 ## Inventory
-Find the actual divergence/merge-base of `release/0.5.7` from its original branch base (verify whether `release/0.5.5` is the intended baseline). Use `git diff --name-status --diff-filter=A BASE...release/0.5.7` and a separate inventory of modified non-Python files. Include Markdown, JSON, YAML, templates, text and config, not just `*.md`; distinguish added from modified and moved files.
+Use `release/0.5.6` as the verified direct ancestry baseline of `release/0.5.7` (merge-base `d8420085dedb9b58a282d504fe39e905c84bdc14`). Use `git diff --name-status --diff-filter=A BASE...release/0.5.7` and a separate inventory of modified non-Python files. Include Markdown, JSON, YAML, templates, text and config, not just `*.md`; distinguish added from modified and moved files.
 
-Initial **candidates for review, not automatic deletion**:
+Initial **candidates for review, not automatic deletion** (only files added since 0.5.6):
 - `docs/architecture/runtime-decomposition-audit.md`
 - `docs/git-semantic-api-audit.md`
 - `docs/GIT_COMMAND_INVENTORY.md`
-- `tests/FOCUSED_TEST_AUDIT.md`
-- `tests/TEST_PLACEMENT.md`
-- `docs/EXECUTION_OWNERSHIP.md`, `docs/RECOVERY_CONTRACT.md` (may instead be useful permanent documentation).
+- `docs/RECOVERY_CONTRACT.md` (may instead be useful permanent documentation).
+- `.devlegate/templates/.devlegate-defaults.json` (likely required configuration; inventory, do not remove blindly).
+
+`docs/EXECUTION_OWNERSHIP.md`, `tests/FOCUSED_TEST_AUDIT.md`, and `tests/TEST_PLACEMENT.md` already existed in `release/0.5.6`; assess them only for temporary *changes since 0.5.6*, not as newly added 0.5.7 files.
 
 ## Required behavior
 1. Classify every newly added non-Python file as permanent product documentation/test support/template/config, temporary research/audit artifact, or ambiguous needing curator decision. Modified files must be checked for embedded temporary sections as well; do not revert unrelated legitimate changes.
