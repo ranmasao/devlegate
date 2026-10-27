@@ -1,0 +1,29 @@
+{
+  "code_base_head": "622ae7919e268900bc48ded485c5eba0d578bad1",
+  "conclusion": "completed",
+  "control_head": "ef6dd802fe19bc7a15706bbc16a800ae6573a0b5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-098",
+  "execution_id": "c5065b65cde1445eb077820240fcf129",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-098",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-098",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reworked recovery tests to assert evidence, reproof, authorized write arguments, and safety-critical sequencing instead of full read-only command traces. Added a safe-observation regression and documented the recovery trace design and audit rationale."
+  },
+  "workspace_head": "e4f4a0468c1dc1f9facae65bcce095e09a69b799"
+}
