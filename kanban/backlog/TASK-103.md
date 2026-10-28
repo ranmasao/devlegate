@@ -17,3 +17,7 @@ Service journal currently logs `worker prompt constructed: execution=... directi
 
 ## Acceptance
 Operators can find the saved prompt directly from a correct journal path; no misleading event claim, no hidden changes to worker execution/recovery. Exact-checkpoint CI and Ruff green.
+
+## Release scheduling decision — 2026-10-28
+
+**Required for Devlegate 0.5.7 before final packaging and tag.** This is operator-facing UX/correctness work, not part of the first-class QA pipeline deferred to 0.6.x. Schedule and validate this ticket in 0.5.7, preserving current owner, lifecycle and evidence safety constraints. Coordinate the final release gate with TASK-107 cleanup.
