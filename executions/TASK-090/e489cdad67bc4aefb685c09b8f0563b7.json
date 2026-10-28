@@ -1,0 +1,29 @@
+{
+  "code_base_head": "62a06aea2408e05e4430fa5b7b200af6d29ea339",
+  "conclusion": "completed",
+  "control_head": "13dca1c6c1a2afa9d4657f95d3a7470d1f51c5e9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-090",
+  "execution_id": "e489cdad67bc4aefb685c09b8f0563b7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-090",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-090",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Improved command discovery and help spacing, documented startup and host policy separation, and made reconcile grammar and ticket disambiguation explicit. Added ticket syntax validation and preserved service-owned IPC admission and busy refusals."
+  },
+  "workspace_head": "39d5f32d51f1a51eff9fec643585e4f37cb10a23"
+}
