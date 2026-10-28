@@ -930,6 +930,26 @@ def test_retirement_restart_restores_occupied_ref_after_delete_crash(
         git(working, "worktree", "add", "--detach", str(foreign), head).returncode
         == 0
     )
+    # Accepted cleanup can retire an older workspace while a different execution
+    # owns agent_running. That state must still durably carry this delete intent.
+    engine._state.update(
+        {
+            "phase": "agent_running",
+            "local_head": head,
+            "remote_head": head,
+            "changed_paths": "",
+            "selected_ticket_id": "T-2",
+            "selected_ticket_body": "live execution",
+            "control_head": head,
+            "execution_ticket_id": "T-2",
+            "execution_id": "live-execution",
+            "execution_base_head": head,
+            "execution_control_head": head,
+            "execution_remote_head": None,
+            "execution_branch": "devlegate/work/T-2",
+            "execution_path": str(engine.execution_worktree_root / "work/T-2"),
+        }
+    )
     original_delete = runtime_module.delete_branch_if_unoccupied
 
     def crash_between_delete_and_occupancy_check(cwd, deleted_branch, **kwargs):
@@ -1685,8 +1705,17 @@ def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_p
     engine._state.update(
         {
             "phase": "agent_running",
+            "local_head": checkpoint,
+            "remote_head": checkpoint,
+            "changed_paths": "",
+            "selected_ticket_id": "T-2",
+            "selected_ticket_body": "live execution",
+            "control_head": checkpoint,
             "execution_ticket_id": "T-2",
             "execution_id": "live-execution",
+            "execution_base_head": checkpoint,
+            "execution_control_head": checkpoint,
+            "execution_remote_head": None,
             "execution_branch": "devlegate/work/T-2",
             "execution_path": str(engine.execution_worktree_root / "work/T-2"),
             "worker_identity": {
@@ -1759,8 +1788,17 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
     engine._state.update(
         {
             "phase": "agent_running",
+            "local_head": checkpoint,
+            "remote_head": checkpoint,
+            "changed_paths": "",
+            "selected_ticket_id": "T-2",
+            "selected_ticket_body": "live execution",
+            "control_head": checkpoint,
             "execution_ticket_id": "T-2",
             "execution_id": "live-execution",
+            "execution_base_head": checkpoint,
+            "execution_control_head": checkpoint,
+            "execution_remote_head": None,
             "execution_branch": "devlegate/work/T-2",
             "execution_path": str(engine.execution_worktree_root / "work/T-2"),
             "worker_identity": {
