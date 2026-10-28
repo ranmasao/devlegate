@@ -1,0 +1,29 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "completed",
+  "control_head": "e44bb0c3acb029458c17ba673299947ff9c81bf5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "21372b77ffbc416284a6a4a7410f59eb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Made execution-ref retirement intent durable even when an unrelated execution is active, preserving exact create-only recovery after an interrupted delete. Routed runtime-owned Git observations and lifecycle, recovery, cleanup, and publication helpers through the ServiceEngine owner-aware runner seam while retaining the independent fail-closed status probe."
+  },
+  "workspace_head": "e2956d30123c951ba5be11eeeca99f180fdd8d53"
+}
