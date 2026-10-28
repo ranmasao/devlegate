@@ -2313,6 +2313,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
                 ("stop", "stop the persistent service"),
                 ("restart", "restart the persistent service"),
                 ("service", "manage an explicitly registered external service"),
+                ("host", "install or remove per-user host policy"),
                 ("logs", "read service or execution logs"),
                 ("status", "show current workflow status"),
                 ("plan", "show the next workflow plan"),
@@ -2360,8 +2361,9 @@ class DevlegateArgumentParser(ConciseArgumentParser):
             ]
             for title, commands in self._top_level_groups:
                 lines.extend(["", f"{title}:"])
+                width = max(len(name) for name, _ in commands) + 2
                 lines.extend(
-                    f"  {name:<15}{description}" for name, description in commands
+                    f"  {name:<{width}}{description}" for name, description in commands
                 )
             lines.append("")
             return "\n".join(lines)
@@ -2675,17 +2677,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Handle a pending product-base change for an execution. Resolve it "
             "using the strongest safe service-owned operation. Normal form: "
             "devlegate reconcile TICKET. The optional --onto assertion accepts a "
-            "full SHA or a unique hexadecimal prefix of at least 4 characters."
+            "full SHA or a unique hexadecimal prefix of at least 4 characters. "
+            "Names other than the listed commands are ticket IDs, including command "
+            "prefixes. Use auto TICKET for IDs matching a command name."
         ),
     )
     reconcile_commands = reconcile_parser.add_subparsers(
         dest="reconcile_command", parser_class=DevlegateArgumentParser
     )
     auto_parser = reconcile_commands.add_parser(
-        "auto", help=argparse.SUPPRESS, description=argparse.SUPPRESS
+        "auto",
+        help="automatically reconcile a ticket (also the default form)",
+        description=(
+            "Automatically reconcile a ticket using the safe service-owned operation."
+        ),
     )
-    auto_parser.add_argument("ticket_id", help=argparse.SUPPRESS)
-    auto_parser.add_argument("--onto", help=argparse.SUPPRESS)
+    auto_parser.add_argument("ticket_id", help="ticket execution to reconcile")
+    auto_parser.add_argument("--onto", help="assert the current product HEAD")
     add_output_arguments(auto_parser)
     update_base_parser = reconcile_commands.add_parser(
         "update-base",
@@ -2846,15 +2854,37 @@ def _run_attached_command(
 def main() -> int:
     parser = build_parser()
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
-    if "reconcile" in argv:
-        index = argv.index("reconcile")
+    shorthand = None
+    index = 0
+    if argv and argv[0] == "--env":
+        index = 2
+    elif argv and argv[0].startswith("--env="):
+        index = 1
+    if len(argv) > index and argv[index] == "reconcile":
         if (
             index + 1 < len(argv)
             and argv[index + 1] not in {"auto", "resume", "update-base", "control"}
             and not argv[index + 1].startswith("-")
         ):
+            shorthand = argv[index + 1]
             argv[index + 1 : index + 1] = ["auto"]
     args = parser.parse_args(argv)
+    if args.command == "reconcile" and args.reconcile_command in {
+        "auto", "resume", "update-base"
+    }:
+        from devlegate.tickets import is_canonical_ticket_name
+
+        if not is_canonical_ticket_name(args.ticket_id + ".md"):
+            parser.error(f"invalid ticket ID: {args.ticket_id!r}")
+        if shorthand and any(
+            name.startswith(shorthand)
+            for name in ("auto", "resume", "update-base", "control")
+        ):
+            print(
+                f"devlegate: interpreting {shorthand!r} as a ticket ID; "
+                "use `reconcile --help` for command syntax",
+                file=sys.stderr,
+            )
     args.project_alias = project_alias
     startup_fd = _startup_fd()
     match args.command:

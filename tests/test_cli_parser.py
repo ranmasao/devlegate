@@ -6,6 +6,85 @@
 
 from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
+from types import SimpleNamespace
+
+
+def test_reconcile_help_exposes_grammar_without_suppression(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", "--help"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 0
+    output = capsys.readouterr().out
+    assert "==SUPPRESS==" not in output
+    for name in ("auto", "resume", "update-base", "control"):
+        assert name in output
+
+
+@pytest.mark.parametrize("arguments", [
+    ["bad.id"], ["update", "extra"], ["resume"],
+    ["update-base", "T-1", "--unknown"], ["control", "--from", "abc"],
+    ["T-1", "--json", "--yaml"],
+])
+def test_invalid_reconcile_never_contacts_service(arguments, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", *arguments])
+    monkeypatch.setattr(cli, "request", pytest.fail)
+    monkeypatch.setattr(cli, "_project_target", pytest.fail)
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("arguments,ticket,fmt", [
+    (["T-1"], "T-1", "table"),
+    (["update", "--json"], "update", "json"),
+    (["update-base-1", "--yaml"], "update-base-1", "yaml"),
+    (["auto", "resume"], "resume", "table"),
+])
+def test_reconcile_ticket_selection(arguments, ticket, fmt, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", *arguments])
+    monkeypatch.setattr(
+        cli, "_project_target", lambda **_: SimpleNamespace(env_file=Path(".env"))
+    )
+    calls = []
+    monkeypatch.setattr(
+        cli, "_reconcile_auto_daemon", lambda *args: calls.append(args) or 0
+    )
+    assert main() == 0
+    assert calls[0][1:] == (ticket, None, fmt)
+    if ticket == "update":
+        assert "interpreting 'update' as a ticket ID" in capsys.readouterr().err
+
+
+def test_reconcile_preserves_busy_refusal(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", "update"])
+    monkeypatch.setattr(
+        cli, "_project_target", lambda **_: SimpleNamespace(env_file=Path(".env"))
+    )
+    locator = SimpleNamespace(
+        socket_path=Path("socket"), daemon_authority_present=lambda: True
+    )
+    monkeypatch.setattr(cli.RuntimeLocator, "from_env", lambda _: locator)
+    calls = []
+    def busy(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise cli.IPCClientError("service busy; mutable request was not admitted")
+    monkeypatch.setattr(cli, "request", busy)
+    assert main() == 1
+    assert calls[0][0][1:] == ("reconcile-auto", {"ticket_id": "update"})
+    assert calls[0][1] == {"mutable": True}
+    output = capsys.readouterr().err
+    assert "interpreting 'update' as a ticket ID" in output
+    assert "service busy; mutable request was not admitted" in output
+
+
+def test_help_spacing_handles_long_names_and_narrow_terminal(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "20")
+    monkeypatch.setattr(
+        cli.DevlegateArgumentParser,
+        "_top_level_groups",
+        (("Future", (("a-very-long-future-command", "description"),)),),
+    )
+    assert "  a-very-long-future-command  description" in build_parser().format_help()
 
 def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     parser = build_parser()
@@ -52,11 +131,14 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         "version",
     ):
         assert sum(line.startswith(f"  {command}") for line in output.splitlines()) == 1
-    assert (
-        "  foreground     run the persistent service attached to this terminal"
-        in output
-    )
-    assert "  reconcile      perform explicit reconciliation" in output
+    for group, commands in cli.DevlegateArgumentParser._top_level_groups:
+        for command, description in commands:
+            assert any(line.startswith(f"  {command}  ") and line.endswith(description)
+                       for line in output.splitlines())
+            with pytest.raises(SystemExit) as help_exit:
+                parser.parse_args([command, "--help"])
+            assert help_exit.value.code == 0
+    assert "host" in output
     assert build_parser().parse_args(["retry", "T-1"]).ticket_id == "T-1"
     assert build_parser().parse_args(["retry", "T-1", "--force"]).force is True
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
@@ -114,6 +196,8 @@ def test_nested_command_help_uses_command_sections():
         (["devlegate", "--help"], "usage: devlegate"),
         (["devlegate", "stop", "--help"], "usage: devlegate stop"),
         (["devlegate", "control", "--help"], "usage: devlegate control"),
+        (["devlegate", "host", "--help"], "usage: devlegate host"),
+        (["devlegate", "project", "--help"], "usage: devlegate project"),
     ],
 )
 def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):

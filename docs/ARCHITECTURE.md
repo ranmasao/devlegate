@@ -101,11 +101,12 @@ Devlegate owns execution-log persistence. Hosting ownership is not a project
 
 Per-user host policy is separate from software distribution. The explicit host
 installation commands remain available for environments that need a recorded
-detached policy, but ordinary bare startup probes the current user manager and
+detached policy, but `devlegate start` probes the current user manager and
 chooses systemd or direct attachment automatically. Host integration does not
 invoke a package manager, create a Python environment, or install a global unit.
 Systemd provisions a project unit only when the automatic or explicit external
 path can verify the exact project identity.
+Bare `devlegate` displays help and does not start a service.
 
 ### Runtime and Distribution Contract
 

@@ -103,6 +103,10 @@ The explicit start command is the normal entry point:
 devlegate start
 ```
 
+Bare `devlegate` displays help. Package installation does not provision host
+policy or project service units. Use `devlegate host install` to install
+per-user host policy separately when needed.
+
 It chooses systemd user supervision when the current user manager is usable and
 the exact project unit can be safely managed. Otherwise it runs attached to the
 current terminal. This fallback is not an internal detached service.
@@ -204,6 +208,13 @@ it does not select the algorithm. Supply it as a full SHA or a unique hexadecima
 commit prefix of at least 4 characters; Devlegate records the resolved full ID.
 `--rewrite-published` is a compatibility option, not required for the canonical
 service-proven published-lineage path.
+
+Ticket IDs start with an ASCII letter or digit and may also contain ASCII
+letters, digits, underscores, and hyphens. Thus `reconcile update` selects the
+ticket `update`, not an abbreviation of `update-base`. Exact command names take
+precedence; use `reconcile auto resume` (or another command name) to select a
+ticket with that name. Invalid syntax is rejected before sending an IPC request;
+the service remains responsible for admission and ownership decisions.
 
 `devlegate stop --force` is the only lifecycle command that persists an
 execution-scoped manual-retry barrier. It records explicit operator intent for

@@ -132,6 +132,11 @@ it automatically for the project service. If not, it runs attached to the
 terminal instead. See [Project Setup](docs/PROJECT_SETUP.md) and
 [Operations](docs/OPERATIONS.md) for details.
 
+Bare `devlegate` displays help. Package installation does not install per-user
+host policy or project units; `devlegate host install` manages host policy
+separately, and project service units are provisioned through service startup
+or explicit service installation.
+
 On Linux, every hosted worker requires a delegated writable cgroup v2 subtree.
 The worker joins its execution cgroup before exec, and retirement is accepted
 only after the kernel reports that cgroup as unpopulated. Systemd installation
