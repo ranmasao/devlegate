@@ -1,0 +1,29 @@
+{
+  "code_base_head": "39d5f32d51f1a51eff9fec643585e4f37cb10a23",
+  "conclusion": "completed",
+  "control_head": "fb0c66fa19515360cb9fb28089d01706fe5dfbd8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-093",
+  "execution_id": "d206aca7dd414fe9a9445c002082f972",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-093",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-093",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added service logging for immediate and historical workspace cleanup, including bounded pass summaries, confirmed resource outcomes, refusal diagnostics, and suppression of repetitive unchanged blocker messages. Added regression coverage for retirement, partial failures, refusals, and interrupted cleanup."
+  },
+  "workspace_head": "e6b12b68aaf00c8a1ad1328360df2f50d35f8061"
+}
