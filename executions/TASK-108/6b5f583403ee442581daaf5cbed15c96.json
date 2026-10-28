@@ -1,0 +1,37 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "5fdb78582be6eb5629bfb7c9ce09dc61acc85391",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "6b5f583403ee442581daaf5cbed15c96",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Design and implement durable recovery for interruption or process loss during the local ref delete/restore transaction, including safe re-observation and restoration.",
+    "Complete the mechanistic Git call-site inventory and harden remaining accepted integration, control lifecycle, recovery, and cleanup families with focused interruption and owner-admission tests.",
+    "Produce the complete before/after command and effect ledger and obtain exact-checkpoint CI validation."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Design and implement durable recovery for interruption or process loss during the local ref delete/restore transaction, including safe re-observation and restoration.",
+      "Complete the mechanistic Git call-site inventory and harden remaining accepted integration, control lifecycle, recovery, and cleanup families with focused interruption and owner-admission tests.",
+      "Produce the complete before/after command and effect ledger and obtain exact-checkpoint CI validation."
+    ],
+    "report": null,
+    "summary": "Hardened local execution-ref retirement admission while preserving the post-delete occupancy check and create-only restoration during shutdown. Added real-Git coverage for an occupancy race and documented the remaining ambiguous-delete gap in the temporary architecture audit."
+  },
+  "workspace_head": "a6eb6560ecc5c151f255bb717f28edbeec5f6263"
+}
