@@ -18,3 +18,7 @@ TASK-088 remains listed under `Failed executions` in `devlegate status` even aft
 
 ## Acceptance
 A historic failure such as TASK-088 does not persist in active Failed after an authoritative transition, while audit and recovery evidence remain accessible. Exact-checkpoint CI and Ruff green.
+
+## Release scheduling decision — 2026-10-28
+
+**Required for Devlegate 0.5.7 before final packaging and tag.** This is operator-facing UX/correctness work, not part of the first-class QA pipeline deferred to 0.6.x. Schedule and validate this ticket in 0.5.7, preserving current owner, lifecycle and evidence safety constraints. Coordinate the final release gate with TASK-107 cleanup.
