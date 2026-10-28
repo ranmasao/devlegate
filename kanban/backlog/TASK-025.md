@@ -102,3 +102,7 @@ The concrete validator catalog and validator execution engine are separate ticke
   skip workflow state.
 - Compatible control advancement during worker execution can replay the handoff into
   QA without losing execution provenance.
+
+## Scheduling decision — 2026-10-28
+
+**Deferred to the beginning of the 0.6.x development cycle. Not a release-0.5.7 gate.** Keep this ticket and its dependency graph intact; before admission, revalidate the specification against the then-integrated source, workflow and validation capabilities. Existing focused tests and exact-checkpoint CI required by 0.5.7 implementation work remain mandatory; this deferral only applies to the new first-class QA pipeline.
