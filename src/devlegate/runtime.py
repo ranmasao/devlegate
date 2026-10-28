@@ -6682,6 +6682,9 @@ class ServiceEngine:
         candidate: dict[str, str] | None = None,
     ) -> None:
         """Release only exact, already-published disposable execution refs."""
+        self._assert_repository_owner()
+        if self._stop_requested():
+            raise ShutdownInterrupted
         if not branch.startswith("devlegate/work/") or not _is_git_identity(
             expected_head
         ):
@@ -6726,16 +6729,38 @@ class ServiceEngine:
             # worktree registrations so foreign checkouts are retained.
             if self._resolve_commit_runtime(self.repo, local_ref) != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
+
+            # Admit the delete only while running. Once it succeeds, the
+            # helper must finish its occupancy check and any create-only
+            # restoration even if shutdown arrives in the meantime.
+            deleted = False
+
+            def retirement_git(
+                cwd: Path, *args: str, check: bool = True
+            ) -> subprocess.CompletedProcess[str]:
+                nonlocal deleted
+                self._assert_repository_owner()
+                if not deleted and self._stop_requested():
+                    raise ShutdownInterrupted
+                result = self._git_runtime(cwd, *args, check=check)
+                if args[:2] == ("update-ref", "-d") and result.returncode == 0:
+                    deleted = True
+                return result
+
             removed = delete_branch_if_unoccupied(
                 self.repo,
                 branch,
                 expected_head=expected_head,
-                runner=self._git_runtime,
+                runner=retirement_git,
             )
             if removed.returncode:
                 raise WorkflowBlockedError(
                     removed.stderr.strip() or "cannot retire local execution ref"
                 )
+            # The local-ref transaction is complete. Leave the remote ref for
+            # a fresh cleanup proof on re-entry rather than starting new work.
+            if self._stop_requested():
+                raise ShutdownInterrupted
             if self._resolve_commit_runtime(self.repo, local_ref) is not None:
                 raise WorkflowBlockedError("local execution ref remains after removal")
         remote_head = remote_ref(

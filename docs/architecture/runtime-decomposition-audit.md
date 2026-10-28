@@ -1,5 +1,27 @@
 # Runtime Decomposition Audit
 
+## TASK-108 cleanup transaction follow-up (temporary; TASK-107 release cleanup)
+
+`_retire_execution_refs` is the only runtime caller of
+`delete_branch_if_unoccupied`. Before and after this change its helper executes
+the same commands: `worktree list --porcelain`, `rev-parse --verify`, leased
+`update-ref -d`, then `worktree list --porcelain`; if the post-check fails or
+finds an occupant, it executes create-only `update-ref` to restore the exact
+head. The surrounding workflow also observes local ref and registrations,
+revalidates any supplied durable proof, and later observes and lease-deletes
+the remote ref. No Git command was added. The local delete is admitted only
+before stop, with owner checks on every command. After a successful delete the
+post-check and possible restoration remain admitted even after stop; subsequent
+remote cleanup waits for fresh proof on re-entry.
+
+An interruption reported by Git during the delete itself remains ambiguous:
+the runtime runner can raise before the helper knows whether deletion occurred,
+so it cannot guarantee the post-check or restoration. A process loss between
+delete and restoration has the same durable-evidence gap. This is not solved
+by allowing arbitrary commands after shutdown: it needs a recoverable transaction
+record or an equivalent narrowly scoped proof of ref ownership and occupancy.
+The wider raw/default Git inventory and other runtime families remain open.
+
 ## TASK-106 reconciliation persistence follow-up
 
 At integrated base `5dafb38bb20ef998e56f00941d3c08b3c9064af0`, both

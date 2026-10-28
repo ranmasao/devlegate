@@ -858,6 +858,64 @@ def test_workspace_cleanup_restart_converges_after_each_retirement_boundary(
     ).stdout
 
 
+@pytest.mark.parametrize("denial", ["stop", "owner"])
+def test_retirement_denial_does_not_spawn_git(tmp_path, monkeypatch, denial):
+    working, config, _state = control_fixture(tmp_path)
+    engine = Devlegate(config)
+    head = git(working, "rev-parse", "HEAD").stdout.strip()
+    stop = threading.Event()
+    if denial == "stop":
+        stop.set()
+    else:
+        engine._host_owner_thread_id = -1
+    calls = []
+    monkeypatch.setattr(runtime_module, "_git", lambda *a, **k: calls.append(a))
+    error = runtime_module.ShutdownInterrupted if denial == "stop" else DevlegateError
+    with engine._stop_context(stop), pytest.raises(error):
+        engine._retire_execution_refs("devlegate/work/T-1", head)
+    assert calls == []
+
+
+def test_retirement_restores_occupied_ref_when_shutdown_follows_delete(
+    tmp_path, monkeypatch
+):
+    working, config, _state = control_fixture(tmp_path)
+    engine = Devlegate(config)
+    branch = "devlegate/work/T-1"
+    head = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "branch", branch, head).returncode == 0
+    foreign = tmp_path / "foreign"
+    assert (
+        git(working, "worktree", "add", "--detach", str(foreign), head).returncode
+        == 0
+    )
+    stop = threading.Event()
+    original = runtime_module._git
+
+    def interrupt_after_delete(cwd, *args, **kwargs):
+        result = original(cwd, *args, **kwargs)
+        if args[:2] == ("update-ref", "-d") and result.returncode == 0:
+            assert (
+                git(foreign, "symbolic-ref", "HEAD", f"refs/heads/{branch}").returncode
+                == 0
+            )
+            stop.set()
+        return result
+
+    monkeypatch.setattr(runtime_module, "_git", interrupt_after_delete)
+    with engine._stop_context(stop), pytest.raises(
+        runtime_module.WorkflowBlockedError, match="became attached"
+    ):
+        engine._retire_execution_refs(branch, head)
+
+    assert resolve_commit(working, f"refs/heads/{branch}") == head
+    stop.clear()
+    with engine._stop_context(stop), pytest.raises(
+        runtime_module.WorkflowBlockedError, match="attached to worktree"
+    ):
+        engine._retire_execution_refs(branch, head)
+
+
 def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
     tmp_path, monkeypatch
 ):
