@@ -1,0 +1,23 @@
+{
+  "code_base_head": "cb94ac849d4d641846bad7b85ed5efcd4d2e6e7d",
+  "conclusion": "failed",
+  "control_head": "8f7562affc9a1a3d8fe5e78b9c3021b1fb39d21a",
+  "egress_error": "exactly one devlegate_report event is required",
+  "egress_ok": false,
+  "execution_branch": "devlegate/work/TASK-087",
+  "execution_id": "8c8215bcf0724c9a9cd3b3210203b080",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-087",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "exactly one devlegate_report event is required",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-087",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": null,
+  "workspace_head": "cb94ac849d4d641846bad7b85ed5efcd4d2e6e7d"
+}
