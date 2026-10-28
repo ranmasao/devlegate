@@ -1,0 +1,29 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "completed",
+  "control_head": "8223bdcf8fd8c047618a803e00a9626a0328691e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "f7123ed0a9364446b943923fe7a93cd8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Removed the reachable default Git runner fallback and retained the sole diagnostic-only raw Git exception with explicit classification. Replaced the stale partial audit with a source-backed authority register, command/effect ledger, interruption semantics, and focused proof references."
+  },
+  "workspace_head": "cb94ac849d4d641846bad7b85ed5efcd4d2e6e7d"
+}
