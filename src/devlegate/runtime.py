@@ -9760,6 +9760,56 @@ class ServiceEngine:
             )
         return tuple(evaluated)
 
+    def _failure_superseded(
+        self, ticket_id: str, metadata: object, state: dict[str, object],
+        control: GitObservation | None,
+    ) -> bool:
+        """Require published descendant history proving a ticket left its state.
+
+        A changed ticket body or a different checkout is not a transition. An
+        unreadable, dirty, divergent, or unfetched observation cannot prove one.
+        The retained failure and reports are never modified by this projection.
+        """
+        if not isinstance(metadata, dict) or control is None:
+            return False
+        if (
+            control.detached or control.branch != self.control_branch
+            or not control.working_tree_clean or not control.remote_head
+            or control.local_head != control.remote_head
+        ):
+            return False
+        for key in ("reconciliation", "accepted_integration", "automatic_retry",
+                    "manual_retry_required"):
+            marker = state.get(key)
+            if isinstance(marker, dict) and marker.get("ticket_id") == ticket_id:
+                return False
+        if (
+            state.get("phase") != "idle"
+            and state.get("selected_ticket_id") == ticket_id
+        ):
+            return False
+        base = metadata.get("control_head")
+        if not isinstance(base, str) or not _is_git_identity(base):
+            return False
+        if base == control.local_head:
+            return False
+        try:
+            if not self._is_ancestor_runtime(
+                self.control_worktree, base, control.local_head
+            ):
+                return False
+        except WorkflowBlockedError:
+            return False
+        paths = [f"{path}/{ticket_id}.md" for path in self._workflow_paths().values()]
+        result = self._git_runtime(
+            self.control_worktree, "log", "--format=", "--name-only", "--no-renames",
+            "--diff-filter=D", f"{base}..{control.local_head}", "--", *paths,
+            check=False,
+        )
+        return result.returncode == 0 and any(
+            line in paths for line in result.stdout.splitlines()
+        )
+
     def _collect_status_attempt(
         self, *, allow_workflow_blocked: bool = False
     ) -> StatusSnapshot:
@@ -9967,6 +10017,10 @@ class ServiceEngine:
                     code=code,
                     control=control,
                 ),
+                failed_executions=self._evaluate_failed_executions(
+                    state.get("failed_executions", {}), TicketStore(()), code, None,
+                    str(workflow_error or "workflow is invalid"),
+                ),
                 lifecycle_integration=lifecycle_integration,
             )
         counts = tuple(
@@ -10032,6 +10086,13 @@ class ServiceEngine:
         failed_executions = self._evaluate_failed_executions(
             failures, ticket_store, code, control, admission_reason
         )
+        if isinstance(failures, dict):
+            failed_executions = tuple(
+                failure for failure in failed_executions
+                if not self._failure_superseded(
+                    failure.ticket_id, failures.get(failure.ticket_id), state, control
+                )
+            )
         live_evidence = self.live_execution_evidence()
         if isinstance(live_evidence, dict):
             active_ticket_id = live_evidence.get("ticket_id")
