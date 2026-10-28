@@ -916,6 +916,60 @@ def test_retirement_restores_occupied_ref_when_shutdown_follows_delete(
         engine._retire_execution_refs(branch, head)
 
 
+def test_retirement_restart_restores_occupied_ref_after_delete_crash(
+    tmp_path, monkeypatch
+):
+    """The durable intent repairs a ref lost before post-delete observation."""
+    working, config, _state = control_fixture(tmp_path)
+    engine = Devlegate(config)
+    branch = "devlegate/work/T-1"
+    head = git(working, "rev-parse", "HEAD").stdout.strip()
+    assert git(working, "branch", branch, head).returncode == 0
+    foreign = tmp_path / "foreign"
+    assert (
+        git(working, "worktree", "add", "--detach", str(foreign), head).returncode
+        == 0
+    )
+    original_delete = runtime_module.delete_branch_if_unoccupied
+
+    def crash_between_delete_and_occupancy_check(cwd, deleted_branch, **kwargs):
+        original_runner = kwargs["runner"]
+
+        def crash_runner(repo, *args, **runner_kwargs):
+            result = original_runner(repo, *args, **runner_kwargs)
+            if args[:2] == ("update-ref", "-d") and result.returncode == 0:
+                assert (
+                    git(
+                        foreign, "symbolic-ref", "HEAD", f"refs/heads/{branch}"
+                    ).returncode
+                    == 0
+                )
+                raise RuntimeError("crash after local ref delete")
+            return result
+
+        return original_delete(
+            cwd,
+            deleted_branch,
+            expected_head=kwargs["expected_head"],
+            runner=crash_runner,
+        )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "delete_branch_if_unoccupied",
+        crash_between_delete_and_occupancy_check,
+    )
+    with pytest.raises(RuntimeError, match="crash after local ref delete"):
+        engine._retire_execution_refs(branch, head)
+    assert resolve_commit(working, f"refs/heads/{branch}") is None
+
+    monkeypatch.undo()
+    restarted = Devlegate(config)
+    with pytest.raises(WorkflowBlockedError, match="attached to worktree"):
+        restarted._retire_execution_refs(branch, head)
+    assert resolve_commit(working, f"refs/heads/{branch}") == head
+
+
 def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
     tmp_path, monkeypatch
 ):
