@@ -7,6 +7,7 @@
 from _control_support import *  # noqa: F403,F405
 
 from contextlib import nullcontext
+from dataclasses import replace
 
 import devlegate.recovery_transactions as recovery_transactions
 
@@ -2681,6 +2682,88 @@ def test_stale_failed_execution_remains_visible_but_not_retryable(
     assert "todo workflow changed since the failure" in text
     assert stale.as_dict()["failed_executions"][0]["retryable"] is False
     assert devlegate._retry_candidates() == ()
+
+
+@pytest.mark.parametrize(
+    "destination", ["todo", "backlog", "review", "accepted", "done", "deleted"]
+)
+def test_published_ticket_transition_supersedes_only_current_failure(
+    tmp_path, monkeypatch, destination
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers, "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
+    )
+    assert run_test_iteration(engine) == 1
+    metadata = dict(engine._state["failed_executions"]["T-1"])
+    control = next((state / "worktrees").glob("*/control"))
+    report_store = ExecutionReportStore(control)
+    report = report_store.read("T-1", metadata["execution_id"])
+    assert engine.status_view().failed_executions
+
+    source = control / "kanban/todo/T-1.md"
+    target_state = "backlog" if destination == "todo" else destination
+    target = control / f"kanban/{target_state}/T-1.md"
+    if destination == "deleted":
+        source.unlink()
+    else:
+        source.rename(target)
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "transition ticket")
+    if destination == "todo":
+        target.rename(source)
+        source.write_text(source.read_text() + "\nnew work\n")
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "return ticket to todo")
+
+    # An unpublished or dirty observation is not authoritative.
+    assert engine.status_view().failed_executions
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    restarted = Devlegate(config)
+    snapshot = restarted.status_view()
+    assert not snapshot.failed_executions
+    assert not snapshot.as_dict()["failed_executions"]
+    assert "Failed executions" not in restarted._render_status_text(snapshot)
+    assert restarted._state["failed_executions"]["T-1"] == metadata
+    assert report_store.read("T-1", metadata["execution_id"]) == report
+    observation = restarted._status_git_observation()["control"]
+    assert observation is not None
+    for uncertain in (
+        None,
+        replace(observation, remote_head=metadata["control_head"]),
+        replace(observation, working_tree_clean=False),
+    ):
+        assert not restarted._failure_superseded(
+            "T-1", metadata, restarted._state, uncertain
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            restarted, "_is_ancestor_runtime",
+            lambda *_args: (_ for _ in ()).throw(WorkflowBlockedError("unreadable")),
+        )
+        assert not restarted._failure_superseded(
+            "T-1", metadata, restarted._state, observation
+        )
+    pending = {**restarted._state, "reconciliation": {"ticket_id": "T-1"}}
+    assert not restarted._failure_superseded("T-1", metadata, pending, observation)
+    if destination == "todo":
+        # Model a separately admitted fresh execution after operator recovery.
+        restarted._save_state("idle", failed_executions={})
+        monkeypatch.setattr(
+            restarted._workers, "run",
+            lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
+        )
+        assert run_test_iteration(restarted) == 1
+        later = restarted.status_view()
+        assert [failure.ticket_id for failure in later.failed_executions] == ["T-1"]
+        assert restarted._state["failed_executions"]["T-1"]["execution_id"] != (
+            metadata["execution_id"]
+        )
+        assert report_store.read("T-1", metadata["execution_id"]) == report
 
 def test_clean_local_product_advance_invalidates_retry(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
