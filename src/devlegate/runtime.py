@@ -1378,7 +1378,10 @@ class ServiceEngine:
         current_head, _remote_head = self._sync_control()
         try:
             control_is_ancestor = is_ancestor(
-                self.control_worktree, admitted_control, current_head, runner=_git
+                self.control_worktree,
+                admitted_control,
+                current_head,
+                runner=self._git_runtime,
             )
         except GitAncestryError as error:
             raise DevlegateError(
@@ -1860,7 +1863,7 @@ class ServiceEngine:
                 "use at least 4 characters"
             )
         try:
-            canonical = resolve_commit(self.repo, value, runner=_git)
+            canonical = self._resolve_commit_runtime(self.repo, value)
         except GitObservationError as error:
             raise DevlegateError(
                 "requested reconciliation target is not a valid commit; "
@@ -1954,7 +1957,7 @@ class ServiceEngine:
             )
         try:
             product_is_descendant = is_ancestor(
-                self.repo, original_base, local_head, runner=_git
+                self.repo, original_base, local_head, runner=self._git_runtime
             )
         except GitAncestryError as error:
             raise WorkflowBlockedError(
@@ -2029,7 +2032,7 @@ class ServiceEngine:
         if not observation.working_tree_clean:
             raise DevlegateError("control working tree is dirty")
 
-        local = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+        local = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if local != from_head:
             raise DevlegateError(
                 f"control local HEAD changed; expected {from_head}, found {local}"
@@ -2039,7 +2042,7 @@ class ServiceEngine:
             self.remote_name,
             self.control_branch,
             prune=True,
-            runner=_git,
+            runner=self._git_runtime,
         )
         if fetch.returncode:
             raise DevlegateError(
@@ -2047,7 +2050,9 @@ class ServiceEngine:
             )
         remote_ref = f"{self.remote_name}/{self.control_branch}"
         observed_remote = resolve_commit(
-            self.control_worktree, f"refs/remotes/{remote_ref}", runner=_git
+            self.control_worktree,
+            f"refs/remotes/{remote_ref}",
+            runner=self._git_runtime,
         )
         if observed_remote is None:
             raise DevlegateError(f"control remote branch not found: {remote_ref}")
@@ -2058,8 +2063,10 @@ class ServiceEngine:
             )
         try:
             histories_are_related = is_ancestor(
-                self.control_worktree, from_head, to_head, runner=_git
-            ) or is_ancestor(self.control_worktree, to_head, from_head, runner=_git)
+                self.control_worktree, from_head, to_head, runner=self._git_runtime
+            ) or is_ancestor(
+                self.control_worktree, to_head, from_head, runner=self._git_runtime
+            )
         except GitAncestryError as error:
             raise DevlegateError(
                 "control history could not be observed; reconciliation is unsafe"
@@ -2413,7 +2420,7 @@ class ServiceEngine:
                         "head": "",
                     },
                 )
-        local = _git(
+        local = self._git_runtime(
             self.repo,
             "for-each-ref",
             "--format=%(refname) %(objectname)",
@@ -2444,7 +2451,7 @@ class ServiceEngine:
             # head so the independently safe ref stages can still converge.
             if not candidate.get("head"):
                 candidate["head"] = head
-        observed = _git(
+        observed = self._git_runtime(
             self.repo,
             "ls-remote",
             self.remote_name,
@@ -3846,7 +3853,7 @@ class ServiceEngine:
             remote_head = "<unknown>"
         try:
             merge_base_value = git_merge_base(
-                self.repo, local_head, remote_head, runner=_git
+                self.repo, local_head, remote_head, runner=self._git_runtime
             )
             merge_base = merge_base_value or "<none>"
         except GitObservationError:
@@ -4735,7 +4742,7 @@ class ServiceEngine:
                     branch_head = resolve_ref_commit(
                         self.repo,
                         f"refs/heads/devlegate/work/{selected_ticket.id}",
-                        runner=_git,
+                        runner=self._git_runtime,
                     )
                     if branch_head not in {None, previous.workspace_head}:
                         raise WorkflowBlockedError(
@@ -5818,7 +5825,7 @@ class ServiceEngine:
         registrations = manager._registrations()
         branch_ref = f"refs/heads/{manager.branch}"
         if (
-            resolve_commit(self.repo, branch_ref, runner=_git) is not None
+            self._resolve_commit_runtime(self.repo, branch_ref) is not None
             or manager.path.exists()
             or any(
                 item.get("branch") == manager.branch for item in registrations.values()
@@ -5889,7 +5896,9 @@ class ServiceEngine:
                 "product descendant lacks an observed remote revision"
             )
         try:
-            descendant = is_ancestor(self.repo, admitted_base, candidate, runner=_git)
+            descendant = is_ancestor(
+                self.repo, admitted_base, candidate, runner=self._git_runtime
+            )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
                 "product revision ancestry cannot be proven before worker launch"
@@ -5961,7 +5970,10 @@ class ServiceEngine:
             return
         try:
             descendant = is_ancestor(
-                self.control_worktree, admitted_control, candidate, runner=_git
+                self.control_worktree,
+                admitted_control,
+                candidate,
+                runner=self._git_runtime,
             )
         except GitAncestryError as error:
             raise ExecutionWorkspaceError(
@@ -6316,26 +6328,31 @@ class ServiceEngine:
             self.control_worktree,
             "HEAD",
             f"{self.accepted_path}/{ticket_id}.md",
-            runner=_git,
+            runner=self._git_runtime,
         )
         if accepted_revision is None:
             raise WorkflowBlockedError("accepted ticket transition is unavailable")
         accepted_path = f"{self.accepted_path}/{ticket_id}.md"
         if (
             read_path(
-                self.control_worktree, accepted_revision, accepted_path, runner=_git
+                self.control_worktree,
+                accepted_revision,
+                accepted_path,
+                runner=self._git_runtime,
             )
             is None
         ):
             previous = parent_commit(
-                self.control_worktree, accepted_revision, runner=_git
+                self.control_worktree, accepted_revision, runner=self._git_runtime
             )
             if previous is None:
                 raise WorkflowBlockedError(
                     "accepted ticket transition parent is unavailable"
                 )
             accepted_revision = previous
-        parent = parent_commit(self.control_worktree, accepted_revision, runner=_git)
+        parent = parent_commit(
+            self.control_worktree, accepted_revision, runner=self._git_runtime
+        )
         if parent is None:
             raise WorkflowBlockedError(
                 "accepted ticket transition parent is unavailable"
@@ -6715,14 +6732,6 @@ class ServiceEngine:
             raise ValueError("execution retirement validation is ambiguous")
         local_ref = f"refs/heads/{branch}"
         local_head = self._resolve_commit_runtime(self.repo, local_ref)
-        # An unrelated active execution owns the runtime state generation. Its
-        # immediate accepted-cleanup path has no durable state slot to borrow.
-        # All admitted cleanup passes and the matching execution retirement
-        # persist this intent before the local delete.
-        persist_retirement = not (
-            self._state.get("phase") == "agent_running"
-            and self._state.get("execution_branch") != branch
-        )
         manager = ExecutionWorkspaceManager(
             self.repo,
             self.execution_worktree_root,
@@ -6768,10 +6777,7 @@ class ServiceEngine:
                 local_head = expected_head
             # The delete either never happened, or its post-delete occupancy
             # proof is now safe to resume. Do not retain a stale recovery grant.
-            if persist_retirement:
-                self._save_state(
-                    str(self._state["phase"]), execution_ref_retirement=None
-                )
+            self._save_state(str(self._state["phase"]), execution_ref_retirement=None)
         if occupied:
             raise WorkflowBlockedError(
                 f"execution ref {branch} is attached to worktree {occupied[0]}"
@@ -6795,14 +6801,13 @@ class ServiceEngine:
             # Persist recovery authority before the destructive compare-and-
             # delete. A restarted owner may use it only to recreate this exact
             # absent ref when a post-delete worktree occupant is proven.
-            if persist_retirement:
-                self._save_state(
-                    str(self._state["phase"]),
-                    execution_ref_retirement={
-                        "branch": branch,
-                        "expected_head": expected_head,
-                    },
-                )
+            self._save_state(
+                str(self._state["phase"]),
+                execution_ref_retirement={
+                    "branch": branch,
+                    "expected_head": expected_head,
+                },
+            )
             # Admit the delete only while running. Once it succeeds, the
             # helper must finish its occupancy check and any create-only
             # restoration even if shutdown arrives in the meantime.
@@ -6830,10 +6835,7 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     removed.stderr.strip() or "cannot retire local execution ref"
                 )
-            if persist_retirement:
-                self._save_state(
-                    str(self._state["phase"]), execution_ref_retirement=None
-                )
+            self._save_state(str(self._state["phase"]), execution_ref_retirement=None)
             # The local-ref transaction is complete. Leave the remote ref for
             # a fresh cleanup proof on re-entry rather than starting new work.
             if self._stop_requested():
@@ -7444,7 +7446,7 @@ class ServiceEngine:
         if not isinstance(checkpoint, str) or not _is_git_identity(checkpoint):
             raise WorkflowBlockedError("accepted product checkpoint is invalid")
         if integration is not None:
-            message = _git(
+            message = self._git_runtime(
                 self.control_worktree,
                 "show",
                 "-s",
@@ -7489,7 +7491,7 @@ class ServiceEngine:
     def _find_accepted_integration_commit(
         self, ticket_id: str, report: ExecutionReport | None = None
     ) -> str | None:
-        result = _git(
+        result = self._git_runtime(
             self.control_worktree,
             "log",
             "--format=%H",
@@ -7509,7 +7511,9 @@ class ServiceEngine:
         # Never fall back to an older integration after a requeue or edit made
         # the current generation unprovable.
         commit = commits[0].strip()
-        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        parents = commit_parents(
+            self.control_worktree, commit, runner=self._git_runtime
+        )
         if (
             parents
             and self._accepted_integration_commit_is_exact(
@@ -7531,7 +7535,9 @@ class ServiceEngine:
         """Bind a done transition to the exact accepted execution generation."""
         if report.ticket_id != ticket_id or not _is_git_identity(report.control_head):
             return False
-        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        parents = commit_parents(
+            self.control_worktree, commit, runner=self._git_runtime
+        )
         if parents is None or not parents:
             return False
         try:
@@ -7546,7 +7552,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted execution control lineage could not be observed"
             )
-        shown = _git(
+        shown = self._git_runtime(
             self.control_worktree,
             "show",
             "-s",
@@ -7593,7 +7599,7 @@ class ServiceEngine:
                 runner=self._git_runtime,
             )
             accepted_parents = commit_parents(
-                self.control_worktree, accepted_commit, runner=_git
+                self.control_worktree, accepted_commit, runner=self._git_runtime
             )
             if (
                 admission is None
@@ -7645,7 +7651,7 @@ class ServiceEngine:
                     options=(
                         f"--force-with-lease=refs/heads/{self.control_branch}:{expected_head}",
                     ),
-                    runner=_git,
+                    runner=self._git_runtime,
                 )
                 if push.returncode:
                     classification, published = (
@@ -7694,7 +7700,7 @@ class ServiceEngine:
             )
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
         ticket.path.rename(target)
-        add_all(self.control_worktree, option="-A", runner=_git)
+        add_all(self.control_worktree, option="-A", runner=self._git_runtime)
         commit = git_commit(
             self.control_worktree,
             integration_message(
@@ -7708,7 +7714,7 @@ class ServiceEngine:
                 ),
                 report.workspace_head or "",
             ),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if commit.returncode:
             raise DevlegateError(
@@ -7730,7 +7736,7 @@ class ServiceEngine:
             options=(
                 f"--force-with-lease=refs/heads/{self.control_branch}:{expected_head}",
             ),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if push.returncode:
             classification, published = self._observe_accepted_control_integration(
@@ -7928,7 +7934,9 @@ class ServiceEngine:
     def _accepted_integration_commit_is_exact(
         self, commit: str, ticket_id: str, expected_parent: str
     ) -> bool:
-        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        parents = commit_parents(
+            self.control_worktree, commit, runner=self._git_runtime
+        )
         if parents is None or not parents or parents[0] != expected_parent:
             return False
         expected = {
@@ -8350,7 +8358,9 @@ class ServiceEngine:
         if local != admitted_base:
             return False
         try:
-            return is_ancestor(self.repo, admitted_base, remote, runner=_git)
+            return is_ancestor(
+                self.repo, admitted_base, remote, runner=self._git_runtime
+            )
         except GitAncestryError:
             return False
 
@@ -8369,7 +8379,7 @@ class ServiceEngine:
         """
         try:
             descendant = is_ancestor(
-                self.repo, admitted_base, product_head, runner=_git
+                self.repo, admitted_base, product_head, runner=self._git_runtime
             )
         except GitAncestryError as error:
             raise WorkflowBlockedError(
@@ -8413,7 +8423,7 @@ class ServiceEngine:
         integrated: str | None = None
         if current != predecessor:
             parents = (
-                commit_parents(self.repo, current, runner=_git)
+                commit_parents(self.repo, current, runner=self._git_runtime)
                 if isinstance(current, str)
                 else None
             )
@@ -8446,7 +8456,7 @@ class ServiceEngine:
                 )
             integrated = self._resolve_commit_runtime(self.repo, "HEAD")
         if integrated is None or not is_ancestor(
-            self.repo, checkpoint, integrated, runner=_git
+            self.repo, checkpoint, integrated, runner=self._git_runtime
         ):
             raise WorkflowBlockedError("accepted checkpoint merge could not be proven")
         if (
@@ -8470,7 +8480,7 @@ class ServiceEngine:
             self.remote_name,
             f"{integrated}:{product_ref}",
             options=(f"--force-with-lease={product_ref}:{predecessor}",),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if pushed.returncode:
             observed = remote_ref(
@@ -8625,10 +8635,10 @@ class ServiceEngine:
             self.remote_name,
             self.remote_branch,
             prune=True,
-            runner=_git,
+            runner=self._git_runtime,
         )
         product_ref = f"{self.remote_name}/{self.remote_branch}"
-        observed_product = resolve_commit(self.repo, product_ref, runner=_git)
+        observed_product = self._resolve_commit_runtime(self.repo, product_ref)
         if product_fetch.returncode or observed_product != remote_head:
             raise WorkflowBlockedError(
                 "product checkout or remote changed before execution recovery"
@@ -8678,10 +8688,10 @@ class ServiceEngine:
                 "cannot validate staged execution rewrite worktree binding"
             )
         try:
-            common = common_dir(manager.path, runner=_git)
-            root = worktree_root(manager.path, runner=_git)
-            expected_common = common_dir(self.repo, runner=_git)
-            observed_branch = branch_name(manager.path, runner=_git)
+            common = common_dir(manager.path, runner=self._git_runtime)
+            root = worktree_root(manager.path, runner=self._git_runtime)
+            expected_common = common_dir(self.repo, runner=self._git_runtime)
+            observed_branch = branch_name(manager.path, runner=self._git_runtime)
         except GitObservationError as error:
             raise WorkflowBlockedError(str(error)) from error
         if (
@@ -8692,8 +8702,8 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "staged execution rewrite worktree binding is invalid"
             )
-        head_value = resolve_commit(manager.path, "HEAD", runner=_git)
-        status_value = working_tree_status(manager.path, runner=_git)
+        head_value = self._resolve_commit_runtime(manager.path, "HEAD")
+        status_value = self._status_runtime(manager.path)
         if head_value is None or registration.get("head") != head_value:
             raise WorkflowBlockedError(
                 "cannot observe staged execution rewrite worktree"
@@ -8766,13 +8776,18 @@ class ServiceEngine:
         *,
         apply_conclusion: bool = True,
     ) -> None:
-        parents = commit_parents(self.control_worktree, commit, runner=_git)
+        parents = commit_parents(
+            self.control_worktree, commit, runner=self._git_runtime
+        )
         if parents is None or len(parents) != 1:
             raise WorkflowBlockedError("unpublished lifecycle parent is unavailable")
         parent_head = parents[0]
         try:
             parent_on_remote = is_ancestor(
-                self.control_worktree, parent_head, remote_head, runner=_git
+                self.control_worktree,
+                parent_head,
+                remote_head,
+                runner=self._git_runtime,
             )
         except GitAncestryError as error:
             raise WorkflowBlockedError(str(error)) from error
@@ -8827,7 +8842,10 @@ class ServiceEngine:
     ) -> None:
         try:
             candidate_descends = is_ancestor(
-                self.control_worktree, control_head, candidate, runner=_git
+                self.control_worktree,
+                control_head,
+                candidate,
+                runner=self._git_runtime,
             )
         except GitAncestryError as error:
             raise WorkflowBlockedError(str(error)) from error
@@ -8902,7 +8920,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 f"resulting ticket store is invalid: {error}"
             ) from error
-        add_all(self.control_worktree, option="-A", runner=_git)
+        add_all(self.control_worktree, option="-A", runner=self._git_runtime)
         committed = git_commit(
             self.control_worktree,
             lifecycle_message(
@@ -8916,7 +8934,7 @@ class ServiceEngine:
                     else report.result.reason
                 ),
             ),
-            runner=_git,
+            runner=self._git_runtime,
         )
         if committed.returncode:
             raise DevlegateError(
@@ -8947,7 +8965,7 @@ class ServiceEngine:
                 self.remote_name,
                 self.control_branch,
                 prune=True,
-                runner=_git,
+                runner=self._git_runtime,
             )
             if fetched.returncode:
                 raise WorkflowBlockedError(
@@ -8956,11 +8974,13 @@ class ServiceEngine:
                 )
             remote_ref = f"{self.remote_name}/{self.control_branch}"
             remote_head = resolve_commit(
-                self.control_worktree, f"refs/remotes/{remote_ref}", runner=_git
+                self.control_worktree,
+                f"refs/remotes/{remote_ref}",
+                runner=self._git_runtime,
             )
             if remote_head is None:
                 raise WorkflowBlockedError("control remote branch is unavailable")
-            local_head = resolve_commit(self.control_worktree, "HEAD", runner=_git)
+            local_head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
             if local_head is None:
                 raise WorkflowBlockedError("control HEAD is unavailable")
             existing = self._remote_lifecycle_commit(
@@ -8968,7 +8988,7 @@ class ServiceEngine:
             )
             if existing is not None:
                 lifecycle_parent = parent_commit(
-                    self.control_worktree, existing, runner=_git
+                    self.control_worktree, existing, runner=self._git_runtime
                 )
                 if lifecycle_parent is None:
                     raise WorkflowBlockedError(
@@ -8981,7 +9001,7 @@ class ServiceEngine:
                             self.control_worktree,
                             local_head,
                             remote_head,
-                            runner=_git,
+                            runner=self._git_runtime,
                         )
                     except GitAncestryError as error:
                         raise WorkflowBlockedError(
@@ -8994,23 +9014,28 @@ class ServiceEngine:
                         )
                     else:
                         merge = merge_fast_forward(
-                            self.control_worktree, remote_ref, runner=_git
+                            self.control_worktree,
+                            remote_ref,
+                            runner=self._git_runtime,
                         )
                         if merge.returncode:
                             raise WorkflowBlockedError(
                                 "cannot fast-forward control worktree"
                             )
-                return resolve_commit(self.control_worktree, "HEAD", runner=_git) or ""
+                return self._resolve_commit_runtime(self.control_worktree, "HEAD") or ""
             if local_head != report.control_head:
                 try:
                     admitted_local = is_ancestor(
                         self.control_worktree,
                         report.control_head,
                         local_head,
-                        runner=_git,
+                        runner=self._git_runtime,
                     )
                     local_remote = is_ancestor(
-                        self.control_worktree, local_head, remote_head, runner=_git
+                        self.control_worktree,
+                        local_head,
+                        remote_head,
+                        runner=self._git_runtime,
                     )
                 except GitAncestryError as error:
                     raise WorkflowBlockedError(
@@ -9031,14 +9056,18 @@ class ServiceEngine:
                         apply_conclusion=apply_conclusion,
                     )
                     self._prove_control_descendant(remote_head, report)
-                    reset = reset_hard(self.control_worktree, remote_head, runner=_git)
+                    reset = reset_hard(
+                        self.control_worktree, remote_head, runner=self._git_runtime
+                    )
                     if reset.returncode:
                         raise WorkflowBlockedError(
                             "cannot replay lifecycle on control descendant"
                         )
                 if local_remote and local_head != remote_head:
                     merge = merge_fast_forward(
-                        self.control_worktree, remote_ref, runner=_git
+                        self.control_worktree,
+                        remote_ref,
+                        runner=self._git_runtime,
                     )
                     if merge.returncode:
                         raise WorkflowBlockedError(
@@ -9051,7 +9080,7 @@ class ServiceEngine:
                     f"-> {remote_head[:12]}; replaying compatible lifecycle"
                 )
                 merge = merge_fast_forward(
-                    self.control_worktree, remote_ref, runner=_git
+                    self.control_worktree, remote_ref, runner=self._git_runtime
                 )
                 if merge.returncode:
                     raise WorkflowBlockedError("cannot fast-forward control descendant")
@@ -9064,7 +9093,7 @@ class ServiceEngine:
                 self.control_worktree,
                 self.remote_name,
                 f"HEAD:refs/heads/{self.control_branch}",
-                runner=_git,
+                runner=self._git_runtime,
             )
             if pushed.returncode == 0:
                 return lifecycle_head
@@ -10086,7 +10115,7 @@ class ServiceEngine:
                             self.control_worktree,
                             bound_control,
                             control.local_head,
-                            runner=_git,
+                            runner=self._git_runtime,
                         )
                     except GitAncestryError:
                         descendant = False
@@ -11128,7 +11157,7 @@ class ServiceEngine:
             self.remote_name,
             self.remote_branch,
             prune=True,
-            runner=_git,
+            runner=self._git_runtime,
         )
         if product_fetch.returncode:
             raise DevlegateError(
@@ -11136,7 +11165,9 @@ class ServiceEngine:
                 f"{product_fetch.stderr.strip() or 'unknown git error'}"
             )
         current_remote = resolve_commit(
-            self.repo, f"refs/remotes/{remote_ref}", runner=_git
+            self.repo,
+            f"refs/remotes/{remote_ref}",
+            runner=self._git_runtime,
         )
         if current_remote != state["remote_head"]:
             raise DevlegateError(
@@ -11148,7 +11179,7 @@ class ServiceEngine:
             self.remote_name,
             self.control_branch,
             prune=True,
-            runner=_git,
+            runner=self._git_runtime,
         )
         if control_fetch.returncode:
             raise DevlegateError(
@@ -11159,14 +11190,14 @@ class ServiceEngine:
         current_control_remote = resolve_commit(
             self.control_worktree,
             f"refs/remotes/{control_remote_ref}",
-            runner=_git,
+            runner=self._git_runtime,
         )
         if current_control_remote != state["control_head"]:
             raise DevlegateError(
                 "control remote generation changed since interrupted execution"
             )
         current_control_head = resolve_commit(
-            self.control_worktree, "HEAD", runner=_git
+            self.control_worktree, "HEAD", runner=self._git_runtime
         )
         execution_control_head = state["execution_control_head"]
         if (
