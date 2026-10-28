@@ -95,9 +95,9 @@ from devlegate.service import ServiceEngine
 
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
-def git(cwd, *args):
+def git(cwd, *args, check=True):
     return subprocess.run(
-        ["git", *map(str, args)], cwd=cwd, text=True, capture_output=True, check=True
+        ["git", *map(str, args)], cwd=cwd, text=True, capture_output=True, check=check
     )
 
 def _make_git_fixture(tmp_path, request, short_state_dir, baseline):

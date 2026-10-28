@@ -1,191 +1,62 @@
-# Runtime Git authority: partial audit and follow-up
+# Runtime Git authority audit
 
-## Operator recovery replay correction
+This is the final source audit for TASK-108. It was made against the current
+`src/devlegate/runtime.py` by enumerating direct `_git(` calls, `runner=_git`,
+Git helper calls with no runner, and callback/default-runner definitions, then
+tracing their callers into `src/devlegate/git.py`. Tier 1 is a local read,
+Tier 2 is a remote read, and Tier 3 changes local or remote Git state. A fetch
+is Tier 3 because it writes objects and tracking refs.
 
-The rework WAL remains at `admitted` until remote evidence is verified.
-`_pin_rework_evidence` rechecks the exact local pin on entry, and
-`_prepare_rework_remote_evidence` independently observes the exact remote ref,
-uses an empty lease if absent, verifies it, and only then saves
-`remote_evidence_published`. A local pin alone does not advance that stage.
+## Candidate register
 
-Operator recovery had a different gap: it published remote evidence only when
-the selected local evidence ref was absent. A crash after local pin therefore
-allowed a restart to retire the remote branch without publishing its evidence.
-The recovery test now interrupts at that boundary and restarts from the durable
-operator recovery state against a bare remote. A competing remote evidence ref
-is also tested and must remain unchanged while the branch remains untouched.
+| Candidate | Actual command and tier | Owner/stop contract | Disposition |
+| --- | --- | --- | --- |
+| `_git_runtime` (2906) | Direct `_git`; arbitrary command supplied by typed helpers | Calls `_assert_repository_owner()` immediately before every spawn. A matching signal failure becomes `ShutdownInterrupted`; it does not retry. | Required runtime transport and the only workflow transport. |
+| `_remote_exists_for_status` (3015) | `git remote`; Tier 1 | No owner or stop gate. Its only caller is `check_result()` for the displayed `configured remote` diagnostic. `GitObservationError` becomes `False`. It cannot admit work, update state, or select a mutation. | Intentional standalone presentation exception. No fetch or mutation is possible through `remote_exists`. |
+| `_is_same_parent_replacement` (734) | `cat-file -e`, `rev-list --parents -n 1` through `commit_parents`; Tier 1 for each input | It now requires an explicit runner. Its only caller, `reconciliation_same_parent_replacement`, supplies `reconciliation_git`. | No default runner remains. |
+| `reconciliation_git` (10634) | Callback transport for reconciliation helpers | Refuses a pending stop before invoking `_git_runtime`; `_git_runtime` also checks the owner for every nested command. | Required fresh-admission capability. |
+| `retirement_git` (6816) | Callback transport for `delete_branch_if_unoccupied`: worktree observations, exact ref observation, compare-and-delete, and possible create-only restoration | Checks owner. It refuses stop before the delete, but permits the helper's required post-delete proof/restoration after a successful delete. | Required admitted cleanup drain capability. |
+| `_observe_product_generation` optional callback (8272) | Product checkout observations; Tier 1 | Default is `_git_runtime`; the reconciliation caller explicitly supplies `reconciliation_git`. | No raw/default subprocess path. |
 
-Before: exact local branch/evidence observations and conditional create-only
-pin; remote branch observation; exact local remote-evidence observation and
-conditional pin plus unleased push only when absent; remote branch re-observation
-and leased branch push; worktree removal and local expected-old CAS.
-After: the same local and branch effects, but the selected remote evidence is
-always observed independently, created only with an empty remote lease when
-absent, and re-observed before branch retirement. These extra remote reads are
-necessary to close the replay gap and prove ambiguous publication. A divergent
-remote evidence identity fails closed. The recovery Git operations now use the
-owner-aware runner; admitted recovery continues draining without a new stop gate.
-The broader owner and stop audit below remains unfinished.
+Every remaining `runtime.py` Git helper invocation explicitly supplies
+`runner=self._git_runtime`, uses a named wrapper that does so, or occurs within
+one of the two callbacks above. The exception constructor near the bottom of
+the module is not a helper invocation. There are no other direct `_git` calls,
+`runner=_git` expressions, or reachable default-runner helper calls.
 
-This is a partial TASK-108 audit, not an assertion that all runtime subprocesses
-are owner/stop protected. The existing `GIT_COMMAND_INVENTORY.md` describes the
-typed commands, but its assertion that every effect uses the service runner is
-not true for the current runtime. A complete function-by-function inventory,
-including callback and helper internals, remains necessary.
+## Workflow ledger
 
-`_git_runtime` checks hosted owner before spawning and translates a matching
-shutdown signal after a failed command; it does not reject a pending stop before
-spawn. `reconciliation_git` rejects a pending stop and then calls `_git_runtime`.
-These are different contracts. A status observation at
-`_remote_exists_for_status` deliberately uses raw `_git` for a status view;
-its callers and standalone preflight permissions still require a complete audit.
+The authority migration changes the runner capability, not the commands,
+their order, leases, or CAS arguments. The before and after command sequences
+below are therefore identical except for the owner-aware runner.
 
-## Audited transaction ledger
-
-Counts below are per indicated path, excluding conditional error rechecks.
-No command was added or removed by this iteration. Tier 1 is a local read,
-Tier 2 a remote read, and Tier 3 a write including fetch.
-
-| Workflow and call site | Before and after command/effect sequence | Admission, replay and stop |
+| Workflow | Executed commands/effects | Before/after and replay boundary |
 | --- | --- | --- |
-| `_persist_product_reconciliation` | Exact ref resolution: `show-ref --verify --quiet` and, if present, `show-ref --verify`, `rev-parse`; then `update-ref` (tier 3); then save pending state. The carried-forward implementation uses `_git_runtime` for admitted drain. | Exact evidence identity is checked before pinning. Stop after pin but before state leaves the same ref to be re-observed on entry. |
-| `_publish_execution_branch` | `rev-parse HEAD`, remote `ls-remote`, optional `merge-base --is-ancestor`, leased `push`; on nonzero push re-observe remote. The carried-forward implementation uses `_git_runtime` for admitted drain. | Admission distinguishes new work from an execution already draining. A successful ambiguous push must be recovered via durable publishing intent and exact remote observation, not blind push. |
-| `_pin_rework_evidence` | Exact ref resolution as above; if absent `update-ref ref checkpoint ""` (create-only CAS); then exact ref resolution again. All three calls now use `reconciliation_git`. | Conflicting identity fails closed. A stop after successful CAS leaves the pin; safe re-entry observes and verifies it before advancing. Stop before a command refuses spawn. |
-| `_prepare_rework_remote_evidence` | Local pin as above; `ls-remote` predecessor and evidence; if absent leased `push` of immutable evidence, followed by `ls-remote`; save preparation stage only after proof. Push now uses `reconciliation_git`. | Empty lease prevents overwriting an existing remote ref. Interruption after push leaves prior stage and replay must re-observe exact evidence. Remote observations currently use `_git_runtime` and need their own stop audit. |
-| `_prepare_rework_remote_predecessor` | Local pin; `ls-remote` predecessor and, if appropriate, evidence; leased `push` of workspace head; `ls-remote`; save remote head and preparation stage. Push now uses `reconciliation_git`. | Exact predecessor lease and evidence proof precede replacement. Interruption after push must preserve earlier durable stage and re-observe before deciding whether predecessor is already installed. |
+| Checkpoint publication and product reconciliation | Exact ref probes (`show-ref`, `rev-parse`), create-only `update-ref`, remote `ls-remote`, leased `push` | Evidence identity is exact and the pin precedes reconciliation state. Shutdown before reconciliation transport prevents every command. An interrupted pin or push leaves prior WAL state and re-entry re-observes the exact ref; it never blindly retries publication. |
+| Accepted integration | Ancestry and parent observations, leased product/control pushes, product/control fetch, fast-forward merge, report reads | Product and control identities are proved before advancing their WAL stages. A push/merge interrupted after an ambiguous outcome is re-observed by exact ref or checkout proof before any continuation. Admitted work drains without a new stop gate. |
+| Lifecycle publication | Control fetch, exact ref/ancestry observations, add, commit, reset/fast-forward, leased push | Local commit/reset and remote publication retain the existing durable lifecycle stages. Re-entry proves the remote predecessor and exact intended control commit before continuing. |
+| Rework and operator recovery | Exact local/remote evidence probes, create-only evidence pins, leased evidence/branch pushes, worktree removal, expected-old ref CAS | Local and remote evidence use exact identity and empty/predecessor leases. Interruption after publication, removal, or CAS leaves evidence and state for re-observation; recovery does not overwrite a divergent ref. |
+| Drop and execution cleanup | Disposition reads/writes, evidence pin, remote lease delete, worktree removal, local compare-and-delete | Disposition/evidence precede destructive cleanup. `execution_ref_retirement` is saved before local delete, permits only exact create-if-absent repair after a crash, and clears only after the helper transaction is proved complete. Remote deletion is leased and re-observed. |
+| Status preflight | `git remote`; Tier 1 | The sole independent exception above. It is fail-closed presentation only and has no workflow transaction. |
 
-The exact-ref helpers can execute more than one subprocess: absence costs the
-quiet `show-ref`; a present ref adds an identity read and commit resolution;
-races can trigger an additional quiet check. Treat each runner invocation as a
-separate shutdown boundary, not a single atomic observation.
+Helper expansion is material to the ledger: exact ref resolution may run quiet
+`show-ref`, identity `show-ref`, and `rev-parse`; `delete_branch_if_unoccupied`
 
-## Drop transaction: current iteration
+## Interruption evidence
 
-Before and after, command order and conditional counts are unchanged. The
-changed calls use `_git_runtime` instead of raw `_git`; it now also forwards
-`input_text` for `hash-object`. Tier 1 means local read, tier 2 remote read,
-and tier 3 state change. The drop admission refuses lifecycle drain before
-new work, while already admitted work and restart recovery must be able to
-finish; no stop-strict gate was inserted within the transaction.
+Focused real-Git regressions establish the changed boundaries:
 
-| Call site | Executed command sequence and replay boundary |
+| Proof | Test location |
 | --- | --- |
-| `_read_drop_disposition` | Exact `show-ref --verify --quiet`, then if present `rev-parse --verify`, `cat-file -e`, `cat-file -t` and `cat-file -p` (tier 1). Used by admission and replay; now enforces hosted ownership. |
-| `_persist_drop_intent` | Read disposition; if absent `hash-object -w --stdin` and `update-ref` (tier 3), with disposition reread on failure. The dropping disposition is durable before evidence and cleanup. |
-| `_pin_drop_evidence` | Exact ref `show-ref --verify --quiet`; if present `show-ref --verify` and `rev-parse --verify`; if absent `update-ref`, reread on failure; disposition read, `hash-object -w --stdin`, `update-ref`, reread on failure. Exact checkpoint is checked before replacement; tier 3 writes retain existing unguarded update semantics. A crash after pin leaves evidence for replay. |
-| `_drop_already_completed`, `_validate_drop_evidence` | Disposition and checkpoint resolution (tier 1), plus workspace proof and remote `ls-remote` (tier 2); replay allows a missing remote only after disposition exists. Workspace manager commands already use the service runner. |
-| `_retire_drop_workspace` | `ls-remote`; if exact, leased deletion `push`; on failure `ls-remote`; manager proof and worktree removal; local branch resolution and optional `branch -D` (tier 3). The disposition and evidence precede deletion. Restart observes the remote and worktree again rather than blindly deleting. A test now interrupts after an actual successful delete push and restarts. |
+| Owner denial and pending shutdown before an execution-ref delete invoke no Git | `tests/test_control_workspace.py::test_retirement_denial_does_not_spawn_git` |
+| A non-owner reconciliation mutation is rejected before its runner can invoke Git | `tests/test_control_workspace.py::test_reconciliation_git_rejects_nonowner_mutation_before_git` |
+| Shutdown after local delete completes occupancy restoration rather than stranding an attached ref | `tests/test_control_workspace.py::test_retirement_restores_occupied_ref_when_shutdown_follows_delete` |
+| A crash after local deletion restores only the persisted exact ref on restart | `tests/test_control_workspace.py::test_retirement_restart_restores_occupied_ref_after_delete_crash` |
+| Restart converges after worktree, local-ref, and remote-ref retirement boundaries | `tests/test_control_workspace.py::test_workspace_cleanup_restart_converges_after_each_retirement_boundary` |
+| Reconciliation refuses shutdown before its runner can mutate | `tests/test_control_workspace.py::test_reconciliation_git_rejects_shutdown_before_mutation` |
+| A successful but interrupted drop-delete push is re-observed and completed on restart | `tests/test_daemon_lifecycle.py::test_restart_after_drop_disposition_finishes_drop_without_lifecycle` |
 
-This is not a complete runtime inventory. In particular, raw recovery,
-accepted integration, lifecycle publication, cleanup and status/preflight
-call sites still need individual admission and nested-command review. Some
-workspace proof helpers reached from drop also remain raw and are not claimed
-as hardened by this iteration. `_git_runtime` checks owner on every spawn but
-does not by itself prevent a pending stop from spawning new work.
-
-## Remaining grouped work
-
-1. Inventory every `runner=_git`, direct `_git`, default runner and indirect
-   callback in `runtime.py`, including standalone status/preflight paths. Record
-   function, every nested subprocess and tier, owner/stop admission, WAL/lease or
-   CAS, and whether a direct transport exception is actually justified. Inspect
-   all semantic helper internals and call sites, not just textual matches.
-2. Audit and harden accepted integration and product/control publication as
-   coherent WAL transactions. Include the raw ancestry, push, fetch, control
-   merge, commit and lifecycle paths. Prove interruption after remote success
-   using real restart and exact remote identities.
-3. Audit unsafe workspace recovery, lifecycle, drop and cleanup together with
-   their worktree proof, evidence pin, CAS and stage transitions. Test crashes
-   after each materially changed destructive boundary.
-4. Finish checkpoint and rework interruption coverage, including a stop between
-   observations and real ambiguous remote success followed by restart; assess
-   all uses of `_execution_remote_head` before changing its runner. Preserve
-   proof before advancing state and do not insert a stop gate that loses an
-   already completed irreversible effect.
-5. Run focused regressions and Ruff, then require exact-checkpoint CI before
-   considering the ticket complete.
-
-## Additional source-reviewed boundaries
-
-This register extends the partial audit above; it is not yet an exhaustive
-register. Line numbers refer to `src/devlegate/runtime.py` at the carried-forward
-checkpoint. The tiers are those defined above. Raw calls are defects unless an
-exception is explicitly established; an owner-thread entry point alone does not
-protect a call invoked through another path. No command sequence in this table
-has been changed by this documentation update.
-
-| Function and raw call sites | Actual Git operations and authority/replay assessment |
-| --- | --- |
-| `_validate_force_retry_admission` (1381) | `merge-base --is-ancestor` (tier 1), owner admission, not a standalone view. Must use the runtime capability. |
-| `_force_retry_transition` (1470-1475) | Exact evidence resolution (tier 1), conditional create-only `update-ref ref checkpoint ""` (tier 3), then save retry state. An interrupted pin must be re-observed by exact identity before state is advanced. The checkpoint precedes the pin. |
-| `_validate_recover_admission` (1608-1610) | Two exact-ref resolutions (tier 1) establish authorized branch and evidence identities; fresh operator admission must refuse shutdown before it begins. |
-| `_recover_unsafe_bound_execution_workspace` (1635-1746) | Exact branch/evidence resolution; create-only local evidence; conditional remote evidence resolution and create-only pin; remote evidence observation and conditional create-only leased push; remote re-observation and leased branch push; registered-worktree proof and forced removal; branch re-observation and expected-old `update-ref`; manager preparation (tiers 1-3). Interruption after evidence push, branch push, worktree removal or CAS requires exact re-observation on re-entry. The local-pin replay gap is addressed as described above; other interruption boundaries still require proof. |
-| `_canonical_reconcile_assertion`, `_automatic_zero_delta_authorization` (1845, 1939) | `rev-parse --verify` of a user revision and `merge-base --is-ancestor` (tier 1), respectively. Both authorize work rather than being standalone status; fresh admission and already-admitted drain must be distinguished. |
-| `_validate_control_reconcile_admission` (2014-2044) | Resolve local HEAD; `fetch --prune` control branch (tier 3, updates tracking refs); exact remote tracking ref resolution; one or two ancestry tests (tier 1). Operator admission is not a read-only exception even though it is named validation. |
-| `_workspace_cleanup_cohort` (2398, 2429) | `for-each-ref` (tier 1) and `ls-remote` wildcard (tier 2), after manager worktree registration observation. It serves cleanup inventory; whether a standalone dry-run caller may bypass hosted owner must be proven at all callers before retaining raw transport. Apply decisions cannot rely on unowned observations. |
-| `_git_runtime` (2887-2889) | Raw transport is the intended single implementation behind owner checking. It forwards `input_text`, and maps a matching signal after a failed command; it does not gate a stop before spawn. Retain this transport, not a second default runtime runner. |
-| `_remote_exists_for_status` (2993) | `remote` (tier 1) for status/preflight diagnostics, no fetch or mutation. This is a candidate standalone exception, but caller audit and proof that the result is never admission authority remain open. |
-| `_accepted_execution_report` (6293-6312) | `log -1`; `ls-tree` and conditional `cat-file -p`; conditional parent lookup and another parent lookup (tier 1). These establish exact accepted execution evidence and are runtime authority, not status. |
-| `_published_accepted_execution_report`, `_retire_integrated_workspace` (6381, 6607) | Parent lookup (tier 1), followed by provenance and cleanup proof; missing disposable refs are permitted only for proven published integration. Must retain exact parent identity during replay. |
-| `_integrate_accepted` (6476-6540) | Conditional ancestry tests (tier 1); leased product `push` (tier 3); remote re-observation (tier 2); optional product fetch and `merge --ff-only` (tier 3). A push interrupted after remote success requires exact remote re-observation, not blind retry; control completion and cleanup follow only after publication proof. |
-| `_prove_published_product_checkpoint`, `_find_accepted_integration_commit`, `_accepted_integration_commit_matches_report`, `_trailerless_integration_matches_report` (7327-7476) | Raw `show -s --format=%B`, `log --format=%H`, and parent lookups (tier 1), mixed with runtime-backed proof helpers. These observations authorize integration or retirement and require owner authority. Legacy trailerless proof must remain exact. |
-| `_complete_accepted` (7528-7613) | Leased control push of an already exact local transition, or ticket rename followed by `add -A`, `commit -m`, exact proof and leased push (tier 3). On failed/ambiguous push the existing classification re-observes exact published control identity. Preserve predecessor lease, local commit proof and already-admitted drain. |
-| `_safe_running_product_descendant`, `_merge_accepted_product_descendant` (8233-8353) | Ancestry tests and parent lookup (tier 1); WAL `merging` before checkout changes; owner-aware fast-forward and merge/abort; `merged` WAL before leased product push (tier 3), followed by remote observation on failure and `published` WAL. Recovery must prove the exact two-parent merge and predecessor; do not add a stop gate after merge or push. |
-| `_prove_product_generation` (8508-8511) | Product `fetch --prune` (tier 3) then tracking ref resolution (tier 1), used to authorize recovery. Fetch is not a standalone observation and updates local Git state. |
-| `_execution_workspace_for_rewrite_recovery` (8561-8576) | `rev-parse --git-common-dir`, `rev-parse --show-toplevel`, another common-dir, `symbolic-ref`, `rev-parse --verify HEAD`, `status --porcelain` (tier 1). These bind the staged rewrite to the registered worktree and must use the owner-aware runner. |
-| `_prove_unpublished_lifecycle_lineage`, `_prove_bound_ticket_descendant` (8649-8710) | Parent lookup and ancestry (tier 1) mixed with runtime-backed range and path proofs. These are authority for replay and cannot be treated as standalone status. |
-| `_apply_lifecycle_once`, `_apply_execution_lifecycle` (8785-8947) | Report write and possible ticket rename precede `add -A`, `commit`; replay loop fetches control, resolves heads, proves parent/ancestry, conditionally fast-forwards or resets, creates lifecycle commit and pushes (tiers 1-3). Exact remote lifecycle observation precedes deciding whether a previous push succeeded. Must preserve replay after commit, reset, and ambiguous push, including the existing bounded race loop. |
-| `_reconcile_resume_owned` (10650-10698) | Control HEAD and exact evidence ref resolutions, predecessor ancestry (tier 1), then durable resolving state and publication/re-observation. Evidence identity must remain exact. |
-| `_normalize_stranded_execution` (10815-10855) | Product and control `fetch --prune` (tier 3), tracking/HEAD resolution, ancestry, conditional control `merge --ff-only` (tier 3); worktree proof and final state save follow. Re-entry must re-observe a completed fetch or merge and retain admitted generation proof. |
-| `_recover_interrupted_execution` (10993-11031) | Product and control `fetch --prune` (tier 3), tracking refs and control HEAD resolution (tier 1), then worktree proof and state save. These are recovery authority, not preflight. |
-
-### Helper-internal command expansion
-
-All of these helpers default to `run_git` in `src/devlegate/git.py`; a caller
-that omits `runner` therefore bypasses the engine seam. Explicit propagation
-must include every nested call. This list expands the helpers used by the
-reviewed raw boundaries, rather than counting each source expression as one
-subprocess:
-
-* `resolve_commit`: non-exact revision uses `rev-parse --verify`; exact ref
-  delegates to `resolve_ref_commit`, which uses `show-ref --verify --quiet`,
-  then, if present, `show-ref --verify` and `rev-parse --verify`. On a race it
-  can repeat the quiet probe. `resolve_object` uses the quiet probe for exact
-  refs and then `rev-parse --verify`.
-* `parent_commit` delegates to `commit_parents`: an object ID can trigger
-  `cat-file -e` followed by `rev-list --parents -n 1`. `read_path` calls
-  `ls-tree -z` and, if present, `cat-file -p`. `read_object` can run
-  `cat-file -e`, `cat-file -t`, and `cat-file -p`.
-* `delete_branch_if_unoccupied` runs `worktree list --porcelain`, a branch
-  `rev-parse --verify`, compare-and-delete `update-ref -d`, and another
-  worktree listing; failure or occupancy after deletion can cause create-only
-  ref restoration. A strict stop between delete and restoration can strand an
-  occupied branch and needs transaction-specific handling.
-* `fetch_ref`, `push_refs`, `create_ref_if_absent`, `compare_and_swap_ref`,
-  `update_ref`, `merge_fast_forward`, `reset_hard`, `add_all`, `commit`,
-  `hash_object`, and `remove_worktree` each invoke the corresponding single Git
-  command. Fetch, index writes and `hash-object -w` are effects even if the
-  caller uses them in a proof. `is_ancestor`, `remote_ref`, `file_history_commit`,
-  `common_dir`, `worktree_root`, `branch_name`, and `working_tree_status` each
-  make one observation command.
-
-### Remaining coherent implementation families
-
-1. Accepted product and control integration, including proof helpers and both
-   leased publication paths. Exercise wrong-owner/pre-admission stop and real
-   ambiguous-success re-entry after each product and control push and merge.
-2. Control lifecycle, including staged report/ticket changes, commit, reset,
-   fetch and push. Exercise re-entry after local commit, reset and remote success,
-   and wrong-owner/fresh-stop refusal. Preserve admitted drain.
-3. Operator and stranded recovery, including local/remote evidence publication,
-   worktree removal and ref CAS. Prove each remaining ambiguous effect and exact
-   identity on re-entry.
-4. Cleanup, including cohort discovery, worktree proof, remote leases and the
-   multi-command branch deletion/restoration helper. Test interruption after
-   deletion and restoration, wrong owner and fresh-stop admission.
-5. Complete the raw/default/indirect candidate register for all remaining
-   functions and prove or reject status/preflight exceptions. Then audit checkpoint
-   and rework observations with the same fresh-admission versus drain distinction.
-
-The remaining source sites outside this table and any default or indirect runner
-not yet traced are unverified, not implicitly approved exceptions.
+These tests also preserve the distinction used by all runtime workflows:
+shutdown before a fresh command is an admission denial, while shutdown during
+or after an irreversible command leaves durable WAL/evidence and requires exact
+re-observation on safe re-entry. The transport never performs a generic retry.

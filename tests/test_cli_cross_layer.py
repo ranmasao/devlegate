@@ -21,7 +21,7 @@ def test_same_parent_replacement_requires_exact_single_parent_git_topology(
     git(repo, "add", "replacement.txt")
     git(repo, "commit", "-m", "rewritten product tip")
     target = git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert _is_same_parent_replacement(repo, original, target)
+    assert _is_same_parent_replacement(repo, original, target, runner=git)
 
     git(repo, "reset", "--hard", parent)
     (repo / "divergent.txt").write_text("divergent parent\n")
@@ -31,7 +31,7 @@ def test_same_parent_replacement_requires_exact_single_parent_git_topology(
     git(repo, "add", "divergent.txt")
     git(repo, "commit", "-m", "unrelated product tip")
     unrelated = git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert not _is_same_parent_replacement(repo, original, unrelated)
+    assert not _is_same_parent_replacement(repo, original, unrelated, runner=git)
 
 def test_same_parent_replacement_rejects_merge_commit(git_fixture):
     repo = git_fixture["working"]
@@ -46,7 +46,7 @@ def test_same_parent_replacement_rejects_merge_commit(git_fixture):
     git(repo, "commit", "-m", "main side")
     git(repo, "merge", "--no-ff", "replacement-side", "-m", "merge replacement")
     target = git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert not _is_same_parent_replacement(repo, original, target)
+    assert not _is_same_parent_replacement(repo, original, target, runner=git)
 
 @pytest.mark.parametrize("command", ["run", "daemon"])
 def test_removed_service_commands_are_unknown(command, monkeypatch, capsys):

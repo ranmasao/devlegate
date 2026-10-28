@@ -31,9 +31,12 @@ the service runner, so owner and shutdown enforcement remain in force.
 | `delete_branch` / `reset_hard` | local branch deletion / checkout reset; Tier 3 local ref/worktree writes | Exact checkpoint identity and branch/worktree ownership are proven first. |
 
 No read helper performs fetch, push, ref update, branch change, cleanup, or
-worktree mutation. The sole subprocess seam is `_git_runtime`, which adds only
+worktree mutation. Runtime-owned subprocesses use `_git_runtime`, which adds
 owner-thread and shutdown interruption policy; command construction is not
-performed there.
+performed there. `_remote_exists_for_status` is the sole deliberate raw
+transport exception: it runs the local `git remote` read only for
+`check_result()` presentation and treats an observation failure as a failed
+diagnostic. It is not used for admission, state, or workflow decisions.
 
 ## Runtime Mutation Ownership
 

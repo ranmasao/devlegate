@@ -732,7 +732,7 @@ def _status_fingerprint(status: str) -> str:
 
 
 def _is_same_parent_replacement(
-    repo: Path, original: str, target: str, *, runner: GitRunner = _git
+    repo: Path, original: str, target: str, *, runner: GitRunner
 ) -> bool:
     """Prove that two distinct commits are single-parent replacements."""
     parent_map: dict[str, tuple[str, ...]] = {}
