@@ -1,0 +1,39 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "aab2141cb18a20286470e20a7950214e6eeec9e6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "78a9f1d50e1b4b07801f08e460555591",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the runtime-wide source-vetted inventory and before/after command/effect ledger required by the ticket.",
+    "Migrate and test the remaining direct runtime Git paths in lifecycle, recovery, control publication, and cleanup families.",
+    "Add focused wrong-thread, pre-command shutdown, and ambiguous-outcome regressions for each remaining materially changed boundary.",
+    "Run the exact-checkpoint CI required by the ticket."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the runtime-wide source-vetted inventory and before/after command/effect ledger required by the ticket.",
+      "Migrate and test the remaining direct runtime Git paths in lifecycle, recovery, control publication, and cleanup families.",
+      "Add focused wrong-thread, pre-command shutdown, and ambiguous-outcome regressions for each remaining materially changed boundary.",
+      "Run the exact-checkpoint CI required by the ticket."
+    ],
+    "report": null,
+    "summary": "Added a durable ref-retirement intent that repairs an exact absent local ref after a crash when a newly occupied worktree is proven. Migrated accepted-integration and interrupted-recovery Git observations and effects to the ServiceEngine runtime runner seam. Added a real-Git restart regression for the delete-to-occupancy crash boundary."
+  },
+  "workspace_head": "aa3e43abb2742b6c484571d16ac657cd7d135ee0"
+}
