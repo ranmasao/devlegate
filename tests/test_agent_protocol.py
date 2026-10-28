@@ -117,16 +117,39 @@ def test_managed_template_upgrade_is_compare_and_swap_and_idempotent(
     shutil.copytree(packaged_template_root(), packaged)
     architect = packaged / "skills/architect/SKILL.md.tmpl"
     architect.write_text(architect.read_text() + "\nUPGRADED PROTOCOL\n")
+    reviewer = packaged / "skills/reviewer/SKILL.md.tmpl"
+    reviewer.write_text(reviewer.read_text() + "\nUPGRADED REVIEW PROTOCOL\n")
     monkeypatch.setattr(
         "devlegate.agent_protocol.packaged_template_root", lambda: packaged
     )
 
-    assert upgrade_project_templates(tmp_path, context()) == (2, 1, 1)
+    assert upgrade_project_templates(tmp_path, context()) == (2, 2, 2)
     assert "UPGRADED PROTOCOL" in (
         tmp_path / "skills/architect/SKILL.md"
     ).read_text()
+    assert "UPGRADED REVIEW PROTOCOL" in (
+        tmp_path / "skills/reviewer/SKILL.md"
+    ).read_text()
     assert upgrade_project_templates(tmp_path, context()) == (2, 0, 0)
     assert upgrade_project_templates(tmp_path, context(), check=True) == (2, 0, 0)
+
+
+def test_rendered_role_contracts_keep_completion_and_review_authority_separate(
+    tmp_path,
+):
+    initialize_project(tmp_path, context())
+
+    architect = (tmp_path / "skills/architect/SKILL.md").read_text()
+    reviewer = (tmp_path / "skills/reviewer/SKILL.md").read_text()
+
+    assert (
+        "Bound a ticket so one worker can make a coherent, independently reviewable"
+        in architect
+    )
+    assert "local checklist or one safe patch is not ticket completion" in architect
+    assert "complete canonical assignment and the\ncumulative evidence" in reviewer
+    assert "`completed` claim does not\nreplace this assessment" in reviewer
+    assert "does not excuse\nunmet requirements" in reviewer
 
 
 def test_managed_template_upgrade_refuses_customized_source(tmp_path, monkeypatch):

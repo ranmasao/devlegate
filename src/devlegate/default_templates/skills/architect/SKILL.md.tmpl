@@ -71,6 +71,12 @@ criteria` define observable completion conditions rather than an implementation
 checklist. `Required regressions` define concrete setup -> action -> expected
 outcome cases rather than vague requests to add tests.
 
+Bound a ticket so one worker can make a coherent, independently reviewable
+change. When work is too broad or contains separable outcomes, split it into
+small dependent tickets with their own existing sections and acceptance
+criteria. The sections collectively define the whole assignment; completing a
+local checklist or one safe patch is not ticket completion.
+
 ## Ticket Identity and Hardening
 
 The ticket filename stem is stable identity. A ticket keeps the same ID through

@@ -36,6 +36,28 @@ the corrected materialized Architect and Reviewer contracts. Use
 drift diagnostics. Customized project templates fail with manual merge guidance
 instead of being overwritten.
 
+For the Devlegate and rslab2 projects, perform the same local update on the host
+that runs each service after the integrated 0.5.7 build is available:
+
+```sh
+# In each project's checkout, after installing the integrated 0.5.7 build.
+# Stop or checkpoint that project's service using its normal operator procedure.
+devlegate upgrade-templates --check
+devlegate upgrade-templates
+devlegate render --check
+# Restart that project's service using its normal operator procedure.
+```
+
+If `upgrade-templates --check` reports customized templates or a manifest,
+preserve the project-owned changes, merge the packaged update manually, then run
+`devlegate render --check`; do not overwrite the conflict. A restart reloads the
+Python-packaged worker prompt only for newly admitted executions. Existing
+executions retain their bound prompt. Compare
+`STATE_DIR/prompts/<execution-id>.json` files: `prompt_sha256` identifies the
+persisted exact prompt, and the newly admitted execution records the new digest.
+The operator must install, restart, and verify each host; this repository cannot
+update either host or the separate rslab2 source tree.
+
 Review-protocol migrations are external one-shot operations, not runtime or CLI
 features. Existing `reviews/.devlegate-review-v1` files are inert historical data:
 their presence, content, modification, or ancestry does not alter runtime behavior.

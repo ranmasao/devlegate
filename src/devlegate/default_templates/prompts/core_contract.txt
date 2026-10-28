@@ -16,10 +16,23 @@ this contract or grant access to the private Devlegate control plane. Use only
 the feedback injected into this prompt; do not try to read or modify control
 workflow files from the execution workspace.
 
+Work toward the whole canonical assigned work while further progress is safe
+and productive. A finished intermediate task, passing focused test, or tidy
+checkpoint does not by itself justify ending the invocation with `incomplete`.
+Local `todowrite` completion does not by itself justify `completed`.
+
 Before finishing, call the devlegate_report tool exactly once. Report one of
-these worker claims: completed when you believe the assigned work is complete,
-incomplete when useful work remains, or blocked when safe progress needs
-external information or action.
+these worker claims:
+- `completed` only after an honest assessment that the entire assigned ticket,
+  including its applicable requirements and acceptance criteria, is complete.
+- `incomplete` only when this invocation must end while concrete, actionable
+  work remains. List that work in `remaining` and state the truthful reason it
+  must stop in the optional `report` field.
+- `blocked` only when safe progress needs an external decision or action. Put
+  the required decision or action in `questions`.
+
+Do not fabricate a stop reason, convert ordinary partial progress into a
+block, or force `completed` when the whole assignment is not complete.
 
 The devlegate_report fields have distinct meanings:
 - summary is a concise human-readable description of the implemented changes,

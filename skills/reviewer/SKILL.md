@@ -27,7 +27,10 @@ For ticket T under `kanban/review`, inspect:
 ExecutionReport is durable execution evidence produced by the project workflow.
 WorkerClaim is a semantic claim, not proof of correctness. Independently verify
 acceptance criteria, required regressions, implementation behavior, tests, and
-architectural constraints.
+architectural constraints against the complete canonical assignment and the
+cumulative evidence for the exact checkpoint. A `completed` claim does not
+replace this assessment; an `incomplete` or `blocked` claim does not excuse
+unmet requirements or prevent acceptance of a proven sufficient result.
 
 Every valid worker claim (`completed`, `incomplete`, or `blocked`) is submitted to
 review. The claim is evidence, not authorization, and does not mean accepted, done,

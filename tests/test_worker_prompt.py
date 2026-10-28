@@ -94,6 +94,48 @@ def test_fresh_prompt_is_narrow_and_deterministic():
         assert private_text not in section(result, "Work Directive")
 
 
+@pytest.mark.parametrize(
+    "directive, expected",
+    [
+        (WorkDirective.FRESH, "Implement the assigned work in the current workspace."),
+        (
+            WorkDirective.RESUME,
+            "Continue the existing implementation in the current workspace. "
+            "Inspect the existing workspace and current changes before editing. "
+            "Preserve useful existing changes and do not discard valid partial work. "
+            "Continue the same assigned work.",
+        ),
+        (
+            WorkDirective.REWORK,
+            "Inspect the carried-forward implementation and current review feedback "
+            "before editing. Revise the existing implementation against that feedback "
+            "while preserving correct work already present and keeping the canonical "
+            "assigned work unchanged.",
+        ),
+    ],
+)
+def test_directive_bytes_are_composed_without_rewriting(directive, expected):
+    assert section(prompt(directive), "Work Directive") == expected
+
+
+def test_worker_termination_policy_distinguishes_pending_work_and_blockers():
+    contract = section(prompt(WorkDirective.FRESH), "Core Worker Contract")
+
+    assert "whole canonical assigned work" in contract
+    assert (
+        "does not by itself justify ending the invocation with `incomplete`" in contract
+    )
+    assert (
+        "Local `todowrite` completion does not by itself justify `completed`"
+        in contract
+    )
+    assert "entire assigned ticket" in contract
+    assert "must end while concrete, actionable\n  work remains" in contract
+    assert "truthful reason it\n  must stop in the optional `report` field" in contract
+    assert "external decision or action" in contract
+    assert "Do not fabricate a stop reason" in contract
+
+
 def test_resume_prompt_stays_without_topology():
     result = prompt(WorkDirective.RESUME)
 
@@ -144,6 +186,25 @@ def test_rework_feedback_is_fenced_verbatim_and_hashed_deterministically(tmp_pat
     assert artifact.parent.stat().st_mode & 0o777 == 0o700
     mark_worker_prompt_sent(artifact)
     assert json.loads(artifact.read_text())["delivery"] == "sent"
+
+
+def test_resume_feedback_preserves_the_verified_input_without_changing_directive():
+    feedback = "Continue after an interrupted execution."
+    result = prompt(
+        WorkDirective.RESUME,
+        review_feedback=feedback,
+        review_source="reviews/T-1/abc.md (sha256:def)",
+    )
+
+    assert section(result, "Work Directive") == (
+        "Continue the existing implementation in the current workspace. Inspect the "
+        "existing workspace and current changes before editing. Preserve useful "
+        "existing changes and do not discard valid partial work. Continue the same "
+        "assigned work."
+    )
+    assert untrusted_section(result, "Current Review Feedback") == (
+        "Source: reviews/T-1/abc.md (sha256:def)\n\n" + feedback
+    )
 
 
 def test_prompt_artifact_refuses_symlinked_private_directory(tmp_path):
