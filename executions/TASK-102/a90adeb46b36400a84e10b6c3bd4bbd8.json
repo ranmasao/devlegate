@@ -1,0 +1,35 @@
+{
+  "code_base_head": "e6b12b68aaf00c8a1ad1328360df2f50d35f8061",
+  "conclusion": "incomplete",
+  "control_head": "0e25be5ebe2738de282ee765ffca05354196c5b4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-102",
+  "execution_id": "a90adeb46b36400a84e10b6c3bd4bbd8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-102",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain a green exact-checkpoint run of ./dev coverage -n 4 --dist=worksteal and investigate repeated parallel service timing failures.",
+    "Extend cross-layer coverage for real divergent control histories and CLI JSON/human status observations."
+  ],
+  "report_artifact": "executions/TASK-102/a90adeb46b36400a84e10b6c3bd4bbd8.md",
+  "report_sha256": "d0cbb172dcc955b997cc1fcf5a4f3486fd270f750c967a658ee651740e1695a3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-102",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Obtain a green exact-checkpoint run of ./dev coverage -n 4 --dist=worksteal and investigate repeated parallel service timing failures.",
+      "Extend cross-layer coverage for real divergent control histories and CLI JSON/human status observations."
+    ],
+    "report": "The exact-checkpoint full coverage run repeatedly encountered service timing failures under parallel load; the affected tests pass in isolation. An earlier full run passed before the final test and performance changes.",
+    "summary": "Reconciled current failed-execution status against published control history while preserving failure metadata and immutable execution reports. Added transition, recovery-marker, reload, and later-failure coverage with conservative handling of uncertain control observations."
+  },
+  "workspace_head": "7b574cf22c1ed09d642ead75f77dfa2787093e84"
+}
