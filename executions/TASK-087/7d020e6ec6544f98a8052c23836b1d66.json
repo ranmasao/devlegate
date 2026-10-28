@@ -1,0 +1,29 @@
+{
+  "code_base_head": "cb94ac849d4d641846bad7b85ed5efcd4d2e6e7d",
+  "conclusion": "completed",
+  "control_head": "b31d9020e78cc45e597725116c8ff81078e1164e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-087",
+  "execution_id": "7d020e6ec6544f98a8052c23836b1d66",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-087",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-087",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Strengthened packaged worker completion and termination guidance, and regenerated managed Architect and Reviewer role contracts. Added focused contract regressions, an evidence-linked audit, and host-by-host 0.5.7 upgrade instructions for Devlegate and rslab2."
+  },
+  "workspace_head": "62a06aea2408e05e4430fa5b7b200af6d29ea339"
+}
