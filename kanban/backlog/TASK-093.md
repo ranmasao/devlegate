@@ -24,3 +24,7 @@ This requirement was briefly added to TASK-092 while its fourth execution was al
 ## Scheduling boundary
 
 Start only after TASK-092 has been accepted and integrated, so cleanup semantics are stable. Use an ordinary new execution, not mutation of TASK-092 during its lifecycle.
+
+## Release scheduling decision — 2026-10-28
+
+**Required for Devlegate 0.5.7 before final packaging and tag.** This is operator-facing UX/correctness work, not part of the first-class QA pipeline deferred to 0.6.x. Schedule and validate this ticket in 0.5.7, preserving current owner, lifecycle and evidence safety constraints. Coordinate the final release gate with TASK-107 cleanup.
