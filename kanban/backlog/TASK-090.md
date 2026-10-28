@@ -31,3 +31,7 @@ Priority: low-to-medium; help/parser UX correctness with an observed attempted m
 ## Additional 0.5.7 help-layout regression (2026-10-27)
 
 The top-level Project help may concatenate the longest command and its description: `upgrade-templatessafely upgrade managed role templates`. Fix the actual shared help layout/width calculation, guaranteeing visible separation (preferably two spaces) for all commands, including longer future names and narrow output where applicable. Preserve command spelling and parser behavior. Add focused help-formatting tests asserting separation and command discovery rather than freezing incidental full output. Coordinate with the existing host/reconcile help work above.
+
+## Release scheduling decision — 2026-10-28
+
+**Required for Devlegate 0.5.7 before final packaging and tag.** This is operator-facing UX/correctness work, not part of the first-class QA pipeline deferred to 0.6.x. Schedule and validate this ticket in 0.5.7, preserving current owner, lifecycle and evidence safety constraints. Coordinate the final release gate with TASK-107 cleanup.
