@@ -71,6 +71,43 @@ def test_canonical_evidence_identity_remains_valid():
     )
 
 
+def test_force_retry_evidence_observation_requires_owner(tmp_path, monkeypatch):
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine.repo = tmp_path
+    engine.execution_worktree_root = tmp_path
+    engine._host_owner_thread_id = -1
+    engine._stop_event = None
+    engine._state = {
+        "execution_id": "exec",
+        "execution_control_head": "control",
+        "execution_base_head": "base",
+    }
+    monkeypatch.setattr(engine, "_sync_control", lambda: ("control", "remote"))
+
+    class WorkspaceManager:
+        path = tmp_path
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def _registrations(self):
+            return {tmp_path.resolve(): {}}
+
+        def _validate_existing(self, *args):
+            return object()
+
+        def verify_submodules(self, workspace):
+            pass
+
+        def checkpoint(self, *args, **kwargs):
+            return SimpleNamespace(after_head="checkpoint")
+
+    monkeypatch.setattr(runtime, "ExecutionWorkspaceManager", WorkspaceManager)
+    monkeypatch.setattr(runtime, "_git", lambda *a, **k: pytest.fail("Git spawned"))
+    with pytest.raises(DevlegateError):
+        engine._force_retry_transition("T-1", "request", {}, {})
+
+
 @pytest.mark.parametrize("shutdown", [False, True])
 def test_product_evidence_rejects_unowned_or_stopped_git(
     tmp_path, monkeypatch, shutdown

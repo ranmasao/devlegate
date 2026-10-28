@@ -1467,12 +1467,12 @@ class ServiceEngine:
                 f"forced retry workspace checkpoint failed: {error}"
             ) from error
         evidence_ref = f"refs/devlegate/recovery/force-retry/{ticket_id}/{execution_id}"
-        existing = resolve_commit(self.repo, evidence_ref, runner=_git)
+        existing = resolve_commit(self.repo, evidence_ref, runner=self._git_runtime)
         if existing is not None and existing != checkpoint.after_head:
             raise DevlegateError("forced retry evidence ref has conflicting identity")
         if existing is None:
             pinned = create_ref_if_absent(
-                self.repo, evidence_ref, checkpoint.after_head, runner=_git
+                self.repo, evidence_ref, checkpoint.after_head, runner=self._git_runtime
             )
             if pinned.returncode:
                 raise DevlegateError("cannot preserve forced retry evidence")
