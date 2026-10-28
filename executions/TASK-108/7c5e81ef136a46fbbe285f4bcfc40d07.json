@@ -1,0 +1,37 @@
+{
+  "code_base_head": "6630a2283a347eee5f93cebe369903c05a1c9677",
+  "conclusion": "incomplete",
+  "control_head": "8b61db566a628ae1e05b9d284b8c8329afc94174",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-108",
+  "execution_id": "7c5e81ef136a46fbbe285f4bcfc40d07",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-108",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Design durable local ref retirement intent and safe restart recovery, and prove the post-delete crash and independently changed ref cases using real Git.",
+    "Audit and harden remaining direct and nested Git calls across accepted integration, lifecycle, recovery, cleanup and preflight; produce a complete before/after command and effect ledger.",
+    "Add focused shutdown and ambiguous-effect tests for remaining boundaries and run exact-checkpoint CI."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-108",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Design durable local ref retirement intent and safe restart recovery, and prove the post-delete crash and independently changed ref cases using real Git.",
+      "Audit and harden remaining direct and nested Git calls across accepted integration, lifecycle, recovery, cleanup and preflight; produce a complete before/after command and effect ledger.",
+      "Add focused shutdown and ambiguous-effect tests for remaining boundaries and run exact-checkpoint CI."
+    ],
+    "report": null,
+    "summary": "Routed forced-retry evidence resolution and create-only pinning through the owner-aware runtime Git capability. Added a regression proving an unowned caller cannot spawn Git at the evidence observation boundary."
+  },
+  "workspace_head": "96ab1e32ff32768f33ae741b46d38f7004bf023b"
+}
