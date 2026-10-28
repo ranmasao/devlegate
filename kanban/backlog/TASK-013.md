@@ -85,3 +85,7 @@ provenance/authority, or fail-closed handling.
 - Focused commands for each semantic domain touched.
 - Full authoritative test/coverage run.
 - Ruff.
+
+## Scheduling decision — 2026-10-28
+
+**Deferred QA work: target the beginning of the 0.6.x development cycle, not a 0.5.7 release gate.** Preserve the existing coverage-gap investigation and behavioral proof requirements, but re-evaluate them against the then-current integrated source and tests before scheduling. The deferral does not waive regressions, targeted tests, or exact-checkpoint CI required for other 0.5.7 implementation tickets.
