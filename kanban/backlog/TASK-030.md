@@ -103,3 +103,7 @@ separate concerns:
 - Test process exits nonzero -> agent receives failed state and bounded diagnostics.
 - Tool/backend interruption does not report PASS by absence of a running process.
 - Two worker executions cannot observe or control each other's test runs.
+
+## Scheduling decision — 2026-10-28
+
+**Deferred to the beginning of the 0.6.x development cycle. Not a release-0.5.7 gate.** Keep this ticket and its dependency graph intact; before admission, revalidate the specification against the then-integrated source, workflow and validation capabilities. Existing focused tests and exact-checkpoint CI required by 0.5.7 implementation work remain mandatory; this deferral only applies to the new first-class QA pipeline.
