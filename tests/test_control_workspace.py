@@ -886,8 +886,7 @@ def test_retirement_restores_occupied_ref_when_shutdown_follows_delete(
     assert git(working, "branch", branch, head).returncode == 0
     foreign = tmp_path / "foreign"
     assert (
-        git(working, "worktree", "add", "--detach", str(foreign), head).returncode
-        == 0
+        git(working, "worktree", "add", "--detach", str(foreign), head).returncode == 0
     )
     stop = threading.Event()
     original = runtime_module._git
@@ -903,15 +902,19 @@ def test_retirement_restores_occupied_ref_when_shutdown_follows_delete(
         return result
 
     monkeypatch.setattr(runtime_module, "_git", interrupt_after_delete)
-    with engine._stop_context(stop), pytest.raises(
-        runtime_module.WorkflowBlockedError, match="became attached"
+    with (
+        engine._stop_context(stop),
+        pytest.raises(runtime_module.WorkflowBlockedError, match="became attached"),
     ):
         engine._retire_execution_refs(branch, head)
 
     assert resolve_commit(working, f"refs/heads/{branch}") == head
     stop.clear()
-    with engine._stop_context(stop), pytest.raises(
-        runtime_module.WorkflowBlockedError, match="attached to worktree"
+    with (
+        engine._stop_context(stop),
+        pytest.raises(
+            runtime_module.WorkflowBlockedError, match="attached to worktree"
+        ),
     ):
         engine._retire_execution_refs(branch, head)
 
@@ -927,8 +930,7 @@ def test_retirement_restart_restores_occupied_ref_after_delete_crash(
     assert git(working, "branch", branch, head).returncode == 0
     foreign = tmp_path / "foreign"
     assert (
-        git(working, "worktree", "add", "--detach", str(foreign), head).returncode
-        == 0
+        git(working, "worktree", "add", "--detach", str(foreign), head).returncode == 0
     )
     # Accepted cleanup can retire an older workspace while a different execution
     # owns agent_running. That state must still durably carry this delete intent.
@@ -1636,7 +1638,11 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
         ),
     )
 
-    result = engine.cleanup_workspaces(apply=True, limit=1)
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+    monkeypatch.setattr(engine, "_refresh_published_status", lambda: None)
+    engine._reconcile_workspace_backlog()
+    result = {"decisions": engine._state["workspace_cleanup"]["last_pass"]}
 
     assert result["decisions"] == [
         {
@@ -1651,9 +1657,149 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
         }
     ]
     assert not workspace.path.exists()
+    assert any(
+        "status=blocked" in line
+        and "worktree=absent local_ref=present upstream_ref=absent" in line
+        and "upstream execution ref is unavailable" in line
+        for line in logs
+    )
+    assert any(
+        "pass finish" in line and "retired=0 blocked_skipped=1" in line for line in logs
+    )
     assert (
         resolve_commit(engine.repo, f"refs/heads/{workspace.branch}") == workspace.head
     )
+
+
+def test_cleanup_logs_immediate_success_and_refusal(tmp_path, monkeypatch):
+    working, config, _ = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    report = SimpleNamespace(
+        ticket_id="T-1", execution_id="exec-1", execution_branch="devlegate/work/T-1"
+    )
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+    monkeypatch.setattr(engine, "_retire_integrated_workspace", lambda *_: None)
+    engine._pending_integrated_cleanup = (report, "head")
+    engine._finish_integrated_workspace_cleanup()
+    assert any(
+        "immediate pass start" in line and "execution=exec-1" in line for line in logs
+    )
+    assert any(
+        "status=retired" in line
+        and "worktree=absent local_ref=absent upstream_ref=absent" in line
+        for line in logs
+    )
+    assert engine._state["workspace_cleanup_event"]["status"] == "retired"
+
+    def refuse(*_args):
+        raise WorkflowBlockedError("local execution ref changed before removal")
+
+    monkeypatch.setattr(engine, "_retire_integrated_workspace", refuse)
+    monkeypatch.setattr(
+        engine,
+        "_cleanup_resource_status",
+        lambda *_: {
+            "worktree": "absent",
+            "local_ref": "present",
+            "upstream_ref": "unknown",
+        },
+    )
+    engine._pending_integrated_cleanup = (report, "head")
+    engine._finish_integrated_workspace_cleanup()
+    assert any(
+        "status=blocked" in line
+        and "local execution ref changed" in line
+        and "local_ref=present" in line
+        for line in logs
+    )
+    assert engine._state["workspace_cleanup_event"]["status"] == "blocked"
+
+
+def test_cleanup_historical_unchanged_blocker_is_not_logged_each_poll(
+    tmp_path, monkeypatch
+):
+    working, config, _ = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+    engine._reconcile_workspace_backlog()
+    first = list(logs)
+    engine._reconcile_workspace_backlog()
+    assert first
+    assert logs == first
+    assert engine.workspace_cleanup_status()["inventory"]["remaining"] == 1
+
+
+def test_cleanup_historical_success_logs_pass_and_confirmed_resources(
+    tmp_path, monkeypatch
+):
+    working, config, _ = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    target = {"ticket_id": "T-1"}
+    decisions = {
+        "ticket_id": "T-1",
+        "status": "retired",
+        "reason": "done execution is published and disposable",
+        "resources": {
+            "worktree": "absent",
+            "local_ref": "absent",
+            "upstream_ref": "absent",
+        },
+    }
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", lambda *_a, **_k: [target])
+    monkeypatch.setattr(
+        engine,
+        "cleanup_workspaces",
+        lambda **kwargs: {
+            "decisions": [decisions]
+            if kwargs["apply"]
+            else [{"ticket_id": "T-1", "status": "eligible"}]
+        },
+    )
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+    engine._reconcile_workspace_backlog()
+    assert any(
+        "historical pass start" in line and "apply_limit=1" in line for line in logs
+    )
+    assert any(
+        "status=retired" in line
+        and "worktree=absent local_ref=absent upstream_ref=absent" in line
+        for line in logs
+    )
+    assert any(
+        "examined=1 retired=1 blocked_skipped=0" in line
+        and "inventory_remaining=1" in line
+        for line in logs
+    )
+    assert engine.workspace_cleanup_status()["last_pass"] == [decisions]
+
+
+def test_cleanup_historical_interruption_preserves_error_details(tmp_path, monkeypatch):
+    working, config, _ = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+
+    def fail(*_args, **_kwargs):
+        raise WorkflowBlockedError("ownership conflict at /private/worktree")
+
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", fail)
+    engine._reconcile_workspace_backlog()
+    assert any(
+        "pass interrupted" in line and "ownership conflict" in line for line in logs
+    )
+    assert all("/private/worktree" not in line for line in logs)
+    assert engine.workspace_cleanup_status()["scan_complete"] is False
 
 
 def test_workspace_cleanup_ignores_unrelated_live_execution_and_resolution(tmp_path):
@@ -2615,9 +2761,7 @@ def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == first
 
 
-def test_reconciliation_git_rejects_nonowner_mutation_before_git(
-    tmp_path, monkeypatch
-):
+def test_reconciliation_git_rejects_nonowner_mutation_before_git(tmp_path, monkeypatch):
     devlegate, _working, _state, execution, _reconciliation, _first, second, _target = (
         _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
     )

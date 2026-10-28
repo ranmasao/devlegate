@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -678,6 +679,30 @@ def _log(message: str) -> None:
     service_log(message)
 
 
+def _cleanup_log_text(value: object) -> str:
+    """Keep useful Git diagnostics without logging paths or remote credentials."""
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"\b\w+://\S+", "<remote>", text)
+    text = re.sub(r"(?<![\w:])/(?:[^\s:]+)", "<path>", text)
+    return text[:500]
+
+
+def _log_cleanup_decision(scope: str, decision: dict[str, object]) -> None:
+    resources = decision.get("resources")
+    detail = ""
+    if isinstance(resources, dict):
+        detail = " " + " ".join(
+            f"{name}={_cleanup_log_text(resources.get(name, 'unknown'))}"
+            for name in ("worktree", "local_ref", "upstream_ref")
+        )
+    ticket = _cleanup_log_text(decision.get("ticket_id", "<unknown>"))
+    _log(
+        f"workspace cleanup {scope} ticket={ticket} "
+        f"status={_cleanup_log_text(decision.get('status', 'unknown'))}{detail} "
+        f"reason={_cleanup_log_text(decision.get('reason', ''))}"
+    )
+
+
 OPERATOR_ADMISSION_TIMEOUT = 1.0
 
 
@@ -805,6 +830,7 @@ class ServiceEngine:
         self._iteration_diagnostic: str | None = None
         self._workspace_cleanup_observation_error: str | None = None
         self._pending_integrated_cleanup: tuple[ExecutionReport, str] | None = None
+        self._cleanup_last_pass_log = float("-inf")
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.RLock()
@@ -1703,9 +1729,10 @@ class ServiceEngine:
                     options=(f"--force-with-lease={remote_evidence}:",),
                     runner=self._git_runtime,
                 )
-                if published.returncode and self._execution_remote_head(
-                    remote_evidence
-                ) != remote_head:
+                if (
+                    published.returncode
+                    and self._execution_remote_head(remote_evidence) != remote_head
+                ):
                     raise DevlegateError("cannot publish remote recovery evidence")
             if self._execution_remote_head(remote_evidence) != remote_head:
                 raise DevlegateError("cannot verify remote recovery evidence")
@@ -1763,7 +1790,10 @@ class ServiceEngine:
             raise DevlegateError("execution branch changed during explicit recovery")
         if current_head == observed_head:
             moved = compare_and_swap_ref(
-                self.repo, branch_ref, str(base_head), observed_head,
+                self.repo,
+                branch_ref,
+                str(base_head),
+                observed_head,
                 runner=self._git_runtime,
             )
             if moved.returncode:
@@ -5185,6 +5215,13 @@ class ServiceEngine:
         durable diagnostics, while a Git or remote failure must not prevent the
         normal ticket scheduler from making progress.
         """
+        log_pass = time.monotonic() - self._cleanup_last_pass_log >= 300
+        if log_pass:
+            self._cleanup_last_pass_log = time.monotonic()
+            _log(
+                "workspace cleanup historical pass start cohort_limit=32 "
+                "apply_limit=1 inventory_limit=10000"
+            )
         try:
             # Inspect a bounded cohort first. A blocked first candidate must
             # not consume the pass when a later candidate is independently
@@ -5206,6 +5243,13 @@ class ServiceEngine:
             if isinstance(eligible, dict) and isinstance(
                 eligible.get("ticket_id"), str
             ):
+                if not log_pass:
+                    log_pass = True
+                    self._cleanup_last_pass_log = time.monotonic()
+                    _log(
+                        "workspace cleanup historical pass start cohort_limit=32 "
+                        "apply_limit=1 inventory_limit=10000"
+                    )
                 selected = [
                     target
                     for target in cohort
@@ -5220,6 +5264,10 @@ class ServiceEngine:
                 # Preserve one blocked/absent diagnostic and advance the
                 # durable cursor when no candidate is currently eligible.
                 result = self.cleanup_workspaces(apply=True, limit=1)
+        except ShutdownInterrupted as error:
+            reason = _cleanup_log_text(str(error) or error.__class__.__name__)
+            _log(f"workspace cleanup historical pass interrupted: {reason}")
+            raise
         except (
             ExecutionWorkspaceError,
             GitAncestryError,
@@ -5230,6 +5278,8 @@ class ServiceEngine:
             DevlegateError,
             WorkflowBlockedError,
         ) as error:
+            reason = _cleanup_log_text(str(error) or error.__class__.__name__)
+            _log(f"workspace cleanup historical pass interrupted: {reason}")
             self._publish_workspace_cleanup_inventory()
             if not isinstance(self._state.get("workspace_cleanup"), dict):
                 self._state["workspace_cleanup"] = {
@@ -5251,7 +5301,6 @@ class ServiceEngine:
                     ),
                 )
                 self._refresh_published_status()
-            _log(f"automatic workspace reconciliation deferred: {error}")
             return
         decisions = result.get("decisions", [])
         if decisions:
@@ -5264,7 +5313,34 @@ class ServiceEngine:
             ]
             if selected:
                 self._state["workspace_cleanup_cursor"] = selected[-1]
+        for decision in decisions:
+            if isinstance(decision, dict) and (
+                decision.get("status") == "retired" or log_pass
+            ):
+                _log_cleanup_decision("historical", decision)
         self._publish_workspace_cleanup_inventory(decisions)
+        if log_pass:
+            inventory = self._state.get("workspace_cleanup", {})
+            totals = (
+                inventory.get("inventory", {}) if isinstance(inventory, dict) else {}
+            )
+            applied_ids = {d.get("ticket_id") for d in decisions if isinstance(d, dict)}
+            pass_decisions = [d for d in decisions if isinstance(d, dict)] + [
+                d
+                for d in dry_run.get("decisions", [])
+                if isinstance(d, dict) and d.get("ticket_id") not in applied_ids
+            ]
+            retired = sum(d.get("status") == "retired" for d in pass_decisions)
+            blocked = sum(
+                d.get("status") in ("blocked", "skipped") for d in pass_decisions
+            )
+            _log(
+                f"workspace cleanup historical pass finish examined={len(cohort)} "
+                f"retired={retired} blocked_skipped={blocked} "
+                f"inventory_remaining={totals.get('remaining', 'unknown')} "
+                f"inventory_status={inventory.get('status', 'unknown')} "
+                f"inventory_scan_complete={inventory.get('scan_complete', False)}"
+            )
 
     def _publish_workspace_cleanup_inventory(
         self, last_decisions: list[object] | None = None
@@ -5348,6 +5424,16 @@ class ServiceEngine:
                 workspace_cleanup=cleanup,
             )
             self._refresh_published_status()
+        old_decisions = (
+            previous.get("decisions", []) if isinstance(previous, dict) else []
+        )
+        for decision in cleanup.get("decisions", []):
+            if (
+                isinstance(decision, dict)
+                and decision not in old_decisions
+                and decision.get("status") in ("blocked", "skipped")
+            ):
+                _log_cleanup_decision("inventory", decision)
 
     def _recover_accepted_integration(self) -> int:
         try:
@@ -6619,6 +6705,12 @@ class ServiceEngine:
         if pending is None:
             return
         report, control_head = pending
+        ticket = _cleanup_log_text(report.ticket_id)
+        execution = _cleanup_log_text(report.execution_id)
+        _log(
+            f"workspace cleanup immediate pass start ticket={ticket} "
+            f"execution={execution} limit=1"
+        )
         cleanup = {
             "ticket_id": report.ticket_id,
             "status": "retired",
@@ -6642,10 +6734,29 @@ class ServiceEngine:
                 "ticket_id": report.ticket_id,
                 "status": "blocked",
                 "reason": str(error) or error.__class__.__name__,
+                "resources": self._cleanup_resource_status(
+                    report.ticket_id, report.execution_branch
+                ),
             }
+        except ShutdownInterrupted as error:
+            reason = _cleanup_log_text(str(error) or error.__class__.__name__)
             _log(
-                f"workspace cleanup blocked for {report.ticket_id}: {cleanup['reason']}"
+                f"workspace cleanup immediate pass interrupted ticket={ticket}: "
+                f"{reason}"
             )
+            raise
+        if cleanup["status"] == "retired":
+            cleanup["resources"] = {
+                "worktree": "absent",
+                "local_ref": "absent",
+                "upstream_ref": "absent",
+            }
+        _log_cleanup_decision("immediate", cleanup)
+        retired = int(cleanup["status"] == "retired")
+        _log(
+            f"workspace cleanup immediate pass finish examined=1 retired={retired} "
+            f"blocked_skipped={1 - retired} remaining={1 - retired}"
+        )
         # Keep this per-ticket event separate from the aggregate inventory
         # consumed by `devlegate clean`; the next owner pass may still have a
         # large backlog after this integration.
@@ -6696,7 +6807,6 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted execution workspace registration is ambiguous"
                 )
-            _log(f"workspace already retired: {ticket_id}")
             self._retire_execution_refs(
                 report.execution_branch, report.workspace_head, report=report
             )
@@ -6710,7 +6820,58 @@ class ServiceEngine:
         self._retire_execution_refs(
             report.execution_branch, report.workspace_head, report=report
         )
-        _log(f"retired workspace {ticket_id} at {report.workspace_head[:12]}")
+
+    def _cleanup_resource_status(self, ticket_id: str, branch: str) -> dict[str, str]:
+        """Best-effort observations after a failed retirement; never infer deletion."""
+        resources = {
+            "worktree": "unknown",
+            "local_ref": "unknown",
+            "upstream_ref": "unknown",
+        }
+        try:
+            manager = ExecutionWorkspaceManager(
+                self.repo,
+                self.execution_worktree_root,
+                ticket_id,
+                runner=self._git_runtime,
+            )
+            registrations = manager._registrations()
+            resources["worktree"] = (
+                "present"
+                if manager.path.resolve() in registrations or manager.path.exists()
+                else "absent"
+            )
+        except (
+            ExecutionWorkspaceError,
+            OSError,
+            subprocess.SubprocessError,
+            ValueError,
+        ):
+            pass
+        try:
+            resources["local_ref"] = (
+                "present"
+                if self._resolve_commit_runtime(self.repo, f"refs/heads/{branch}")
+                is not None
+                else "absent"
+            )
+        except (OSError, subprocess.SubprocessError, DevlegateError):
+            pass
+        try:
+            resources["upstream_ref"] = (
+                "present"
+                if remote_ref(
+                    self.repo,
+                    self.remote_name,
+                    f"refs/heads/{branch}",
+                    runner=self._git_runtime,
+                )
+                is not None
+                else "absent"
+            )
+        except (GitObservationError, OSError, subprocess.SubprocessError):
+            pass
+        return resources
 
     def _retire_execution_refs(
         self,
@@ -10661,9 +10822,7 @@ class ServiceEngine:
         return resolved
 
     def reconciliation_product(self, base: str) -> dict[str, object]:
-        product = self._observe_product_generation(
-            base, runner=self.reconciliation_git
-        )
+        product = self._observe_product_generation(base, runner=self.reconciliation_git)
         if product.get("branch") != self.current_branch:
             raise ReconciliationTransactionError(
                 "product checkout is on the wrong branch"
@@ -10672,9 +10831,7 @@ class ServiceEngine:
 
     def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
         try:
-            return is_ancestor(
-                self.repo, base, target, runner=self.reconciliation_git
-            )
+            return is_ancestor(self.repo, base, target, runner=self.reconciliation_git)
         except GitAncestryError as error:
             raise ReconciliationTransactionError(str(error)) from error
 
