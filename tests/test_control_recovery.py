@@ -8,6 +8,9 @@ from _control_support import *  # noqa: F403,F405
 
 from contextlib import nullcontext
 from dataclasses import replace
+from collections import Counter
+import json
+import devlegate.runtime as runtime_module
 
 import devlegate.recovery_transactions as recovery_transactions
 
@@ -1091,7 +1094,34 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
         "run",
         lambda *_args: pytest.fail("publication recovery reran worker"),
     )
+    trace = []
+    original_git = runtime_module._git
+
+    def traced(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original_git(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", traced)
+    trace_path = tmp_path / "recovery-trace.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
     assert run_test_iteration(recovered) == 0
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    starts = [
+        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
+    ]
+    assert [tuple(e["argv"][3:]) for e in starts] == trace
+    counts = Counter(args[0] for args in trace)
+    assert len(trace) == 97
+    assert {
+        name: counts[name] for name in ("fetch", "ls-remote", "push", "add", "commit")
+    } == {
+        "fetch": 4, "ls-remote": 6, "push": 2, "add": 1, "commit": 1,
+    }
+    assert any(
+        e.get("event") == "child_start"
+        and "receive-pack" in " ".join(e.get("argv", []))
+        for e in events
+    )
     control = next((state / "worktrees").glob("*/control"))
     assert (control / "kanban/review/T-1.md").is_file()
     execution = next((state / "worktrees").glob("*/work/T-1"))
