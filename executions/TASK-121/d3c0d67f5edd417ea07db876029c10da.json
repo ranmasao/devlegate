@@ -1,0 +1,29 @@
+{
+  "code_base_head": "ecec5b2a53a95a2fdc8e4992f598640fe8ef283f",
+  "conclusion": "completed",
+  "control_head": "b3a9bc8e3cdd435e0923b143097b982751c9c8ef",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-121",
+  "execution_id": "d3c0d67f5edd417ea07db876029c10da",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-121",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-121",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced wildcard imports in the IPC test family with explicit bindings and defined explicit support exports while preserving shared fixture and monkeypatch object identities. Removed the targeted Ruff suppressions and sorted the affected imports."
+  },
+  "workspace_head": "2e684e81f20b8326c85fd9f754b22d03d435fbb6"
+}
