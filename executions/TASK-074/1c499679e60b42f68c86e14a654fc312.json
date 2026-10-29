@@ -1,0 +1,37 @@
+{
+  "code_base_head": "07865bf5aa2a765b6868671208ba7f5f11d82f12",
+  "conclusion": "incomplete",
+  "control_head": "7256e7cd8fcca8ddb94e6926cd14ee353b94dffd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-074",
+  "execution_id": "1c499679e60b42f68c86e14a654fc312",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-074",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Eliminate history-size-dependent per-report metadata checks during idle ticket polling while retaining fail-closed evidence validation.",
+    "Detect changes to first-parent chronology when Git history changes without changing report files.",
+    "Complete the measured before/after full-resolution audit for ticket and execution snapshot and follow flows."
+  ],
+  "report_artifact": "executions/TASK-074/1c499679e60b42f68c86e14a654fc312.md",
+  "report_sha256": "ad549e87bfa6e9054bb3b836907d23e68d0446caa9aa3d888da901f5994b84bf",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-074",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Eliminate history-size-dependent per-report metadata checks during idle ticket polling while retaining fail-closed evidence validation.",
+      "Detect changes to first-parent chronology when Git history changes without changing report files.",
+      "Complete the measured before/after full-resolution audit for ticket and execution snapshot and follow flows."
+    ],
+    "report": "The current cache still performs one metadata check per historical report on idle polls and does not observe chronology-only Git changes, so it does not yet meet the requested bounded and provenance-safe observation contract. Further implementation and measurement are required.",
+    "summary": "Cached validated ticket execution reports across unchanged follow polls, with filesystem evidence checks and refresh on report publication. Added regressions for idle reuse, new reports, and changed or removed evidence."
+  },
+  "workspace_head": "eee506c92be1e6bfbed090e6bf5e710ca915a384"
+}
