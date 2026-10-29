@@ -1,0 +1,29 @@
+{
+  "code_base_head": "e6b12b68aaf00c8a1ad1328360df2f50d35f8061",
+  "conclusion": "completed",
+  "control_head": "61ebc86453b429b44389c4636880e13bf9e9b387",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-102",
+  "execution_id": "ba55048dfc5d459cbb20f3adf949c33e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-102",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-102/ba55048dfc5d459cbb20f3adf949c33e.md",
+  "report_sha256": "dc617a1dbc26f2b109e555788cdffff4529f611d4cb9f8ddc4ed21198fcf43c9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-102",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Exact working-tree serial coverage passed and Ruff passed. Parallel coverage reproduced service admission and timing failures; a focused parallel rerun reproduced the reconciliation service-busy failure. Serial coverage is the bounded validation workaround for this environment.",
+    "summary": "Tightened failure supersession to require published first-parent transition evidence and retained failures when control histories diverge. Added real Git-history and CLI/JSON regressions covering retained evidence and later failures."
+  },
+  "workspace_head": "b84249c7721b0972b6a60b14c8485bebf02a5b52"
+}
