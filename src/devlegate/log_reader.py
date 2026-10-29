@@ -324,6 +324,88 @@ def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
     return ordered
 
 
+class _TicketReportObservation:
+    """Reuse validated immutable reports while checking their filesystem evidence."""
+
+    def __init__(self, control_worktree: Path, ticket_id: str):
+        self.control_worktree = control_worktree
+        self.ticket_id = ticket_id
+        self.reports = None
+        self.directory = None
+        self.evidence = {}
+        self.active = None
+
+    @staticmethod
+    def _stat(path: Path):
+        try:
+            value = path.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise LogReaderError(
+                f"cannot inspect execution evidence: {path}"
+            ) from error
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    def _directory(self):
+        root = self.control_worktree / "executions"
+        parent = self._stat(self.control_worktree)
+        root_stat = self._stat(root)
+        ticket_stat = self._stat(root / self.ticket_id)
+        for value in (parent, root_stat, ticket_stat):
+            if value is not None and not stat.S_ISDIR(value[2]):
+                raise LogReaderError("execution report directory is unsafe")
+        # Changes in unrelated ticket directories do not invalidate this ticket.
+        return (parent[:5] if parent else None, root_stat[:5] if root_stat else None,
+                ticket_stat)
+
+    def _evidence(self, reports):
+        root = self.control_worktree / "executions" / self.ticket_id
+        result = {}
+        for report in reports:
+            path = root / f"{report.execution_id}.json"
+            result[path] = self._stat(path)
+            if report.report_artifact is not None:
+                artifact = path.with_suffix(".md")
+                result[artifact] = self._stat(artifact)
+        return result
+
+    def _candidate_evidence(self):
+        root = self.control_worktree / "executions" / self.ticket_id
+        try:
+            paths = tuple(root.glob("*.json")) if root.is_dir() else ()
+            return {
+                candidate: self._stat(candidate)
+                for path in paths
+                for candidate in (path, path.with_suffix(".md"))
+            }
+        except OSError as error:
+            raise LogReaderError("cannot enumerate execution evidence") from error
+
+    def observe(self, active):
+        directory = self._directory()
+        if self.reports is not None:
+            if self._evidence(self.reports) != self.evidence:
+                raise LogReaderError(
+                    "execution report evidence changed or is inaccessible"
+                )
+            if directory == self.directory and active == self.active:
+                return self.reports
+        before = self._candidate_evidence()
+        reports = _ordered_ticket_reports(self.control_worktree, self.ticket_id, active)
+        evidence = self._evidence(reports)
+        if (
+            any(value is None for value in evidence.values())
+            or self._directory() != directory
+            or self._candidate_evidence() != before
+        ):
+            raise LogReaderError("execution report evidence changed during observation")
+        self.reports, self.directory, self.evidence = reports, directory, evidence
+        self.active = active
+        return reports
+
+
 def _active_ticket_execution(
     state_dir: Path, state_key: str, ticket_id: str
 ) -> str | None:
@@ -340,12 +422,15 @@ def _execution_header(execution: str, conclusion: str | None) -> str:
 
 def _ticket_selection(
     state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
-    *, allow_pending_log=False,
+    *, allow_pending_log=False, observation=None,
 ):
     """Select one chronological snapshot, with a single global line budget."""
     state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
     active = _active_ticket_execution(state_dir, state_key, ticket_id)
-    reports = _ordered_ticket_reports(control_worktree, ticket_id, active)
+    reports = (
+        observation.observe(active) if observation is not None
+        else _ordered_ticket_reports(control_worktree, ticket_id, active)
+    )
     entries = [(r.execution_id, r.result.conclusion) for r in reports]
     if active is not None:
         entries.sort(key=lambda entry: entry[0] == active)
@@ -430,14 +515,12 @@ def follow_ticket(
 ) -> int:
     """Follow all executions for a ticket until it reaches its terminal state."""
     lines = _lines(lines)
+    observation = _TicketReportObservation(control_worktree, ticket_id)
     state, active, selected, cursor = _ticket_selection(
         state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
-        allow_pending_log=True,
+        allow_pending_log=True, observation=observation,
     )
     printed: set[str] = set()
-    report_order = tuple(
-        execution for execution, conclusion, _ in selected if conclusion is not None
-    )
     for execution, conclusion, records in selected:
         if markers:
             print(_execution_header(execution, conclusion), end="")
@@ -465,10 +548,7 @@ def follow_ticket(
     while True:
         state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
         active = _active_ticket_execution(state_dir, state_key, ticket_id)
-        reports = _ordered_ticket_reports(
-            control_worktree, ticket_id, active, report_order
-        )
-        report_order = tuple(report.execution_id for report in reports)
+        reports = observation.observe(active)
         for report in reports:
             if report.execution_id in printed:
                 continue

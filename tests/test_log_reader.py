@@ -751,6 +751,79 @@ def test_ticket_follow_waits_in_accepted_until_done(tmp_path, monkeypatch):
     assert calls == 2
 
 
+def test_ticket_follow_idle_reuses_reports_and_detects_new_report(
+    tmp_path, monkeypatch, capsys
+):
+    import devlegate.log_reader as reader
+
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "accepted")
+    first, second, new = "a" * 32, "b" * 32, "c" * 32
+    for execution in (first, second):
+        _report(control, execution, ticket="T-1")
+        _commit_reports(control)
+        path = execution_log_path(state, "key", execution)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(execution[0] + "\n")
+    calls = {"reports": 0, "history": 0, "sleep": 0}
+    original_reports, original_history = reader._ticket_reports, reader.history_changes
+
+    def reports(*args):
+        calls["reports"] += 1
+        return original_reports(*args)
+
+    def history(*args, **kwargs):
+        calls["history"] += 1
+        return original_history(*args, **kwargs)
+
+    def advance(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] == 4:
+            assert calls["reports"] == 1
+            assert calls["history"] == 1
+            _report(control, new, ticket="T-1")
+            _commit_reports(control)
+            execution_log_path(state, "key", new).write_text("c\n")
+        elif calls["sleep"] == 5:
+            (control / "kanban" / "done").mkdir()
+            (control / "kanban" / "accepted" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    monkeypatch.setattr(reader, "_ticket_reports", reports)
+    monkeypatch.setattr(reader, "history_changes", history)
+    monkeypatch.setattr(reader.time, "sleep", advance)
+    assert follow_ticket(state, "key", control, "T-1", 1,
+                         {"accepted": "kanban/accepted", "done": "kanban/done"},
+                         markers=False) == 0
+    assert capsys.readouterr().out == "b\nc\n"
+    assert calls["reports"] == 2
+    assert calls["history"] == 2
+
+
+@pytest.mark.parametrize("change", ["corrupt", "remove"])
+def test_ticket_follow_rejects_changed_cached_evidence(tmp_path, monkeypatch, change):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "accepted")
+    execution = "a" * 32
+    _report(control, execution, ticket="T-1")
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True)
+    path.write_text("record\n")
+    report = control / "executions" / "T-1" / f"{execution}.json"
+
+    def advance(_seconds):
+        if change == "corrupt":
+            report.write_text("corrupt")
+        else:
+            report.unlink()
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    with pytest.raises(LogReaderError, match="evidence changed"):
+        follow_ticket(state, "key", control, "T-1", 10,
+                      {"accepted": "kanban/accepted"}, markers=False)
+
+
 @pytest.mark.parametrize(
     "lines, expected",
     [
