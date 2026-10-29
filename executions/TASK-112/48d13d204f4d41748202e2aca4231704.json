@@ -1,0 +1,37 @@
+{
+  "code_base_head": "9b49bed8bc27f3b2d9c2c339e684d849a87e3d61",
+  "conclusion": "incomplete",
+  "control_head": "af4b1a1db511c9258b17b340c6fc22d779a9d91f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-112",
+  "execution_id": "48d13d204f4d41748202e2aca4231704",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-112",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the exhaustive nested state alias and indirect capability mutation inventory at the product SHA.",
+    "Complete the field-level transition and authority matrix, including failure and reentry behavior for all state fields.",
+    "Trace remaining lock acquisition and callback paths through the owner loop, operator commands, receipts, snapshot publication and SQLite, distinguishing possible inversions from proven behavior."
+  ],
+  "report_artifact": "executions/TASK-112/48d13d204f4d41748202e2aca4231704.md",
+  "report_sha256": "96ae54b9335ae912aca7e5d1c2447a3f2f55419e520c87d0763c5c44bb9ee77f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-112",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the exhaustive nested state alias and indirect capability mutation inventory at the product SHA.",
+      "Complete the field-level transition and authority matrix, including failure and reentry behavior for all state fields.",
+      "Trace remaining lock acquisition and callback paths through the owner loop, operator commands, receipts, snapshot publication and SQLite, distinguishing possible inversions from proven behavior."
+    ],
+    "report": "The carried-forward audit remains a partial inventory; the remaining source and callback paths have not been exhaustively traced, so the full diagnostic scope cannot be claimed complete.",
+    "summary": "Expanded the state authority audit with direct-write locations, reconciliation failure behavior, IPC and lock observations, and actionable findings. Added deterministic tests for forced-stop save overwrites, stale and mixed publication views, and reconciliation temporary-base failure."
+  },
+  "workspace_head": "1777f4c991be9e32632c2f600697ac9135c7469d"
+}
