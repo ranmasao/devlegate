@@ -235,7 +235,9 @@ def test_product_evidence_existing_refs(product_evidence, existing):
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_product_evidence_pin_complete_git_trace(product_evidence, monkeypatch, existing):
+def test_product_evidence_pin_complete_git_trace(
+    product_evidence, monkeypatch, existing
+):
     engine, report, product, ref, _, checkpoint, saved, git = product_evidence
     if existing:
         git("update-ref", ref, checkpoint)
