@@ -1,0 +1,29 @@
+{
+  "code_base_head": "baeee877466a84522d0b2331ba16d0bb7ec0d2fc",
+  "conclusion": "completed",
+  "control_head": "9e727b04c1915931b1ec45890b54cce9e0121b1d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-113",
+  "execution_id": "addeba15993946cd8463b693768f5f78",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-113",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-113",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Extended the real-Git audit with publication, interrupted publication recovery, and cleanup screening and retirement traces, including zero and 32 ref-only candidates. Documented per-scenario effect counts, the inventory cardinality model, and measurement limitations."
+  },
+  "workspace_head": "3c03414dc1cf1396d7823f537771a4fa15530829"
+}
