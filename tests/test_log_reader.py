@@ -4,6 +4,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -55,6 +56,17 @@ def _ticket(control: Path, ticket: str, state: str) -> None:
     path = control / "kanban" / state / f"{ticket}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(ticket)
+
+
+def _commit_reports(control: Path) -> None:
+    if not (control / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(control)], check=True)
+    subprocess.run(["git", "-C", str(control), "add", "executions"], check=True)
+    subprocess.run(
+        ["git", "-C", str(control), "-c", "user.name=Test", "-c",
+         "user.email=test@example.com", "commit", "-qm", "Publish execution"],
+        check=True,
+    )
 
 
 def test_execution_prefix_requires_unique_report(tmp_path):
@@ -531,6 +543,7 @@ def test_ticket_follow_does_not_replay_report_before_state_transition(
         if calls == 1:
             first_path.write_text("first\nfinal\n")
             _report(control, first, ticket="T-1")
+            _commit_reports(control)
         elif calls == 2:
             second_path.write_text("second\n")
             SQLiteRuntimeStore(state, "key").replace(
@@ -542,6 +555,7 @@ def test_ticket_follow_does_not_replay_report_before_state_transition(
             )
         elif calls == 3:
             _report(control, second, ticket="T-1")
+            _commit_reports(control)
         elif calls == 4:
             (control / "kanban" / "done").mkdir(parents=True)
             (control / "kanban" / "todo" / "T-1.md").rename(
@@ -655,6 +669,30 @@ def test_execution_follow_waits_for_delayed_log_creation(tmp_path, monkeypatch, 
     assert capsys.readouterr().out == "delayed\n"
 
 
+def test_execution_follow_zero_tail_includes_delayed_log(tmp_path, monkeypatch, capsys):
+    identifier = "b" * 32
+    state, control = tmp_path / "state", tmp_path / "control"
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": identifier,
+         "execution_ticket_id": "ticket"}
+    )
+    path = execution_log_path(state, "key", identifier)
+    calls = 0
+
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            path.parent.mkdir(parents=True)
+            path.write_text("new\n")
+        elif calls == 2:
+            _report(control, identifier)
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    assert follow_execution(state, "key", control, identifier, 0) == 0
+    assert capsys.readouterr().out == "new\n"
+
+
 def test_terminal_execution_without_log_fails_without_waiting(tmp_path, monkeypatch):
     identifier = "c" * 32
     state = tmp_path / "state"
@@ -728,7 +766,9 @@ def test_ticket_snapshot_follow_share_global_tail(
     _ticket(control, "T-1", "todo")
     first, old, active = "f" * 32, "a" * 32, "b" * 32
     _report(control, first, ticket="T-1")
+    _commit_reports(control)
     _report(control, old, ticket="T-1")
+    _commit_reports(control)
     SQLiteRuntimeStore(state, "key").replace(
         {"phase": "agent_running", "execution_id": active, "execution_ticket_id": "T-1"}
     )
@@ -737,8 +777,8 @@ def test_ticket_snapshot_follow_share_global_tail(
     first_path = execution_log_path(state, "key", first)
     first_path.write_text("first\n")
     old_path.write_text("old-1\nold-2\nold-3\n")
-    os.utime(first_path, ns=(1_000_000_000, 1_000_000_000))
-    os.utime(old_path, ns=(2_000_000_000, 2_000_000_000))
+    os.utime(first_path, ns=(2_000_000_000, 2_000_000_000))
+    os.utime(old_path, ns=(1_000_000_000, 1_000_000_000))
     active_path = execution_log_path(state, "key", active)
     active_path.write_text("active\n")
     paths = {"todo": "kanban/todo", "done": "kanban/done"}
@@ -761,6 +801,18 @@ def test_ticket_snapshot_follow_share_global_tail(
     monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
     assert follow_ticket(state, "key", control, "T-1", lines, paths, markers=False) == 0
     assert capsys.readouterr().out == expected + "append\n"
+
+
+def test_ticket_multiple_unpublished_reports_fail_closed(tmp_path):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    for execution in ("a" * 32, "b" * 32):
+        _report(control, execution, ticket="T-1")
+        path = execution_log_path(state, "key", execution)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("record\n")
+    with pytest.raises(LogReaderError, match="execution chronology"):
+        ticket_log(state, "key", control, "T-1", None, {"todo": "kanban/todo"})
 
 
 @pytest.mark.parametrize("lines", [0, 2, None])
@@ -825,6 +877,58 @@ def test_bound_execution_follow_does_not_enumerate_other_tickets(
     assert "failed" in capsys.readouterr().out
 
 
+def test_resolved_follow_observation_is_bounded(tmp_path, monkeypatch, capsys):
+    from devlegate import log_reader
+
+    state, control = tmp_path / "state", tmp_path / "control"
+    execution = "c" * 32
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": execution,
+         "execution_ticket_id": "T-1"}
+    )
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True)
+    path.write_text("start\n")
+    counts = {"loads": 0, "reports": 0, "scans": 0, "opens": 0}
+    load, report = SQLiteRuntimeStore.load, log_reader._execution_report
+    candidates, open_path = log_reader._report_candidates, Path.open
+
+    def counted_load(store):
+        counts["loads"] += 1
+        return load(store)
+
+    def counted_report(*args, **kwargs):
+        counts["reports"] += 1
+        return report(*args, **kwargs)
+
+    def counted_candidates(*args, **kwargs):
+        counts["scans"] += 1
+        return candidates(*args, **kwargs)
+
+    def counted_open(candidate, *args, **kwargs):
+        if candidate == path:
+            counts["opens"] += 1
+        return open_path(candidate, *args, **kwargs)
+
+    sleeps = 0
+
+    def advance(_seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 3:
+            _report(control, execution, ticket="T-1")
+
+    monkeypatch.setattr(SQLiteRuntimeStore, "load", counted_load)
+    monkeypatch.setattr(log_reader, "_execution_report", counted_report)
+    monkeypatch.setattr(log_reader, "_report_candidates", counted_candidates)
+    monkeypatch.setattr(Path, "open", counted_open)
+    monkeypatch.setattr(log_reader.time, "sleep", advance)
+    resolved, owner, _ = log_reader.resolve_execution(control, execution, state, "key")
+    assert follow_execution(state, "key", control, resolved, 10, ticket_id=owner) == 0
+    assert capsys.readouterr().out == "start\n"
+    assert counts == {"loads": 4, "reports": 5, "scans": 0, "opens": 1}
+
+
 def test_ticket_snapshot_marker_and_suppression(tmp_path):
     state, control = tmp_path / "state", tmp_path / "control"
     _ticket(control, "T-1", "accepted")
@@ -836,3 +940,39 @@ def test_ticket_snapshot_marker_and_suppression(tmp_path):
         state, "key", control, "T-1", 0, paths, markers=False, final_marker=True
     )
     assert tuple(raw) == ()
+
+
+@pytest.mark.parametrize(
+    "state, detail",
+    [("review", "awaiting review"), ("accepted", "awaiting integration"),
+     ("done", "done (integrated)"), ("todo", "pending work or rework"),
+     ("backlog", "backlog")],
+)
+def test_ticket_snapshot_marker_reports_workflow_state(tmp_path, state, detail):
+    control = tmp_path / "control"
+    _ticket(control, "T-1", state)
+    _, content = ticket_log(
+        tmp_path / "state", "key", control, "T-1", 0,
+        {state: f"kanban/{state}"}, final_marker=True,
+    )
+    assert "snapshot complete" in "".join(content)
+    assert detail in "".join(content)
+
+
+def test_follow_interrupt_does_not_print_terminal_marker(tmp_path, monkeypatch, capsys):
+    state, control = tmp_path / "state", tmp_path / "control"
+    execution = "a" * 32
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": execution,
+         "execution_ticket_id": "T-1"}
+    )
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True)
+    path.write_text("unfinished")
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", interrupt)
+    assert follow_execution(state, "key", control, execution, None, markers=True) == 130
+    assert capsys.readouterr().out == "unfinished"

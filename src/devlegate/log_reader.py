@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from devlegate.execution_result import ExecutionReportError, ExecutionReportStore
+from devlegate.git import GitObservationError, history_changes, run_git
 from devlegate.operational_log import OperationalLogError, execution_log_path
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 
@@ -282,20 +283,45 @@ def _ticket_reports(control_worktree: Path, ticket_id: str):
         raise LogReaderError(str(error)) from error
 
 
-def _ordered_ticket_reports(state_dir, state_key, control_worktree, ticket_id):
+def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
     reports = _ticket_reports(control_worktree, ticket_id)
+    if len(reports) < 2:
+        return reports
+    by_id = {report.execution_id: report for report in reports}
+    if len(order) == len(reports) and set(order) == set(by_id):
+        return [by_id[execution] for execution in order]
+    by_path = {
+        f"executions/{ticket_id}/{report.execution_id}.json": report
+        for report in reports
+    }
+    def first_parent_history(cwd, *args, **kwargs):
+        return run_git(cwd, args[0], "--first-parent", *args[1:], **kwargs)
+
     try:
-        return sorted(
-            reports,
-            key=lambda report: (
-                execution_log_path(state_dir, state_key, report.execution_id)
-                .stat()
-                .st_mtime_ns,
-                report.execution_id,
-            ),
+        history = history_changes(
+            control_worktree, "HEAD", f"executions/{ticket_id}",
+            runner=first_parent_history,
         )
-    except OSError as error:
-        raise LogReaderError(f"cannot inspect execution log: {error}") from error
+    except (GitObservationError, OSError) as error:
+        raise LogReaderError("cannot establish execution chronology") from error
+    ordered = []
+    seen = set()
+    for _, changes in reversed(history):
+        touched = [change for change in changes if change[2:] in by_path]
+        if len(touched) > 1:
+            raise LogReaderError("ambiguous execution chronology")
+        for change in touched:
+            path = change[2:]
+            if not change.startswith("A\t") or path in seen:
+                raise LogReaderError("ambiguous execution chronology")
+            seen.add(path)
+            ordered.append(by_path[path])
+    missing = [report for path, report in by_path.items() if path not in seen]
+    if len(missing) == 1 and missing[0].execution_id == active:
+        ordered.extend(missing)
+    elif missing:
+        raise LogReaderError("cannot establish execution chronology")
+    return ordered
 
 
 def _active_ticket_execution(
@@ -318,8 +344,8 @@ def _ticket_selection(
 ):
     """Select one chronological snapshot, with a single global line budget."""
     state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
-    reports = _ordered_ticket_reports(state_dir, state_key, control_worktree, ticket_id)
     active = _active_ticket_execution(state_dir, state_key, ticket_id)
+    reports = _ordered_ticket_reports(control_worktree, ticket_id, active)
     entries = [(r.execution_id, r.result.conclusion) for r in reports]
     if active is not None:
         entries.sort(key=lambda entry: entry[0] == active)
@@ -409,6 +435,9 @@ def follow_ticket(
         allow_pending_log=True,
     )
     printed: set[str] = set()
+    report_order = tuple(
+        execution for execution, conclusion, _ in selected if conclusion is not None
+    )
     for execution, conclusion, records in selected:
         if markers:
             print(_execution_header(execution, conclusion), end="")
@@ -435,10 +464,11 @@ def follow_ticket(
             printed.add(active)
     while True:
         state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
-        reports = _ordered_ticket_reports(
-            state_dir, state_key, control_worktree, ticket_id
-        )
         active = _active_ticket_execution(state_dir, state_key, ticket_id)
+        reports = _ordered_ticket_reports(
+            control_worktree, ticket_id, active, report_order
+        )
+        report_order = tuple(report.execution_id for report in reports)
         for report in reports:
             if report.execution_id in printed:
                 continue
@@ -457,6 +487,8 @@ def follow_ticket(
         # Accepted is an intermediate integration boundary. Keep observing until
         # the ticket reaches the canonical workflow terminal state.
         if state == "done":
+            if active is not None and active not in printed:
+                raise LogReaderError(f"execution {active} has no durable report")
             if markers and final_marker:
                 print(f"\n===== ticket {ticket_id}: done (integrated) =====")
             return 0
@@ -632,13 +664,16 @@ def _follow_execution(
                 report = _execution_report(control_worktree, execution)
                 if report is not None:
                     ticket_id = report.ticket_id
+        # If the file does not yet exist, everything it later contains arrived
+        # after follow began and is continuation, not an initial tail.
+        pending_log = cursor is None and not path.is_file()
         while cursor is None:
-            terminal = _execution_terminal(control_worktree, execution, ticket_id)
-            active = _execution_active(state_dir, state_key, execution)
             if path.is_file():
-                cursor = _LogCursor(path, lines)
+                cursor = _LogCursor(path, None if pending_log else lines)
                 print("".join(cursor.initial), end="", flush=True)
                 break
+            terminal = _execution_terminal(control_worktree, execution, ticket_id)
+            active = _execution_active(state_dir, state_key, execution)
             if terminal or not active:
                 if terminal:
                     raise LogReaderError(f"execution log not found: {path}")
