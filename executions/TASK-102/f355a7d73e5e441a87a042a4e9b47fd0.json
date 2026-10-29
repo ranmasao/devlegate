@@ -1,0 +1,29 @@
+{
+  "code_base_head": "e6b12b68aaf00c8a1ad1328360df2f50d35f8061",
+  "conclusion": "completed",
+  "control_head": "0a445486282d1e168b9196f2b5de5693a6e5dc31",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-102",
+  "execution_id": "f355a7d73e5e441a87a042a4e9b47fd0",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-102",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-102/f355a7d73e5e441a87a042a4e9b47fd0.md",
+  "report_sha256": "7050b4fc9583cccc1dd8e7fc5647c79a27100a7675e01f194cbed3a5e5f6c486",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-102",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The original full parallel CI run reproduced service busy in test_real_service_process_executes_reconciliation_from_real_cli and four other timing failures. A parallel subset reproduced that failure while the isolated serial test passed; readiness permits scheduler activity and the runtime correctly refuses concurrent mutable admission. After the targeted test fix, the reconciliation case and regression passed in the parallel subset, although three separate daemon timing tests failed in that subset. Final ./dev coverage -n 4 --dist=worksteal passed with 1479 passed and 1 skipped; ./dev lint passed.",
+    "summary": "Preserved lifecycle-based failed-execution status reconciliation and adjusted the real CLI reconciliation test to retry only explicit non-admission busy refusals while checking pending evidence remains intact. Added a regression distinguishing safe busy retries from ambiguous admission timeouts."
+  },
+  "workspace_head": "40fb0bbff9b7c6f2eb4bc9125536d8bea87f1846"
+}
