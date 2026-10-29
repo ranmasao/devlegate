@@ -824,6 +824,142 @@ def test_ticket_follow_rejects_changed_cached_evidence(tmp_path, monkeypatch, ch
                       {"accepted": "kanban/accepted"}, markers=False)
 
 
+@pytest.mark.parametrize("history", ["ambiguous", "missing"])
+def test_ticket_observation_revalidates_changed_git_history(tmp_path, history):
+    from devlegate.log_reader import _TicketReportObservation
+
+    control = tmp_path / "control"
+    first, second = "a" * 32, "b" * 32
+    _report(control, first, ticket="T-1")
+    _commit_reports(control)
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(control), "-c", "user.name=Test", "-c",
+             "user.email=test@example.com", *args],
+            check=True, text=True, capture_output=True,
+        ).stdout.strip()
+
+    first_tree = git("rev-parse", "HEAD^{tree}")
+    _report(control, second, ticket="T-1")
+    _commit_reports(control)
+    final_tree = git("rev-parse", "HEAD^{tree}")
+    observation = _TicketReportObservation(control, "T-1")
+    try:
+        assert [r.execution_id for r in observation.observe(None)] == [first, second]
+        tree = final_tree if history == "ambiguous" else first_tree
+        new_head = git("commit-tree", tree, "-m", "rewritten history")
+        git("update-ref", "HEAD", new_head)
+        with pytest.raises(LogReaderError, match="execution chronology"):
+            observation.observe(None)
+    finally:
+        observation.close()
+
+
+def test_ticket_idle_observation_has_constant_evidence_probes(tmp_path, monkeypatch):
+    from devlegate.log_reader import _TicketReportObservation
+
+    control = tmp_path / "control"
+    for index in range(12):
+        _report(control, f"{index:032x}", ticket="T-1")
+        _commit_reports(control)
+    observation = _TicketReportObservation(control, "T-1")
+    try:
+        observation.observe(None)
+        calls = []
+        original = observation._stat
+        def counted(path):
+            calls.append(path)
+            return original(path)
+
+        monkeypatch.setattr(observation, "_stat", counted)
+        for _ in range(3):
+            observation.observe(None)
+        assert len(calls) == 9
+        assert all(path.suffix != ".json" for path in calls)
+    finally:
+        observation.close()
+
+
+def test_ticket_follow_resolution_costs(tmp_path, monkeypatch, capsys):
+    from devlegate import log_reader as reader
+
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "accepted")
+    for execution in ("a" * 32, "b" * 32):
+        _report(control, execution, ticket="T-1")
+        _commit_reports(control)
+        path = execution_log_path(state, "key", execution)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("line\n")
+    counts = dict(load=0, reports=0, history=0, head=0, stat=0, opens=0)
+    original_load = SQLiteRuntimeStore.load
+    original_reports = reader._ticket_reports
+    original_history = reader.history_changes
+    original_git = reader.run_git
+    original_stat = reader._TicketReportObservation._stat
+    original_open = Path.open
+
+    def load(*args):
+        counts["load"] += 1
+        return original_load(*args)
+
+    def reports(*args):
+        counts["reports"] += 1
+        return original_reports(*args)
+
+    def history(*args, **kwargs):
+        counts["history"] += 1
+        return original_history(*args, **kwargs)
+
+    def git(*args, **kwargs):
+        if args[1] == "rev-parse":
+            counts["head"] += 1
+        return original_git(*args, **kwargs)
+
+    def stat_path(path):
+        counts["stat"] += 1
+        return original_stat(path)
+
+    def open_path(path, *args, **kwargs):
+        if (path.parent.name == "executions" and path.suffix == ".log"
+                and args and args[0] == "rb"):
+            counts["opens"] += 1
+        return original_open(path, *args, **kwargs)
+
+    samples = []
+    def advance(_seconds):
+        samples.append(counts.copy())
+        if len(samples) == 2:
+            execution = "c" * 32
+            _report(control, execution, ticket="T-1")
+            _commit_reports(control)
+            execution_log_path(state, "key", execution).write_text("new\n")
+        elif len(samples) == 3:
+            (control / "kanban" / "done").mkdir()
+            (control / "kanban" / "accepted" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    monkeypatch.setattr(SQLiteRuntimeStore, "load", load)
+    monkeypatch.setattr(reader, "_ticket_reports", reports)
+    monkeypatch.setattr(reader, "history_changes", history)
+    monkeypatch.setattr(reader, "run_git", git)
+    monkeypatch.setattr(
+        reader._TicketReportObservation, "_stat", staticmethod(stat_path)
+    )
+    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(reader.time, "sleep", advance)
+    assert follow_ticket(state, "key", control, "T-1", None,
+                         {"accepted": "kanban/accepted", "done": "kanban/done"},
+                         markers=False) == 0
+    assert capsys.readouterr().out == "line\nline\nnew\n"
+    assert samples == [
+        dict(load=2, reports=1, history=1, head=3, stat=19, opens=2),
+        dict(load=3, reports=1, history=1, head=4, stat=22, opens=2),
+        dict(load=4, reports=2, history=2, head=7, stat=45, opens=3),
+    ]
+
+
 @pytest.mark.parametrize(
     "lines, expected",
     [

@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
 import re
 import stat
+import struct
 import subprocess
 import time
 from collections.abc import Callable, Iterable
@@ -325,7 +328,14 @@ def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
 
 
 class _TicketReportObservation:
-    """Reuse validated immutable reports while checking their filesystem evidence."""
+    """Cache immutable evidence, invalidated by directory events and Git HEAD.
+
+    The control worktree is assumed to be a local filesystem with working
+    inotify notifications. Historical evidence must not be changed through
+    mmap, remote filesystem clients, or other paths bypassing inotify.
+    Queue overflow or loss of the watch fails closed. Notifications are installed
+    before validation so changes racing validation cannot be silently cached.
+    """
 
     def __init__(self, control_worktree: Path, ticket_id: str):
         self.control_worktree = control_worktree
@@ -334,6 +344,65 @@ class _TicketReportObservation:
         self.directory = None
         self.evidence = {}
         self.active = None
+        self.head = None
+        self.fd = None
+        self.watched = None
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    def _watch(self, directory):
+        if directory is None or self.watched is not None:
+            return
+        libc = ctypes.CDLL(None, use_errno=True)
+        fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+        if fd < 0:
+            raise LogReaderError("cannot monitor execution report evidence")
+        path = self.control_worktree / "executions" / self.ticket_id
+        # Modify, attribute, close-write, move, create, delete and watch loss.
+        mask = 0x2 | 0x4 | 0x8 | 0x40 | 0x80 | 0x100 | 0x200 | 0x400 | 0x800
+        # Require a directory and do not follow a replaced symlink.
+        if libc.inotify_add_watch(fd, os.fsencode(path), mask | 0x03000000) < 0:
+            os.close(fd)
+            raise LogReaderError("cannot monitor execution report evidence")
+        self.fd, self.watched = fd, directory[:2]
+
+    def _events(self):
+        if self.fd is None:
+            return False
+        changed = False
+        while True:
+            try:
+                data = os.read(self.fd, 65536)
+            except BlockingIOError:
+                return changed
+            except OSError as error:
+                raise LogReaderError(
+                    "cannot monitor execution report evidence"
+                ) from error
+            if not data:
+                raise LogReaderError("execution report evidence watch lost")
+            offset = 0
+            while offset < len(data):
+                _, mask, _, length = struct.unpack_from("iIII", data, offset)
+                if mask & (0x4000 | 0x8000 | 0x400 | 0x800):
+                    raise LogReaderError("execution report evidence watch lost")
+                changed = True
+                offset += 16 + length
+
+    def _head(self, reports):
+        if len(reports) < 2:
+            return None
+        try:
+            result = run_git(self.control_worktree, "rev-parse", "--verify", "HEAD")
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise LogReaderError("cannot establish execution chronology") from error
+        head = result.stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head):
+            raise LogReaderError("cannot establish execution chronology")
+        return head
 
     @staticmethod
     def _stat(path: Path):
@@ -385,24 +454,39 @@ class _TicketReportObservation:
 
     def observe(self, active):
         directory = self._directory()
+        ticket_directory = directory[2]
+        if self.watched is not None and (
+            ticket_directory is None or ticket_directory[:2] != self.watched
+        ):
+            raise LogReaderError("execution report evidence changed or is inaccessible")
+        self._watch(ticket_directory)
+        changed = self._events()
+        head = self._head(self.reports) if self.reports is not None else None
         if self.reports is not None:
-            if self._evidence(self.reports) != self.evidence:
+            if changed and self._evidence(self.reports) != self.evidence:
                 raise LogReaderError(
                     "execution report evidence changed or is inaccessible"
                 )
-            if directory == self.directory and active == self.active:
+            if (not changed and directory == self.directory and active == self.active
+                    and head == self.head):
                 return self.reports
         before = self._candidate_evidence()
+        # Bind chronology to a stable HEAD across the history walk.
+        head_before = self._head([path for path in before if path.suffix == ".json"])
         reports = _ordered_ticket_reports(self.control_worktree, self.ticket_id, active)
+        head_after = self._head(reports)
         evidence = self._evidence(reports)
         if (
             any(value is None for value in evidence.values())
             or self._directory() != directory
             or self._candidate_evidence() != before
+            or self._events()
+            or (head_before is not None and head_before != head_after)
         ):
             raise LogReaderError("execution report evidence changed during observation")
         self.reports, self.directory, self.evidence = reports, directory, evidence
         self.active = active
+        self.head = head_after
         return reports
 
 
@@ -514,8 +598,21 @@ def follow_ticket(
     *, markers: bool = True, final_marker: bool = False,
 ) -> int:
     """Follow all executions for a ticket until it reaches its terminal state."""
-    lines = _lines(lines)
     observation = _TicketReportObservation(control_worktree, ticket_id)
+    try:
+        return _follow_ticket(
+            state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
+            markers=markers, final_marker=final_marker, observation=observation,
+        )
+    finally:
+        observation.close()
+
+
+def _follow_ticket(
+    state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
+    *, markers, final_marker, observation,
+):
+    lines = _lines(lines)
     state, active, selected, cursor = _ticket_selection(
         state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
         allow_pending_log=True, observation=observation,
