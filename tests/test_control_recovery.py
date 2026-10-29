@@ -1026,6 +1026,7 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         run_test_iteration(devlegate)
     assert crashed
     execution = next((state / "worktrees").glob("*/work/T-1"))
+    checkpoint_head = git(execution, "rev-parse", "HEAD").stdout.strip()
     checkpoint_count = git(
         execution, "log", "--all", "--format=%s"
     ).stdout.splitlines().count("T-1: Control ticket")
@@ -1054,6 +1055,10 @@ def test_checkpointing_recovery_recognizes_existing_exact_checkpoint(
         lambda *_args: pytest.fail("checkpoint recovery reran worker"),
     )
     assert run_test_iteration(recovered) == 0
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint_head
+    assert git(
+        execution, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+    ).stdout.split()[0] == checkpoint_head
     assert git(execution, "log", "--all", "--format=%s").stdout.splitlines().count(
         "T-1: Control ticket"
     ) == 1
@@ -1652,6 +1657,13 @@ def test_post_checkpoint_unobservable_remote_resumes_after_observation_returns(
         assert reconciliation["product_remote_head"] == changed_head
         assert reconciliation["product_remote_head"]
         assert reconciliation["original_base"] == base
+        assert (
+            git(working, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+            == checkpoint
+        )
+        assert not git(
+            working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+        ).stdout.strip()
         restarted = Devlegate(config)
         assert restarted._state["reconciliation"] == reconciliation
 

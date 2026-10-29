@@ -1,5 +1,25 @@
 # Integrated runtime and Git diagnostic audit
 
+## Workflow recovery capability follow-up
+
+`src/devlegate/recovery_workflow.py` now declares the checkpoint exactness,
+reconciliation persistence, and report/state validation calls made by replay.
+The corresponding `ServiceEngine` methods in `src/devlegate/runtime.py` forward
+to existing owner-held operations; these seams allow the extracted workflow to
+invoke them without taking ownership of state or Git. The workflow protocol no
+longer declares unused repository attributes or lifecycle application and
+finalization callbacks. Those callbacks remain on the engine.
+
+`tests/test_workflow_recovery_contract.py` compares direct owner calls with
+protocol methods and checks engine call signatures. Real Git replay coverage
+in `tests/test_control_recovery.py` checks exact checkpoint publication,
+reconciliation evidence and absence of stale publication, and lifecycle report
+provenance. The contract check covers direct calls and parameter shape, not
+full static type compatibility or indirect and dynamic calls. These focused
+proofs do not establish final architecture approval; the separate recovery
+boundary audit and human story gate remain outside this scope. The diagnostic
+below records the earlier audit.
+
 ## Scope and evidence
 
 Product HEAD inspected: `9001823a77365860dbda0901b712cb3d442b894a` (TASK-074). This is a fresh diagnostic, not TASK-073 final acceptance or a claim of architectural approval. Recommendations require curator selection. No product behavior is changed here. Historical evidence is in `docs/GIT_COMMAND_INVENTORY.md`, `docs/git-semantic-api-audit.md`, `docs/runtime-git-authority-followup.md`, and `docs/architecture/runtime-decomposition-audit.md`; their stated snapshots and older line numbers must not be mistaken for this HEAD. The injected TASK-073 description is historical context; private workflow records were not consulted.
