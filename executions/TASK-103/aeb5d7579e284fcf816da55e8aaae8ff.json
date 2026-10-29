@@ -1,0 +1,29 @@
+{
+  "code_base_head": "40fb0bbff9b7c6f2eb4bc9125536d8bea87f1846",
+  "conclusion": "completed",
+  "control_head": "8b38f23ca4a468b70d65171176532a579da7090a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-103",
+  "execution_id": "aeb5d7579e284fcf816da55e8aaae8ff",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-103",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-103",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a journal event identifying the durably persisted worker prompt artifact and its execution and digest. Delivery success is logged only after the sent marker is persisted, with privacy-preserving failure diagnostics and focused coverage of prompt lifecycle events."
+  },
+  "workspace_head": "07865bf5aa2a765b6868671208ba7f5f11d82f12"
+}
