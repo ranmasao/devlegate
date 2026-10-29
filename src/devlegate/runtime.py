@@ -4969,6 +4969,10 @@ class ServiceEngine:
             ),
             admitted_control_head=str(self._state["execution_control_head"]),
         )
+        _log(
+            f"worker prompt persisted: execution={execution_id} "
+            f"path={str(prompt_artifact)!r} sha256={prompt_digest}"
+        )
         self._save_state(
             "agent_running",
             execution_stage="worker-launch",
@@ -6146,14 +6150,15 @@ class ServiceEngine:
         self, artifact: Path, execution_id: str, prompt_digest: str
     ) -> None:
         """Record successful stdin delivery separately from diagnostic I/O."""
-        _log(f"worker prompt sent: execution={execution_id} sha256={prompt_digest}")
         try:
             mark_worker_prompt_sent(artifact)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError):
             _log(
                 "worker prompt diagnostic update failed after successful delivery: "
-                f"execution={execution_id} error={error}"
+                f"execution={execution_id}"
             )
+        else:
+            _log(f"worker prompt sent: execution={execution_id} sha256={prompt_digest}")
 
     def _set_rework_preparation_stage(self, stage: str) -> None:
         rework = self._state.get("rework_provenance")
