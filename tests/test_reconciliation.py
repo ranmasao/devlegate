@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from devlegate import reconciliation_transactions as transactions
 from devlegate import runtime
 from devlegate.reconciliation import has_valid_evidence_identity
 from devlegate.runtime import DevlegateError, ServiceEngine, ShutdownInterrupted
@@ -69,6 +70,49 @@ def test_canonical_evidence_identity_remains_valid():
             "evidence_ref": "refs/devlegate/reconciliation/T-1/done-execution",
         }
     )
+
+
+def test_rewrite_observation_failure_leaves_temporary_base_in_memory(monkeypatch):
+    admission = SimpleNamespace(
+        checkpoint="checkpoint", original_base="base", target="target",
+        execution_remote_head=None, evidence_ref="evidence",
+    )
+    workspace = SimpleNamespace(head="checkpoint", dirty=False, path="workspace")
+    durable = {}
+
+    class Owner:
+        _state = {
+            "execution_base_head": "base", "reconciliation": {"execution_id": "exec"}
+        }
+
+        def reconciliation_workspace_manager(self, _ticket):
+            return SimpleNamespace(branch="work")
+
+        def _execution_workspace_for_recovery(self):
+            if self._state["execution_base_head"] == "target":
+                raise RuntimeError("observation failed")
+            return workspace
+
+        def _execution_remote_head(self, _branch):
+            return None
+
+        def _save_state(self, _phase, **fields):
+            self._state = {**self._state, **fields}
+            durable.update(self._state)
+
+        def reconciliation_git(self, *_args):
+            return SimpleNamespace(returncode=0)
+
+    owner = Owner()
+    monkeypatch.setattr(
+        transactions, "prove_workspace_lineage", lambda *args: ["checkpoint"]
+    )
+    monkeypatch.setattr(transactions, "admit_update_base", lambda *args: admission)
+    with pytest.raises(RuntimeError, match="observation failed"):
+        transactions.start_fresh_rewrite(owner, "T-1", admission, False)
+    assert durable["execution_base_head"] == "base"
+    assert durable["reconciliation"]["rewrite_stage"] == "local-pending"
+    assert owner._state["execution_base_head"] == "target"
 
 
 def test_force_retry_evidence_observation_requires_owner(tmp_path, monkeypatch):
