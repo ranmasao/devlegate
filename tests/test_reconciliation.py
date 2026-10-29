@@ -234,6 +234,33 @@ def test_product_evidence_existing_refs(product_evidence, existing):
         assert saved[0][1]["reconciliation"]["evidence_ref"] == ref
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_product_evidence_pin_complete_git_trace(product_evidence, monkeypatch, existing):
+    engine, report, product, ref, _, checkpoint, saved, git = product_evidence
+    if existing:
+        git("update-ref", ref, checkpoint)
+    original = runtime._git
+    trace = []
+
+    def traced(repo, *args, **kwargs):
+        trace.append(tuple(args))
+        return original(repo, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_git", traced)
+    engine._persist_product_reconciliation(report, product, checkpoint)
+    observation = [
+        ("show-ref", "--verify", "--quiet", ref),
+        ("show-ref", "--verify", ref),
+        ("rev-parse", "--verify", f"{ref}^{{commit}}"),
+    ]
+    assert trace == (
+        observation + observation
+        if existing
+        else [observation[0], ("update-ref", ref, checkpoint, "")] + observation
+    )
+    assert saved
+
+
 @pytest.mark.parametrize("racer", ["equal", "conflict", "absent"])
 def test_product_evidence_create_race_reobserves(product_evidence, monkeypatch, racer):
     engine, report, product, ref, base, checkpoint, saved, git = product_evidence

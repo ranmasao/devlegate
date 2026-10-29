@@ -4,6 +4,8 @@
 # ruff: noqa: F403, F405, I001
 """Daemon tests outside host, lifecycle, and worker-loss ownership."""
 
+import json
+
 from _daemon_support import *  # noqa: F403,F405
 from _control_support import fresh_control_fixture
 
@@ -58,7 +60,24 @@ def test_control_sync_trace_covers_runtime_observations(
 
     monkeypatch.setattr(runtime, "_git", traced_git)
     before = git(engine.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    trace2_path = tmp_path / "sync-trace2.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace2_path))
     local_head, remote_head = engine._sync_control()
+    events = [json.loads(line) for line in trace2_path.read_text().splitlines()]
+    starts = [event for event in events if event.get("event") == "start"]
+    children = [event for event in events if event.get("event") == "child_start"]
+    top_level = [event for event in starts if "/" not in event["sid"]]
+    assert all(event["argv"][1] == "-C" for event in top_level)
+    assert [tuple(event["argv"][3:]) for event in top_level] == trace
+    # Fetch both reads the remote and writes local objects and tracking refs.
+    assert sum(args[0] == "fetch" for args in trace) == 1
+    assert sum(args[0] == "merge" for args in trace) == int(advance_remote)
+    assert sum(args[0] not in {"fetch", "merge"} for args in trace) == (
+        15 if advance_remote else 13
+    )
+    assert any(
+        "upload-pack" in " ".join(event.get("argv", [])) for event in children
+    )
     commands = [
         ("merge-base", "--is-ancestor")
         if args[:2] == ("merge-base", "--is-ancestor")
