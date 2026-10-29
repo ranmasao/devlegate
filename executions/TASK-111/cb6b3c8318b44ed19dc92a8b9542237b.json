@@ -1,0 +1,29 @@
+{
+  "code_base_head": "58d08a9859f4fd4d491a5e3c9c8650c59ce38c5b",
+  "conclusion": "completed",
+  "control_head": "05d3ba35a89f3fa167b723c3d9bc7ea46fdbb086",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-111",
+  "execution_id": "cb6b3c8318b44ed19dc92a8b9542237b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-111",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-111",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reconciled the workflow recovery protocol with actual engine calls and documented the forwarding boundary and remaining proof limits. Added a direct-call contract check and strengthened real Git replay assertions for exact checkpoint publication and reconciliation evidence."
+  },
+  "workspace_head": "9b49bed8bc27f3b2d9c2c339e684d849a87e3d61"
+}
