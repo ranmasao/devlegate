@@ -8,6 +8,7 @@ import dataclasses
 import json
 import subprocess
 import threading
+from collections import Counter
 from types import SimpleNamespace
 
 from _control_support import *  # noqa: F403,F405
@@ -126,6 +127,98 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
     ]
     assert execution.is_dir()
     assert engine._state.get("mutable_receipts", {}) == {}
+
+
+def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    )
+    _publish_done_execution(control, workspace, "T-1", checkpoint, "trace-cleanup")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    trace = []
+    original = runtime_module._git
+
+    def traced(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", traced)
+    trace_path = tmp_path / "cleanup-trace.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
+    dry = engine.cleanup_workspaces(apply=False, limit=1)
+    boundary = len(trace)
+    result = engine.cleanup_workspaces(apply=True, limit=1)
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    starts = [
+        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
+    ]
+    assert [tuple(e["argv"][3:]) for e in starts] == trace
+    dry_counts = Counter(x[0] for x in trace[:boundary])
+    applied = trace[boundary:]
+    apply_counts = Counter(x[0] for x in applied)
+    assert len(trace[:boundary]) == 26 and dry_counts["fetch"] == 1
+    assert dry_counts["ls-remote"] == 3
+    assert len(applied) == 104
+    assert (
+        apply_counts["fetch"], apply_counts["ls-remote"],
+        apply_counts["update-ref"], apply_counts["push"],
+    ) == (5, 14, 1, 1)
+    removal = next(
+        i for i, args in enumerate(applied) if args[:2] == ("worktree", "remove")
+    )
+    assert any(args[0] == "fetch" for args in applied[:removal])
+    assert any(args[0] == "ls-remote" for args in applied[:removal])
+    assert any(
+        e.get("event") == "child_start"
+        and "upload-pack" in " ".join(e.get("argv", []))
+        for e in events
+    )
+    assert dry["decisions"][0]["status"] == "eligible"
+    assert result["decisions"][0]["status"] == "retired"
+
+
+@pytest.mark.parametrize("candidates", [0, 32])
+def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candidates):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    for number in range(candidates):
+        git(working, "branch", f"devlegate/work/T-{number + 100}")
+    trace = []
+    original = runtime_module._git
+
+    def traced(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", traced)
+    trace_path = tmp_path / "screen-trace.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
+    result = engine.cleanup_workspaces(apply=False, limit=max(1, candidates))
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    starts = [
+        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
+    ]
+    assert [tuple(e["argv"][3:]) for e in starts] == trace
+    counts = Counter(x[0] for x in trace)
+    assert len(trace) == 4 + 3 * candidates
+    assert counts["ls-remote"] == 1
+    assert counts["worktree"] == 2 + candidates
+    assert len(result["decisions"]) == candidates
+    assert all(item["status"] == "skipped" for item in result["decisions"])
+    assert any(
+        e.get("event") == "child_start"
+        and "upload-pack" in " ".join(e.get("argv", []))
+        for e in events
+    )
 
 
 def test_validated_workspace_retirement_forces_removal_but_keeps_branch(
@@ -2465,6 +2558,56 @@ def test_execution_publication_lease_rejects_intervening_remote_generation(
             workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
         ).stdout.split()[0]
         == external
+    )
+
+
+def test_execution_publication_real_git_trace(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = manager.prepare(base)
+    (workspace.path / "change.txt").write_text("change\n")
+    git(workspace.path, "add", "change.txt")
+    git(workspace.path, "commit", "-m", "checkpoint")
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    trace = []
+    original = runtime_module._git
+
+    def traced(repo, *args, check=True):
+        trace.append(tuple(args))
+        return original(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", traced)
+    trace_path = tmp_path / "publication-trace.jsonl"
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
+    engine._publish_execution_branch(workspace, checkpoint, None)
+    events = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    starts = [
+        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
+    ]
+    assert [tuple(e["argv"][3:]) for e in starts] == trace
+    assert any(
+        e.get("event") == "child_start"
+        and "receive-pack" in " ".join(e.get("argv", []))
+        for e in events
+    )
+    assert trace == [
+        ("rev-parse", "--verify", "HEAD^{commit}"),
+        ("ls-remote", "origin", f"refs/heads/{manager.branch}"),
+        (
+            "push", f"--force-with-lease=refs/heads/{manager.branch}:", "origin",
+            f"{checkpoint}:refs/heads/{manager.branch}",
+        ),
+    ]
+    assert (
+        git(workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}")
+        .stdout.split()[0]
+        == checkpoint
     )
 
 
