@@ -130,6 +130,93 @@ def test_cleanup_inventory_save_failure_leaves_memory_ahead_of_sqlite(
     assert engine._runtime_store.observe() == before
 
 
+def test_forced_stop_can_be_overwritten_by_inflight_owner_save(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    entered, release = threading.Event(), threading.Event()
+    original = engine._runtime_store.replace
+    errors = []
+
+    def replace(state):
+        if threading.current_thread().name == "owner-save":
+            entered.set()
+            assert release.wait(10)
+        original(state)
+
+    def save():
+        try:
+            engine._save_state("agent_running", execution_stage="post-worker")
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(engine._runtime_store, "replace", replace)
+    thread = threading.Thread(target=save, name="owner-save")
+    thread.start()
+    try:
+        assert entered.wait(10)
+        engine.request_lifecycle("stop", "request-1", force=True)
+        assert (
+            engine._runtime_store.load()["execution_interruption_kind"]
+            == "operator_abort"
+        )
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert not errors
+    assert engine._runtime_store.load().get("execution_interruption_kind") is None
+    assert engine._state.get("manual_retry_required") is None
+
+
+def test_failed_status_refresh_retains_last_published_view(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    engine.status_view()
+    before = engine.published_status_payload()
+    engine._save_state("idle", local_head="new-generation")
+    monkeypatch.setattr(engine, "status_view", lambda: (_ for _ in ()).throw(
+        DevlegateError("observation failed")
+    ))
+    engine._refresh_published_status()
+    assert engine.published_status_payload() == before
+    assert engine._runtime_store.load()["local_head"] == "new-generation"
+
+
+def test_status_and_service_publication_can_be_observed_between_generations(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    snapshot = engine.status_view()
+    old_status = engine.published_status_payload()
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    entered, release = threading.Event(), threading.Event()
+    original = engine._publish_service_snapshot
+    errors = []
+
+    def publish(**kwargs):
+        original(**kwargs)
+        entered.set()
+        assert release.wait(10)
+
+    def refresh():
+        try:
+            engine._publish_status_snapshot(snapshot)
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(engine, "_publish_service_snapshot", publish)
+    thread = threading.Thread(target=refresh)
+    thread.start()
+    try:
+        assert entered.wait(10)
+        assert engine.service_snapshot().phase == "agent_running"
+        assert engine.published_status_payload() == old_status
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert not errors
+
+
 def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     worker_entered = threading.Event()
