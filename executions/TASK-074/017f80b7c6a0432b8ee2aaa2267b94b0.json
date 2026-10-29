@@ -1,0 +1,35 @@
+{
+  "code_base_head": "07865bf5aa2a765b6868671208ba7f5f11d82f12",
+  "conclusion": "incomplete",
+  "control_head": "e8dc3f6738d54f7333c0c86062b0632510c1c7f0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-074",
+  "execution_id": "017f80b7c6a0432b8ee2aaa2267b94b0",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-074",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Eliminate repeated parsing of previously validated ticket reports during follow polling without weakening report and artifact integrity checks.",
+    "Complete representative before-and-after whole-resolution measurements and the full consolidation inventory."
+  ],
+  "report_artifact": "executions/TASK-074/017f80b7c6a0432b8ee2aaa2267b94b0.md",
+  "report_sha256": "c76f32c938bc044a4d75d8afc45c9ab4a20f79cdc660d202db0aa9ee68194a98",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-074",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Eliminate repeated parsing of previously validated ticket reports during follow polling without weakening report and artifact integrity checks.",
+      "Complete representative before-and-after whole-resolution measurements and the full consolidation inventory."
+    ],
+    "report": "Ticket follow still revalidates every historical report and artifact on each idle poll; a safe bounded-observation implementation and complete baseline measurements have not been established.",
+    "summary": "Replaced mutable log-mtime ordering with first-parent control history and fail-closed handling of unresolved chronology. Fixed delayed zero-tail follow and added chronology, lifecycle, interruption, and observation regressions."
+  },
+  "workspace_head": "b694f6504241f594819ebf64fb1b48b845acdc4c"
+}
