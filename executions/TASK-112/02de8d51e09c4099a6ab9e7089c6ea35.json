@@ -1,0 +1,37 @@
+{
+  "code_base_head": "9b49bed8bc27f3b2d9c2c339e684d849a87e3d61",
+  "conclusion": "incomplete",
+  "control_head": "94cbcb7a2573e58ed6976dba8360676f9bb01abe",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-112",
+  "execution_id": "02de8d51e09c4099a6ab9e7089c6ea35",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-112",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the exhaustive direct and nested state mutation and alias inventory, including indirect capability calls.",
+    "Trace complete lock acquisition order across IPC, worker callbacks, and owner-loop paths.",
+    "Add deterministic forced-stop versus owner-save, publication freshness, and reconciliation alias failure tests; complete the transition and authority matrix."
+  ],
+  "report_artifact": "executions/TASK-112/02de8d51e09c4099a6ab9e7089c6ea35.md",
+  "report_sha256": "2d29eb87e7fbafee7b44ef6a649e192e8a4f95e6d23a82c9ea0deda2a2b8f902",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-112",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the exhaustive direct and nested state mutation and alias inventory, including indirect capability calls.",
+      "Trace complete lock acquisition order across IPC, worker callbacks, and owner-loop paths.",
+      "Add deterministic forced-stop versus owner-save, publication freshness, and reconciliation alias failure tests; complete the transition and authority matrix."
+    ],
+    "report": "The current investigation and tests cover selected paths only; the exhaustive inventory and race coverage required by the ticket are not yet established.",
+    "summary": "Added a revision-specific working state and authority inventory and regression tests for SQLite writer serialization, forced-stop save failure, and cleanup inventory save failure."
+  },
+  "workspace_head": "14fdf44811be40aa7ad027ab45925032fb3a023b"
+}
