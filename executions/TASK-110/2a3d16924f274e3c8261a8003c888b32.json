@@ -1,0 +1,29 @@
+{
+  "code_base_head": "4628390c72c228d251bf1fab1ee7d8c10c343bed",
+  "conclusion": "completed",
+  "control_head": "f356c1a3deea9f1240f022204fc4e625ddcbdb2d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-110",
+  "execution_id": "2a3d16924f274e3c8261a8003c888b32",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-110",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-110",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reconciliation evidence pinning now uses create-only ref updates and exact re-observation before persisting state, preserving competing evidence. Added real-ref regression coverage for existing refs, races, interruption and replay, and normal versus replay fallback."
+  },
+  "workspace_head": "58d08a9859f4fd4d491a5e3c9c8650c59ce38c5b"
+}
