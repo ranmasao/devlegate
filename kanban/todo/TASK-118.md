@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Converge reconciliation transaction ownership"
-"depends_on": ["TASK-112", "TASK-114"]
+"depends_on": ["TASK-112", "TASK-114", "TASK-123"]
 ---
 
 ## Scope

@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Git workflow semantic ownership and DRY audit"
-"depends_on": ["TASK-113"]
+"depends_on": ["TASK-113", "TASK-123"]
 ---
 
 ## Scope

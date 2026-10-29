@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Extract pure runtime state invariant validator pilot"
-"depends_on": ["TASK-112"]
+"depends_on": ["TASK-112", "TASK-123"]
 ---
 
 ## Scope
