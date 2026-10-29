@@ -132,6 +132,122 @@ def test_product_evidence_rejects_unowned_or_stopped_git(
         engine._persist_product_reconciliation(report, product, "checkpoint")
 
 
+@pytest.fixture
+def product_evidence(tmp_path):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args], check=True,
+            text=True, capture_output=True,
+        ).stdout.strip()
+
+    git("init")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
+    git("commit", "--allow-empty", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("commit", "--allow-empty", "-m", "checkpoint")
+    checkpoint = git("rev-parse", "HEAD")
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine.repo = tmp_path
+    engine._host_owner_thread_id = None
+    engine._stop_event = None
+    engine._state = {"execution_control_head": "control", "control_head": "control"}
+    report = SimpleNamespace(
+        ticket_id="T-1", execution_id="exec", code_base_head=base,
+        workspace_head=checkpoint, execution_branch="work", execution_path="work",
+        as_dict=lambda: {"workspace_head": checkpoint},
+    )
+    product = {
+        "remote_head": base, "local_head": checkpoint, "reason": "changed",
+        "branch": "main", "dirty": False, "target_eligible": True,
+    }
+    ref = engine._reconciliation_evidence_ref("T-1", "exec")
+    saved = []
+
+    def save(phase, **kwargs):
+        assert git("rev-parse", ref) == checkpoint
+        saved.append((phase, kwargs))
+
+    engine._save_state = save
+    return engine, report, product, ref, base, checkpoint, saved, git
+
+
+@pytest.mark.parametrize("existing", ["absent", "equal", "conflict"])
+def test_product_evidence_existing_refs(product_evidence, existing):
+    engine, report, product, ref, base, checkpoint, saved, git = product_evidence
+    if existing != "absent":
+        git("update-ref", ref, checkpoint if existing == "equal" else base)
+    if existing == "conflict":
+        with pytest.raises(runtime.WorkflowBlockedError, match="inconsistent"):
+            engine._persist_product_reconciliation(report, product, checkpoint)
+        assert git("rev-parse", ref) == base
+        assert not saved
+    else:
+        observed = engine._persist_product_reconciliation(report, product, checkpoint)
+        assert observed == checkpoint
+        assert git("rev-parse", ref) == checkpoint
+        assert saved[0][0] == "idle"
+        assert saved[0][1]["reconciliation"]["evidence_ref"] == ref
+
+
+@pytest.mark.parametrize("racer", ["equal", "conflict", "absent"])
+def test_product_evidence_create_race_reobserves(product_evidence, monkeypatch, racer):
+    engine, report, product, ref, base, checkpoint, saved, git = product_evidence
+    create = runtime.create_ref_if_absent
+
+    def race(repo, reference, oid, *, runner):
+        if racer != "absent":
+            git("update-ref", ref, checkpoint if racer == "equal" else base)
+            return create(repo, reference, oid, runner=runner)
+        return subprocess.CompletedProcess([], 1, "", "failure")
+
+    monkeypatch.setattr(runtime, "create_ref_if_absent", race)
+    if racer == "equal":
+        engine._persist_product_reconciliation(report, product, checkpoint)
+        assert saved
+        assert git("rev-parse", ref) == checkpoint
+    else:
+        with pytest.raises(runtime.WorkflowBlockedError):
+            engine._persist_product_reconciliation(report, product, checkpoint)
+        assert not saved
+        if racer == "conflict":
+            assert git("rev-parse", ref) == base
+        else:
+            assert subprocess.run(
+                ["git", "-C", str(engine.repo), "show-ref", "--verify", "--quiet", ref]
+            ).returncode != 0
+
+
+def test_product_evidence_interrupted_after_pin_restarts(product_evidence, monkeypatch):
+    engine, report, product, ref, _, checkpoint, saved, git = product_evidence
+    create = runtime.create_ref_if_absent
+
+    def interrupted(*args, **kwargs):
+        assert create(*args, **kwargs).returncode == 0
+        raise ShutdownInterrupted
+
+    monkeypatch.setattr(runtime, "create_ref_if_absent", interrupted)
+    with pytest.raises(ShutdownInterrupted):
+        engine._persist_product_reconciliation(report, product, checkpoint)
+    assert git("rev-parse", ref) == checkpoint
+    assert not saved
+    monkeypatch.setattr(runtime, "create_ref_if_absent", create)
+    engine.recovery_persist_reconciliation(report, product, checkpoint)
+    assert saved[0][1]["reconciliation"]["worker_checkpoint"] == checkpoint
+
+
+def test_product_evidence_normal_fallback_and_replay_requirement(product_evidence):
+    engine, report, product, ref, base, checkpoint, saved, git = product_evidence
+    product.update(remote_head=None, local_head=base)
+    with pytest.raises(runtime.WorkflowBlockedError, match="remote identity"):
+        engine.recovery_persist_reconciliation(report, product, checkpoint)
+    assert not saved
+    assert engine._persist_product_reconciliation(
+        report, product, checkpoint, allow_base_fallback=True
+    ) == base
+    assert git("rev-parse", ref) == checkpoint
+
+
 @pytest.mark.parametrize("shutdown", [False, True])
 def test_checkpoint_push_rejects_unowned_or_stopped_git(
     tmp_path, monkeypatch, shutdown

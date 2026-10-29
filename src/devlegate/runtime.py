@@ -8711,13 +8711,19 @@ class ServiceEngine:
         )
         if existing_evidence is not None and existing_evidence != report.workspace_head:
             raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
-        pinned = update_ref(
-            self.repo,
-            evidence_ref,
-            report.workspace_head,
-            runner=self._git_runtime,
+        if existing_evidence is None:
+            create_ref_if_absent(
+                self.repo,
+                evidence_ref,
+                report.workspace_head,
+                runner=self._git_runtime,
+            )
+        observed_evidence = resolve_commit(
+            self.repo, evidence_ref, runner=self._git_runtime
         )
-        if pinned.returncode:
+        if observed_evidence is not None and observed_evidence != report.workspace_head:
+            raise WorkflowBlockedError("reconciliation evidence ref is inconsistent")
+        if observed_evidence != report.workspace_head:
             raise WorkflowBlockedError(
                 "cannot pin reconciliation worker checkpoint evidence"
             )
