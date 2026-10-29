@@ -1,0 +1,37 @@
+{
+  "code_base_head": "07865bf5aa2a765b6868671208ba7f5f11d82f12",
+  "conclusion": "incomplete",
+  "control_head": "09a7e56b6a0082e967c1e7f7e9cf39245ae4997c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-074",
+  "execution_id": "99078e58f510408b8f98eb1b7131501a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-074",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Establish reliable chronological execution ordering; current ordering uses mutable log modification times and is not authoritative.",
+    "Eliminate or justify repeated ticket report parsing and finish the whole-resolution polling and file-open audit.",
+    "Complete edge-case and CLI regression coverage for lifecycle markers, delayed logs, interruption, errors, and execution transitions."
+  ],
+  "report_artifact": "executions/TASK-074/99078e58f510408b8f98eb1b7131501a.md",
+  "report_sha256": "9446392638dbfc765327d7e13b9d0b7dd19e66328af0afc7e413a8401d6c014f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-074",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Establish reliable chronological execution ordering; current ordering uses mutable log modification times and is not authoritative.",
+      "Eliminate or justify repeated ticket report parsing and finish the whole-resolution polling and file-open audit.",
+      "Complete edge-case and CLI regression coverage for lifecycle markers, delayed logs, interruption, errors, and execution transitions."
+    ],
+    "report": "The report schema has random execution IDs and no execution-order field; log modification times do not prove chronological order. The remaining polling and edge-case audit is not complete.",
+    "summary": "Shared ticket snapshot selection with follow, consolidated execution resolution and active-state observation, and added log history options and lifecycle markers. Added focused parser, parity, polling, and marker coverage."
+  },
+  "workspace_head": "2246e44080339cb5fd09c92ac15ea2e933ebadd5"
+}
