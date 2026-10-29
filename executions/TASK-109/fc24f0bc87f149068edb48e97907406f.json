@@ -1,0 +1,29 @@
+{
+  "code_base_head": "9001823a77365860dbda0901b712cb3d442b894a",
+  "conclusion": "completed",
+  "control_head": "e389d58781cf57428643c8f68f62caf36cc037e6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-109",
+  "execution_id": "fc24f0bc87f149068edb48e97907406f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-109",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-109",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a current-HEAD architecture audit mapping runtime ownership, Git effects, historical findings, and prioritized extraction and consolidation proposals. The audit identifies a reconciliation evidence-ref race and recovery capability contract drift while documenting measurement gaps and curator decision boundaries."
+  },
+  "workspace_head": "587d68f113b67a68d7e3a08a7445556c90b1f651"
+}
