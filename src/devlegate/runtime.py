@@ -834,6 +834,9 @@ class ServiceEngine:
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.RLock()
+        self._state_write_lock = threading.RLock()
+        self._state_write_active = threading.local()
+        self._state_write_uncertain = False
         self._receipt_lock = threading.Lock()
         self._operator_command: OperatorCommand | None = None
         self._operator_active = False
@@ -955,6 +958,12 @@ class ServiceEngine:
 
     def _record_forced_lifecycle_abort(self, request_id: str | None = None) -> None:
         """Durably record forced worker interruption before signalling it."""
+        with self._state_write_lock:
+            if self._state_write_uncertain:
+                raise DevlegateError("runtime state write outcome uncertain; restart required")
+            self._record_forced_lifecycle_abort_locked(request_id)
+
+    def _record_forced_lifecycle_abort_locked(self, request_id: str | None) -> None:
         if self._state.get("phase") not in {"agent_pending", "agent_running"}:
             return
         if not all(
@@ -3789,6 +3798,34 @@ class ServiceEngine:
         clear_operator_recovery: bool = False,
         **fields: object,
     ) -> None:
+        if getattr(self._state_write_active, "saving", False):
+            raise DevlegateError("reentrant runtime state save")
+        with self._state_write_lock:
+            if self._state_write_uncertain:
+                raise DevlegateError("runtime state write outcome uncertain; restart required")
+            self._state_write_active.saving = True
+            try:
+                self._save_state_locked(
+                    phase,
+                    clear_execution=clear_execution,
+                    preserve_resume_required=preserve_resume_required,
+                    clear_pre_worker_generation=clear_pre_worker_generation,
+                    clear_operator_recovery=clear_operator_recovery,
+                    **fields,
+                )
+            finally:
+                self._state_write_active.saving = False
+
+    def _save_state_locked(
+        self,
+        phase: str,
+        *,
+        clear_execution: bool,
+        preserve_resume_required: bool,
+        clear_pre_worker_generation: bool,
+        clear_operator_recovery: bool,
+        **fields: object,
+    ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {**self._state, "phase": phase, **fields}
         if phase == "agent_pending" and "worker_identity" not in state:
@@ -3840,11 +3877,46 @@ class ServiceEngine:
                 state.pop(field, None)
         if clear_operator_recovery:
             state.pop("operator_recovery", None)
+        # A completion prepared before the abort must not turn an accepted
+        # forced interruption into a normal completion. Recovery after restart
+        # can resolve the persisted interruption using its usual evidence.
+        if self._lifecycle_force and self._state.get(
+            "execution_interruption_kind"
+        ) == "operator_abort":
+            failures = state.get("failed_executions")
+            failure = (
+                failures.get(self._state.get("execution_ticket_id"))
+                if isinstance(failures, dict)
+                else None
+            )
+            transferred = (
+                phase == "idle"
+                and isinstance(failure, dict)
+                and failure.get("execution_id") == self._state.get("execution_id")
+                and failure.get("interruption_kind") == "operator_abort"
+                and (
+                    self._state.get("manual_retry_required") is None
+                    or failure.get("manual_retry_required") is True
+                )
+            )
+            if not transferred and (
+                state.get("execution_interruption_kind") != "operator_abort"
+                or (
+                    self._state.get("manual_retry_required") is not None
+                    and state.get("manual_retry_required")
+                    != self._state.get("manual_retry_required")
+                )
+            ):
+                raise DevlegateError("forced lifecycle interruption requires recovery")
         self._validate_state_invariant(state)
         try:
             self._runtime_store.replace(state)
         except RuntimeStoreError as error:
+            self._state_write_uncertain = True
             raise DevlegateError(str(error)) from error
+        except Exception:
+            self._state_write_uncertain = True
+            raise
         self._state = state
 
     def _observe_worktree(self, status: str) -> bool:

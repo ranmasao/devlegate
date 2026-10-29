@@ -130,7 +130,7 @@ def test_cleanup_inventory_save_failure_leaves_memory_ahead_of_sqlite(
     assert engine._runtime_store.observe() == before
 
 
-def test_forced_stop_can_be_overwritten_by_inflight_owner_save(tmp_path, monkeypatch):
+def test_forced_stop_waits_for_inflight_owner_save(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     _persist_active_execution(engine, "agent_running", "worker-launch")
     entered, release = threading.Event(), threading.Event()
@@ -152,20 +152,126 @@ def test_forced_stop_can_be_overwritten_by_inflight_owner_save(tmp_path, monkeyp
     monkeypatch.setattr(engine._runtime_store, "replace", replace)
     thread = threading.Thread(target=save, name="owner-save")
     thread.start()
+    stopped = threading.Event()
+
+    def stop():
+        try:
+            engine.request_lifecycle("stop", "request-1", force=True)
+            stopped.set()
+        except Exception as error:
+            errors.append(error)
+
+    stopper = threading.Thread(target=stop)
     try:
         assert entered.wait(10)
-        engine.request_lifecycle("stop", "request-1", force=True)
-        assert (
-            engine._runtime_store.load()["execution_interruption_kind"]
-            == "operator_abort"
-        )
+        stopper.start()
+        assert not stopped.wait(0.1)
     finally:
         release.set()
         thread.join(10)
+        stopper.join(10)
     assert not thread.is_alive()
+    assert not stopper.is_alive()
     assert not errors
-    assert engine._runtime_store.load().get("execution_interruption_kind") is None
-    assert engine._state.get("manual_retry_required") is None
+    state = engine._runtime_store.load()
+    assert state["execution_interruption_kind"] == "operator_abort"
+    assert state["manual_retry_required"]["request_id"] == "request-1"
+    assert state["execution_stage"] == "post-worker"
+    assert engine._state == state
+
+
+def test_state_save_reentry_fails_closed(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    before = engine._runtime_store.observe()
+
+    def replace(_state):
+        engine._save_state("agent_running", local_head="nested")
+
+    monkeypatch.setattr(engine._runtime_store, "replace", replace)
+    with pytest.raises(DevlegateError, match="reentrant runtime state save"):
+        engine._save_state("agent_running", local_head="outer")
+    assert engine._runtime_store.observe() == before
+
+
+def test_forced_stop_rejects_normal_completion_and_survives_restart(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    engine.request_lifecycle("stop", "request-1", force=True)
+    before = engine._runtime_store.load()
+    with pytest.raises(DevlegateError, match="requires recovery"):
+        engine._save_state("idle", clear_execution=True, manual_retry_required=None)
+    assert engine._runtime_store.load() == before
+    restarted = ServiceEngine(engine.env_file)
+    assert restarted._state == before
+
+
+def test_interrupted_completion_transfers_abort_to_failure(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    engine.request_lifecycle("stop", "request-1", force=True)
+    failure = {
+        "execution_id": "execution-1",
+        "interruption_kind": "operator_abort",
+        "manual_retry_required": True,
+        "product_head": "unknown",
+        "remote_head": "unknown",
+        "control_head": "unknown",
+        "todo_fingerprint": "unknown",
+        "reason": "interrupted",
+    }
+    engine._save_state(
+        "idle", clear_execution=True, manual_retry_required=None,
+        failed_executions={"T-1": failure},
+    )
+    assert engine._runtime_store.load()["failed_executions"]["T-1"] == failure
+
+
+def test_completion_before_forced_stop_is_not_marked_interrupted(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    engine._save_state("idle", clear_execution=True, local_head="completed")
+    engine.request_lifecycle("stop", "request-1", force=True)
+    state = engine._runtime_store.load()
+    assert state["local_head"] == "completed"
+    assert state.get("manual_retry_required") is None
+    assert state.get("execution_interruption_kind") is None
+
+
+def test_ambiguous_commit_blocks_later_saves_and_signals(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    original = engine._runtime_store.replace
+    stop = threading.Event()
+    engine._stop_event = stop
+
+    def commit_then_fail(state):
+        original(state)
+        raise RuntimeStoreError("ambiguous commit")
+
+    monkeypatch.setattr(engine._runtime_store, "replace", commit_then_fail)
+    with pytest.raises(DevlegateError, match="ambiguous commit"):
+        engine._save_state("agent_running", local_head="committed")
+    with pytest.raises(DevlegateError, match="restart required"):
+        engine.request_lifecycle("stop", "request-1", force=True)
+    assert not stop.is_set()
+    assert engine._runtime_store.load()["local_head"] == "committed"
+    assert ServiceEngine(engine.env_file)._state["local_head"] == "committed"
+
+
+def test_stop_callback_can_reenter_state_save(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+
+    class Stop:
+        def request(self, kind, *, source):
+            assert kind == source == "operator_abort"
+            assert engine._runtime_store.load()["execution_interruption_kind"] == kind
+            engine._save_state("agent_running", local_head="callback")
+
+    engine._stop_event = Stop()
+    engine.request_lifecycle("stop", "request-1", force=True)
+    assert engine._runtime_store.load()["local_head"] == "callback"
 
 
 def test_failed_status_refresh_retains_last_published_view(tmp_path, monkeypatch):
