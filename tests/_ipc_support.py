@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-# ruff: noqa: F401, I001
 
 """Shared IPC fixtures and dispatch/server implementation-seam source.
 
@@ -11,41 +10,25 @@ stay separate from fake dispatch and retain their IPC proof boundary.
 """
 
 import json
-
 import os
-
 import socket
-
 import stat
-
 import struct
-
 import sys
-
 import threading
-
 import time
-
 from concurrent.futures import ThreadPoolExecutor
-
 from pathlib import Path
-
 from types import SimpleNamespace
 
 import pytest
-
+from _control_support import control_fixture, git, invoke, persist_agent_running
 from resource_helpers import owned_short_state_dir
-
 from runtime_helpers import run_test_iteration
 
-from _control_support import control_fixture, git, invoke, persist_agent_running
-
 import devlegate.cli as cli
-
 import devlegate.daemon as daemon
-
 import devlegate.ipc_server as ipc_server
-
 from devlegate.ipc_protocol import (
     MAX_PAYLOAD_BYTES,
     IPCProtocolError,
@@ -55,24 +38,21 @@ from devlegate.ipc_protocol import (
     receive_frame,
     send_frame,
 )
-
 from devlegate.ipc_server import (
     UNIX_SOCKET_PATH_MAX_BYTES,
     UnixIPCServer,
     dispatch_mutation,
     dispatch_read_only,
 )
-
 from devlegate.runtime import (
     DevlegateError,
     OperatorCommand,
     RetryCandidate,
     _reconcile_resume_request_fingerprint,
 )
-
 from devlegate.service import ServiceEngine
-
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
+
 
 def make_engine(tmp_path, monkeypatch, state_override=None):
     working, config, state = control_fixture(tmp_path)
@@ -110,5 +90,49 @@ def _request(method, payload=None):
 
     return IPCRequest(1, "id", method, payload or {})
 
-# Export all support names, including private helper functions used by domain tests.
-__all__ = [name for name in globals() if not name.startswith("__")]
+# Explicit shared bindings include fixtures and monkeypatch attachment points.
+__all__ = [
+    "DevlegateError",
+    "IPCProtocolError",
+    "MAX_PAYLOAD_BYTES",
+    "OperatorCommand",
+    "Path",
+    "RetryCandidate",
+    "ServiceEngine",
+    "SimpleNamespace",
+    "ThreadPoolExecutor",
+    "UNIX_SOCKET_PATH_MAX_BYTES",
+    "UnixIPCServer",
+    "WorkerClaim",
+    "WorkerRunResult",
+    "_reconcile_resume_request_fingerprint",
+    "_request",
+    "cli",
+    "control_fixture",
+    "daemon",
+    "dispatch_mutation",
+    "dispatch_read_only",
+    "encode_frame",
+    "encode_request",
+    "git",
+    "invoke",
+    "ipc_server",
+    "json",
+    "make_engine",
+    "os",
+    "owned_short_state_dir",
+    "parse_response",
+    "persist_agent_running",
+    "pytest",
+    "receive_frame",
+    "request",
+    "run_test_iteration",
+    "running_server",
+    "send_frame",
+    "socket",
+    "stat",
+    "struct",
+    "sys",
+    "threading",
+    "time",
+]

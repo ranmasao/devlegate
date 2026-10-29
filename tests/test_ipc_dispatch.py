@@ -1,10 +1,18 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-# ruff: noqa: F403, F405, I001
 """Fake dispatch and validation; this layer does not prove owner serialization."""
 
-from _ipc_support import *  # noqa: F403,F405
+from _ipc_support import (
+    IPCProtocolError,
+    _request,
+    dispatch_mutation,
+    dispatch_read_only,
+    pytest,
+    request,
+)
+from _ipc_support import running_server as running_server
+
 
 def test_unknown_method_returns_structured_error(running_server):
     _engine, _state, _server = running_server

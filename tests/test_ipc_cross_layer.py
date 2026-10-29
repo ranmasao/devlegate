@@ -1,10 +1,34 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-# ruff: noqa: F403, F405, I001
 """IPC recovery/topology bridge tests not owned by dispatch, transport, or handoff."""
 
-from _ipc_support import *  # noqa: F403,F405
+from _ipc_support import (
+    MAX_PAYLOAD_BYTES,
+    DevlegateError,
+    OperatorCommand,
+    ThreadPoolExecutor,
+    UnixIPCServer,
+    _request,
+    dispatch_mutation,
+    dispatch_read_only,
+    git,
+    ipc_server,
+    make_engine,
+    os,
+    owned_short_state_dir,
+    parse_response,
+    persist_agent_running,
+    pytest,
+    receive_frame,
+    request,
+    send_frame,
+    socket,
+    sys,
+    threading,
+)
+from _ipc_support import running_server as running_server
+
 
 def test_short_state_directory_context_cleans_external_resource():
     with owned_short_state_dir() as path:
