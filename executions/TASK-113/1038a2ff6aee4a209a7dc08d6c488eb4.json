@@ -1,0 +1,33 @@
+{
+  "code_base_head": "baeee877466a84522d0b2331ba16d0bb7ec0d2fc",
+  "conclusion": "blocked",
+  "control_head": "0f3cb15b7d4bc1164c65eeb129a8ba69d97c11d9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-113",
+  "execution_id": "1038a2ff6aee4a209a7dc08d6c488eb4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-113",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate create the new checkpoint and run its hosted CI check to provide the requested green CI evidence?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-113/1038a2ff6aee4a209a7dc08d6c488eb4.md",
+  "report_sha256": "bdde86d13ceaf0372f8f82f64f4d420922837bf652b51fd1fda63e8703dd07d1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-113",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate create the new checkpoint and run its hosted CI check to provide the requested green CI evidence?"
+    ],
+    "remaining": [],
+    "report": "The configured local lint command passed and the focused tests passed. The full local coverage run had two service timing failures; both passed when rerun individually. Hosted CI cannot be verified until Devlegate creates the checkpoint.",
+    "summary": "Fixed the Ruff line-length diagnostic in the evidence-pin trace test while preserving the existing audit and measurements."
+  },
+  "workspace_head": "ecec5b2a53a95a2fdc8e4992f598640fe8ef283f"
+}
