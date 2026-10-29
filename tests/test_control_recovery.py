@@ -2730,6 +2730,12 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     assert "Failed executions" not in restarted._render_status_text(snapshot)
     assert restarted._state["failed_executions"]["T-1"] == metadata
     assert report_store.read("T-1", metadata["execution_id"]) == report
+    if destination == "todo":
+        human = invoke(working, "status", config=config)
+        structured = invoke(working, "status", "--json", config=config)
+        assert human.returncode == structured.returncode == 0
+        assert "Failed executions" not in human.stdout
+        assert not json.loads(structured.stdout)["failed_executions"]
     observation = restarted._status_git_observation()["control"]
     assert observation is not None
     for uncertain in (
@@ -2764,6 +2770,62 @@ def test_published_ticket_transition_supersedes_only_current_failure(
             metadata["execution_id"]
         )
         assert report_store.read("T-1", metadata["execution_id"]) == report
+        human = invoke(working, "status", config=config)
+        structured = invoke(working, "status", "--json", config=config)
+        assert human.returncode == structured.returncode == 0
+        assert "Failed executions" in human.stdout and "T-1" in human.stdout
+        assert [f["id"] for f in json.loads(structured.stdout)[
+            "failed_executions"
+        ]] == ["T-1"]
+
+
+def test_side_branch_deletion_and_divergent_remote_do_not_supersede_failure(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers, "run",
+        lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
+    )
+    assert run_test_iteration(engine) == 1
+    control = next((state / "worktrees").glob("*/control"))
+    base = git(control, "rev-parse", "HEAD").stdout.strip()
+    # The side branch deletes the ticket, but the merge retains the mainline copy.
+    git(control, "checkout", "-b", "side-delete")
+    (control / "kanban/todo/T-1.md").unlink()
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "side deletion")
+    git(control, "checkout", "devlegate/control")
+    (control / "mainline.txt").write_text("mainline\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "mainline change")
+    git(control, "merge", "--no-commit", "--no-ff", "side-delete")
+    git(control, "restore", "--source=HEAD", "--staged", "--worktree",
+        "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "merge retaining ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    assert engine.status_view().failed_executions
+
+    # Publish a different descendant of the original base and fetch it without
+    # reconciling the local checkout. Neither side proves an authoritative view.
+    publisher = tmp_path / "publisher-divergent"
+    remote = git(working, "remote", "get-url", "origin").stdout.strip()
+    git(tmp_path, "clone", remote, str(publisher))
+    git(publisher, "checkout", "-b", "divergent", base)
+    (publisher / "kanban/todo/T-1.md").unlink()
+    git(publisher, "add", "-A")
+    git(publisher, "commit", "-m", "divergent deletion")
+    git(publisher, "push", "--force", "origin", "HEAD:refs/heads/devlegate/control")
+    git(control, "fetch", "origin", "devlegate/control")
+    assert engine.status_view().failed_executions
+    human = invoke(working, "status", config=config)
+    structured = invoke(working, "status", "--json", config=config)
+    assert human.returncode == structured.returncode == 0
+    assert "Failed executions" in human.stdout and "T-1" in human.stdout
+    assert json.loads(structured.stdout)["failed_executions"][0]["id"] == "T-1"
 
 def test_clean_local_product_advance_invalidates_retry(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
