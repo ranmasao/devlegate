@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import sqlite3
+import threading
 
 import pytest
 
@@ -102,6 +103,44 @@ def test_sqlite_store_failed_commit_keeps_previous_state(tmp_path, monkeypatch):
     fresh = SQLiteRuntimeStore(tmp_path, "checkout")
     assert fresh.load() == {"phase": "idle", "revision": "old"}
     assert fresh.observe()[1] == "sqlite:1"
+
+
+def test_sqlite_store_serializes_competing_replacements(tmp_path, monkeypatch):
+    first = SQLiteRuntimeStore(tmp_path, "checkout")
+    second = SQLiteRuntimeStore(tmp_path, "checkout")
+    first.replace({"phase": "idle", "writer": "initial"})
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+    original_commit = first._commit
+
+    def hold_commit(connection):
+        entered.set()
+        assert release.wait(5)
+        original_commit(connection)
+
+    def write(store, writer):
+        try:
+            store.replace({"phase": "idle", "writer": writer})
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(first, "_commit", hold_commit)
+    one = threading.Thread(target=write, args=(first, "first"))
+    two = threading.Thread(target=write, args=(second, "second"))
+    one.start()
+    try:
+        assert entered.wait(5)
+        two.start()
+        assert second.observe() == ({"phase": "idle", "writer": "initial"}, "sqlite:1")
+    finally:
+        release.set()
+        one.join(10)
+        if two.ident is not None:
+            two.join(10)
+    assert not one.is_alive() and not two.is_alive()
+    assert not errors
+    assert second.observe() == ({"phase": "idle", "writer": "second"}, "sqlite:3")
 
 
 def test_sqlite_store_rejects_unsupported_schema_version(tmp_path):
