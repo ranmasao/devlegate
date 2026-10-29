@@ -8,6 +8,55 @@ from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
 from devlegate.execution_result import ExecutionReportStore
 
+
+def _reconcile_when_not_busy(service, config, pending, target):
+    result = None
+
+    def attempt():
+        nonlocal result
+        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
+        if result.returncode and (
+            "service busy; mutable request was not admitted" in result.stderr
+        ):
+            assert _disk_state(config)["reconciliation"] == pending
+            return False
+        return True
+
+    service.wait_for(attempt)
+    return result
+
+
+def test_reconciliation_admission_retry_only_retries_explicit_busy(monkeypatch):
+    pending = {"status": "pending"}
+    monkeypatch.setattr(__import__(__name__), "_disk_state", lambda _: {
+        "reconciliation": pending
+    })
+
+    class Service:
+        def __init__(self, responses):
+            self.responses = iter(responses)
+            self.attempts = 0
+
+        def cli(self, *args):
+            self.attempts += 1
+            return next(self.responses)
+
+        def wait_for(self, predicate):
+            while not predicate():
+                pass
+
+    busy = subprocess.CompletedProcess(
+        [], 1, "", "service busy; mutable request was not admitted"
+    )
+    success = subprocess.CompletedProcess([], 0, "", "")
+    other = subprocess.CompletedProcess([], 1, "", "admission coordination timed out")
+    service = Service([busy, success])
+    assert _reconcile_when_not_busy(service, None, pending, "target") is success
+    assert service.attempts == 2
+    service = Service([other])
+    assert _reconcile_when_not_busy(service, None, pending, "target") is other
+    assert service.attempts == 1
+
 @pytest.mark.parametrize("output", ["--json", "--yaml"])
 def test_restart_rejects_output_formats(output):
     with pytest.raises(SystemExit):
@@ -2209,7 +2258,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         service.kill()
         service.restart()
         assert _disk_state(config)["reconciliation"] == pending_before
-        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
+        result = _reconcile_when_not_busy(service, config, pending_before, target)
         assert result.returncode == 0, result.stderr
         assert "reconciliation request accepted: T-1" in result.stdout
 
