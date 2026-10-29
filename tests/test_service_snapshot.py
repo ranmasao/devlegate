@@ -9,7 +9,8 @@ import pytest
 from runtime_helpers import run_test_iteration
 from _control_support import control_fixture, git, invoke
 
-from devlegate.runtime import BlockedReason, ServiceSnapshot
+from devlegate.runtime import BlockedReason, DevlegateError, ServiceSnapshot
+from devlegate.runtime_store import RuntimeStoreError
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerRunResult
 
@@ -84,6 +85,49 @@ def test_service_snapshot_read_does_not_acquire_project_lock(tmp_path, monkeypat
     with engine._lock():
         snapshot = engine.service_snapshot()
     assert snapshot.lifecycle == "initialized"
+
+
+def test_forced_stop_save_failure_does_not_signal_worker(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    _persist_active_execution(engine, "agent_running", "worker-launch")
+    before = engine._runtime_store.observe()
+    previous = engine._state
+    stop = threading.Event()
+    engine._stop_event = stop
+
+    def fail(_state):
+        raise RuntimeStoreError("forced failure")
+
+    monkeypatch.setattr(engine._runtime_store, "replace", fail)
+    with pytest.raises(DevlegateError, match="forced failure"):
+        engine.request_lifecycle("stop", "request-1", force=True)
+
+    assert not stop.is_set()
+    assert engine._state is previous
+    assert engine._runtime_store.observe() == before
+    assert engine.lifecycle_status_payload()["intent"] == "stop"
+
+
+def test_cleanup_inventory_save_failure_leaves_memory_ahead_of_sqlite(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    engine._save_state("idle")
+    before = engine._runtime_store.observe()
+    monkeypatch.setattr(engine, "_workspace_cleanup_cohort", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        engine, "cleanup_workspaces", lambda **_kwargs: {"decisions": []}
+    )
+
+    def fail(_state):
+        raise RuntimeStoreError("forced failure")
+
+    monkeypatch.setattr(engine._runtime_store, "replace", fail)
+    with pytest.raises(DevlegateError, match="forced failure"):
+        engine._publish_workspace_cleanup_inventory()
+
+    assert engine._state["workspace_cleanup"]["status"] == "clean"
+    assert engine._runtime_store.observe() == before
 
 
 def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypatch):
