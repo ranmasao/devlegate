@@ -1,0 +1,29 @@
+{
+  "code_base_head": "07865bf5aa2a765b6868671208ba7f5f11d82f12",
+  "conclusion": "completed",
+  "control_head": "ed51233c1d27ff17dc644c8c2e40ac55710beac7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-074",
+  "execution_id": "6016356bee15488ab44fcf9ce0f7a921",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-074",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-074",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Bounded ticket follow evidence observation with directory notifications and Git HEAD invalidation, preserving fail-closed validation and authoritative chronology. Added regression coverage and a log-resolution reuse and observation-cost audit."
+  },
+  "workspace_head": "9001823a77365860dbda0901b712cb3d442b894a"
+}
