@@ -1,0 +1,37 @@
+{
+  "code_base_head": "9b49bed8bc27f3b2d9c2c339e684d849a87e3d61",
+  "conclusion": "incomplete",
+  "control_head": "57a5532a2800712ceb2cfa14c9a30c87ab320701",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-112",
+  "execution_id": "8b851e41ee754e759a2d42ffa29e3e28",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-112",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the finite inventory of all durable top-level fields, nested and aliased writers, and indirect field producers against the baseline source.",
+    "Finish tracing owner-loop lock scopes, callback implementations, and possible reverse acquisition edges.",
+    "Run the focused regression tests in an environment with pytest installed."
+  ],
+  "report_artifact": "executions/TASK-112/8b851e41ee754e759a2d42ffa29e3e28.md",
+  "report_sha256": "a86b13c2e4e563a23db7a4b422d505afbd846685fbc2aeb6b64d2595dc099c3f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-112",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the finite inventory of all durable top-level fields, nested and aliased writers, and indirect field producers against the baseline source.",
+      "Finish tracing owner-loop lock scopes, callback implementations, and possible reverse acquisition edges.",
+      "Run the focused regression tests in an environment with pytest installed."
+    ],
+    "report": "The field and lock inventories remain partial, and focused validation could not run because pytest is not installed in the execution environment.",
+    "summary": "Expanded the state-transition matrix and directed lock/callback observations, traced recovery capability writes and aliases, and classified the three evidenced defects independently."
+  },
+  "workspace_head": "488f25030be8ca1a11c30efbcc02aacdd13a7f4f"
+}
