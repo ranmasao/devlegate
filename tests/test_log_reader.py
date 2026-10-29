@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,6 @@ from devlegate.log_reader import (
     execution_id,
     execution_log,
     follow_execution,
-    follow_file,
     follow_ticket,
     journal_command,
     service_unit,
@@ -349,13 +349,8 @@ def test_follow_remains_bound_to_resolved_execution(tmp_path, monkeypatch, capsy
     path_a.write_text("a-before\na-after\n")
     path_b.write_text("b-before\nb-after\n")
 
-    def stop_following(_seconds):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", stop_following)
-    assert (
-        follow_file(execution_log_path(state, "key", selected), 1) == 130
-    )
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", lambda _seconds: None)
+    assert follow_execution(state, "key", control, selected, 1) == 0
     output = capsys.readouterr().out
     assert "a-after\n" in output
     assert "b-after\n" not in output
@@ -716,3 +711,128 @@ def test_ticket_follow_waits_in_accepted_until_done(tmp_path, monkeypatch):
         == 0
     )
     assert calls == 2
+
+
+@pytest.mark.parametrize(
+    "lines, expected",
+    [
+        (3, "old-2\nold-3\nactive\n"),
+        (0, ""),
+        (None, "first\nold-1\nold-2\nold-3\nactive\n"),
+    ],
+)
+def test_ticket_snapshot_follow_share_global_tail(
+    tmp_path, monkeypatch, capsys, lines, expected
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    first, old, active = "f" * 32, "a" * 32, "b" * 32
+    _report(control, first, ticket="T-1")
+    _report(control, old, ticket="T-1")
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": active, "execution_ticket_id": "T-1"}
+    )
+    old_path = execution_log_path(state, "key", old)
+    old_path.parent.mkdir(parents=True)
+    first_path = execution_log_path(state, "key", first)
+    first_path.write_text("first\n")
+    old_path.write_text("old-1\nold-2\nold-3\n")
+    os.utime(first_path, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(old_path, ns=(2_000_000_000, 2_000_000_000))
+    active_path = execution_log_path(state, "key", active)
+    active_path.write_text("active\n")
+    paths = {"todo": "kanban/todo", "done": "kanban/done"}
+    _, snapshot = ticket_log(state, "key", control, "T-1", lines, paths, markers=False)
+    assert "".join(snapshot) == expected
+
+    calls = 0
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            active_path.write_text("active\nappend\n")
+            _report(control, active, ticket="T-1")
+        elif calls == 2:
+            (control / "kanban" / "done").mkdir()
+            (control / "kanban" / "todo" / "T-1.md").rename(
+                control / "kanban" / "done" / "T-1.md"
+            )
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    assert follow_ticket(state, "key", control, "T-1", lines, paths, markers=False) == 0
+    assert capsys.readouterr().out == expected + "append\n"
+
+
+@pytest.mark.parametrize("lines", [0, 2, None])
+def test_execution_snapshot_follow_raw_parity(tmp_path, monkeypatch, capsys, lines):
+    state, control = tmp_path / "state", tmp_path / "control"
+    execution = "a" * 32
+    _report(control, execution)
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True)
+    path.write_text("one\ntwo\nthree\n")
+    _, snapshot = execution_log(state, "key", control, execution, lines)
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", lambda _seconds: None)
+    assert follow_execution(state, "key", control, execution, lines) == 0
+    assert capsys.readouterr().out == "".join(snapshot)
+
+
+@pytest.mark.parametrize(
+    "source, identity", [("service", []), ("ticket", ["T-1"]), ("execution", ["a"])]
+)
+def test_log_parser_history_options(source, identity):
+    from devlegate.cli import build_parser
+
+    parser = build_parser()
+    base = ["logs", source, *identity]
+    assert parser.parse_args(base).lines is None
+    assert parser.parse_args(base + ["--all", "-f"]).all
+    assert parser.parse_args(base + ["-t", "0", "-f"]).lines == 0
+    for options in (["--all", "--tail", "100"], ["--lines", "5"], ["-t", "-1"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(base + options)
+
+
+def test_bound_execution_follow_does_not_enumerate_other_tickets(
+    tmp_path, monkeypatch, capsys
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    execution = "c" * 32
+    SQLiteRuntimeStore(state, "key").replace(
+        {
+            "phase": "agent_running",
+            "execution_id": execution,
+            "execution_ticket_id": "T-1",
+        }
+    )
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True)
+    path.write_text("start\n")
+    calls = 0
+
+    def advance(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            _report(control, execution, ticket="T-1")
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    monkeypatch.setattr(
+        "devlegate.log_reader._report_candidates",
+        lambda *_args: pytest.fail("bound follow must not enumerate tickets"),
+    )
+    assert follow_execution(state, "key", control, execution, 10, markers=True) == 0
+    assert "failed" in capsys.readouterr().out
+
+
+def test_ticket_snapshot_marker_and_suppression(tmp_path):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "accepted")
+    paths = {"accepted": "kanban/accepted"}
+    _, marked = ticket_log(state, "key", control, "T-1", 0, paths, final_marker=True)
+    assert "snapshot complete" in "".join(marked)
+    assert "awaiting integration" in "".join(marked)
+    _, raw = ticket_log(
+        state, "key", control, "T-1", 0, paths, markers=False, final_marker=True
+    )
+    assert tuple(raw) == ()
