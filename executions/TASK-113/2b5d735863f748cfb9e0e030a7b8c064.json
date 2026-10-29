@@ -1,0 +1,37 @@
+{
+  "code_base_head": "baeee877466a84522d0b2331ba16d0bb7ec0d2fc",
+  "conclusion": "incomplete",
+  "control_head": "e4061eaf7d964e1945ac621006ef589d85efcf56",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-113",
+  "execution_id": "2b5d735863f748cfb9e0e030a7b8c064",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-113",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Instrument complete argv and nested effects for publication and recovery, including relevant failure and replay paths.",
+    "Measure cleanup with 0, 1, and 32 candidates and the 10000-candidate inventory bound, including fresh pre-mutation proof ordering.",
+    "Complete the bounded audit with separate measured and estimated local-read, remote-read, and write counts and regression evidence."
+  ],
+  "report_artifact": "executions/TASK-113/2b5d735863f748cfb9e0e030a7b8c064.md",
+  "report_sha256": "7e29b5439ff34ae79ada3f1dc5207ddd219a10704c82e82e7c5dd8ecff2e73ab",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-113",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Instrument complete argv and nested effects for publication and recovery, including relevant failure and replay paths.",
+      "Measure cleanup with 0, 1, and 32 candidates and the 10000-candidate inventory bound, including fresh pre-mutation proof ordering.",
+      "Complete the bounded audit with separate measured and estimated local-read, remote-read, and write counts and regression evidence."
+    ],
+    "report": "The invocation ended before the remaining dynamic tracing and bounded cleanup measurements could be completed.",
+    "summary": "Added real-Git sync Trace2 and full runner-argv checks, plus evidence-pin argv and create-only lease regression coverage. Documented the measured effects and the unmeasured boundaries."
+  },
+  "workspace_head": "b6c7a7407ef7861bb08d4c46445e67d3678e6237"
+}
