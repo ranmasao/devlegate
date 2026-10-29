@@ -47,10 +47,10 @@ from devlegate.launcher import LaunchCommand, product_launcher
 from devlegate.lifecycle_receipt import read as read_lifecycle_receipt
 from devlegate.log_reader import (
     LogReaderError,
-    execution_id,
     execution_log,
     follow_execution,
     follow_ticket,
+    resolve_execution,
     service_unit,
     stream_journal,
     ticket_log,
@@ -2229,6 +2229,10 @@ def _startup_report(engine: ServiceEngine, mode: str) -> None:
 
 def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
     try:
+        if args.all:
+            args.lines = None
+        elif args.lines is None:
+            args.lines = 100
         if args.logs_source == "service":
             unit = service_unit(target.locator.state_dir, target.locator.state_key)
             return stream_journal(unit, args.lines, args.follow)
@@ -2261,6 +2265,8 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
                     args.ticket_id,
                     args.lines,
                     workflow_paths,
+                    markers=not args.suppress_markers,
+                    final_marker=True,
                 )
             _, content = ticket_log(
                 target.locator.state_dir,
@@ -2269,15 +2275,17 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
                 args.ticket_id,
                 args.lines,
                 workflow_paths,
+                markers=not args.suppress_markers,
+                final_marker=True,
             )
             print("".join(content), end="")
             return 0
         if args.follow:
-            resolved = execution_id(
+            resolved, owner, _ = resolve_execution(
                 control_worktree,
                 args.execution_id,
-                state_dir=target.locator.state_dir,
-                state_key=target.locator.state_key,
+                target.locator.state_dir,
+                target.locator.state_key,
             )
             return follow_execution(
                 target.locator.state_dir,
@@ -2285,6 +2293,8 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
                 control_worktree,
                 resolved,
                 args.lines,
+                markers=not args.suppress_markers,
+                ticket_id=owner,
             )
         resolved, content = execution_log(
             target.locator.state_dir,
@@ -2292,6 +2302,7 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
             control_worktree,
             args.execution_id,
             args.lines,
+            markers=not args.suppress_markers,
         )
         print("".join(content), end="")
         return 0
@@ -2568,20 +2579,34 @@ def build_parser() -> argparse.ArgumentParser:
     service_logs_parser = logs_commands.add_parser(
         "service", help="read the registered service journal"
     )
-    service_logs_parser.add_argument("--follow", "-f", action="store_true")
-    service_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
     execution_logs_parser = logs_commands.add_parser(
         "execution", help="read one execution log"
     )
     execution_logs_parser.add_argument("execution_id", metavar="EXECUTION")
-    execution_logs_parser.add_argument("--follow", "-f", action="store_true")
-    execution_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
     ticket_logs_parser = logs_commands.add_parser(
         "ticket", help="read all execution logs for one ticket"
     )
     ticket_logs_parser.add_argument("ticket_id", metavar="TICKET")
-    ticket_logs_parser.add_argument("--follow", "-f", action="store_true")
-    ticket_logs_parser.add_argument("--lines", type=int, default=100, metavar="N")
+    def log_tail(value: str) -> int:
+        try:
+            count = int(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(
+                "tail must be a non-negative integer"
+            ) from error
+        if count < 0:
+            raise argparse.ArgumentTypeError("tail must be a non-negative integer")
+        return count
+
+    for log_parser in (service_logs_parser, execution_logs_parser, ticket_logs_parser):
+        log_parser.add_argument("--follow", "-f", action="store_true")
+        history = log_parser.add_mutually_exclusive_group()
+        history.add_argument(
+            "--tail", "-t", dest="lines", type=log_tail, metavar="N"
+        )
+        history.add_argument("--all", action="store_true")
+    for log_parser in (execution_logs_parser, ticket_logs_parser):
+        log_parser.add_argument("--suppress-markers", action="store_true")
     project_parser = commands.add_parser(
         "project",
         help="inspect and register local projects",
