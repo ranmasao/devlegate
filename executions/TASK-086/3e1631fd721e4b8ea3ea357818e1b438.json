@@ -1,0 +1,29 @@
+{
+  "code_base_head": "587d68f113b67a68d7e3a08a7445556c90b1f651",
+  "conclusion": "completed",
+  "control_head": "8464b58bd1e10dc9dd6107befab812a526af8119",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-086",
+  "execution_id": "3e1631fd721e4b8ea3ea357818e1b438",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-086",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-086",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a revision-specific runtime responsibility audit covering lifecycle, durable state, concurrency, test boundaries, Ruff suppressions, and prioritized independent follow-up slices. Documented evidence limitations and do-nothing decisions alongside the proposed contracts and proofs."
+  },
+  "workspace_head": "4628390c72c228d251bf1fab1ee7d8c10c343bed"
+}
