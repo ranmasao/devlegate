@@ -185,13 +185,134 @@ in-memory state reference, and already-admitted lifecycle intent. These tests
 also demonstrate cleanup inventory memory advancing on a failed save. They
 cover selected interleavings only, not crash or post-commit ambiguity.
 
-The field table is a partial source inventory, not a proof of every top-level
-key or every nested writer. To finish the bounded inventory, enumerate literal
-keys and keyword arguments at every `_save_state` and `recovery_save_state` call,
-trace each `**fields` producer and each alias returned from `_state`, and compare
-the results to the field table. Inspect indirect callbacks and injected capability
-implementations separately: static enumeration cannot prove their dynamic effects.
-The lock graph likewise needs all remaining owner-loop lock scopes and potential
-reverse edges traced, including external callbacks. These gaps preclude a final
-authority or deadlock-freedom claim. TASK-085 recovery-boundary analysis and
-TASK-073 human story gate remain separate.
+### Bounded durable-field cross-check
+
+The exact product baseline is the parent `9b49bed8bc27f3b2d9c2c339e684d849a87e3d61`;
+`git diff 9b49bed8bc27f3b2d9c2c339e684d849a87e3d61 HEAD -- src/devlegate`
+is empty at this audit checkpoint. The carried-forward commits add this audit
+and tests only. State initialization is `{"phase": "idle"}` in `runtime.py:825`
+and `runtime_store.py:181-186`. The validator at `runtime.py:3325-3780` checks
+selected fields and phase-dependent relationships, not a closed top-level
+schema. SQLite serializes the whole dictionary, including unknown keys. The
+following is the union of initialization, validator, literal save keywords,
+save clearing, direct writes and the statically resolved dynamic producers.
+Groups map to the field-level matrix above:
+
+* Selection: `phase`, `selected_ticket_id`, `selected_ticket_body`,
+  `selected_ticket_title`, `selected_ticket_dependencies`.
+* Observations: `local_head`, `remote_head`, `control_head`, `changed_paths`,
+  `handled_remote_head`, `handled_control_head`, `handled_todo_fingerprint`.
+* Execution: `execution_ticket_id`, `execution_id`, `execution_branch`,
+  `execution_path`, `execution_base_head`, `execution_admitted_base_head`,
+  `execution_control_head`, `execution_remote_head`, `execution_start_head`,
+  `execution_validated_product_head`, `execution_validated_control_head`,
+  `execution_product_predecessor`, `execution_product_transition`,
+  `execution_stage`, `worker_identity`, `execution_interruption_kind`,
+  `worker_prompt_sha256`, `worker_prompt_directive`, `pending_execution_report`.
+* Recovery, retry, and receipts: `rework_provenance`, `failed_executions`,
+  `resume_required`, `force_retry_authorization`, `force_retry_provenance`,
+  `manual_retry_required`, `automatic_retry`, `last_automatic_retry`,
+  `mutable_receipts`, `operator_recovery`, `reconciliation`.
+* Integration and cleanup: `accepted_integration`, `execution_ref_retirement`,
+  `workspace_cleanup`, `workspace_cleanup_cursor`, `workspace_cleanup_event`.
+* Matrix omission: `interrupted_execution_id`, written by interrupted-execution
+  normalization at `runtime.py:11338-11347,11538-11547`. It records the
+  interrupted identity alongside failure metadata; it is not current ownership
+  proof. Unlike the listed execution clear fields, it is not removed by the
+  `clear_execution` loop at 3808-3832.
+
+Literal keyword enumeration includes `clear_execution`,
+`preserve_resume_required`, `clear_pre_worker_generation`, and
+`clear_operator_recovery`; these are `_save_state` control parameters, not
+serialized fields. Recovery transaction and workflow literal keyword calls are
+included in the same union; the recovery protocol permits other implementations.
+Dynamic expansions at production save call sites are:
+
+| Call site | Producer and statically visible keys |
+| --- | --- |
+| `runtime.py:982` | Local `fields` at 969-981: `execution_interruption_kind`, optionally `manual_retry_required`. |
+| `runtime.py:2367` | Three conditional literal dictionaries at 2370-2383: `manual_retry_required`, `operator_recovery`, `reconciliation`. |
+| `runtime.py:4212` | `synchronized_fields` at 4206-4211: `local_head`, `remote_head`, `changed_paths`, `control_head`. |
+| `runtime.py:5717` | `fields` at 5688-5716: handled heads and fingerprint, `execution_control_head`, `failed_executions`, optionally `automatic_retry`, `last_automatic_retry`, `manual_retry_required`. |
+| `runtime.py:10736` | `recovery_save_state` forwards `values`; known production callers use literal keywords in `recovery_workflow.py` and `recovery_transactions.py`. An injected caller can supply arbitrary keywords and nested objects; their effects are not statically bounded by this protocol. |
+
+Nested ownership is also not a deep-copy boundary: receipt `cohort` is reused
+at `runtime.py:2314-2318`, and `result` and `cohort` survive the shallow receipt
+copy at 2280; cleanup `decisions` is taken from the result at 2558-2562. Rework
+and reconciliation copies retain nested members (matrix and locations above).
+`recovery_state` returns the live top-level alias; recovery workflow and
+transactions retain state aliases, and reconciliation temporarily writes through
+one at `reconciliation_transactions.py:578-627`. These are visible production
+writers or shared references, not evidence that every external holder mutates
+them. Unknown callbacks, injected stores, capabilities, and objects passed as
+save values remain extension points; a literal-key search cannot bound them.
+
+### Bounded lock adjacency and reverse-edge assessment
+
+Arrows mean acquisition or callback while the left-hand scope remains held,
+not necessarily a blocking wait. The project flock is held by the owner process
+across the loop, and must not be confused with a thread mutex.
+
+* Flock -> snapshot, operator, lifecycle, receipt, supervisor, SQLite and
+  external Git/process operations along owner paths (`runtime.py:9414-9475`,
+  2530-2582, 4976-5007). Owner claim releases operator before iteration or
+  dispatch; release paths reacquire it at 2603-2641.
+* Operator -> lifecycle, receipt, snapshot, SQLite and cleanup/Git: admission
+  holds operator across `_lifecycle_drain_pending`, validation and receipt
+  recording (`runtime.py:2532-2582`); retry validation calls `service_snapshot`
+  at 1323-1329. `_record_operator_admission` holds receipt across cohort
+  observation and save at 2287-2369; force retry is also called there. Cleanup
+  receipt update releases receipt before its subsequent save at 2563-2582.
+* Operator -> lifecycle -> supervisor, SQLite and stop callback on direct IPC
+  lifecycle (`runtime.py:917-952`). The callback may be an externally supplied
+  `request` or `set`; its own lock acquisitions and reentry are unknown.
+* Receipt -> SQLite and cohort observation/Git as above. Snapshot -> local
+  drop-candidate computation (`runtime.py:1074-1077`); other published view
+  getters copy or obtain references inside the lock. Publication observes and
+  saves outside individual snapshot critical sections (`runtime.py:2696-2746,
+  2823-2854`). No snapshot -> operator acquisition was established in these
+  inspected sections; custom helpers or callback reentry remain potential
+  reverse edges, not demonstrated cycles.
+* IPC connection lock -> connection bookkeeping only on dispatch admission;
+  dispatch executes after release (`ipc_server.py:526-550`). `stop()` also
+  releases it before response waits and thread joins (311-335). Connection
+  thread -> lifecycle directly or -> operator queue; it waits for admission
+  after releasing operator (`runtime.py:1302-1321`).
+* Supervisor lock -> active-map/drain bookkeeping (`worker_supervisor.py:624-644,
+  720-723,791-792`); worker identity, prompt and interruption callbacks run
+  after release at 732-758. Engine callbacks can save to SQLite. A reverse
+  supervisor -> operator/lifecycle edge is not established on this path;
+  injected containment/process and callback implementations remain unexplored.
+
+This adjacency is bounded to the named internal paths. External callback
+reentry could introduce reverse edges, including callback -> operator or
+snapshot -> other locks, but no internal cycle or global deadlock-freedom is
+claimed. SQLite's own contention and Git/process waits are separate from the
+Python lock graph.
+
+### Coverage checklist, validation, and residual uncertainties
+
+* [x] Baseline SHA and source difference verified; supplied TASK-109 and graph
+  artifacts were unavailable, while TASK-086 was treated as a lead only.
+* [x] Finite top-level field union, direct writes, known nested sharing,
+  recovery aliases and dynamic save producers compared with transition matrix.
+* [x] WAL replacement and rollback semantics, full-payload race, owner/IPC
+  lock edges, publication freshness and ownership are documented above.
+* [x] Targeted failure and race tests retained. In a temporary development venv
+  using available system test packages, `python3 -m venv --system-site-packages
+  /tmp/opencode/task112-venv` followed by
+  `/tmp/opencode/task112-venv/bin/python -m pytest tests/test_runtime_store.py
+  tests/test_service_snapshot.py tests/test_reconciliation.py -q` passed:
+  65 tests in 18.40 seconds, Python 3.12.3 and pytest 9.0.3.
+* [x] Boundaries preserved: single-owner admission, WAL, Git CAS/evidence,
+  provenance, interruption and replay were assessed without runtime refactor.
+
+Separately actionable defects are the stale full-row forced-stop overwrite and
+the reconciliation temporary-base exceptional exit described above. Cleanup
+memory/durable divergence and mixed/stale publication are demonstrated
+observations whose downstream authorization impact is not established.
+Residual uncertainty includes arbitrary injected callbacks and mutable values,
+untested thread/process schedules, post-commit ambiguity, external Git failure
+and crash timing, and extension lock/reentry edges. These do not constitute a
+claim of dynamic exhaustiveness or final architecture approval. TASK-085 remains
+the separate recovery-boundary audit; TASK-073 remains the human-only story gate.
