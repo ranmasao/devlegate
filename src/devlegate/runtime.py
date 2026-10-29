@@ -9801,8 +9801,26 @@ class ServiceEngine:
         except WorkflowBlockedError:
             return False
         paths = [f"{path}/{ticket_id}.md" for path in self._workflow_paths().values()]
+        # A side branch may delete a ticket even though the published mainline
+        # retains it at the merge. Only transitions of the observed first-parent
+        # history can supersede this failure.
+        lineage = self._git_runtime(
+            self.control_worktree, "rev-list", "--first-parent", control.local_head,
+            check=False,
+        )
+        if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
+            return False
+        if not any(
+            self._git_runtime(
+                self.control_worktree, "cat-file", "-e", f"{base}:{path}",
+                check=False,
+            ).returncode == 0
+            for path in paths
+        ):
+            return False
         result = self._git_runtime(
-            self.control_worktree, "log", "--format=", "--name-only", "--no-renames",
+            self.control_worktree, "log", "--first-parent", "-m", "--format=",
+            "--name-only", "--no-renames",
             "--diff-filter=D", f"{base}..{control.local_head}", "--", *paths,
             check=False,
         )
