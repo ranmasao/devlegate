@@ -24,9 +24,9 @@ class LogReaderError(RuntimeError):
 _TICKET_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
-def _lines(value: int) -> int:
-    if value < 0:
-        raise LogReaderError("--lines must be a non-negative integer")
+def _lines(value: int | None) -> int | None:
+    if value is not None and value < 0:
+        raise LogReaderError("--tail must be a non-negative integer")
     return value
 
 
@@ -44,7 +44,7 @@ def service_unit(state_dir: Path, state_key: str) -> str:
     return unit
 
 
-def _current_execution_id(state_dir: Path, state_key: str) -> str | None:
+def _active_state(state_dir: Path, state_key: str) -> dict | None:
     try:
         state = SQLiteRuntimeStore(state_dir, state_key).load()
     except RuntimeStoreError as error:
@@ -59,7 +59,7 @@ def _current_execution_id(state_dir: Path, state_key: str) -> str | None:
         character not in "0123456789abcdef" for character in current
     ):
         raise LogReaderError("invalid current execution identity")
-    return current
+    return state
 
 
 def execution_id(
@@ -69,26 +69,32 @@ def execution_id(
     state_dir: Path | None = None,
     state_key: str | None = None,
 ) -> str:
+    return resolve_execution(control_worktree, selector, state_dir, state_key)[0]
+
+
+def resolve_execution(control_worktree, selector, state_dir, state_key):
     if not selector or any(
         character not in "0123456789abcdef" for character in selector
     ):
         raise LogReaderError(
             "execution ID must be a lowercase hexadecimal ID or prefix"
         )
-    if len(selector) == 32:
-        if state_dir is not None and state_key is not None:
-            current = _current_execution_id(state_dir, state_key)
-            if current == selector:
-                return selector
-        if _execution_report(control_worktree, selector) is not None:
-            return selector
-        raise LogReaderError(f"execution not found: {selector}")
-    identities = list(_execution_candidates(control_worktree, selector))
-    current = None
+    state = None
     if state_dir is not None and state_key is not None:
-        current = _current_execution_id(state_dir, state_key)
-        if current is not None:
-            identities.append(current)
+        state = _active_state(state_dir, state_key)
+    current = state["execution_id"] if state is not None else None
+    if len(selector) == 32 and current == selector:
+        owner = state.get("execution_ticket_id")
+        if not isinstance(owner, str) or not _TICKET_ID.fullmatch(owner):
+            owner = None
+        report = _execution_report(control_worktree, selector, owner)
+        if owner is None and report is not None:
+            owner = report.ticket_id
+        return selector, owner, report
+    candidates = _report_candidates(control_worktree, selector)
+    identities = [identity for _, identity in candidates]
+    if current is not None:
+        identities.append(current)
     matches = tuple(
         dict.fromkeys(
             identity for identity in identities if identity.startswith(selector)
@@ -101,20 +107,29 @@ def execution_id(
         raise LogReaderError(
             f"execution prefix is ambiguous: {selector}\nmatches:\n{matching}"
         )
-    if (
-        matches[0] != current
-        and _execution_report(control_worktree, matches[0]) is None
-    ):
+    selected = matches[0]
+    owners = [owner for owner, identity in candidates if identity == selected]
+    if len(owners) > 1:
+        raise LogReaderError(f"execution identity is ambiguous: {selected}")
+    owner = owners[0] if owners else None
+    if selected == current and state is not None:
+        active_owner = state.get("execution_ticket_id")
+        if isinstance(active_owner, str) and _TICKET_ID.fullmatch(active_owner):
+            owner = active_owner
+    report = _execution_report(control_worktree, selected, owner) if owner else None
+    if selected != current and report is None:
         raise LogReaderError(f"execution not found: {selector}")
-    return matches[0]
+    return selected, owner, report
 
 
-def _execution_candidates(control_worktree: Path, selector: str) -> tuple[str, ...]:
-    """Enumerate report identities without deserializing unrelated reports."""
+def _report_candidates(
+    control_worktree: Path, selector: str
+) -> tuple[tuple[str, str], ...]:
+    """Enumerate matching paths without deserializing unrelated reports."""
     root = control_worktree / "executions"
     if root.is_symlink() or (root.exists() and not root.is_dir()):
         raise LogReaderError("execution report root is unsafe")
-    candidates: set[str] = set()
+    candidates: set[tuple[str, str]] = set()
     if not root.is_dir():
         return ()
     try:
@@ -133,7 +148,7 @@ def _execution_candidates(control_worktree: Path, selector: str) -> tuple[str, .
                     )
                     and path.stem.startswith(selector)
                 ):
-                    candidates.add(path.stem)
+                    candidates.add((ticket_root.name, path.stem))
     except OSError as error:
         raise LogReaderError(f"cannot enumerate execution reports: {error}") from error
     return tuple(sorted(candidates))
@@ -142,7 +157,7 @@ def _execution_candidates(control_worktree: Path, selector: str) -> tuple[str, .
 class _LogCursor:
     """Read a log tail and continue from the exact byte position it used."""
 
-    def __init__(self, path: Path, lines: int) -> None:
+    def __init__(self, path: Path, lines: int | None) -> None:
         self.path = path
         self.lines = _lines(lines)
         if not path.is_file():
@@ -160,6 +175,13 @@ class _LogCursor:
         handle = self.handle
         handle.seek(0, 2)
         size = handle.tell()
+        if self.lines is None:
+            handle.seek(0)
+            self.initial = tuple(
+                record.decode("utf-8")
+                for record in handle.read(size).splitlines(keepends=True)
+            )
+            return
         if self.lines == 0 or size == 0:
             self.initial: tuple[str, ...] = ()
             return
@@ -204,7 +226,7 @@ class _LogCursor:
             handle.close()
 
 
-def _read_file(path: Path, lines: int) -> Iterable[str]:
+def _read_file(path: Path, lines: int | None) -> Iterable[str]:
     cursor = _LogCursor(path, lines)
     try:
         return cursor.initial
@@ -213,19 +235,23 @@ def _read_file(path: Path, lines: int) -> Iterable[str]:
 
 
 def execution_log(
-    state_dir: Path, state_key: str, control_worktree: Path, selector: str, lines: int
+    state_dir: Path, state_key: str, control_worktree: Path, selector: str, lines: int,
+    *, markers: bool = False,
 ) -> tuple[str, Iterable[str]]:
-    resolved = execution_id(
-        control_worktree,
-        selector,
-        state_dir=state_dir,
-        state_key=state_key,
+    resolved, _, report = resolve_execution(
+        control_worktree, selector, state_dir, state_key
     )
     try:
         path = execution_log_path(state_dir, state_key, resolved)
     except OperationalLogError as error:
         raise LogReaderError(str(error)) from error
-    return resolved, _read_file(path, lines)
+    content = tuple(_read_file(path, lines))
+    if markers:
+        status = report.result.conclusion if report else "active/nonterminal"
+        content += (
+            f"\n===== execution {resolved}: snapshot complete; {status} =====\n",
+        )
+    return resolved, content
 
 
 def _ticket_observation(
@@ -256,31 +282,77 @@ def _ticket_reports(control_worktree: Path, ticket_id: str):
         raise LogReaderError(str(error)) from error
 
 
+def _ordered_ticket_reports(state_dir, state_key, control_worktree, ticket_id):
+    reports = _ticket_reports(control_worktree, ticket_id)
+    try:
+        return sorted(
+            reports,
+            key=lambda report: (
+                execution_log_path(state_dir, state_key, report.execution_id)
+                .stat()
+                .st_mtime_ns,
+                report.execution_id,
+            ),
+        )
+    except OSError as error:
+        raise LogReaderError(f"cannot inspect execution log: {error}") from error
+
+
 def _active_ticket_execution(
     state_dir: Path, state_key: str, ticket_id: str
 ) -> str | None:
-    try:
-        state = SQLiteRuntimeStore(state_dir, state_key).load()
-    except RuntimeStoreError as error:
-        raise LogReaderError(str(error)) from error
-    if not isinstance(state, dict) or state.get("phase") not in {
-        "agent_pending",
-        "agent_running",
-    }:
+    state = _active_state(state_dir, state_key)
+    if state is None or state.get("execution_ticket_id") != ticket_id:
         return None
-    if state.get("execution_ticket_id") != ticket_id:
-        return None
-    execution = state.get("execution_id")
-    if not isinstance(execution, str) or not execution or any(
-        character not in "0123456789abcdef" for character in execution
-    ):
-        raise LogReaderError("invalid current execution identity")
-    return execution
+    return state["execution_id"]
 
 
 def _execution_header(execution: str, conclusion: str | None) -> str:
     detail = f" conclusion={conclusion}" if conclusion is not None else " state=active"
     return f"\n===== execution {execution}{detail} =====\n"
+
+
+def _ticket_selection(
+    state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
+    *, allow_pending_log=False,
+):
+    """Select one chronological snapshot, with a single global line budget."""
+    state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
+    reports = _ordered_ticket_reports(state_dir, state_key, control_worktree, ticket_id)
+    active = _active_ticket_execution(state_dir, state_key, ticket_id)
+    entries = [(r.execution_id, r.result.conclusion) for r in reports]
+    if active is not None:
+        entries.sort(key=lambda entry: entry[0] == active)
+    if active is not None and active not in {item[0] for item in entries}:
+        entries.append((active, None))
+    selected = []
+    remaining = _lines(lines)
+    active_cursor = None
+    try:
+        for execution, conclusion in reversed(entries):
+            path = execution_log_path(state_dir, state_key, execution)
+            if allow_pending_log and execution == active and not path.is_file():
+                selected.append((execution, conclusion, ()))
+                continue
+            if remaining == 0 and execution != active:
+                if not path.is_file():
+                    raise LogReaderError(f"execution log not found: {path}")
+                selected.append((execution, conclusion, ()))
+                continue
+            cursor = _LogCursor(path, remaining)
+            records = cursor.initial
+            if execution == active:
+                active_cursor = cursor
+            else:
+                cursor.close()
+            selected.append((execution, conclusion, records))
+            if remaining is not None:
+                remaining -= len(records)
+        return state, active, list(reversed(selected)), active_cursor
+    except BaseException:
+        if active_cursor is not None:
+            active_cursor.close()
+        raise
 
 
 def ticket_log(
@@ -290,21 +362,34 @@ def ticket_log(
     ticket_id: str,
     lines: int,
     workflow_paths: dict[str, str],
+    *, markers: bool = True, final_marker: bool = False,
 ) -> tuple[str, Iterable[str]]:
     """Read every durable execution log belonging to one ticket."""
-    _ticket_observation(control_worktree, ticket_id, workflow_paths)
-    reports = _ticket_reports(control_worktree, ticket_id)
-    known = {report.execution_id for report in reports}
-    active = _active_ticket_execution(state_dir, state_key, ticket_id)
+    state, _, selected, cursor = _ticket_selection(
+        state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths
+    )
+    if cursor is not None:
+        cursor.close()
     records: list[str] = []
-    for report in reports:
-        path = execution_log_path(state_dir, state_key, report.execution_id)
-        records.append(_execution_header(report.execution_id, report.result.conclusion))
-        records.extend(_read_file(path, lines))
-    if active is not None and active not in known:
-        path = execution_log_path(state_dir, state_key, active)
-        records.append(_execution_header(active, None))
-        records.extend(_read_file(path, lines))
+    for execution, conclusion, content in selected:
+        if markers:
+            records.append(_execution_header(execution, conclusion))
+        records.extend(content)
+    if final_marker and markers:
+        details = {
+            "done": "done (integrated)",
+            "accepted": "accepted (awaiting integration)",
+            "review": "review (awaiting review)",
+            "todo": "todo (pending work or rework)",
+            "backlog": "backlog",
+        }
+        status = details.get(state, state)
+        if selected:
+            execution, conclusion, _ = selected[-1]
+            status += f"; execution {execution}: {conclusion or 'active/nonterminal'}"
+        records.append(
+            f"\n===== ticket {ticket_id}: snapshot complete; {status} =====\n"
+        )
     return ticket_id, tuple(records)
 
 
@@ -315,13 +400,44 @@ def follow_ticket(
     ticket_id: str,
     lines: int,
     workflow_paths: dict[str, str],
+    *, markers: bool = True, final_marker: bool = False,
 ) -> int:
     """Follow all executions for a ticket until it reaches its terminal state."""
     lines = _lines(lines)
+    state, active, selected, cursor = _ticket_selection(
+        state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
+        allow_pending_log=True,
+    )
     printed: set[str] = set()
+    for execution, conclusion, records in selected:
+        if markers:
+            print(_execution_header(execution, conclusion), end="")
+        print("".join(records), end="", flush=True)
+        if execution != active or state == "done":
+            printed.add(execution)
+    if state == "done" and active is not None and any(
+        execution == active and conclusion is None
+        for execution, conclusion, _ in selected
+    ):
+        if cursor is not None:
+            cursor.close()
+        raise LogReaderError(f"execution {active} has no durable report")
+    if cursor is not None or (active is not None and state != "done"):
+        if state == "done":
+            cursor.close()
+        else:
+            result = _follow_execution(
+                state_dir, state_key, control_worktree, active, lines,
+                ticket_id=ticket_id, cursor=cursor,
+            )
+            if result != 0:
+                return result
+            printed.add(active)
     while True:
         state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
-        reports = _ticket_reports(control_worktree, ticket_id)
+        reports = _ordered_ticket_reports(
+            state_dir, state_key, control_worktree, ticket_id
+        )
         active = _active_ticket_execution(state_dir, state_key, ticket_id)
         for report in reports:
             if report.execution_id in printed:
@@ -331,15 +447,18 @@ def follow_ticket(
             if active == report.execution_id and state != "done":
                 continue
             path = execution_log_path(state_dir, state_key, report.execution_id)
-            print(
-                _execution_header(report.execution_id, report.result.conclusion),
-                end="",
-            )
-            print("".join(_read_file(path, lines)), end="", flush=True)
+            if markers:
+                print(
+                    _execution_header(report.execution_id, report.result.conclusion),
+                    end="",
+                )
+            print("".join(_read_file(path, None)), end="", flush=True)
             printed.add(report.execution_id)
         # Accepted is an intermediate integration boundary. Keep observing until
         # the ticket reaches the canonical workflow terminal state.
         if state == "done":
+            if markers and final_marker:
+                print(f"\n===== ticket {ticket_id}: done (integrated) =====")
             return 0
         if active is not None:
             if active in printed:
@@ -353,13 +472,14 @@ def follow_ticket(
                     (item for item in reports if item.execution_id == active), None
                 )
                 conclusion = report.result.conclusion if report is not None else None
-                print(_execution_header(active, conclusion), end="", flush=True)
+                if markers:
+                    print(_execution_header(active, conclusion), end="", flush=True)
             result = _follow_execution(
                 state_dir,
                 state_key,
                 control_worktree,
                 active,
-                lines,
+                None,
                 ticket_id=ticket_id,
             )
             if result != 0:
@@ -372,15 +492,17 @@ def follow_ticket(
             return 130
 
 
-def journal_command(unit: str, lines: int, follow: bool) -> list[str]:
+def journal_command(unit: str, lines: int | None, follow: bool) -> list[str]:
     command = [
         "journalctl",
         "--user-unit",
         unit,
         "--no-pager",
-        "--lines",
-        str(_lines(lines)),
     ]
+    if lines is None:
+        command.append("--no-tail")
+    else:
+        command.extend(("--lines", str(_lines(lines))))
     if follow:
         command.append("--follow")
     return command
@@ -388,7 +510,7 @@ def journal_command(unit: str, lines: int, follow: bool) -> list[str]:
 
 def stream_journal(
     unit: str,
-    lines: int,
+    lines: int | None,
     follow: bool,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -418,32 +540,9 @@ def stream_journal(
         raise LogReaderError(f"cannot run journalctl: {error}") from error
 
 
-def follow_file(path: Path, lines: int) -> int:
-    cursor = _LogCursor(path, lines)
-    try:
-        print("".join(cursor.initial), end="")
-        while True:
-            records = cursor.read_available()
-            if records:
-                print("".join(records), end="")
-            else:
-                time.sleep(0.1)
-    except KeyboardInterrupt:
-        return 130
-    finally:
-        cursor.close()
-
-
 def _execution_active(state_dir: Path, state_key: str, execution: str) -> bool:
-    try:
-        state = SQLiteRuntimeStore(state_dir, state_key).load()
-    except RuntimeStoreError as error:
-        raise LogReaderError(str(error)) from error
-    return (
-        isinstance(state, dict)
-        and state.get("phase") in {"agent_pending", "agent_running"}
-        and state.get("execution_id") == execution
-    )
+    state = _active_state(state_dir, state_key)
+    return state is not None and state["execution_id"] == execution
 
 
 def _execution_report(
@@ -484,17 +583,11 @@ def _execution_report(
         except ExecutionReportError as error:
             raise LogReaderError(str(error)) from error
 
-    root = control_worktree / "executions"
-    if root.is_symlink() or (root.exists() and not root.is_dir()):
-        raise LogReaderError("execution report root is unsafe")
-    candidates = []
-    if root.is_dir():
-        for ticket_root in root.iterdir():
-            if ticket_root.is_symlink() or not ticket_root.is_dir():
-                raise LogReaderError("execution report ticket directory is unsafe")
-            candidate = ticket_root / f"{execution}.json"
-            if candidate.exists() or candidate.is_symlink():
-                candidates.append((ticket_root.name, candidate))
+    candidates = [
+        (ticket, identifier)
+        for ticket, identifier in _report_candidates(control_worktree, execution)
+        if identifier == execution
+    ]
     if len(candidates) > 1:
         raise LogReaderError(f"execution identity is ambiguous: {execution}")
     if not candidates:
@@ -519,6 +612,8 @@ def _follow_execution(
     lines: int,
     *,
     ticket_id: str | None = None,
+    cursor: _LogCursor | None = None,
+    markers: bool = False,
 ) -> int:
     """Follow one immutable execution until its durable report and log EOF."""
     lines = _lines(lines)
@@ -526,8 +621,17 @@ def _follow_execution(
         path = execution_log_path(state_dir, state_key, execution)
     except OperationalLogError as error:
         raise LogReaderError(str(error)) from error
-    cursor = None
     try:
+        if ticket_id is None:
+            state = _active_state(state_dir, state_key)
+            if state is not None and state["execution_id"] == execution:
+                owner = state.get("execution_ticket_id")
+                if isinstance(owner, str) and _TICKET_ID.fullmatch(owner):
+                    ticket_id = owner
+            if ticket_id is None:
+                report = _execution_report(control_worktree, execution)
+                if report is not None:
+                    ticket_id = report.ticket_id
         while cursor is None:
             terminal = _execution_terminal(control_worktree, execution, ticket_id)
             active = _execution_active(state_dir, state_key, execution)
@@ -548,11 +652,15 @@ def _follow_execution(
             if records:
                 print("".join(records), end="", flush=True)
                 continue
-            if _execution_terminal(control_worktree, execution, ticket_id):
+            report = _execution_report(control_worktree, execution, ticket_id)
+            if report is not None:
                 # The report is the lifecycle boundary; consume everything that
                 # was published before or during terminalization, then stop.
                 time.sleep(0.1)
                 print("".join(cursor.read_available()), end="", flush=True)
+                if markers:
+                    conclusion = report.result.conclusion
+                    print(f"\n===== execution {execution}: {conclusion} =====")
                 return 0
             if not _execution_active(state_dir, state_key, execution):
                 time.sleep(0.1)
@@ -571,8 +679,10 @@ def follow_execution(
     control_worktree: Path,
     execution: str,
     lines: int,
+    *, markers: bool = False, ticket_id: str | None = None,
 ) -> int:
     """Follow one immutable execution until its durable report and log EOF."""
     return _follow_execution(
-        state_dir, state_key, control_worktree, execution, lines
+        state_dir, state_key, control_worktree, execution, lines,
+        markers=markers, ticket_id=ticket_id,
     )
