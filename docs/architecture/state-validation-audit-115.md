@@ -53,14 +53,16 @@ contents while common file, process and SQLite entry points are forbidden, and
 the existing error class and exact text are checked. It is not an exhaustive
 proof of every branch or every possible I/O primitive.
 
-## Remaining extraction work
+## Extraction result
 
-The exception and two runtime-defined helpers need an acyclic ownership plan
-that preserves their identity and existing runtime users. Move the validator
-without changing check order, then compare a saved copy of the baseline against
-the extracted implementation across current and legacy valid and invalid JSON
-fixtures, including exact exception types and text. Exercise nested report and
-review paths, no-mutation/no-I/O instrumentation, imports in both orders,
-load/save/restart, and configured checks. Preserve SQLite, normalization,
-state ownership and transaction behavior. This audit does not establish final
-architecture approval or cover the separate recovery-boundary audit.
+`runtime_state_validation.py` now owns the complete validator, its shared error,
+and both pure identity helpers. `runtime.py` imports those definitions and keeps
+the static entrypoint used by existing callers; state loading and saving remain
+there. The frozen test baseline's validator was checked by AST against the exact
+baseline SHA above. `tests/test_state_validation_purity.py` compares results,
+error identity and text, and input preservation, including malformed nested
+report and review bindings, legacy and current states, and both import orders.
+It also checks save and reload through a new engine instance. Existing recovery
+tests exercise replay paths. Instrumentation covers common I/O entry points, not
+every possible effect or arbitrary custom container behavior. This audit does
+not establish final architecture approval or cover the separate recovery audit.

@@ -5,12 +5,17 @@
 
 import builtins
 import copy
+import json
 import sqlite3
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+from state_validation_baseline import baseline_validate_state_invariant
 
 from devlegate.runtime import DevlegateError, ServiceEngine
+from devlegate.runtime_state_validation import validate_state_invariant
 
 
 @pytest.mark.parametrize(
@@ -21,11 +26,51 @@ from devlegate.runtime import DevlegateError, ServiceEngine
         (
             {
                 "phase": "idle",
+                "accepted_integration": {
+                    "ticket_id": "T",
+                    "checkpoint": "a" * 40,
+                    "control_head": "b" * 40,
+                },
+            },
+            None,
+        ),
+        (
+            {
+                "phase": "idle",
                 "workspace_cleanup": {"status": "clean", "decisions": []},
             },
             None,
         ),
         ({"phase": "unknown"}, "invalid state phase: unknown"),
+        (
+            {
+                "phase": "merge_pending",
+                "local_head": "a",
+                "remote_head": "b",
+                "changed_paths": "",
+                "control_head": "c",
+            },
+            None,
+        ),
+        (
+            {
+                "phase": "agent_pending",
+                "local_head": "a",
+                "remote_head": "b",
+                "changed_paths": "",
+                "selected_ticket_id": "T",
+                "selected_ticket_body": "",
+                "control_head": "c",
+                "execution_ticket_id": "T",
+                "execution_base_head": "a",
+                "execution_control_head": "c",
+                "execution_branch": "b",
+                "execution_path": "p",
+                "execution_id": "E",
+                "execution_remote_head": None,
+            },
+            None,
+        ),
         (
             {"phase": "idle", "workspace_cleanup": {"status": "bad"}},
             "invalid workspace cleanup status",
@@ -104,11 +149,60 @@ def test_validation_baseline_no_mutation_or_common_io(state, message, monkeypatc
     monkeypatch.setattr(builtins, "open", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
-    if message is None:
-        assert ServiceEngine._validate_state_invariant(state) is None
-    else:
-        with pytest.raises(DevlegateError) as error:
-            ServiceEngine._validate_state_invariant(state)
-        assert type(error.value) is DevlegateError
-        assert str(error.value) == message
-    assert state == before
+    results = []
+    for validator in (
+        baseline_validate_state_invariant,
+        validate_state_invariant,
+        ServiceEngine._validate_state_invariant,
+    ):
+        try:
+            result = validator(state)
+        except Exception as error:
+            results.append((type(error), str(error)))
+        else:
+            results.append((None, result))
+        assert state == before
+    assert results == [results[0]] * 3
+    assert results[0] == ((DevlegateError, message) if message else (None, None))
+
+
+@pytest.mark.parametrize(
+    "first", ["devlegate.runtime", "devlegate.runtime_state_validation"]
+)
+def test_import_orders(first):
+    code = (
+        "import importlib, sys; "
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / 'src')!r}); "
+        f"importlib.import_module({first!r}); "
+        "r=importlib.import_module('devlegate.runtime'); "
+        "v=importlib.import_module('devlegate.runtime_state_validation'); "
+        "assert r.DevlegateError is v.DevlegateError; "
+        "assert r.ServiceEngine._validate_state_invariant is v.validate_state_invariant"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_differential_builtin_error():
+    state = {"phase": []}
+    for validator in (baseline_validate_state_invariant, validate_state_invariant):
+        with pytest.raises(TypeError, match="unhashable type: 'list'"):
+            validator(state)
+    assert state == {"phase": []}
+
+
+def test_save_load_restart(git_fixture, monkeypatch):
+    from devlegate.cli import Devlegate
+
+    monkeypatch.chdir(git_fixture["working"])
+    engine = Devlegate(git_fixture["config"])
+    engine._save_state(
+        "merge_pending",
+        local_head="a",
+        remote_head="b",
+        changed_paths="",
+        control_head="c",
+    )
+    saved = copy.deepcopy(engine._state)
+    restarted = Devlegate(git_fixture["config"])
+    assert restarted._state == saved
+    assert json.loads(json.dumps(saved)) == saved
