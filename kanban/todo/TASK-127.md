@@ -1,0 +1,26 @@
+---
+"type": "devlegate.ticket"
+"title": "Audit and redesign shared CLI table rendering for terminal-aware multiline cells"
+---
+
+## Problem and observed baseline
+`src/devlegate/output.py::render_table` and `render_grid` provide shared rendering, but currently size columns using `len()` of entire string values, assume one physical line per logical row, and never constrain width to the terminal. `src/devlegate/cli.py::_active_execution_grid` uses `textwrap.wrap(title, width=23)` and adds extra *logical* table rows for continuation lines, causing horizontal separators inside one ticket title. Other status, check and diagnostic tables rely on the same shared renderers. Preserve DRY rather than patching each caller.
+
+## Required audit before implementation
+- Inventory **all human-readable table/grid call sites**, including status, active execution, blocked/eligible/review/accepted, preflight/check, diagnostics, lifecycle, and other CLI commands; assess actual formatting policies and regression tests. Explicitly separate machine JSON/YAML schemas (unchanged) from human output.
+- Identify the columns that are never safe to word-wrap (ticket IDs, states, small counters, short hashes) versus free text (title, reason, description) versus long opaque values (full hashes, URLs, filesystem paths, refs, commands). Design explicit per-column policy with predictable fallback for long unbreakable tokens.
+- Measure existing widths and current printed output, detect all ad-hoc wrapping and assumptions that `len` equals terminal-cell width. Keep a concise design/evidence note; do not expand into a generic terminal UI framework.
+
+## Implementation criteria
+1. Implement reusable **multiline logical rows** in the shared table renderer: physical continuation lines occupy the *same logical row* and do not get horizontal separators between them. Preserve column alignment, borders and ordering.
+2. Derive available terminal width dynamically (e.g. standard-library terminal size detection) with explicit deterministic non-TTY, narrow-terminal and redirect/fallback behavior. Account for frames/separators/padding when allocating widths. Avoid accidental wrapping by the terminal.
+3. Support explicit per-column policies (no-wrap, wrap at words, and safe treatment of opaque unbreakable tokens). Allocate constrained widths while respecting minimum/priority columns. Do not split IDs, hashes, paths or machine identifiers arbitrarily. Define honest overflow/truncation rules; never silently corrupt/misrepresent an identity. If all minimum widths cannot fit, degrade predictably.
+4. Handle embedded newlines, tabs/control codes, Unicode display cells (including combining/wide characters), and ANSI color escapes where applicable. If correct terminal-cell width cannot be determined safely with stdlib-only code, document a deliberately bounded dependency-free policy and tests rather than treating `len()` as universally correct. Never output raw control sequences from arbitrary untrusted table values.
+5. Remove the `textwrap.wrap(..., width=23)` plus synthetic-row workaround from `_active_execution_grid`; migrate affected callers to the common capabilities, without duplicating width/wrap logic. Keep machine-readable output and IPC payload schemas unchanged.
+6. Preserve reasonable presentation of existing short uncomplicated tables and distinguish human output from terminal escape sequences. No unnecessary third-party dependencies, migrations, generic TUI framework or broad refactor.
+
+## Tests and acceptance evidence
+- Snapshot/golden or structure-level checks for short and long titles, active execution rows with a single logical-row separator, blocked/eligible/review tables, wide/narrow terminals, non-TTY pipes, many columns, and reflow after COLUMNS change.
+- Invariants: each physical output line has bounded terminal display width where feasibility/policy permits, borders align, Unicode wide/combining text does not break frame, long IDs are intact or explicitly handled according to policy, and multiline cells preserve content and row semantics.
+- Verify existing CLI status/check call sites still work; assert --json/--yaml payload invariance and operator status accuracy. Run focused and configured CI.
+- Provide before/after representative terminal output and document chosen per-column allocation/truncation policy, including any unavoidable width limitation.
