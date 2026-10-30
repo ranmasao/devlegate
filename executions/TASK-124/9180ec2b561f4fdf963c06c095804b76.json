@@ -1,0 +1,29 @@
+{
+  "code_base_head": "c189bd5b0e3e90e582f526d1198a684883641be8",
+  "conclusion": "completed",
+  "control_head": "4fd330363385f32a5df6ab4fd6fd9ba242b61279",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-124",
+  "execution_id": "9180ec2b561f4fdf963c06c095804b76",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-124",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-124",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Require remote ref observations to contain a single valid object ID paired with the exact requested ref identity. Add controlled-output, real-Git suffix-match, and publication refusal regressions while preserving existing lease and recovery behavior."
+  },
+  "workspace_head": "fd2d19188dd723781b668787c8acdee0e9049a0f"
+}
