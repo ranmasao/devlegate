@@ -1,0 +1,29 @@
+{
+  "code_base_head": "ff5f7b8ad289da4f2e853fd18005b34f6f7a1778",
+  "conclusion": "completed",
+  "control_head": "5cef88b6fce9da0415d3454132f27bc066a1eae6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-120",
+  "execution_id": "ab3a32b4ac74459bbee2f3f1478407c1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-120",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-120",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added an exact-SHA operator admission audit mapping request types, receipts, effects, lock contention, replay semantics, regression evidence, and diagnostic gaps. Documented the source-derived timeout uncertainty and method-specific admission effects."
+  },
+  "workspace_head": "c189bd5b0e3e90e582f526d1198a684883641be8"
+}
