@@ -352,7 +352,24 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
         )
     observed = owner._execution_remote_head(manager.branch)
     expected = reconciliation.get("rewrite_expected_remote")
-    if observed == expected:
+    if not isinstance(expected, str) or not expected:
+        raise ReconciliationTransactionError(
+            "interrupted execution rewrite evidence is invalid"
+        )
+    rewritten_ref = reconciliation.get("rewritten_evidence_ref")
+    if not isinstance(rewritten_ref, str):
+        raise ReconciliationTransactionError(
+            "interrupted execution rewrite evidence is invalid"
+        )
+    try:
+        pinned = resolve_ref_commit(
+            owner.repo, rewritten_ref, runner=owner.reconciliation_git
+        )
+    except GitObservationError as error:
+        raise ReconciliationTransactionError(
+            f"cannot inspect interrupted execution rewrite evidence: {error}"
+        ) from error
+    if observed == expected and pinned is None:
         restored = reset_hard(
             workspace.path, checkpoint, runner=owner.reconciliation_git
         )
@@ -375,13 +392,13 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
             ),
         )
         return 0
-    if observed != rewrite_checkpoint or workspace.head != rewrite_checkpoint:
+    if (observed not in (expected, rewrite_checkpoint) or
+            workspace.head != rewrite_checkpoint):
         raise ReconciliationTransactionError(
             "execution branch remote changed during interrupted rewrite"
         )
     displaced_ref = reconciliation.get("displaced_evidence_ref")
-    rewritten_ref = reconciliation.get("rewritten_evidence_ref")
-    if not isinstance(displaced_ref, str) or not isinstance(rewritten_ref, str):
+    if displaced_ref != admission.evidence_ref or not isinstance(rewritten_ref, str):
         raise ReconciliationTransactionError(
             "interrupted execution rewrite evidence is invalid"
         )
@@ -437,6 +454,14 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
         raise ReconciliationTransactionError(
             "interrupted execution rewrite does not reach HEAD"
         )
+    if observed == expected:
+        if not rewrite_published or not reconciliation.get("rewrite_authorized"):
+            raise ReconciliationTransactionError(
+                "published execution ref requires explicit rewrite authorization"
+            )
+        owner.reconciliation_publish_rewrite(
+            manager.branch, rewrite_checkpoint, expected
+        )
     return _resolve(
         owner,
         ticket_id,
@@ -465,6 +490,39 @@ def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmis
                 "interrupted execution rewrite workspace is dirty"
             )
         workspace = owner._execution_workspace_for_rewrite_recovery(manager)
+    rewritten_ref = reconciliation.get("rewritten_evidence_ref")
+    if not isinstance(rewritten_ref, str):
+        raise ReconciliationTransactionError(
+            "interrupted execution rewrite evidence is invalid"
+        )
+    try:
+        pinned = resolve_ref_commit(
+            owner.repo, rewritten_ref, runner=owner.reconciliation_git
+        )
+    except GitObservationError as error:
+        raise ReconciliationTransactionError(
+            f"cannot inspect interrupted execution rewrite evidence: {error}"
+        ) from error
+    if pinned is not None:
+        if (pinned != workspace.head or workspace.dirty or
+                reconciliation.get("displaced_evidence_ref") !=
+                admission.evidence_ref or
+                reconciliation.get("rewrite_expected_remote") is not None or
+                owner._execution_remote_head(manager.branch) is not None):
+            raise ReconciliationTransactionError(
+                "interrupted execution rewrite evidence is invalid"
+            )
+        commits = authorize_workspace_rewrite(
+            owner, workspace, admission.target, pinned, None, rewrite_published
+        )
+        if (not commits or len(commits) != reconciliation.get("rewrite_count") or
+                commits[-1] != pinned or
+                not _linear(owner, workspace.path, admission.target, commits)):
+            raise ReconciliationTransactionError(
+                "interrupted execution rewrite evidence is invalid"
+            )
+        return _resolve(owner, ticket_id, reconciliation, admission.target,
+                        pinned, None, rewritten_ref)
     if workspace.head != checkpoint:
         try:
             commits = commit_range(

@@ -701,14 +701,53 @@ def test_update_base_interruption_keeps_base_and_replays(tmp_path, monkeypatch, 
     assert devlegate._state["execution_base_head"] == original_base
     assert durable["reconciliation"] == devlegate._state["reconciliation"]
     assert durable["reconciliation"]["rewrite_stage"] == "local-pending"
+    if point == "resolution":
+        reference = durable["reconciliation"]["rewritten_evidence_ref"]
+        pinned = git(execution, "rev-parse", reference).stdout.strip()
+        assert pinned == git(execution, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setenv("GIT_COMMITTER_DATE", "2030-01-01T00:00:00+0000")
+        with monkeypatch.context() as patch:
+            patch.setattr(devlegate, "reconciliation_todo_fingerprint", interrupt)
+            with pytest.raises(RuntimeError, match="injected interruption"):
+                devlegate.reconcile_update_base("T-1", target)
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == pinned
+        assert state_payload(state)["reconciliation"] == durable["reconciliation"]
     assert devlegate.reconcile_update_base("T-1", target) == 0
     assert devlegate._state["execution_base_head"] == target
     assert state_payload(state)["execution_base_head"] == target
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
+    if point == "resolution":
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == pinned
 
 
-@pytest.mark.parametrize("point", ["remote_wal", "pin", "publish", "resolution"])
+def test_local_replay_refuses_conflicting_pinned_evidence(tmp_path, monkeypatch):
+    devlegate, _working, state, execution, reconciliation, _first, second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+
+    def interrupt():
+        raise RuntimeError("injected interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(devlegate, "reconciliation_todo_fingerprint", interrupt)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            devlegate.reconcile_update_base("T-1", target)
+    pending = state_payload(state)["reconciliation"]
+    reference = pending["rewritten_evidence_ref"]
+    rewritten = git(execution, "rev-parse", "HEAD").stdout.strip()
+    git(execution, "update-ref", reference, second, rewritten)
+    with pytest.raises(DevlegateError, match="rewrite evidence is invalid"):
+        devlegate.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", reference).stdout.strip() == second
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == rewritten
+    assert state_payload(state)["reconciliation"] == pending
+    assert devlegate._state["execution_base_head"] == reconciliation["original_base"]
+
+
+@pytest.mark.parametrize(
+    "point", ["remote_wal", "pin", "after_pin", "publish", "resolution"]
+)
 def test_published_update_base_interruption_keeps_base_and_replays(
     tmp_path, monkeypatch, point
 ):
@@ -739,6 +778,14 @@ def test_published_update_base_interruption_keeps_base_and_replays(
             patch.setattr(devlegate, "_save_state", save)
         elif point == "pin":
             patch.setattr(devlegate, "reconciliation_pin_rewrite_evidence", interrupt)
+        elif point == "after_pin":
+            original = devlegate.reconciliation_pin_rewrite_evidence
+
+            def pin(*args, **kwargs):
+                original(*args, **kwargs)
+                interrupt()
+
+            patch.setattr(devlegate, "reconciliation_pin_rewrite_evidence", pin)
         elif point == "publish":
             original = devlegate.reconciliation_publish_rewrite
 
@@ -759,6 +806,12 @@ def test_published_update_base_interruption_keeps_base_and_replays(
     assert durable["reconciliation"]["rewrite_stage"] == (
         "local-pending" if point == "remote_wal" else "remote-pending"
     )
+    if point in {"after_pin", "publish", "resolution"}:
+        pinned = git(
+            execution, "rev-parse", durable["reconciliation"]["rewritten_evidence_ref"]
+        ).stdout.strip()
+        assert pinned == git(execution, "rev-parse", "HEAD").stdout.strip()
+        monkeypatch.setenv("GIT_COMMITTER_DATE", "2030-01-01T00:00:00+0000")
     assert devlegate.reconcile_update_base("T-1", target, rewrite_published=True) == 0
     if devlegate._state["reconciliation"]["status"] != "resolved":
         assert (
@@ -768,6 +821,8 @@ def test_published_update_base_interruption_keeps_base_and_replays(
     assert state_payload(state)["execution_base_head"] == target
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
+    if point in {"after_pin", "publish", "resolution"}:
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == pinned
 
 
 def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
@@ -803,6 +858,11 @@ def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
         "rewrite_target": target,
         "rewrite_count": 1,
         "rewrite_stage": "local-pending",
+        "rewrite_expected_remote": None,
+        "displaced_evidence_ref": reconciliation["evidence_ref"],
+        "rewritten_evidence_ref": transactions.rewritten_evidence_ref(
+            "T-1", reconciliation["execution_id"]
+        ),
     }
     devlegate._save_state(
         "idle",
