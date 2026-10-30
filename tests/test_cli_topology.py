@@ -854,7 +854,10 @@ def test_real_service_sigkill_restarts_without_mutation(git_fixture, monkeypatch
         plan = service.cli("plan", "--json")
         assert status.returncode == 0, status.stderr
         assert plan.returncode == 0, plan.stderr
-        assert _disk_state(config) == before
+        after = _disk_state(config)
+        before["workspace_cleanup"].pop("observed_at_unix", None)
+        after["workspace_cleanup"].pop("observed_at_unix", None)
+        assert after == before
     finally:
         service.kill()
 

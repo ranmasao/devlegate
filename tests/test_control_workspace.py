@@ -1150,7 +1150,9 @@ def test_workspace_cleanup_restart_rejects_changed_ref_after_interruption(
     assert git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
 
 
-def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
+def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(
+    tmp_path, monkeypatch
+):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     engine = Devlegate(config)
@@ -1162,10 +1164,13 @@ def test_automatic_workspace_cleanup_rotates_past_blocked_candidate(tmp_path):
         engine.repo, engine.execution_worktree_root, "T-2"
     ).prepare(base)
 
+    clock = [0.0]
+    monkeypatch.setattr(runtime_module.time, "monotonic", lambda: clock[0])
     engine._reconcile_workspace_backlog()
     assert first.path.is_dir() and second.path.is_dir()
     assert engine._state["workspace_cleanup_cursor"] == "T-1"
 
+    clock[0] += 300
     engine._reconcile_workspace_backlog()
     assert engine._state["workspace_cleanup_cursor"] == "T-2"
     restarted = Devlegate(config)
@@ -1756,9 +1761,6 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
         and "upstream execution ref is unavailable" in line
         for line in logs
     )
-    assert any(
-        "pass finish" in line and "retired=0 blocked_skipped=1" in line for line in logs
-    )
     assert (
         resolve_commit(engine.repo, f"refs/heads/{workspace.branch}") == workspace.head
     )
@@ -1825,9 +1827,70 @@ def test_cleanup_historical_unchanged_blocker_is_not_logged_each_poll(
     engine._reconcile_workspace_backlog()
     first = list(logs)
     engine._reconcile_workspace_backlog()
-    assert first
     assert logs == first
     assert engine.workspace_cleanup_status()["inventory"]["remaining"] == 1
+
+
+def test_historical_cadence_excludes_non_done_and_reconsiders_done(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(base)
+    clock = [1000.0]
+    monkeypatch.setattr(runtime_module.time, "monotonic", lambda: clock[0])
+    logs = []
+    monkeypatch.setattr(runtime_module, "_log", logs.append)
+    commands = []
+    original = engine._git_runtime
+
+    def count(repo, *args, **kwargs):
+        commands.append(args)
+        return original(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", count)
+    engine._reconcile_workspace_backlog()
+    assert engine.workspace_cleanup_status()["decisions"][0]["reason"] == (
+        "ticket is not durably done"
+    )
+    assert not any(args and args[0] == "fetch" for args in commands)
+    assert not logs
+    commands.clear()
+    clock[0] += 299
+    engine._service_wake.set()
+    engine._reconcile_workspace_backlog()
+    assert not commands
+    clock[0] += 1
+    engine._reconcile_workspace_backlog()
+    assert not any(args and args[0] == "fetch" for args in commands)
+    assert not logs
+
+    restarted = Devlegate(config)
+    restarted_commands = []
+    restarted_git = restarted._git_runtime
+
+    def count_restarted(repo, *args, **kwargs):
+        restarted_commands.append(args)
+        return restarted_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(restarted, "_git_runtime", count_restarted)
+    restarted._reconcile_workspace_backlog()
+    assert restarted_commands
+    assert restarted.workspace_cleanup_status()["decisions"][0]["reason"] == (
+        "ticket is not durably done"
+    )
+    assert not logs
+
+    _publish_done_execution(control, workspace, "T-1", base, "done-execution")
+    clock[0] += 300
+    commands.clear()
+    engine._reconcile_workspace_backlog()
+    assert any(args and args[0] == "fetch" for args in commands)
 
 
 def test_cleanup_historical_success_logs_pass_and_confirmed_resources(
@@ -1861,16 +1924,8 @@ def test_cleanup_historical_success_logs_pass_and_confirmed_resources(
     monkeypatch.setattr(runtime_module, "_log", logs.append)
     engine._reconcile_workspace_backlog()
     assert any(
-        "historical pass start" in line and "apply_limit=1" in line for line in logs
-    )
-    assert any(
         "status=retired" in line
         and "worktree=absent local_ref=absent upstream_ref=absent" in line
-        for line in logs
-    )
-    assert any(
-        "examined=1 retired=1 blocked_skipped=0" in line
-        and "inventory_remaining=1" in line
         for line in logs
     )
     assert engine.workspace_cleanup_status()["last_pass"] == [decisions]

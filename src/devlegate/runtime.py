@@ -767,7 +767,8 @@ class ServiceEngine:
         self._iteration_diagnostic: str | None = None
         self._workspace_cleanup_observation_error: str | None = None
         self._pending_integrated_cleanup: tuple[ExecutionReport, str] | None = None
-        self._cleanup_last_pass_log = float("-inf")
+        # A new owner always discovers historical resources on its first idle pass.
+        self._cleanup_last_pass = float("-inf")
         self._workflow_validation_succeeded = False
         self._stop_event: threading.Event | None = None
         self._operator_command_lock = threading.RLock()
@@ -4776,13 +4777,10 @@ class ServiceEngine:
         durable diagnostics, while a Git or remote failure must not prevent the
         normal ticket scheduler from making progress.
         """
-        log_pass = time.monotonic() - self._cleanup_last_pass_log >= 300
-        if log_pass:
-            self._cleanup_last_pass_log = time.monotonic()
-            _log(
-                "workspace cleanup historical pass start cohort_limit=32 "
-                "apply_limit=1 inventory_limit=10000"
-            )
+        now = time.monotonic()
+        if now - self._cleanup_last_pass < 300:
+            return
+        self._cleanup_last_pass = now
         try:
             # Inspect a bounded cohort first. A blocked first candidate must
             # not consume the pass when a later candidate is independently
@@ -4792,6 +4790,7 @@ class ServiceEngine:
                 apply=False,
                 limit=max(1, len(cohort)),
                 targets=cohort,
+                historical=True,
             )
             eligible = next(
                 (
@@ -4804,13 +4803,6 @@ class ServiceEngine:
             if isinstance(eligible, dict) and isinstance(
                 eligible.get("ticket_id"), str
             ):
-                if not log_pass:
-                    log_pass = True
-                    self._cleanup_last_pass_log = time.monotonic()
-                    _log(
-                        "workspace cleanup historical pass start cohort_limit=32 "
-                        "apply_limit=1 inventory_limit=10000"
-                    )
                 selected = [
                     target
                     for target in cohort
@@ -4820,11 +4812,14 @@ class ServiceEngine:
                     apply=True,
                     limit=1,
                     targets=selected,
+                    historical=True,
                 )
             else:
                 # Preserve one blocked/absent diagnostic and advance the
                 # durable cursor when no candidate is currently eligible.
-                result = self.cleanup_workspaces(apply=True, limit=1)
+                result = self.cleanup_workspaces(
+                    apply=True, limit=1, targets=cohort[:1], historical=True
+                )
         except ShutdownInterrupted as error:
             reason = _cleanup_log_text(str(error) or error.__class__.__name__)
             _log(f"workspace cleanup historical pass interrupted: {reason}")
@@ -4875,33 +4870,18 @@ class ServiceEngine:
             if selected:
                 self._state["workspace_cleanup_cursor"] = selected[-1]
         for decision in decisions:
-            if isinstance(decision, dict) and (
-                decision.get("status") == "retired" or log_pass
+            if isinstance(decision, dict) and decision.get("status") == "retired":
+                _log_cleanup_decision("historical", decision)
+            elif (
+                isinstance(decision, dict)
+                and decision.get("status") in ("blocked", "skipped")
+                and decision.get("reason") != "ticket is not durably done"
+                and decision not in (self._state.get("workspace_cleanup") or {}).get(
+                    "last_pass", []
+                )
             ):
                 _log_cleanup_decision("historical", decision)
         self._publish_workspace_cleanup_inventory(decisions)
-        if log_pass:
-            inventory = self._state.get("workspace_cleanup", {})
-            totals = (
-                inventory.get("inventory", {}) if isinstance(inventory, dict) else {}
-            )
-            applied_ids = {d.get("ticket_id") for d in decisions if isinstance(d, dict)}
-            pass_decisions = [d for d in decisions if isinstance(d, dict)] + [
-                d
-                for d in dry_run.get("decisions", [])
-                if isinstance(d, dict) and d.get("ticket_id") not in applied_ids
-            ]
-            retired = sum(d.get("status") == "retired" for d in pass_decisions)
-            blocked = sum(
-                d.get("status") in ("blocked", "skipped") for d in pass_decisions
-            )
-            _log(
-                f"workspace cleanup historical pass finish examined={len(cohort)} "
-                f"retired={retired} blocked_skipped={blocked} "
-                f"inventory_remaining={totals.get('remaining', 'unknown')} "
-                f"inventory_status={inventory.get('status', 'unknown')} "
-                f"inventory_scan_complete={inventory.get('scan_complete', False)}"
-            )
 
     def _publish_workspace_cleanup_inventory(
         self, last_decisions: list[object] | None = None
@@ -4919,6 +4899,7 @@ class ServiceEngine:
                 apply=False,
                 limit=max(1, len(targets)),
                 targets=targets,
+                historical=True,
             )
             decisions = result.get("decisions", [])
             blocked = [
@@ -4926,7 +4907,10 @@ class ServiceEngine:
                 for item in decisions
                 if isinstance(item, dict)
                 and (
-                    item.get("status") == "blocked"
+                    (
+                        item.get("status") == "blocked"
+                        and item.get("reason") != "ticket is not durably done"
+                    )
                     or (
                         item.get("status") == "skipped"
                         and item.get("reason")
@@ -4944,6 +4928,7 @@ class ServiceEngine:
             status = "clean" if not decisions else ("blocked" if blocked else "partial")
             cleanup: dict[str, object] = {
                 "status": status,
+                "observed_at_unix": time.time(),
                 "scan_complete": not remote_unobserved and len(targets) < 10000,
                 "inventory": {
                     "candidates": len(targets),
@@ -4967,6 +4952,7 @@ class ServiceEngine:
         ) as error:
             cleanup = {
                 "status": "blocked",
+                "observed_at_unix": time.time(),
                 "scan_complete": False,
                 "inventory": {"candidates": 0, "remaining": 0},
                 "decisions": [
@@ -4993,8 +4979,15 @@ class ServiceEngine:
                 isinstance(decision, dict)
                 and decision not in old_decisions
                 and decision.get("status") in ("blocked", "skipped")
+                and decision.get("reason") != "ticket is not durably done"
             ):
                 _log_cleanup_decision("inventory", decision)
+        if (
+            isinstance(previous, dict)
+            and previous.get("status") == "blocked"
+            and cleanup.get("status") != "blocked"
+        ):
+            _log("workspace cleanup inventory health recovered")
 
     def _recover_accepted_integration(self) -> int:
         try:
@@ -6959,6 +6952,7 @@ class ServiceEngine:
         apply: bool = False,
         limit: int = 100,
         targets: list[dict[str, str]] | None = None,
+        historical: bool = False,
     ) -> dict[str, object]:
         """List, or apply, a bounded cleanup of proven done-ticket worktrees."""
         if limit < 1:
@@ -6992,6 +6986,12 @@ class ServiceEngine:
                     "reason": self._workspace_cleanup_observation_error,
                 }
             )
+        tickets = {}
+        if historical and targets:
+            # Do not classify an uncommitted workflow move as durable state.
+            if self._status_runtime(self.control_worktree):
+                raise WorkflowBlockedError("control working tree is dirty")
+            tickets = self._ticket_store().by_id
         for target in targets:
             if target.get("head") == "" and all(
                 isinstance(target.get(field), str) and target[field]
@@ -7027,6 +7027,29 @@ class ServiceEngine:
                 ticket_id,
                 runner=self._git_runtime,
             )
+            if historical and (
+                not _is_git_identity(target["head"])
+                or Path(target["path"]).absolute() != manager.path
+                or target["branch"] != manager.branch
+            ):
+                decisions.append(
+                    {
+                        "ticket_id": ticket_id,
+                        "status": "skipped",
+                        "reason": "workspace cleanup target identity is invalid",
+                    }
+                )
+                continue
+            ticket = tickets.get(ticket_id)
+            if historical and ticket is not None and ticket.state != "done":
+                decisions.append(
+                    {
+                        "ticket_id": ticket_id,
+                        "status": "blocked",
+                        "reason": "ticket is not durably done",
+                    }
+                )
+                continue
             try:
                 manager, workspace, _binding = self._observe_cleanup_candidate(
                     target, registrations

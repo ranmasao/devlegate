@@ -4,6 +4,23 @@ This is the operator reference for using the Devlegate service.
 The [README](../README.md) is the project overview; [Architecture](ARCHITECTURE.md)
 covers ownership and implementation boundaries.
 
+## Historical Workspace Cleanup Inventory
+
+The owner attempts historical cleanup on its first idle iteration after startup
+or restart, then no more often than every 300 monotonic seconds. A pass runs on
+the next idle scheduler iteration after it is due; scheduler activity can delay
+it. Accepted-integration cleanup runs separately and immediately. Control changes
+are reconsidered on the next historical pass, and restart starts a new pass.
+
+The owner refreshes the read-only inventory after each historical pass, including
+an interrupted pass when observation is possible. `observed_at_unix` is the wall
+clock time of that inventory attempt; its age can be computed against the current
+wall clock and is subject to clock adjustments. It does not guarantee current
+repository state. `scan_complete` is false on observation failure or when the
+10,000 candidate limit is reached. Non-done tickets remain visible as blocked,
+but do not count as actionable blockers and do not receive per-candidate
+retirement proofs. Mutation always uses fresh proof.
+
 ## Adopt A Project
 
 Start with an existing Git repository, its intended product branch, a configured
