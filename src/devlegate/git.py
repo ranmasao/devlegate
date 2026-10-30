@@ -725,11 +725,18 @@ def remote_ref(
             f"cannot observe remote ref {ref!r}: "
             f"{_stderr(result).strip() or 'unknown Git error'}"
         )
-    fields = result.stdout.split()
-    if not fields:
+    if result.stdout == "":
         return None
-    if len(fields) != 2 or not _is_object_id(fields[0]):
+    record = result.stdout.removesuffix("\n")
+    if "\n" in record:
         raise GitObservationError("Git returned malformed remote ref output")
+    fields = record.split("\t")
+    if len(fields) != 2 or not _is_object_id(fields[0]) or not fields[1]:
+        raise GitObservationError("Git returned malformed remote ref output")
+    if fields[1] != ref:
+        raise GitObservationError(
+            f"Git returned changed remote ref identity for {ref!r}"
+        )
     return fields[0]
 
 

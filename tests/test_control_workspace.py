@@ -2573,6 +2573,36 @@ def test_execution_publication_lease_rejects_intervening_remote_generation(
     )
 
 
+def test_execution_publication_rejects_wrong_remote_identity(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = manager.prepare(base)
+    ref = f"refs/heads/{manager.branch}"
+    git(working, "push", "origin", f"{base}:{ref}")
+    original = runtime_module._git
+    calls = []
+
+    def wrong_identity(repo, *args, check=True):
+        calls.append(args)
+        if args == ("ls-remote", "origin", ref):
+            return subprocess.CompletedProcess(
+                args, 0, f"{base}\trefs/heads/other\n", ""
+            )
+        return original(repo, *args, check=check)
+
+    monkeypatch.setattr(runtime_module, "_git", wrong_identity)
+    with pytest.raises(DevlegateError, match="identity"):
+        engine._publish_execution_branch(workspace, base, base)
+    assert ("ls-remote", "origin", ref) in calls
+    assert not any(args[0] == "push" for args in calls)
+    assert git(working, "ls-remote", "origin", ref).stdout.split()[0] == base
+
+
 def test_execution_publication_real_git_trace(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

@@ -569,6 +569,67 @@ def test_remote_exists_uses_structured_remote_listing(tmp_path):
         git.remote_exists(tmp_path, "origin", runner=broken_runner)
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        f"{'a' * 40}\trefs/heads/other\n",
+        f"{'a' * 40}\trefs/heads/main^{{}}\n",
+        "ref: refs/heads/main\trefs/heads/main\n",
+        f"{'a' * 40}\trefs/heads/main\n{'b' * 40}\trefs/heads/other\n",
+        f"{'a' * 40}\trefs/heads/main\n\n",
+        f"{'a' * 40} refs/heads/main\n",
+        f"{'a' * 40}\trefs/heads/main\textra\n",
+        "\n",
+        f"{'g' * 40}\trefs/heads/main\n",
+    ],
+)
+def test_remote_ref_rejects_invalid_or_wrong_identity(tmp_path, output):
+    def runner(_cwd, *args, check):
+        assert args == ("ls-remote", "origin", "refs/heads/main")
+        assert check is False
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    with pytest.raises(git.GitObservationError):
+        git.remote_ref(tmp_path, "origin", "refs/heads/main", runner=runner)
+
+
+def test_remote_ref_distinguishes_exact_match_absence_and_failure(tmp_path):
+    ref = "refs/heads/main"
+    sha = "a" * 40
+
+    def runner_with(code, output):
+        return lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], code, output, "remote failure"
+        )
+
+    assert git.remote_ref(tmp_path, "origin", ref, runner=runner_with(0, "")) is None
+    assert git.remote_ref(
+        tmp_path, "origin", ref, runner=runner_with(0, f"{sha}\t{ref}\n")
+    ) == sha
+    for code in (1, 2, 128):
+        with pytest.raises(git.GitObservationError, match="remote failure"):
+            git.remote_ref(tmp_path, "origin", ref, runner=runner_with(code, ""))
+
+
+def test_remote_ref_real_git_exact_and_suffix_match(tmp_path):
+    def command(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+
+    command("init", "-b", "main")
+    command("config", "user.name", "Test User")
+    command("config", "user.email", "test@example.com")
+    command("commit", "--allow-empty", "-m", "base")
+    sha = command("rev-parse", "HEAD")
+    command("update-ref", "refs/other/refs/heads/missing", sha)
+    assert git.remote_ref(tmp_path, str(tmp_path), "refs/heads/main") == sha
+    assert git.remote_ref(tmp_path, str(tmp_path), "refs/heads/absent") is None
+    with pytest.raises(git.GitObservationError, match="identity"):
+        git.remote_ref(tmp_path, str(tmp_path), "refs/heads/missing")
+
+
 @pytest.mark.parametrize("locale_name", ["C", "C.UTF-8"])
 def test_git_porcelain_locale_smoke(tmp_path, locale_name):
     available = subprocess.run(
