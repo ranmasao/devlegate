@@ -1,0 +1,29 @@
+{
+  "code_base_head": "ee6c479b3e8cf4a29168d5b1e34c4b6a7e1f2b6e",
+  "conclusion": "completed",
+  "control_head": "697c26a69d8e57d935258c8c1c8335fa30bfeaf7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-114",
+  "execution_id": "7aeaaf51ecb743e59cf61c3fa77b56e2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-114",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-114",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a bounded Git boundary audit mapping mutation ownership, observation semantics, duplicate command construction, callback indirection, historical effect counts, and ranked recommendations. The audit identifies source-specific regression evidence and remaining measurement gaps."
+  },
+  "workspace_head": "e48a44b688d20a58eff22e376925dbfd45d44bd3"
+}
