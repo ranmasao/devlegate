@@ -1,0 +1,29 @@
+{
+  "code_base_head": "e48a44b688d20a58eff22e376925dbfd45d44bd3",
+  "conclusion": "completed",
+  "control_head": "d64dddac6a56c9bc983e3c3c7fcd11bfa9e88595",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-115",
+  "execution_id": "caab4219d0e54652b483351aac76bb94",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-115",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-115",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Extracted the complete read-only state invariant validator and shared identity helpers into an acyclic module while retaining the runtime compatibility entrypoint and existing exception identity. Added baseline differential, purity, import-order, and save/restart regression coverage, and updated the validation audit."
+  },
+  "workspace_head": "7a612ae8a756fb66af68132c3af8baa264675c2c"
+}
