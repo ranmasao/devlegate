@@ -27,6 +27,7 @@ from devlegate.agent_protocol import (
     render_project,
     upgrade_project_templates,
 )
+from devlegate.cleanup_dependency import accepted_integration_dependency_reason
 from devlegate.commit_messages import integration_message, lifecycle_message
 from devlegate.control_git_workflow import (
     ControlGitWorkflowError,
@@ -6858,14 +6859,11 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "accepted integration dependency identity is invalid"
                 )
-            if pending["ticket_id"] == ticket_id:
-                if pending["checkpoint"] != checkpoint:
-                    raise WorkflowBlockedError(
-                        "accepted integration dependency contradicts accepted execution"
-                    )
-                raise WorkflowBlockedError(
-                    "accepted execution has a pending integration dependency"
-                )
+            reason = accepted_integration_dependency_reason(
+                ticket_id, checkpoint, pending["ticket_id"], pending["checkpoint"]
+            )
+            if reason is not None:
+                raise WorkflowBlockedError(reason)
 
     def _revalidate_cleanup_retirement(
         self,
