@@ -1,0 +1,37 @@
+{
+  "code_base_head": "e48a44b688d20a58eff22e376925dbfd45d44bd3",
+  "conclusion": "incomplete",
+  "control_head": "e8f8cc827c242dabae48acc6e7d589816c7799c7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-115",
+  "execution_id": "a11c49993a9d43f0931b992c5f3707d4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-115",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract the validator and its shared dependencies into an acyclic module while preserving behavior and exception identity.",
+    "Add baseline-versus-extracted differential cases, import-order checks, and load/save/restart regression coverage; run the configured checks.",
+    "Verify the new checkpoint in hosted CI after Devlegate creates it."
+  ],
+  "report_artifact": "executions/TASK-115/a11c49993a9d43f0931b992c5f3707d4.md",
+  "report_sha256": "70d120e59db3a6c7f6b5cab70eca09c4fdaf839ad4ce608f917e44449d16a817",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-115",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract the validator and its shared dependencies into an acyclic module while preserving behavior and exception identity.",
+      "Add baseline-versus-extracted differential cases, import-order checks, and load/save/restart regression coverage; run the configured checks.",
+      "Verify the new checkpoint in hosted CI after Devlegate creates it."
+    ],
+    "report": "The extraction and its differential validation have not been implemented in this invocation. Hosted verification requires a new checkpoint, which the worker contract assigns to Devlegate.",
+    "summary": "Fixed the reported Ruff violation and extended the existing purity baseline to cover malformed nested execution reports and review bindings with exact error messages."
+  },
+  "workspace_head": "f2b94d91c90badd399ec2903a016f6f937aacc8e"
+}
