@@ -1,0 +1,29 @@
+{
+  "code_base_head": "a083ef2598c1da7cd23fe2ebb762192b88b9517b",
+  "conclusion": "completed",
+  "control_head": "cacd77976f582d5b51ae39443466dcca6a50325d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-118",
+  "execution_id": "077db84f3f8f47d0bb4ce4313969c710",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-118",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-118",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Reconciliation transactions now use detached pending-state snapshots instead of directly reading owner state, while retaining the existing owner save and replay boundaries. Added a revision-specific boundary assessment and snapshot isolation regression coverage."
+  },
+  "workspace_head": "8c331efb38fb40dc6a2d7eb423ec3fb1f95357f9"
+}
