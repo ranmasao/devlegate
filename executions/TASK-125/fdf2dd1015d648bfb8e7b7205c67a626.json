@@ -1,0 +1,29 @@
+{
+  "code_base_head": "fd2d19188dd723781b668787c8acdee0e9049a0f",
+  "conclusion": "completed",
+  "control_head": "bd9428a27012983b38583ffddfe024672951b9bc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-125",
+  "execution_id": "fdf2dd1015d648bfb8e7b7205c67a626",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-125",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-125",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Scheduled historical workspace cleanup on a five-minute monotonic cadence, with early durable non-done exclusion and actionable logging. Added inventory observation timestamps, operator documentation, and coverage for cadence, restart, reconsideration, and cleanup safety."
+  },
+  "workspace_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187"
+}
