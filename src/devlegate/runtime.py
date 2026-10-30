@@ -146,7 +146,7 @@ from devlegate.runtime_state_validation import (
     validate_state_invariant,
 )
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
-from devlegate.status_projection import ticket_counts, tickets_in_state
+from devlegate.status_projection import blocked_tickets
 from devlegate.tickets import (
     Ticket,
     TicketError,
@@ -9607,7 +9607,10 @@ class ServiceEngine:
                 ),
                 lifecycle_integration=lifecycle_integration,
             )
-        counts = ticket_counts(tuple(ticket.state for ticket in ticket_store.tickets))
+        counts = tuple(
+            (name, sum(ticket.state == name for ticket in ticket_store.tickets))
+            for name in ("backlog", "todo", "review", "accepted", "done")
+        )
         runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
         dependency_blocked = tuple(
             (
@@ -9624,19 +9627,11 @@ class ServiceEngine:
         integration_ticket_id = (
             lifecycle_integration[0] if lifecycle_integration is not None else None
         )
-        review = tickets_in_state(
-            tuple(
-                (ticket.id, ticket.title, ticket.state)
-                for ticket in ticket_store.tickets
-            ),
-            "review",
+        review = tuple(
+            (t.id, t.title) for t in ticket_store.tickets if t.state == "review"
         )
-        accepted = tickets_in_state(
-            tuple(
-                (ticket.id, ticket.title, ticket.state)
-                for ticket in ticket_store.tickets
-            ),
-            "accepted",
+        accepted = tuple(
+            (t.id, t.title) for t in ticket_store.tickets if t.state == "accepted"
         )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
@@ -9700,7 +9695,6 @@ class ServiceEngine:
             else None
         )
         eligible = runnable if plan.action == "run-worker" and not plan.bound else ()
-        eligible_ids = {ticket_id for ticket_id, _title in eligible}
         pre_barrier = self._admission_barrier(
             state, ticket_store, dirty, branch_ok, code
         )
@@ -9726,43 +9720,10 @@ class ServiceEngine:
             if global_barrier is not None
             else None
         )
-        dependency_entries = {
-            ticket_id: (title, blockers)
-            for ticket_id, title, blockers in dependency_blocked
-        }
-        blocked_entries = []
-        for ticket in ticket_store.tickets:
-            if ticket.state != "todo" or ticket.id == bound_ticket_id:
-                continue
-            if ticket.id in dependency_entries:
-                title, blockers = dependency_entries[ticket.id]
-                blocked_reason = BlockedReason(
-                    "dependencies",
-                    tickets=tuple(
-                        (
-                            dependency,
-                            (
-                                "integration-in-progress"
-                                if dependency == integration_ticket_id
-                                else state
-                            ),
-                        )
-                        for dependency, state in blockers
-                    ),
-                )
-                if (
-                    integration_ticket_id is not None
-                    and len(blockers) == 1
-                    and blockers[0][0] == integration_ticket_id
-                ):
-                    blocked_reason = BlockedReason(
-                        "integration-in-progress",
-                        ticket_id=integration_ticket_id,
-                    )
-                blocked_entries.append((ticket.id, title, blocked_reason))
-            elif ticket.id not in eligible_ids:
-                assert global_block_reason is not None
-                blocked_entries.append((ticket.id, ticket.title, global_block_reason))
+        blocked_entries = blocked_tickets(
+            ticket_store.tickets, dependency_blocked, eligible, bound_ticket_id,
+            integration_ticket_id, global_block_reason, BlockedReason,
+        )
         return StatusSnapshot(
             phase=str(state["phase"]),
             bound_ticket_id=bound_ticket_id,
@@ -9772,7 +9733,7 @@ class ServiceEngine:
             control=control,
             counts=counts,
             runnable=runnable,
-            blocked=tuple(blocked_entries),
+            blocked=blocked_entries,
             review=review,
             accepted=accepted,
             next_ticket=next_ticket,
