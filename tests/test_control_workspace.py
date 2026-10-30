@@ -2232,8 +2232,9 @@ def test_workspace_cleanup_retains_published_pending_candidate_integration(tmp_p
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
 
 
+@pytest.mark.parametrize("dependency", ["active", "accepted_integration"])
 def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, dependency
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2265,15 +2266,22 @@ def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
         nonlocal admitted
         if not admitted:
             admitted = True
-            engine._state.update(
-                {
-                    "phase": "agent_running",
-                    "execution_ticket_id": report.ticket_id,
-                    "execution_id": report.execution_id,
-                    "execution_branch": report.execution_branch,
-                    "execution_path": report.execution_path,
+            if dependency == "accepted_integration":
+                engine._state["accepted_integration"] = {
+                    "ticket_id": report.ticket_id,
+                    "checkpoint": report.workspace_head,
+                    "control_head": checkpoint,
                 }
-            )
+            else:
+                engine._state.update(
+                    {
+                        "phase": "agent_running",
+                        "execution_ticket_id": report.ticket_id,
+                        "execution_id": report.execution_id,
+                        "execution_branch": report.execution_branch,
+                        "execution_path": report.execution_path,
+                    }
+                )
         return original_validate(*args, **kwargs)
 
     monkeypatch.setattr(
@@ -2283,7 +2291,11 @@ def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
     result = engine.cleanup_workspaces(apply=True, limit=1)
 
     assert result["decisions"][0]["status"] == "blocked"
-    assert result["decisions"][0]["reason"] == "accepted execution is still active"
+    assert result["decisions"][0]["reason"] == (
+        "accepted execution is still active"
+        if dependency == "active"
+        else "accepted execution has a pending integration dependency"
+    )
     assert workspace.path.is_dir()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
 
