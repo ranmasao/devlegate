@@ -1,0 +1,35 @@
+{
+  "code_base_head": "e48a44b688d20a58eff22e376925dbfd45d44bd3",
+  "conclusion": "incomplete",
+  "control_head": "57d253372ed72bfbf87644e78581ac75edbd0cea",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-115",
+  "execution_id": "fb7f17fb6bc6447cb7f52a4692594e84",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-115",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extract the validator into an acyclic pure validation module while preserving its shared dependencies and exact behavior.",
+    "Differential-test current and legacy valid and invalid states against the baseline, including nested report and review paths, and verify imports, load/save/restart, and configured checks."
+  ],
+  "report_artifact": "executions/TASK-115/fb7f17fb6bc6447cb7f52a4692594e84.md",
+  "report_sha256": "5689bb591fd1f319b661f8fa04457581918116c0f0b24cfdacec3ca2aca5b62e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-115",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extract the validator into an acyclic pure validation module while preserving its shared dependencies and exact behavior.",
+      "Differential-test current and legacy valid and invalid states against the baseline, including nested report and review paths, and verify imports, load/save/restart, and configured checks."
+    ],
+    "report": "The validator relocation and full differential verification were not completed in this invocation. The focused baseline tests pass; Ruff is unavailable in the current environment.",
+    "summary": "Documented the runtime validator's callers, input domain, dependencies, and side-effect boundary. Added baseline checks for input preservation, common I/O entry points, and exact diagnostics."
+  },
+  "workspace_head": "21251fba558a9bc90bb2e8ea7e376d658abda6f3"
+}
