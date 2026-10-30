@@ -1,0 +1,29 @@
+{
+  "code_base_head": "8d753c145fd3b8b476e11bdbb7c7035a256c8539",
+  "conclusion": "completed",
+  "control_head": "6fc1bfd7f410bda33a7df807bfb3765128be1e60",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-123",
+  "execution_id": "f17cbf8ed55046acb66fe28b8dedf487",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-123",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-123",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Preserved pinned rewrite evidence during local and published reconciliation replay, with exact commit and lineage checks and lease-protected publication. Added deterministic real-Git interruption, repeated replay, and conflicting-evidence coverage."
+  },
+  "workspace_head": "ee6c479b3e8cf4a29168d5b1e34c4b6a7e1f2b6e"
+}
