@@ -146,6 +146,7 @@ from devlegate.runtime_state_validation import (
     validate_state_invariant,
 )
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
+from devlegate.status_projection import ticket_counts, tickets_in_state
 from devlegate.tickets import (
     Ticket,
     TicketError,
@@ -9606,13 +9607,7 @@ class ServiceEngine:
                 ),
                 lifecycle_integration=lifecycle_integration,
             )
-        counts = tuple(
-            (
-                state_name,
-                sum(ticket.state == state_name for ticket in ticket_store.tickets),
-            )
-            for state_name in ("backlog", "todo", "review", "accepted", "done")
-        )
+        counts = ticket_counts(tuple(ticket.state for ticket in ticket_store.tickets))
         runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
         dependency_blocked = tuple(
             (
@@ -9629,15 +9624,19 @@ class ServiceEngine:
         integration_ticket_id = (
             lifecycle_integration[0] if lifecycle_integration is not None else None
         )
-        review = tuple(
-            (ticket.id, ticket.title)
-            for ticket in ticket_store.tickets
-            if ticket.state == "review"
+        review = tickets_in_state(
+            tuple(
+                (ticket.id, ticket.title, ticket.state)
+                for ticket in ticket_store.tickets
+            ),
+            "review",
         )
-        accepted = tuple(
-            (ticket.id, ticket.title)
-            for ticket in ticket_store.tickets
-            if ticket.state == "accepted"
+        accepted = tickets_in_state(
+            tuple(
+                (ticket.id, ticket.title, ticket.state)
+                for ticket in ticket_store.tickets
+            ),
+            "accepted",
         )
         selected_id = state.get("selected_ticket_id")
         bound_phase = str(state["phase"]) in {
