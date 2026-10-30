@@ -960,7 +960,9 @@ class ServiceEngine:
         """Durably record forced worker interruption before signalling it."""
         with self._state_write_lock:
             if self._state_write_uncertain:
-                raise DevlegateError("runtime state write outcome uncertain; restart required")
+                raise DevlegateError(
+                    "runtime state write outcome uncertain; restart required"
+                )
             self._record_forced_lifecycle_abort_locked(request_id)
 
     def _record_forced_lifecycle_abort_locked(self, request_id: str | None) -> None:
@@ -3802,7 +3804,9 @@ class ServiceEngine:
             raise DevlegateError("reentrant runtime state save")
         with self._state_write_lock:
             if self._state_write_uncertain:
-                raise DevlegateError("runtime state write outcome uncertain; restart required")
+                raise DevlegateError(
+                    "runtime state write outcome uncertain; restart required"
+                )
             self._state_write_active.saving = True
             try:
                 self._save_state_locked(

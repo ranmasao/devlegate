@@ -194,7 +194,9 @@ def test_state_save_reentry_fails_closed(tmp_path, monkeypatch):
     assert engine._runtime_store.observe() == before
 
 
-def test_forced_stop_rejects_normal_completion_and_survives_restart(tmp_path, monkeypatch):
+def test_forced_stop_rejects_normal_completion_and_survives_restart(
+    tmp_path, monkeypatch
+):
     engine, _state = make_engine(tmp_path, monkeypatch)
     _persist_active_execution(engine, "agent_running", "worker-launch")
     engine.request_lifecycle("stop", "request-1", force=True)
