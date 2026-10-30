@@ -27,7 +27,10 @@ from devlegate.agent_protocol import (
     render_project,
     upgrade_project_templates,
 )
-from devlegate.cleanup_dependency import accepted_integration_dependency_reason
+from devlegate.cleanup_dependency import (
+    accepted_integration_dependency_reason,
+    snapshot_integration,
+)
 from devlegate.commit_messages import integration_message, lifecycle_message
 from devlegate.control_git_workflow import (
     ControlGitWorkflowError,
@@ -6830,40 +6833,10 @@ class ServiceEngine:
                     "accepted execution has an automatic retry dependency"
                 )
 
-        pending = state.get("accepted_integration")
-        if pending is not None:
-            if (
-                not isinstance(pending, dict)
-                or set(pending)
-                not in (
-                    {"ticket_id", "checkpoint", "control_head"},
-                    {"ticket_id", "checkpoint", "control_head", "control_predecessor"},
-                    {"ticket_id", "checkpoint", "control_head", "product_transition"},
-                    {
-                        "ticket_id",
-                        "checkpoint",
-                        "control_head",
-                        "control_predecessor",
-                        "product_transition",
-                    },
-                )
-                or not isinstance(pending.get("ticket_id"), str)
-                or not pending["ticket_id"]
-                or not _is_git_identity(pending.get("checkpoint"))
-                or not _is_git_identity(pending.get("control_head"))
-                or (
-                    "control_predecessor" in pending
-                    and not _is_git_identity(pending.get("control_predecessor"))
-                )
-            ):
-                raise WorkflowBlockedError(
-                    "accepted integration dependency identity is invalid"
-                )
-            reason = accepted_integration_dependency_reason(
-                ticket_id, checkpoint, pending["ticket_id"], pending["checkpoint"]
-            )
-            if reason is not None:
-                raise WorkflowBlockedError(reason)
+        pending = snapshot_integration(state.get("accepted_integration"))
+        reason = accepted_integration_dependency_reason(ticket_id, checkpoint, pending)
+        if reason is not None:
+            raise WorkflowBlockedError(reason)
 
     def _revalidate_cleanup_retirement(
         self,
