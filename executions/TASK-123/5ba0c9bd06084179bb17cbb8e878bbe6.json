@@ -1,0 +1,29 @@
+{
+  "code_base_head": "8d753c145fd3b8b476e11bdbb7c7035a256c8539",
+  "conclusion": "completed",
+  "control_head": "16390ed443ae24c564ce79d4354f65e177795657",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-123",
+  "execution_id": "5ba0c9bd06084179bb17cbb8e878bbe6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-123",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-123",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Removed the temporary reconciliation base mutation by passing the target explicitly to workspace validation. Added regression and real-Git interruption coverage for local and published rewrite replay."
+  },
+  "workspace_head": "0ac3ab28311a7ca93c0a9b6d241cf8ef65d23852"
+}
