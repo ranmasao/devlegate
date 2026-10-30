@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Runtime and orchestration implementation for Devlegate."""
 
+import copy
 import dataclasses
 import fcntl
 import hashlib
@@ -10376,6 +10377,7 @@ class ServiceEngine:
         return self._git_runtime(cwd, *args, check=check)
 
     def reconciliation_pending(self) -> dict[str, object]:
+        """Return detached pending evidence, never an alias of owner state."""
         reconciliation = self._state.get("reconciliation")
         if (
             not isinstance(reconciliation, dict)
@@ -10384,7 +10386,7 @@ class ServiceEngine:
             raise ReconciliationTransactionError(
                 "reconciliation has no pending transaction"
             )
-        return reconciliation
+        return copy.deepcopy(reconciliation)
 
     def reconciliation_target(self, value: str) -> str:
         resolved = resolve_commit(

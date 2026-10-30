@@ -72,6 +72,17 @@ def test_canonical_evidence_identity_remains_valid():
     )
 
 
+def test_pending_reconciliation_snapshot_does_not_alias_owner_state():
+    engine = ServiceEngine.__new__(ServiceEngine)
+    engine._state = {"reconciliation": {"status": "pending", "report": {"head": "a"}}}
+    snapshot = engine.reconciliation_pending()
+    snapshot["status"] = "resolved"
+    snapshot["report"]["head"] = "b"
+    assert engine._state["reconciliation"] == {
+        "status": "pending", "report": {"head": "a"}
+    }
+
+
 def test_rewrite_observation_failure_preserves_durable_base_in_memory(monkeypatch):
     admission = SimpleNamespace(
         checkpoint="checkpoint", original_base="base", target="target",
@@ -84,6 +95,9 @@ def test_rewrite_observation_failure_preserves_durable_base_in_memory(monkeypatc
         _state = {
             "execution_base_head": "base", "reconciliation": {"execution_id": "exec"}
         }
+
+        def reconciliation_pending(self):
+            return dict(self._state["reconciliation"])
 
         def reconciliation_workspace_manager(self, _ticket):
             return SimpleNamespace(branch="work")

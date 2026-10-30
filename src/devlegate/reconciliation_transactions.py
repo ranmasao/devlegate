@@ -334,7 +334,7 @@ def _resolve(owner: Any, ticket_id: str, reconciliation: dict[str, object],
 
 def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
                            rewrite_published: bool) -> int:
-    reconciliation = owner._state["reconciliation"]
+    reconciliation = owner.reconciliation_pending()
     manager = owner.reconciliation_workspace_manager(ticket_id)
     workspace = owner._execution_workspace_for_rewrite_recovery(manager)
     checkpoint = str(reconciliation["worker_checkpoint"])
@@ -475,7 +475,7 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
 
 def recover_local_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
                           rewrite_published: bool) -> int:
-    reconciliation = owner._state["reconciliation"]
+    reconciliation = owner.reconciliation_pending()
     manager = owner.reconciliation_workspace_manager(ticket_id)
     workspace = owner._execution_workspace_for_rewrite_recovery(manager)
     checkpoint = str(reconciliation["worker_checkpoint"])
@@ -578,7 +578,7 @@ def _linear(owner: Any, workspace: Any, root: str, commits: Sequence[str]) -> bo
 
 def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmission,
                         rewrite_published: bool) -> int:
-    reconciliation = owner._state["reconciliation"]
+    reconciliation = owner.reconciliation_pending()
     manager = owner.reconciliation_workspace_manager(ticket_id)
     workspace = owner._execution_workspace_for_recovery()
     checkpoint = admission.checkpoint
