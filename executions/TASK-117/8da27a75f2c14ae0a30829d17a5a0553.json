@@ -1,0 +1,29 @@
+{
+  "code_base_head": "7c288d5a351fa4cf999c79e5dc137b7a6294f222",
+  "conclusion": "completed",
+  "control_head": "32ff5a3de8ea341914ea9db4decb9a119dc2927b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-117",
+  "execution_id": "8da27a75f2c14ae0a30829d17a5a0553",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-117",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-117",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Moved accepted-integration record validation and exact checkpoint binding into a pure proof over an immutable snapshot, retaining runtime gate ordering and diagnostics. Added gate-level regression coverage for record shapes, binding decisions, precedence, and snapshot isolation while preserving existing drift and restart tests."
+  },
+  "workspace_head": "a083ef2598c1da7cd23fe2ebb762192b88b9517b"
+}
