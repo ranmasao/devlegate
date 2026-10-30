@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "blocked",
+  "control_head": "6b3b2da1c0c393b5bdf05c4cf2ac64e201648d78",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "5f4b2060eb68410387aac6e61f772ff4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate provide the relevant sanitized report contents and execution/control/checkpoint SHAs, ticket blob history and transitions, pinned evidence identities, runtime owner/state, cleanup refusal, and current TASK-073 worktree cleanliness and live remote ref observations? The worker contract forbids reading the private control plane, and the other execution worktree is outside the permitted workspace."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Correlate both execution reports, control transitions, ticket blob history, runtime ownership and actual cleanup refusal to establish the historical sequence and whether the generation is obsolete.",
+    "Establish a recurrence verdict with a deterministic real-Git reproducer or evidence of non-recurrence, then implement and validate the applicable remediation and its required safety and recovery tests."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate provide the relevant sanitized report contents and execution/control/checkpoint SHAs, ticket blob history and transitions, pinned evidence identities, runtime owner/state, cleanup refusal, and current TASK-073 worktree cleanliness and live remote ref observations? The worker contract forbids reading the private control plane, and the other execution worktree is outside the permitted workspace."
+    ],
+    "remaining": [
+      "Correlate both execution reports, control transitions, ticket blob history, runtime ownership and actual cleanup refusal to establish the historical sequence and whether the generation is obsolete.",
+      "Establish a recurrence verdict with a deterministic real-Git reproducer or evidence of non-recurrence, then implement and validate the applicable remediation and its required safety and recovery tests."
+    ],
+    "report": null,
+    "summary": "Inspected the current cleanup and rework safeguards and identified the non-done cleanup refusal. No resources or production code were changed."
+  },
+  "workspace_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187"
+}
