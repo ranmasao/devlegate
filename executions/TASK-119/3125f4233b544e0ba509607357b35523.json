@@ -1,0 +1,29 @@
+{
+  "code_base_head": "8c331efb38fb40dc6a2d7eb423ec3fb1f95357f9",
+  "conclusion": "completed",
+  "control_head": "11a583b226fc137a7f714fcdb7cdfbdbd43ddf80",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-119",
+  "execution_id": "3125f4233b544e0ba509607357b35523",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-119",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-119",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Mapped iteration predicates, ownership, Git effects, durable boundaries, stop gates and replay paths at the verified source revision. Documented the decision to make no runtime extraction because no independently justified closed phase was established."
+  },
+  "workspace_head": "ff5f7b8ad289da4f2e853fd18005b34f6f7a1778"
+}
