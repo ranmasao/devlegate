@@ -1,0 +1,29 @@
+{
+  "code_base_head": "7a612ae8a756fb66af68132c3af8baa264675c2c",
+  "conclusion": "completed",
+  "control_head": "cc676d6e741f07ef5e9a1176dba8163d1f14f84a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-116",
+  "execution_id": "782d37f76def4716a84b6fe7d8b03980",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-116",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-116",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Extracted immutable ticket-count and review/accepted list shaping from the status projection while retaining owner-side observation, verification, admission, and live checks. Added focused regression coverage for the extracted shaping."
+  },
+  "workspace_head": "62b2fffe6aa1ab98f26d76503dbfaf582acacd16"
+}
