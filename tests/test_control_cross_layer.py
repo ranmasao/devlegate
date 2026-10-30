@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from _control_support import *  # noqa: F403,F405
 from devlegate.git import resolve_commit
+from devlegate import reconciliation_transactions as transactions
 
 def test_product_workflow_copy_fails_closed(tmp_path):
     working, config, _state = control_fixture(tmp_path)
@@ -651,6 +652,123 @@ def test_resolving_reconciliation_restart_recovers_retained_report(
     assert (
         next((state / "worktrees").glob("*/control")) / "kanban/review/T-1.md"
     ).is_file()
+
+@pytest.mark.parametrize(
+    "point", ["rebase", "observation", "lineage", "linear", "pin", "resolution"]
+)
+def test_update_base_interruption_keeps_base_and_replays(tmp_path, monkeypatch, point):
+    devlegate, _working, state, execution, reconciliation, _first, _second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    original_base = reconciliation["original_base"]
+
+    def interrupt(*args, **kwargs):
+        raise RuntimeError("injected interruption")
+
+    with monkeypatch.context() as patch:
+        if point == "rebase":
+            original = devlegate.reconciliation_git
+
+            def rebase(*args, **kwargs):
+                result = original(*args, **kwargs)
+                if args[1:2] == ("rebase",):
+                    interrupt()
+                return result
+
+            patch.setattr(devlegate, "reconciliation_git", rebase)
+        elif point == "observation":
+            original = devlegate._execution_workspace_for_recovery
+
+            def observe(*args, **kwargs):
+                if kwargs.get("base_head") == target:
+                    interrupt()
+                return original(*args, **kwargs)
+
+            patch.setattr(devlegate, "_execution_workspace_for_recovery", observe)
+        elif point == "lineage":
+            patch.setattr(transactions, "authorize_workspace_rewrite", interrupt)
+        elif point == "linear":
+            patch.setattr(transactions, "_linear", interrupt)
+        elif point == "pin":
+            patch.setattr(devlegate, "reconciliation_pin_rewrite_evidence", interrupt)
+        else:
+            patch.setattr(devlegate, "reconciliation_todo_fingerprint", interrupt)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            devlegate.reconcile_update_base("T-1", target)
+
+    durable = state_payload(state)
+    assert durable["execution_base_head"] == original_base
+    assert devlegate._state["execution_base_head"] == original_base
+    assert durable["reconciliation"] == devlegate._state["reconciliation"]
+    assert durable["reconciliation"]["rewrite_stage"] == "local-pending"
+    assert devlegate.reconcile_update_base("T-1", target) == 0
+    assert devlegate._state["execution_base_head"] == target
+    assert state_payload(state)["execution_base_head"] == target
+    assert devlegate._state["reconciliation"]["status"] == "resolved"
+    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
+
+
+@pytest.mark.parametrize("point", ["remote_wal", "pin", "publish", "resolution"])
+def test_published_update_base_interruption_keeps_base_and_replays(
+    tmp_path, monkeypatch, point
+):
+    devlegate, _working, state, execution, reconciliation, _first, second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    git(
+        execution, "push", "origin",
+        f"{second}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    devlegate._save_state(
+        "idle", reconciliation={**reconciliation, "execution_remote_head": second}
+    )
+
+    def interrupt(*args, **kwargs):
+        raise RuntimeError("injected interruption")
+
+    with monkeypatch.context() as patch:
+        if point == "remote_wal":
+            original = devlegate._save_state
+
+            def save(*args, **kwargs):
+                stage = kwargs.get("reconciliation", {}).get("rewrite_stage")
+                if stage == "remote-pending":
+                    interrupt()
+                return original(*args, **kwargs)
+
+            patch.setattr(devlegate, "_save_state", save)
+        elif point == "pin":
+            patch.setattr(devlegate, "reconciliation_pin_rewrite_evidence", interrupt)
+        elif point == "publish":
+            original = devlegate.reconciliation_publish_rewrite
+
+            def publish(*args, **kwargs):
+                original(*args, **kwargs)
+                interrupt()
+
+            patch.setattr(devlegate, "reconciliation_publish_rewrite", publish)
+        else:
+            patch.setattr(devlegate, "reconciliation_todo_fingerprint", interrupt)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
+
+    durable = state_payload(state)
+    assert durable["execution_base_head"] == reconciliation["original_base"]
+    assert devlegate._state["execution_base_head"] == durable["execution_base_head"]
+    assert devlegate._state["reconciliation"] == durable["reconciliation"]
+    assert durable["reconciliation"]["rewrite_stage"] == (
+        "local-pending" if point == "remote_wal" else "remote-pending"
+    )
+    assert devlegate.reconcile_update_base("T-1", target, rewrite_published=True) == 0
+    if devlegate._state["reconciliation"]["status"] != "resolved":
+        assert (
+            devlegate.reconcile_update_base("T-1", target, rewrite_published=True) == 0
+        )
+    assert devlegate._state["execution_base_head"] == target
+    assert state_payload(state)["execution_base_head"] == target
+    assert devlegate._state["reconciliation"]["status"] == "resolved"
+    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
+
 
 def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
     tmp_path, monkeypatch
