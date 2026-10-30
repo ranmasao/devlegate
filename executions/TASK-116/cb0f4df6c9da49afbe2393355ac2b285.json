@@ -1,0 +1,29 @@
+{
+  "code_base_head": "7a612ae8a756fb66af68132c3af8baa264675c2c",
+  "conclusion": "completed",
+  "control_head": "8016c327552a93944974d1e00f89d6d1da09b4a7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-116",
+  "execution_id": "cb0f4df6c9da49afbe2393355ac2b285",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-116",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-116",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Extracted the blocked-ticket status projection over immutable ticket and admission observations while keeping observation, freshness, dependency hooks and admission in the runtime. Added differential coverage against the original projection across changing ticket states, dependency blockers, integration, selection and ordering."
+  },
+  "workspace_head": "7c288d5a351fa4cf999c79e5dc137b7a6294f222"
+}
