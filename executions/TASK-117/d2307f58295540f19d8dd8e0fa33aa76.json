@@ -1,0 +1,29 @@
+{
+  "code_base_head": "7c288d5a351fa4cf999c79e5dc137b7a6294f222",
+  "conclusion": "completed",
+  "control_head": "01bbd0111934a6bee00622e5129947195f70813c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-117",
+  "execution_id": "d2307f58295540f19d8dd8e0fa33aa76",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-117",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-117",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Isolated the validated accepted-integration dependency comparison as a pure exact-checkpoint proof while retaining engine-owned validation and revalidation. Added dependency and drift coverage and documented the cleanup boundary and remaining audit gaps."
+  },
+  "workspace_head": "fa2b77cd6374843054f3f9a1d6f1662844ad78aa"
+}
