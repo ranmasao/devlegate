@@ -72,7 +72,7 @@ def test_canonical_evidence_identity_remains_valid():
     )
 
 
-def test_rewrite_observation_failure_leaves_temporary_base_in_memory(monkeypatch):
+def test_rewrite_observation_failure_preserves_durable_base_in_memory(monkeypatch):
     admission = SimpleNamespace(
         checkpoint="checkpoint", original_base="base", target="target",
         execution_remote_head=None, evidence_ref="evidence",
@@ -88,8 +88,8 @@ def test_rewrite_observation_failure_leaves_temporary_base_in_memory(monkeypatch
         def reconciliation_workspace_manager(self, _ticket):
             return SimpleNamespace(branch="work")
 
-        def _execution_workspace_for_recovery(self):
-            if self._state["execution_base_head"] == "target":
+        def _execution_workspace_for_recovery(self, *, base_head=None):
+            if base_head == "target":
                 raise RuntimeError("observation failed")
             return workspace
 
@@ -112,7 +112,7 @@ def test_rewrite_observation_failure_leaves_temporary_base_in_memory(monkeypatch
         transactions.start_fresh_rewrite(owner, "T-1", admission, False)
     assert durable["execution_base_head"] == "base"
     assert durable["reconciliation"]["rewrite_stage"] == "local-pending"
-    assert owner._state["execution_base_head"] == "target"
+    assert owner._state == durable
 
 
 def test_force_retry_evidence_observation_requires_owner(tmp_path, monkeypatch):

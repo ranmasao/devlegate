@@ -8892,10 +8892,13 @@ class ServiceEngine:
                 "product checkout or remote changed before execution recovery"
             )
 
-    def _execution_workspace_for_recovery(self) -> ExecutionWorkspace:
+    def _execution_workspace_for_recovery(
+        self, *, base_head: str | None = None
+    ) -> ExecutionWorkspace:
         state = self._state
         ticket_id = state.get("execution_ticket_id")
-        base_head = state.get("execution_base_head")
+        if base_head is None:
+            base_head = state.get("execution_base_head")
         branch = state.get("execution_branch")
         path = state.get("execution_path")
         if not all(

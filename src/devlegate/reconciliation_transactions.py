@@ -557,7 +557,6 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
             raise ReconciliationTransactionError(
                 "published execution ref is outside the proven execution lineage"
             )
-    previous_execution_base = owner._state["execution_base_head"]
     try:
         admission = admit_update_base(owner, ticket_id, admission.target)
     except ReconciliationTransactionError:
@@ -575,7 +574,6 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         "rewrite_stage": "local-pending",
     }
     owner._save_state("idle", reconciliation=operation)
-    owner._state["execution_base_head"] = admission.target
     try:
         rebased = owner.reconciliation_git(
             workspace.path,
@@ -586,7 +584,6 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         )
         if rebased.returncode:
             owner.reconciliation_git(workspace.path, "rebase", "--abort")
-            owner._state["execution_base_head"] = previous_execution_base
             try:
                 restored = resolve_commit(
                     workspace.path, "HEAD", runner=owner.reconciliation_git
@@ -606,11 +603,10 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
                 "reconciliation conflict; manual/advanced reconciliation is required"
             )
     except OSError as error:
-        owner._state["execution_base_head"] = previous_execution_base
         raise ReconciliationTransactionError(
             f"reconciliation failed: {error}"
         ) from error
-    updated = owner._execution_workspace_for_recovery()
+    updated = owner._execution_workspace_for_recovery(base_head=admission.target)
     try:
         rewritten = list(authorize_workspace_rewrite(owner, updated, admission.target,
                                                        updated.head, execution_remote,
@@ -624,7 +620,6 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
         restored = reset_hard(
             workspace.path, admission.checkpoint, runner=owner.reconciliation_git
         )
-        owner._state["execution_base_head"] = previous_execution_base
         if restored.returncode:
             raise ReconciliationTransactionError(
                 "reconciled execution lineage is invalid"
