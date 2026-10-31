@@ -42,17 +42,38 @@ stranded workspace, pins recovery evidence, and records a resume requirement
 (`runtime.py:1411-1493`). None of these paths proves that it ran for TASK-073.
 They also do not prove all possible failure and restart paths converge.
 
-## Verdict and missing proof
+## Policy decision and remaining proof
 
-The precise historical sequence, provenance continuity, present ownership,
-and recurrence of *unwanted* retention remain undetermined. A non-done
-candidate being retained is reproducible from the guard, but is not itself a
-systemic defect or proof of an obsolete generation. Conversely, product
-ancestry and the two incomplete reports do not prove that an active or
-recoverable execution is obsolete. Neither remediation branch A nor B can be
-selected safely from the supplied facts. No repair or deletion is authorized.
+The curator's subsequent decision establishes that retention of a deferred,
+non-done ticket is intentional. It is not an automatic cleanup defect. The
+guard reproduces that retention for any non-done candidate; it does not prove
+that any generation is obsolete. The precise historical sequence and provenance
+continuity remain undetermined. The decision calls for a separate, explicitly
+authorized operator reset, rather than either automatic deletion or a one-shot
+repair. No repair or deletion is authorized by this diagnostic.
 
-## Bounded operator evidence request
+The operator's read-only observations on 2026-10-31 reported an idle runtime,
+zero active workers, and a clean registered worktree and local and remote
+execution refs at `1ec3a1b705d4036137806c7a0f55275b3e48faca`, with the ticket
+in backlog. These observations are historical and do not establish the absence
+of persisted recovery dependencies. They must not be used as effect-time proof.
+
+The existing explicit workspace recovery is restricted to an unsafe pre-worker
+binding and retains that execution identity; it is not a reset of an idle,
+deferred generation. Ordinary historical cleanup requires durable done state.
+Neither path authorizes the requested operator reset. A reset must be serialized
+with the service owner, preserve the ticket and evidence, bind confirmation to
+exact identities, and reject active or persisted recovery dependencies. It must
+re-observe before each destructive stage and use expected-old local ref CAS and
+a remote lease. A durable reset intent is needed to distinguish an authorized
+partial retirement from unexplained missing resources after a restart.
+
+## Historical evidence request (superseded)
+
+The following request records the earlier diagnostic's limitations. The curator
+has determined that collecting the full historical reports again is not a
+prerequisite for implementing the operator reset. It is not a request to access
+private control state from an implementation workspace.
 
 Provide a sanitized, explicitly authorized read-only task artifact, scoped to
 TASK-073, containing the following. Include observation time, repository
