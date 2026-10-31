@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,7 +27,9 @@ def test_real_git_resource_observation(tmp_path: Path) -> None:
     git(repo, "add", "file")
     git(repo, "commit", "-m", "initial")
     remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+    )
     git(repo, "remote", "add", "origin", str(remote))
     root = tmp_path / "managed"
     root.mkdir()
@@ -50,6 +53,7 @@ def test_real_git_resource_observation(tmp_path: Path) -> None:
     assert observation["local_head"] == git(repo, "rev-parse", "HEAD")
     assert observation["remote_head"] == observation["local_head"]
     assert observation["worktrees"][0]["dirty"] is True
+    assert observation["worktrees"][0]["status"] == "?? untracked\0"
     assert observation["worktrees"][0]["locked"] == "kept for review"
     assert (path / ".git").read_bytes() == before
     assert observation == observe_execution_resources(repo, root, "TASK-1", "origin")
@@ -70,8 +74,31 @@ def test_foreign_branch_registration_is_visible(tmp_path: Path) -> None:
     git(repo, "remote", "add", "origin", str(repo))
     foreign = tmp_path / "foreign"
     git(repo, "worktree", "add", "-b", "devlegate/work/TASK-1", str(foreign))
-    observation = observe_execution_resources(repo, tmp_path / "managed", "TASK-1", "origin")
+    observation = observe_execution_resources(
+        repo, tmp_path / "managed", "TASK-1", "origin"
+    )
     assert observation["path_exists"] is False
     assert len(observation["worktrees"]) == 1
     assert observation["worktrees"][0]["path"] == str(foreign)
     assert observation["worktrees"][0]["expected"] is False
+
+
+def test_missing_worktree_is_reported_without_pruning(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "commit", "--allow-empty", "-m", "initial")
+    git(repo, "remote", "add", "origin", str(repo))
+    root = tmp_path / "managed"
+    path = root / "work" / "TASK-1"
+    path.parent.mkdir(parents=True)
+    git(repo, "worktree", "add", "-b", "devlegate/work/TASK-1", str(path))
+    shutil.rmtree(path)
+    before = git(repo, "worktree", "list", "--porcelain")
+    result = observe_execution_resources(repo, root, "TASK-1", "origin")
+    assert result["worktrees"][0]["prunable"] is not None
+    assert result["worktrees"][0]["exists"] is False
+    assert result["worktrees"][0]["status"] is None
+    assert git(repo, "worktree", "list", "--porcelain") == before
