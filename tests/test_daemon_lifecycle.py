@@ -649,6 +649,37 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
     assert engine.serve(stop_event) == 0
     assert prepared and prepared[0].path.is_dir()
     assert engine._state["phase"] == "agent_pending"
+    state = engine._runtime_store.load()
+    journal = state["execution_resource_intents"][state["execution_id"]][
+        "preparation_journal"
+    ]
+    assert journal == [
+        {"sequence": 1, "event": "started"},
+        {
+            "sequence": 2,
+            "event": "observed",
+            "path": str(prepared[0].path),
+            "branch": prepared[0].branch,
+            "head": prepared[0].head,
+            "base_head": prepared[0].base_head,
+        },
+    ]
+
+
+def test_interrupted_workspace_preparation_leaves_durable_started_event(
+    tmp_path, monkeypatch
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+
+    def interrupted(_plan):
+        raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(engine, "_prepare_execution_workspace", interrupted)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        engine.serve(threading.Event())
+    state = engine._runtime_store.load()
+    intent = state["execution_resource_intents"][state["execution_id"]]
+    assert intent["preparation_journal"] == [{"sequence": 1, "event": "started"}]
 
 def test_stop_after_agent_running_commit_still_drains_attempt(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
