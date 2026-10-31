@@ -1843,6 +1843,10 @@ def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
     assert restarted._state["automatic_retry"]["fresh_execution_id"] == (
         pending["fresh_execution_id"]
     )
+    intents = restarted._state["execution_resource_intents"]
+    assert len(intents) == 2
+    assert len({intent["nonce"] for intent in intents.values()}) == 2
+    retry_intent = intents[pending["fresh_execution_id"]].copy()
 
     replay = Devlegate(config)
     ids = []
@@ -1856,6 +1860,7 @@ def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
     monkeypatch.setattr(replay._workers, "run", resumed_worker)
     assert run_test_iteration(replay) == 0
     assert ids == [pending["fresh_execution_id"]]
+    assert replay._state["execution_resource_intents"][ids[0]] == retry_intent
 
 def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     tmp_path, monkeypatch
