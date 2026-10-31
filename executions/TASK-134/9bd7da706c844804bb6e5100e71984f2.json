@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "438af6039d0ac6d8eb583f034d5246305d07f5ee",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "9bd7da706c844804bb6e5100e71984f2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and validate the owner-serialized generation binding journal across resource creation, publication, worker admission, recovery, retirement, and recreation, including independently observed identities and positive proof.",
+    "Add real-Git crash-boundary, restart, foreign-resource, same-SHA recreation, and pinned-evidence tests and document the implemented recovery protocol.",
+    "Investigate the separate full-suite IPC crash-recovery timeout and obtain a passing configured CI run."
+  ],
+  "report_artifact": "executions/TASK-134/9bd7da706c844804bb6e5100e71984f2.md",
+  "report_sha256": "384bbe18daba70b5cc1a43a4490873cf7c83b9390496a156060d06ddf336b111",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement and validate the owner-serialized generation binding journal across resource creation, publication, worker admission, recovery, retirement, and recreation, including independently observed identities and positive proof.",
+      "Add real-Git crash-boundary, restart, foreign-resource, same-SHA recreation, and pinned-evidence tests and document the implemented recovery protocol.",
+      "Investigate the separate full-suite IPC crash-recovery timeout and obtain a passing configured CI run."
+    ],
+    "report": "The existing admission intent does not establish resource continuity, and a safe positive proof requires coordinated changes across multiple resource mutation and recovery paths that were not completed in this invocation. The configured coverage run failed in test_real_service_reconcile_receipt_restart_is_not_a_queue; that test passed in isolation, which does not establish the cause of the parallel failure.",
+    "summary": "Synchronized the recovery test with the service's published plan after the durable state update, and corrected lint issues in the existing resource proof files."
+  },
+  "workspace_head": "3c608ba7e7e0a823e8437d00fbbebda6d22836ea"
+}
