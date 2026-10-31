@@ -135,13 +135,6 @@ class ExecutionWorkspaceManager:
             self.repo, "worktree", "add", str(self.path), self.branch, check=False
         )
         if created.returncode:
-            registrations = self._registrations()
-            if registrations.get(expected_path) is not None:
-                workspace = self._validate_existing(
-                    registrations[expected_path], base_head
-                )
-                self._prepare_submodules(workspace.path)
-                return workspace
             raise ExecutionWorkspaceError(
                 f"cannot create execution worktree {self.path}: "
                 f"{created.stderr.strip() or 'unknown git error'}"
@@ -663,11 +656,10 @@ class ExecutionWorkspaceManager:
             return
         created = self._runner(self.repo, "branch", self.branch, base_head, check=False)
         if created.returncode:
-            if not self._branch_exists():
-                raise ExecutionWorkspaceError(
-                    f"cannot create execution branch {self.branch}: "
-                    f"{created.stderr.strip() or 'unknown git error'}"
-                )
+            raise ExecutionWorkspaceError(
+                f"cannot create execution branch {self.branch}: "
+                f"{created.stderr.strip() or 'unknown git error'}"
+            )
 
     def _branch_exists(self) -> bool:
         try:
