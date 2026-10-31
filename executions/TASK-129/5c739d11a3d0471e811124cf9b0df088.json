@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "c3a4f1d5b6ece3535911f15f54a58044da4cc920",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "5c739d11a3d0471e811124cf9b0df088",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable generation-specific resource ownership binding at fresh admission, including WAL/CAS, restart and recreation handling.",
+    "Correlate binding, lifecycle, resources, pending intents and pinned evidence into a deterministic safe preview and confirmation digest.",
+    "Add end-to-end owner/IPC and adversarial real-Git tests, no-write verification, and operator documentation for the complete binding semantics."
+  ],
+  "report_artifact": "executions/TASK-129/5c739d11a3d0471e811124cf9b0df088.md",
+  "report_sha256": "d4cf1aef2de5e376b7077734933eb32986f24526e1077a690d673aa0ae88d8c7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable generation-specific resource ownership binding at fresh admission, including WAL/CAS, restart and recreation handling.",
+      "Correlate binding, lifecycle, resources, pending intents and pinned evidence into a deterministic safe preview and confirmation digest.",
+      "Add end-to-end owner/IPC and adversarial real-Git tests, no-write verification, and operator documentation for the complete binding semantics."
+    ],
+    "report": "The durable binding crosses workspace creation, replay, recovery and ownership persistence invariants; it was not implemented safely in this invocation. Preview remains fail-closed.",
+    "summary": "Strengthened control-history proof to reject ticket changes before report admission and added explicit preview diagnostics for resource identity and checkpoint mismatches."
+  },
+  "workspace_head": "a96f51d670e0c0843dc1bda02c51c1ae62da74d0"
+}
