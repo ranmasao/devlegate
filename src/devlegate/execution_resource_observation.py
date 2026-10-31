@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from devlegate.execution_workspace import ExecutionWorkspaceManager
+from devlegate.execution_workspace import (
+    ExecutionWorkspaceError,
+    ExecutionWorkspaceManager,
+)
 from devlegate.git import GitRunner, remote_ref, resolve_ref_commit, run_git
 
 
@@ -47,6 +50,7 @@ def observe_execution_resources(
         record["expected"] = path == expected
         record["exists"] = path.is_dir()
         record["dirty"] = None
+        record["status"] = None
         if (
             path == expected
             and path.is_dir()
@@ -58,14 +62,23 @@ def observe_execution_resources(
             # running status inside it. Its own HEAD is only a status baseline.
             head = item.get("head")
             if isinstance(head, str) and item.get("branch") == manager.branch:
-                workspace = manager._validate_existing(item, head)
-                record["dirty"] = workspace.dirty
+                manager._validate_existing(item, head, verify_status=False)
+                status = readonly(path, "status", "--porcelain=v1", "-z", check=False)
+                if status.returncode:
+                    raise ExecutionWorkspaceError(
+                        "cannot observe execution worktree status: "
+                        f"{status.stderr.strip() or 'unknown git error'}"
+                    )
+                record["status"] = status.stdout
+                record["dirty"] = bool(status.stdout)
         worktrees.append(record)
     return {
         "path": str(manager.path),
         "path_exists": manager.path.exists() or manager.path.is_symlink(),
         "path_symlink": manager.path.is_symlink(),
-        "root_symlink": manager.root.is_symlink() or (manager.root / "work").is_symlink(),
+        "root_symlink": (
+            manager.root.is_symlink() or (manager.root / "work").is_symlink()
+        ),
         "branch": manager.branch,
         "reference": reference,
         "local_head": resolve_ref_commit(manager.repo, reference, runner=readonly),
