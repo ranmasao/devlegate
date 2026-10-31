@@ -4,12 +4,14 @@
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from devlegate.execution_inspection_evidence import observe_execution_evidence
 from devlegate.execution_resource_observation import observe_execution_resources
-from devlegate.git import GitObservationError
+from devlegate.git import GitObservationError, run_git
+from devlegate.runtime import ServiceEngine
 
 
 def git(path: Path, *args: str) -> str:
@@ -137,3 +139,35 @@ def test_missing_worktree_is_reported_without_pruning(tmp_path: Path) -> None:
     assert result["worktrees"][0]["exists"] is False
     assert result["worktrees"][0]["status"] is None
     assert git(repo, "worktree", "list", "--porcelain") == before
+
+
+def test_backlog_is_not_rejected_only_for_being_unfinished(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    ticket = repo / "backlog" / "TASK-1.md"
+    ticket.parent.mkdir()
+    ticket.write_text("deferred\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "defer ticket")
+    git(repo, "remote", "add", "origin", str(repo))
+    engine = SimpleNamespace(
+        repo=repo, control_worktree=repo, execution_worktree_root=tmp_path / "managed",
+        remote_name="origin", backlog_path="backlog", todo_path="todo",
+        review_path="review", accepted_path="accepted", done_path="done",
+        _state={"phase": "idle"}, _git_runtime=run_git,
+    )
+    result = ServiceEngine._inspect_execution(engine, "TASK-1")
+    assert result["tickets"][0]["state"] == "backlog"
+    assert result["ticket_history"]["backlog"] == [{
+        "commit": git(repo, "rev-parse", "HEAD"),
+        "changes": ["A\tbacklog/TASK-1.md"],
+    }]
+    assert result["unsafe_reasons"] == ["execution generation ownership is not proven"]
+    assert result["safe"] is False
+
+    engine._state = {"phase": "agent_running", "execution_ticket_id": "TASK-1"}
+    active = ServiceEngine._inspect_execution(engine, "TASK-1")
+    assert "ticket has persisted execution ownership" in active["unsafe_reasons"]
