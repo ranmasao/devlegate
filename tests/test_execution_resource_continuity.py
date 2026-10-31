@@ -81,3 +81,26 @@ def test_fresh_creation_marker_is_not_transferred_to_identical_recreation(tmp_pa
     replay.prepare(base, creation_identity=identity)
     assert replay.creation_marker is None
     assert not (replacement_admin / marker.name).exists()
+
+
+def test_verified_creation_observation_detects_marker_and_ref_drift(tmp_path):
+    repo = tmp_path / "repo"
+    git(tmp_path, "init", "-b", "main", repo)
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    manager = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
+    identity = {
+        "ticket_id": "T-1", "execution_id": "generation-1", "nonce": "nonce-1",
+        "control_head": base, "admitted_base_head": base,
+        "branch": manager.branch, "path": str(manager.path),
+    }
+    workspace = manager.prepare(base, creation_identity=identity)
+    marker = manager.creation_marker
+    assert manager.verify_creation_observation(identity, workspace, marker)
+    Path(marker).write_text(json.dumps({**identity, "nonce": "other"}))
+    assert not manager.verify_creation_observation(identity, workspace, marker)
+    Path(marker).write_text(json.dumps(identity))
+    git(workspace.path, "commit", "--allow-empty", "-m", "next")
+    assert not manager.verify_creation_observation(identity, workspace, marker)
