@@ -612,6 +612,21 @@ def test_stop_after_agent_pending_commit_preserves_binding(tmp_path, monkeypatch
     assert engine.serve(stop_event) == 0
     assert engine._state["phase"] == "agent_pending"
     assert engine._state["execution_id"]
+    state = engine._runtime_store.load()
+    intent = state["execution_resource_intents"][state["execution_id"]]
+    assert intent == {
+        "status": "intent",
+        "nonce": intent["nonce"],
+        "ticket_id": state["execution_ticket_id"],
+        "execution_id": state["execution_id"],
+        "control_head": state["execution_control_head"],
+        "admitted_base_head": state["execution_admitted_base_head"],
+        "remote_head": state["execution_remote_head"],
+        "branch": state["execution_branch"],
+        "path": state["execution_path"],
+    }
+    assert intent["nonce"] and intent["nonce"] != state["execution_id"]
+    assert not Path(intent["path"]).exists()
 
 def test_stop_after_workspace_preparation_preserves_pending_execution(
     tmp_path, monkeypatch
