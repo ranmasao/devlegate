@@ -1,0 +1,35 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "incomplete",
+  "control_head": "88370d4535355ad567f008141e30c769770eb544",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-127",
+  "execution_id": "2b9d9ab301a342f3a72f7348579d63c8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-127",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the configured full test suite and investigate any failures; the serial run exceeded its 15-minute limit and pytest-xdist is unavailable.",
+    "Extend acceptance coverage for all nine key/value CLI sections and the requested machine-format invariance scenarios."
+  ],
+  "report_artifact": "executions/TASK-127/2b9d9ab301a342f3a72f7348579d63c8.md",
+  "report_sha256": "3b363caa67f42ef8ae096989ef6b719e7e68b69d1bfc47fad24b06cdfb3aac26",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-127",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the configured full test suite and investigate any failures; the serial run exceeded its 15-minute limit and pytest-xdist is unavailable.",
+      "Extend acceptance coverage for all nine key/value CLI sections and the requested machine-format invariance scenarios."
+    ],
+    "report": "The full serial suite timed out after reaching 35%; the available Python environment does not include pytest-xdist.",
+    "summary": "Implemented shared terminal-aware multiline table rendering, preserved opaque tokens and machine output, and removed synthetic active-execution rows. Added rendering tests and a table-layout audit."
+  },
+  "workspace_head": "49ddf1446a0d6555ced455441c62b91399161c7e"
+}
