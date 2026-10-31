@@ -7,6 +7,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from devlegate.execution_workspace import ExecutionWorkspaceManager
 
 
@@ -92,9 +94,13 @@ def test_verified_creation_observation_detects_marker_and_ref_drift(tmp_path):
     base = git(repo, "rev-parse", "HEAD")
     manager = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
     identity = {
-        "ticket_id": "T-1", "execution_id": "generation-1", "nonce": "nonce-1",
-        "control_head": base, "admitted_base_head": base,
-        "branch": manager.branch, "path": str(manager.path),
+        "ticket_id": "T-1",
+        "execution_id": "generation-1",
+        "nonce": "nonce-1",
+        "control_head": base,
+        "admitted_base_head": base,
+        "branch": manager.branch,
+        "path": str(manager.path),
     }
     workspace = manager.prepare(base, creation_identity=identity)
     marker = manager.creation_marker
@@ -104,3 +110,65 @@ def test_verified_creation_observation_detects_marker_and_ref_drift(tmp_path):
     Path(marker).write_text(json.dumps(identity))
     git(workspace.path, "commit", "--allow-empty", "-m", "next")
     assert not manager.verify_creation_observation(identity, workspace, marker)
+
+
+@pytest.mark.parametrize("boundary", range(6))
+def test_creation_transition_interruption_never_completes_journal(tmp_path, boundary):
+    repo = tmp_path / "repo"
+    git(tmp_path, "init", "-b", "main", repo)
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    manager = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
+    identity = {
+        "ticket_id": "T-1",
+        "execution_id": "generation-1",
+        "nonce": "nonce-1",
+        "control_head": base,
+        "admitted_base_head": base,
+        "branch": manager.branch,
+        "path": str(manager.path),
+    }
+    entries = []
+
+    def record(resource, event, head):
+        if len(entries) == boundary:
+            raise RuntimeError("interrupted")
+        entries.append((resource, event, head))
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        manager.prepare(base, creation_identity=identity, creation_transition=record)
+    expected = [
+        (resource, event, base)
+        for resource in ("branch", "worktree", "marker")
+        for event in ("intent", "verified")
+    ]
+    assert entries == expected[:boundary]
+
+
+def test_creation_observation_rejects_detached_head_at_same_oid(tmp_path):
+    repo = tmp_path / "repo"
+    git(tmp_path, "init", "-b", "main", repo)
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    manager = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
+    identity = {
+        "ticket_id": "T-1",
+        "execution_id": "generation-1",
+        "nonce": "nonce-1",
+        "control_head": base,
+        "admitted_base_head": base,
+        "branch": manager.branch,
+        "path": str(manager.path),
+    }
+    workspace = manager.prepare(base, creation_identity=identity)
+    assert manager.verify_creation_observation(
+        identity, workspace, manager.creation_marker
+    )
+    git(workspace.path, "checkout", "--detach", base)
+    assert not manager.verify_creation_observation(
+        identity, workspace, manager.creation_marker
+    )
