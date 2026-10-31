@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "blocked",
+  "control_head": "0e9089a75f39bbeb86882eec315a49481b2fbd6f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "dc5152404f0040fdb08ba29115780279",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can the operator provide the scoped, sanitized read-only TASK-073 control history, execution reports, owner and recovery state, worktree and ref identities, pinned evidence, and cleanup refusal described in docs/architecture/task-126-retention-diagnostic.md?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Reconstruct the historical transition and resource-generation sequence from authorized evidence.",
+    "Determine recurrence with a real-Git reproducer or source-backed non-recurrence proof, select the appropriate remediation, and implement and validate it."
+  ],
+  "report_artifact": "executions/TASK-126/dc5152404f0040fdb08ba29115780279.md",
+  "report_sha256": "2df3f9e63c2ce82116d8a5e4c95c87460c70e0d33612627f0b4600c3662a13f2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can the operator provide the scoped, sanitized read-only TASK-073 control history, execution reports, owner and recovery state, worktree and ref identities, pinned evidence, and cleanup refusal described in docs/architecture/task-126-retention-diagnostic.md?"
+    ],
+    "remaining": [
+      "Reconstruct the historical transition and resource-generation sequence from authorized evidence.",
+      "Determine recurrence with a real-Git reproducer or source-backed non-recurrence proof, select the appropriate remediation, and implement and validate it."
+    ],
+    "report": "The required operator-host and control-history evidence was not supplied as an authorized task input; disposal authority and the recurrence verdict cannot be established from the available facts. The focused cadence test could not run because pytest is not installed.",
+    "summary": "Added a bounded diagnostic describing the known report identities, product ancestry, cleanup guard, lifecycle paths, and the evidence needed to classify TASK-073 resources."
+  },
+  "workspace_head": "84f0b08d859d1bab28795d8ece7b4202610289d8"
+}
