@@ -129,6 +129,40 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
     assert engine._state.get("mutable_receipts", {}) == {}
 
 
+def test_historical_cleanup_apply_retains_deferred_real_git_resources(
+    tmp_path, monkeypatch
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
+    workspace = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    ).prepare(checkpoint)
+    assert git(
+        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
+    ).returncode == 0
+    monkeypatch.setattr(
+        engine, "_ticket_store",
+        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="backlog")}),
+    )
+    target = {
+        "ticket_id": "T-1", "path": str(workspace.path),
+        "branch": workspace.branch, "head": checkpoint,
+    }
+
+    for _ in range(2):
+        result = engine.cleanup_workspaces(
+            apply=True, historical=True, targets=[target]
+        )
+        assert result["decisions"][0]["reason"] == "ticket is not durably done"
+        assert workspace.path.is_dir()
+        assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+        remote = git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}")
+        assert remote.returncode == 0
+        assert remote.stdout.split()[0] == checkpoint
+
+
 def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
