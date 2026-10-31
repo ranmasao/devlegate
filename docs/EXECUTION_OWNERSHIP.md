@@ -32,3 +32,18 @@ composition uses the Linux cgroup-v2 provider and fails closed when its probe is
 not usable. Semantic tests may inject a deterministic provider with the same
 create, spawn, terminate, wait, and destroy lifecycle; that test double is not
 a production fallback and does not weaken admission requirements.
+
+## Git resource continuity
+
+The execution workspace inspection's `REUSABLE` classification describes Git
+topology and workspace state; it is not a generation-specific ownership proof.
+A worktree and its branch can both be removed and recreated at the same path,
+branch and commit while producing the same inspection result. In particular, a
+report or an admission record naming that commit does not establish continuity
+of either resource. The same limitation applies to an upstream ref observed at
+the same object ID. A separate marker or evidence ref that survives replacement
+of the resource cannot by itself establish that the resource was not replaced.
+
+Historical executions have no owner-published resource-continuity binding and
+must therefore be treated as unsafe by any generic reset proof. Existing
+workspace recovery classifications and checkpoint pins are not such a binding.
