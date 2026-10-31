@@ -8,6 +8,7 @@ import json
 
 from _daemon_support import *  # noqa: F403,F405
 
+
 def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
     tmp_path, monkeypatch
 ):
@@ -22,9 +23,7 @@ def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
         except DevlegateError as error:
             submitted.append(error)
 
-    thread = threading.Thread(
-        target=submit
-    )
+    thread = threading.Thread(target=submit)
     thread.start()
     deadline = time.monotonic() + 5
     while not engine._operator_command_pending() and time.monotonic() < deadline:
@@ -42,15 +41,18 @@ def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
     assert len(submitted) == 1
     assert isinstance(submitted[0], DevlegateError)
 
+
 def test_drop_rejects_lifecycle_drain_before_owner_admission(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     engine.request_lifecycle("stop", "stop-request")
+
     def unexpected_git(*args, **kwargs):
         pytest.fail("Git must not run before drop admission")
 
     monkeypatch.setattr(engine, "_git_runtime", unexpected_git)
     with pytest.raises(DevlegateError, match="service is draining"):
         engine.submit_drop("T-1", "execution-1", request_id="drop-request")
+
 
 def test_drop_disposition_wrong_thread_never_spawns_git(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -73,6 +75,7 @@ def test_drop_disposition_wrong_thread_never_spawns_git(tmp_path, monkeypatch):
     assert errors and "owner thread" in errors[0]
     assert calls == []
 
+
 def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     intent = daemon.ShutdownIntent()
@@ -86,10 +89,14 @@ def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch
     assert intent.source == "operator_abort"
     assert intent.is_set()
 
+
 @pytest.mark.parametrize(
     "fault_stage",
     [
-        "after-evidence", "after-disposition", "after-remote", "after-worktree",
+        "after-evidence",
+        "after-disposition",
+        "after-remote",
+        "after-worktree",
         "push-ambiguous",
     ],
 )
@@ -131,9 +138,7 @@ def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         workspace_head=workspace.head,
-        run=WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        ),
+        run=WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None),
     )
     engine._save_state(
         "agent_running",
@@ -202,9 +207,7 @@ def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
         workspace.head
     )
     assert git(engine.repo, "cat-file", "-t", disposition_ref).stdout.strip() == "blob"
-    disposition = json.loads(
-        git(engine.repo, "cat-file", "-p", disposition_ref).stdout
-    )
+    disposition = json.loads(git(engine.repo, "cat-file", "-p", disposition_ref).stdout)
     assert disposition["disposition"] == (
         "dropping" if fault_stage == "after-evidence" else "dropped"
     )
@@ -221,6 +224,7 @@ def test_restart_after_drop_disposition_finishes_drop_without_lifecycle(
     output = capsys.readouterr().out
     assert "recovering dropped execution T-1 (drop-replay)" in output
     assert "dropped execution cleanup complete: T-1 (drop-replay)" in output
+
 
 def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
     tmp_path, monkeypatch
@@ -278,9 +282,7 @@ def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         workspace_head=checkpoint,
-        run=WorkerRunResult(
-            0, None, WorkerClaim("completed", "done", (), ()), None
-        ),
+        run=WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None),
     )
     engine._save_state(
         "agent_running",
@@ -305,8 +307,9 @@ def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
         for item in manager._registrations().values()
     )
     assert (
-        git(engine.repo, "show-ref", "--verify", f"refs/heads/{workspace.branch}")
-        .returncode
+        git(
+            engine.repo, "show-ref", "--verify", f"refs/heads/{workspace.branch}"
+        ).returncode
         == 0
     )
 
@@ -337,9 +340,10 @@ def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
         for item in manager._registrations().values()
     )
     assert git(engine.repo, "branch", "--list", workspace.branch).stdout == ""
-    assert engine._read_drop_disposition("T-1", report.execution_id)[
-        "disposition"
-    ] == "dropped"
+    assert (
+        engine._read_drop_disposition("T-1", report.execution_id)["disposition"]
+        == "dropped"
+    )
     assert (
         git(
             engine.repo,
@@ -350,6 +354,7 @@ def test_restart_recovers_dropped_submodule_worktree_without_lifecycle(
         == checkpoint
     )
     assert not list((control / "executions").glob("**/*.json"))
+
 
 def test_polling_exits_cleanly_after_shutdown_interrupted_git(tmp_path, monkeypatch):
     engine, _, _ = make_engine(tmp_path, monkeypatch)
@@ -363,6 +368,7 @@ def test_polling_exits_cleanly_after_shutdown_interrupted_git(tmp_path, monkeypa
 
     assert engine.serve(stop_intent) == 0
     assert engine.service_snapshot().lifecycle == "ready"
+
 
 @pytest.mark.parametrize(
     ("signum", "expected_kind", "expected_status"),
@@ -405,13 +411,12 @@ def test_daemon_host_signal_handler_splits_abort_from_graceful_lifecycle(
     assert result == expected_status
     assert set(installed) == {signal.SIGINT, signal.SIGTERM}
 
+
 @pytest.mark.parametrize(
     ("source", "expected_status"),
     [("operator_abort", 130), ("force", 0)],
 )
-def test_forced_operator_abort_is_successful_service_shutdown(
-    source, expected_status
-):
+def test_forced_operator_abort_is_successful_service_shutdown(source, expected_status):
     class FakeServiceEngine:
         def serve(self, _stop_intent, *, lock_handle=None, once=False):
             return 0
@@ -422,13 +427,13 @@ def test_forced_operator_abort_is_successful_service_shutdown(
 
     assert host._serve_engine(intent) == expected_status
 
-def test_restart_authority_handoff_requires_internal_hosting(
-    tmp_path, monkeypatch
-):
+
+def test_restart_authority_handoff_requires_internal_hosting(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     monkeypatch.setenv("DEVLEGATE_RESTART_AUTHORITY_FD", "99")
     with pytest.raises(DevlegateError, match="requires internal hosting mode"):
         daemon.ServiceHost(engine, host_mode=daemon.HostingMode.EXTERNAL)
+
 
 @pytest.mark.parametrize(
     "signals", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM)]
@@ -452,11 +457,10 @@ def test_daemon_host_operator_abort_precedes_graceful_lifecycle(monkeypatch, sig
 
     intent = daemon.ShutdownIntent()
     host = daemon.ServiceHost(FakeServiceEngine())
-    with host._signal_ownership(
-        intent, lambda _intent, _request_id, _force: {}
-    ):
+    with host._signal_ownership(intent, lambda _intent, _request_id, _force: {}):
         result = host._serve_engine(intent)
     assert result == 130
+
 
 def test_stop_during_observation_prevents_fresh_mutation(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -477,6 +481,7 @@ def test_stop_during_observation_prevents_fresh_mutation(tmp_path, monkeypatch):
     assert engine.serve(stop_event) == 0
     assert calls == []
     assert engine._state["phase"] == "idle"
+
 
 def test_stop_before_merge_commit_does_not_fast_forward(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -503,6 +508,7 @@ def test_stop_before_merge_commit_does_not_fast_forward(tmp_path, monkeypatch):
     assert engine._state["phase"] == "idle"
     assert engine._state.get("remote_head") != target
 
+
 def test_committed_merge_pending_drains_before_stop(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     publisher = control_publisher(tmp_path)
@@ -525,6 +531,7 @@ def test_committed_merge_pending_drains_before_stop(tmp_path, monkeypatch):
 
     assert git(engine.repo, "rev-parse", "HEAD").stdout.strip() == target
     assert engine._state["phase"] == "idle"
+
 
 @pytest.mark.parametrize(
     ("kind", "returncode"),
@@ -580,6 +587,7 @@ def test_merge_pending_does_not_retry_shutdown_fetch(
     assert "execution failed" not in output
     assert "unknown git error" not in output
 
+
 def test_existing_agent_pending_is_preserved_on_stop(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     workspace, _control = persist_agent_running(engine, state)
@@ -596,6 +604,7 @@ def test_existing_agent_pending_is_preserved_on_stop(tmp_path, monkeypatch):
     assert engine._state == before
     assert calls == []
     assert workspace.path.is_dir()
+
 
 def test_stop_after_agent_pending_commit_preserves_binding(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -630,6 +639,7 @@ def test_stop_after_agent_pending_commit_preserves_binding(tmp_path, monkeypatch
     assert intent["nonce"] and intent["nonce"] != state["execution_id"]
     assert not Path(intent["path"]).exists()
 
+
 def test_stop_after_workspace_preparation_preserves_pending_execution(
     tmp_path, monkeypatch
 ):
@@ -661,9 +671,30 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
     marker = Path(created["marker"])
     identity = json.loads(marker.read_text())
     intent = state["execution_resource_intents"][state["execution_id"]]
+    assert intent["creation_transitions"] == [
+        {
+            "sequence": index,
+            "resource": resource,
+            "event": event,
+            "expected_head": prepared[0].head,
+        }
+        for index, (resource, event) in enumerate(
+            (
+                (resource, event)
+                for resource in ("branch", "worktree", "marker")
+                for event in ("intent", "verified")
+            ),
+            1,
+        )
+    ]
     for key in (
-        "ticket_id", "execution_id", "nonce", "control_head",
-        "admitted_base_head", "branch", "path",
+        "ticket_id",
+        "execution_id",
+        "nonce",
+        "control_head",
+        "admitted_base_head",
+        "branch",
+        "path",
     ):
         assert identity[key] == intent[key]
     assert journal[2] == {
@@ -678,7 +709,8 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
 
 
 @pytest.mark.xfail(
-    strict=True, raises=AssertionError,
+    strict=True,
+    raises=AssertionError,
     reason="generation binding is not yet authoritative",
 )
 @pytest.mark.parametrize("restart", [False, True])
@@ -719,6 +751,7 @@ def test_interrupted_workspace_preparation_leaves_durable_started_event(
     intent = state["execution_resource_intents"][state["execution_id"]]
     assert intent["preparation_journal"] == [{"sequence": 1, "event": "started"}]
 
+
 def test_stop_after_agent_running_commit_still_drains_attempt(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
@@ -743,6 +776,7 @@ def test_stop_after_agent_running_commit_still_drains_attempt(tmp_path, monkeypa
     assert worker_calls == [True]
     assert engine._state["phase"] == "idle"
 
+
 def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
     tmp_path, monkeypatch
 ):
@@ -766,6 +800,7 @@ def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
         run_test_iteration(engine, stop_event)
     assert engine._state["phase"] == "idle"
     assert "interrupted" not in engine._state["failed_executions"]["T-1"]
+
 
 def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
@@ -792,6 +827,7 @@ def test_later_stage_failure_with_stop_remains_ambiguous(tmp_path, monkeypatch):
     assert engine._state["execution_stage"] == "publishing"
     assert engine._state.get("failed_executions", {}) == {}
 
+
 def test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary(
     tmp_path, monkeypatch
 ):
@@ -815,6 +851,7 @@ def test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary(
         run_test_iteration(engine)
     assert engine.lifecycle_intent() == "stop"
     assert engine._state["execution_stage"] == "checkpointing"
+
 
 @pytest.mark.parametrize("drain_stage", ["post-checkpoint", "publishing", "lifecycle"])
 def test_stop_at_committed_execution_stage_drains_to_idle(
@@ -844,6 +881,7 @@ def test_stop_at_committed_execution_stage_drains_to_idle(
     assert (control / "kanban/review/T-1.md").is_file()
     assert engine.service_snapshot().worker_running is False
 
+
 def test_stop_before_accepted_integration_leaves_ticket_accepted(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     control = next((state / "worktrees").glob("*/control"))
@@ -864,6 +902,7 @@ def test_stop_before_accepted_integration_leaves_ticket_accepted(tmp_path, monke
     assert engine.serve(stop_event) == 0
     assert (control / "kanban/accepted/T-1.md").is_file()
     assert not (engine.repo / "implementation.txt").exists()
+
 
 def test_started_accepted_integration_drains_before_stop(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
@@ -895,6 +934,7 @@ def test_started_accepted_integration_drains_before_stop(tmp_path, monkeypatch):
     assert (control / "kanban/done/T-1.md").is_file()
     assert engine._state["phase"] == "idle"
 
+
 def test_stop_during_worker_prevents_next_ticket_admission(tmp_path, monkeypatch):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     control = next((state / "worktrees").glob("*/control"))
@@ -916,6 +956,7 @@ def test_stop_during_worker_prevents_next_ticket_admission(tmp_path, monkeypatch
     assert engine.serve(stop_event) == 0
     assert calls == ["T-1"]
     assert (control / "kanban/todo/T-2.md").is_file()
+
 
 def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
     tmp_path, monkeypatch
@@ -952,6 +993,7 @@ def test_daemon_stop_during_worker_finishes_attempt_without_next_ticket(
     assert worker_calls == [True]
     assert engine.service_snapshot().worker_running is False
     assert engine._state["phase"] == "idle"
+
 
 @pytest.mark.parametrize("once", [False, True])
 def test_once_operator_abort_stops_after_one_iteration(tmp_path, monkeypatch, once):
