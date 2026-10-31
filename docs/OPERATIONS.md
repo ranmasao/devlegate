@@ -21,6 +21,19 @@ repository state. `scan_complete` is false on observation failure or when the
 but do not count as actionable blockers and do not receive per-candidate
 retirement proofs. Mutation always uses fresh proof.
 
+For an owner-side, read-only observation of one ticket, run:
+
+```sh
+devlegate clean inspect TASK-123 --json
+```
+
+The output includes committed ticket and execution evidence, local pins,
+worktree registrations and exact local and remote branch observations. An
+unobservable remote or inconsistent worktree is reported as unsafe. This
+inspection currently does not prove execution generation ownership, so it
+reports unsafe even for a deferred backlog ticket. It does not authorize or
+perform cleanup.
+
 ## Adopt A Project
 
 Start with an existing Git repository, its intended product branch, a configured
