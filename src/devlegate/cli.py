@@ -10,7 +10,6 @@ import os
 import select
 import subprocess
 import sys
-import textwrap
 import time
 import uuid
 from collections.abc import Callable
@@ -1826,17 +1825,13 @@ def _short_hash(value: str | None) -> str:
 
 
 def _active_execution_grid(execution: dict[str, object]) -> str:
-    """Render one execution as a row that can grow to multiple rows later."""
+    """Render one execution as a logical row."""
     ticket_id = str(execution.get("ticket_id") or "-")
     state = str(execution.get("state") or "-")
     stage = str(execution.get("stage") or execution.get("phase") or "-")
     execution_id = _short_hash(execution.get("execution_id"))
     title = str(execution.get("ticket_title") or "-")
-    title_lines = textwrap.wrap(title, width=23) or ["-"]
-    rows = [
-        (ticket_id, state, stage, execution_id, title_lines[0]),
-        *[("", "", "", "", line) for line in title_lines[1:]],
-    ]
+    rows = [(ticket_id, state, stage, execution_id, title)]
     return render_grid(
         "Active executions",
         ("Ticket", "State", "Stage", "Execution", "Title"),
