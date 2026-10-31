@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -90,12 +92,15 @@ class ExecutionWorkspaceManager:
         # Standalone inspection remains available, while service callers inject
         # their owner- and shutdown-aware Git capability.
         self._runner = _default_git_runner if runner is None else runner
+        self.creation_marker: str | None = None
 
-    def prepare(self, base_head: str) -> ExecutionWorkspace:
+    def prepare(
+        self, base_head: str, *, creation_identity: dict[str, str] | None = None
+    ) -> ExecutionWorkspace:
         self._validate_base(base_head)
         if self.root.is_symlink() or (self.root / "work").is_symlink():
             raise self._path_conflict("has a symlinked workspace root")
-        self._ensure_branch(base_head)
+        branch_created = self._ensure_branch(base_head)
         self._validate_branch(base_head)
         registrations = self._registrations()
         branch_path = next(
@@ -146,7 +151,44 @@ class ExecutionWorkspaceManager:
             )
         workspace = self._validate_existing(registration, base_head)
         self._prepare_submodules(workspace.path)
+        if branch_created and creation_identity is not None:
+            self.creation_marker = self._write_creation_marker(creation_identity)
         return workspace
+
+    def _write_creation_marker(self, identity: dict[str, str]) -> str:
+        """Install evidence only in the administrative directory just created by Git."""
+        result = self._runner(self.path, "rev-parse", "--absolute-git-dir", check=False)
+        common = self._runner(self.repo, "rev-parse", "--git-common-dir", check=False)
+        if result.returncode or common.returncode:
+            raise ExecutionWorkspaceError(
+                "cannot locate worktree administrative directory"
+            )
+        admin = Path(result.stdout.strip()).resolve()
+        common_path = Path(common.stdout.strip())
+        if not common_path.is_absolute():
+            common_path = self.repo / common_path
+        if admin.parent != (common_path.resolve() / "worktrees"):
+            raise ExecutionWorkspaceError(
+                "unexpected worktree administrative directory"
+            )
+        marker = admin / "devlegate-generation.json"
+        payload = (json.dumps(identity, sort_keys=True) + "\n").encode("utf-8")
+        try:
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            directory = os.open(admin, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot persist worktree creation marker: {error}"
+            ) from error
+        return str(marker)
 
     def prepare_rework(
         self, base_head: str, previous_base: str, previous_checkpoint: str
@@ -651,15 +693,16 @@ class ExecutionWorkspaceManager:
                 "product repository"
             )
 
-    def _ensure_branch(self, base_head: str) -> None:
+    def _ensure_branch(self, base_head: str) -> bool:
         if self._branch_exists():
-            return
+            return False
         created = self._runner(self.repo, "branch", self.branch, base_head, check=False)
         if created.returncode:
             raise ExecutionWorkspaceError(
                 f"cannot create execution branch {self.branch}: "
                 f"{created.stderr.strip() or 'unknown git error'}"
             )
+        return True
 
     def _branch_exists(self) -> bool:
         try:
