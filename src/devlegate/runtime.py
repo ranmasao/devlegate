@@ -1182,6 +1182,7 @@ class ServiceEngine:
 
     def _inspect_execution(self, ticket_id: str) -> dict[str, object]:
         """Return a conservative owner-side observation, never an authorization."""
+        from devlegate.execution_inspection_evidence import observe_execution_evidence
         from devlegate.execution_resource_observation import observe_execution_resources
 
         def readonly(cwd: Path, *args: str, **kwargs: object):
@@ -1194,6 +1195,16 @@ class ServiceEngine:
             "control_head": None,
             "tickets": [],
             "resources": None,
+            "evidence": None,
+            "runtime_dependencies": json.loads(json.dumps({
+                key: self._state.get(key)
+                for key in (
+                    "phase", "execution_ticket_id", "execution_id",
+                    "execution_branch", "execution_path", "worker_identity",
+                    "pending_execution_report", "operator_recovery",
+                    "reconciliation", "automatic_retry", "accepted_integration",
+                )
+            })),
         }
         reasons = result["unsafe_reasons"]
         assert isinstance(reasons, list)
@@ -1215,6 +1226,15 @@ class ServiceEngine:
             result["tickets"] = tickets
             if len(tickets) != 1:
                 reasons.append("ticket state is absent or ambiguous")
+            elif tickets[0]["state"] != "done":
+                reasons.append("ticket is not done")
+            try:
+                result["evidence"] = observe_execution_evidence(
+                    self.repo, self.control_worktree, head, ticket_id,
+                    runner=self._git_runtime,
+                )
+            except (GitObservationError, OSError, subprocess.SubprocessError) as error:
+                reasons.append(f"evidence observation failed: {error}")
         except (GitObservationError, OSError, subprocess.SubprocessError) as error:
             reasons.append(f"control observation failed: {error}")
         try:
@@ -1240,6 +1260,10 @@ class ServiceEngine:
                     reasons.append("execution worktree is prunable")
                 if item.get("dirty") is True:
                     reasons.append("execution worktree is dirty")
+                if item["expected"] and item.get("branch") != resources["branch"]:
+                    reasons.append("execution worktree branch does not match")
+                if item["expected"] and item.get("dirty") is None:
+                    reasons.append("execution worktree cleanliness is unobservable")
         except (ExecutionWorkspaceError, GitObservationError, OSError,
                 subprocess.SubprocessError, ValueError) as error:
             reasons.append(f"resource observation failed: {error}")
@@ -1352,6 +1376,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "service admission outcome is unknown; "
                     "retry with the same request id"
+                    if command.mutable else "read-only observation timed out"
                 )
         return self._admission_result(command)
 
@@ -2583,7 +2608,7 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
-                recording = True
+                recording = command.mutable
                 self._record_operator_admission(command)
                 if command.method == "inspect-execution":
                     command.admission_result = self._inspect_execution(
@@ -2647,12 +2672,16 @@ class ServiceEngine:
         except (GitObservationError, GitAncestryError) as error:
             command.admission_error = DevlegateError(
                 "service admission outcome is unknown; retry with the same request id"
-                if recording else "service busy; mutable request was not admitted"
+                if recording else (
+                    "service busy; mutable request was not admitted"
+                    if command.mutable else f"read-only observation failed: {error}"
+                )
             )
             raise command.admission_error from error
-        except Exception:
+        except Exception as error:
             command.admission_error = DevlegateError(
                 "service admission outcome is unknown; retry with the same request id"
+                if command.mutable else f"read-only observation failed: {error}"
             )
             raise
         finally:
