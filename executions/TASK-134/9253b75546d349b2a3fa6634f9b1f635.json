@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "0777a225248a098fea3f23b624d929109d97bae4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "9253b75546d349b2a3fa6634f9b1f635",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized WAL/CAS creation, publication, retirement and recovery transitions for worktrees and local/upstream refs, including retries, rework, reconciliation and cleanup.",
+    "Implement positive read-only proof against the durable journal and current Git observations, rejecting interrupted, foreign, stale and conflicting resources.",
+    "Add real-Git and owner tests for positive proof, restart, transition interruption, same-SHA recreation and preservation of prior evidence."
+  ],
+  "report_artifact": "executions/TASK-134/9253b75546d349b2a3fa6634f9b1f635.md",
+  "report_sha256": "e34119b375a6bdfaff3eb1d9a878081d7ceea25dbf330810eec7e94c918e35bc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized WAL/CAS creation, publication, retirement and recovery transitions for worktrees and local/upstream refs, including retries, rework, reconciliation and cleanup.",
+      "Implement positive read-only proof against the durable journal and current Git observations, rejecting interrupted, foreign, stale and conflicting resources.",
+      "Add real-Git and owner tests for positive proof, restart, transition interruption, same-SHA recreation and preservation of prior evidence."
+    ],
+    "report": "The existing preparation and recovery paths reuse resources and mutate refs outside a shared generation journal. A safe positive proof depends on integrating those paths together; that implementation has not been completed in this invocation.",
+    "summary": "Added an isolated real-Git regression demonstrating that an upstream ref recreated at the same commit has identical observations. Documented the lifecycle transition-journal dependency and exclusive-writer boundary for generation proof."
+  },
+  "workspace_head": "65e440076858c19cc5d20b4597a5030bb9580c10"
+}
