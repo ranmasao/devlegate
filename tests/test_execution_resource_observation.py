@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from devlegate.execution_inspection_evidence import observe_execution_evidence
 from devlegate.execution_resource_observation import observe_execution_resources
 from devlegate.git import GitObservationError
 
@@ -15,6 +16,40 @@ def git(path: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(path), *args], check=True, text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_committed_evidence_and_pins_are_inventoried_without_writes(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    report = repo / "executions" / "TASK-1" / "first.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("{}\n")
+    review = repo / "reviews" / "TASK-1" / "first.md"
+    review.parent.mkdir(parents=True)
+    review.write_text("review\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "evidence")
+    head = git(repo, "rev-parse", "HEAD")
+    pin = "refs/devlegate/reconciliation/TASK-1/first"
+    git(repo, "update-ref", pin, head)
+    report.write_text("uncommitted change\n")
+    before = git(repo, "status", "--porcelain=v1")
+    result = observe_execution_evidence(repo, repo, head, "TASK-1")
+    assert [item["path"] for item in result["files"]] == [
+        "executions/TASK-1/first.json", "reviews/TASK-1/first.md"
+    ]
+    assert result["files"][0]["object"] == git(
+        repo, "rev-parse", "HEAD:executions/TASK-1/first.json"
+    )
+    assert result["local_pins"] == [{"ref": pin, "object": head}]
+    assert result["history"]["executions"] == [{
+        "commit": head, "changes": ["A\texecutions/TASK-1/first.json"]
+    }]
+    assert observe_execution_evidence(repo, repo, head, "TASK-1") == result
+    assert git(repo, "status", "--porcelain=v1") == before
 
 
 def test_real_git_resource_observation(tmp_path: Path) -> None:
