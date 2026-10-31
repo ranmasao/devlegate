@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "89cd65799da800fc69124cea9ad39ff24b7e246c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "5c051da138974e989b596a14d94b0e95",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement a shared owner-serialized transition protocol covering checkpoint, rework, ref publication, recovery, retirement, and cleanup, including revocation and CAS verification.",
+    "Publish durable authoritative generation bindings and implement independently observed positive proof, including proof after owner restart and enforcement of the exclusive-writer ref boundary.",
+    "Add the remaining lifecycle, remote failure, recreation, drift, and report/pin preservation tests and document binding and recovery semantics.",
+    "Run configured CI again after completing the remaining implementation."
+  ],
+  "report_artifact": "executions/TASK-134/5c051da138974e989b596a14d94b0e95.md",
+  "report_sha256": "3440e1f8b02799b12e6994a72a478bda979bfcd8b7f347e697245680a478ac28",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement a shared owner-serialized transition protocol covering checkpoint, rework, ref publication, recovery, retirement, and cleanup, including revocation and CAS verification.",
+      "Publish durable authoritative generation bindings and implement independently observed positive proof, including proof after owner restart and enforcement of the exclusive-writer ref boundary.",
+      "Add the remaining lifecycle, remote failure, recreation, drift, and report/pin preservation tests and document binding and recovery semantics.",
+      "Run configured CI again after completing the remaining implementation."
+    ],
+    "report": "The full lifecycle authority and proof protocol remains unfinished within this invocation; publishing a positive proof before those mutation paths are mediated would be unsound. The configured coverage run passed before the final repair-guard changes (1650 passed, 1 skipped, 2 expected failures); focused tests and lint passed after those changes.",
+    "summary": "Added fail-closed checks that prevent interrupted resource creation from being adopted or repaired during owner restart, with real-Git coverage of creation journal boundaries."
+  },
+  "workspace_head": "2ffeddb4629df88be101a57b6af3c217224d770f"
+}
