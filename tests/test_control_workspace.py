@@ -4184,7 +4184,7 @@ def test_existing_branch_and_worktree_are_rediscovered_after_finalization_bounda
     assert rediscovered.head == base
 
 
-def test_branch_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
+def test_branch_creation_error_does_not_adopt_matching_ref(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     key = next(state.glob("worktrees/*"))
@@ -4201,10 +4201,12 @@ def test_branch_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypa
         return result
 
     monkeypatch.setattr(execution_workspace, "_git", race)
-    workspace = ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
+    with pytest.raises(ExecutionWorkspaceError, match="cannot create execution branch"):
+        ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
 
     assert raced
-    assert workspace.head == base
+    assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == base
+    assert not (key / "work" / "T-1").exists()
 
 
 def test_unreadable_execution_branch_is_not_permission_to_create(tmp_path):
@@ -4231,7 +4233,9 @@ def test_unreadable_execution_branch_is_not_permission_to_create(tmp_path):
     assert not (key / "work" / "T-1").exists()
 
 
-def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkeypatch):
+def test_worktree_creation_error_does_not_adopt_matching_worktree(
+    tmp_path, monkeypatch
+):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     key = next(state.glob("worktrees/*"))
@@ -4248,11 +4252,13 @@ def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkey
         return result
 
     monkeypatch.setattr(execution_workspace, "_git", race)
-    workspace = ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
+    with pytest.raises(
+        ExecutionWorkspaceError, match="cannot create execution worktree"
+    ):
+        ExecutionWorkspaceManager(working, key, "T-1").prepare(base)
 
     assert raced
-    assert workspace.path.is_dir()
-    assert workspace.head == base
+    assert (key / "work" / "T-1").is_dir()
 
 
 @pytest.mark.parametrize(
