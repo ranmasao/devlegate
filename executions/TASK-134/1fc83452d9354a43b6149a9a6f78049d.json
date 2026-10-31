@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "95be2916fde2cf66f8b4fb79de2b90929fba6eb0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "1fc83452d9354a43b6149a9a6f78049d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement authoritative BOUND publication and read-only positive proof with persisted provenance and independently observed resources.",
+    "Mediate publication, checkpoint, rework, retry, repair, reconciliation, retirement, cleanup and recovery with owner-serialized intent, CAS, verification and revocation.",
+    "Add comprehensive lifecycle interruption, restart, recreation, remote failure and evidence preservation tests, and remove the positive lifecycle xfails only after the implementation is authoritative.",
+    "Re-run configured CI after completing the implementation and resolve any reproducible failures."
+  ],
+  "report_artifact": "executions/TASK-134/1fc83452d9354a43b6149a9a6f78049d.md",
+  "report_sha256": "43204148519c668b0166a4cee00ce74a9d0e1cd67fcf6c025f3077c78dbd60f7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement authoritative BOUND publication and read-only positive proof with persisted provenance and independently observed resources.",
+      "Mediate publication, checkpoint, rework, retry, repair, reconciliation, retirement, cleanup and recovery with owner-serialized intent, CAS, verification and revocation.",
+      "Add comprehensive lifecycle interruption, restart, recreation, remote failure and evidence preservation tests, and remove the positive lifecycle xfails only after the implementation is authoritative.",
+      "Re-run configured CI after completing the implementation and resolve any reproducible failures."
+    ],
+    "report": "The creation journal is still only partial: other lifecycle mutations bypass it, so positive proof cannot safely be enabled. The configured coverage run had one service-restart timeout; the affected case passed when rerun alone. The two authoritative-binding lifecycle tests remain xfailed.",
+    "summary": "Added durable, independently verified preparation transition observations for branch, worktree, and marker creation, and strengthened worktree identity verification. Added interruption and drift coverage and documented the fail-closed semantics."
+  },
+  "workspace_head": "fb73c901421a829a04fbe39d105c2edd5da941c9"
+}
