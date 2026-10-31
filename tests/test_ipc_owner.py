@@ -63,6 +63,25 @@ def test_inspection_runs_on_owner_without_receipt(
     assert engine._mutable_receipt("inspection") is None
 
 
+def test_inspection_error_is_not_uncertain_mutation(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    command = OperatorCommand(
+        request_id="inspection-error", method="inspect-execution",
+        fingerprint="inspect-execution:T-1", ticket_id="T-1", mutable=False,
+    )
+
+    def fail(_ticket):
+        raise DevlegateError("observation failed")
+
+    monkeypatch.setattr(engine, "_inspect_execution", fail)
+    with pytest.raises(DevlegateError, match="^observation failed$"):
+        engine._admit_operator_command(command)
+    assert str(command.admission_error) == "observation failed"
+    assert engine._mutable_receipt("inspection-error") is None
+
+
 @pytest.mark.parametrize("pause_at", ["validation", "receipt"])
 def test_timeout_waiting_for_owner_lock_returns_committed_admission(
     tmp_path, monkeypatch, short_state_dir, pause_at
