@@ -48,11 +48,16 @@ Historical executions have no owner-published resource-continuity binding and
 must therefore be treated as unsafe by any generic reset proof. Existing
 workspace recovery classifications and checkpoint pins are not such a binding.
 
-New admissions also persist a nonce-bearing resource intent alongside the pending
-execution state, before workspace preparation. This is only an intent: it does
-not yet journal resource creation, publication or retirement, and must not be
-used as an ownership proof. A pending execution predating the intent is not
-assigned one on replay.
+New admissions persist a nonce-bearing resource intent alongside the pending
+execution state, before workspace preparation. On the first ordinary preparation,
+when the owner creates both the branch and worktree, it writes the admission
+identity and nonce into a new file in the Git worktree administrative directory,
+syncs it, and journals the observed creation before worker launch. Replayed or
+pre-existing resources are not assigned a marker. An interruption before the
+creation event leaves only incomplete evidence, even if a marker exists. The
+marker and journal are not yet ownership proof: publication, ref mutations and
+retirement are not comprehensively journaled. A pending execution predating the
+intent is not assigned one on replay.
 
 A future resource proof must assume that resource mutations are mediated by the
 serialized owner. Git cannot retrospectively detect an out-of-band deletion and

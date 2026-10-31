@@ -5388,6 +5388,7 @@ class ServiceEngine:
         execution_id: str | None,
         event: str,
         workspace: ExecutionWorkspace | None = None,
+        marker: str | None = None,
     ) -> None:
         """Persist preparation observations without asserting resource ownership."""
         intents = self._state.get("execution_resource_intents")
@@ -5412,6 +5413,8 @@ class ServiceEngine:
                 head=workspace.head,
                 base_head=workspace.base_head,
             )
+        if marker is not None:
+            entry["marker"] = marker
         updated = {**intent, "preparation_journal": [*journal, entry]}
         self._save_state(
             str(self._state["phase"]),
@@ -5537,7 +5540,26 @@ class ServiceEngine:
                 manager, workspace, previous_execution, previous_checkpoint
             )
         else:
-            workspace = manager.prepare(base_head)
+            execution_id = self._state.get("execution_id")
+            intents = self._state.get("execution_resource_intents")
+            intent = intents.get(execution_id) if isinstance(intents, dict) else None
+            identity = None
+            if isinstance(intent, dict) and intent.get("preparation_journal") == [
+                {"sequence": 1, "event": "started"}
+            ]:
+                fields = (
+                    "ticket_id", "execution_id", "nonce", "control_head",
+                    "admitted_base_head", "branch", "path",
+                )
+                if all(
+                    isinstance(intent.get(key), str) and intent[key] for key in fields
+                ):
+                    identity = {key: intent[key] for key in fields}
+            workspace = manager.prepare(base_head, creation_identity=identity)
+            if manager.creation_marker is not None:
+                self._record_resource_preparation(
+                    execution_id, "created", workspace, manager.creation_marker
+                )
         current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
             self._adopt_validated_control_descendant(
