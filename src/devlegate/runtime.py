@@ -2559,7 +2559,8 @@ class ServiceEngine:
         except (GitObservationError, GitAncestryError) as error:
             command.admission_error = DevlegateError(
                 "service admission outcome is unknown; retry with the same request id"
-                if recording else "service busy; mutable request was not admitted"
+                if recording
+                else "service busy; mutable request was not admitted"
             )
             raise command.admission_error from error
         except Exception:
@@ -3387,9 +3388,10 @@ class ServiceEngine:
         # A completion prepared before the abort must not turn an accepted
         # forced interruption into a normal completion. Recovery after restart
         # can resolve the persisted interruption using its usual evidence.
-        if self._lifecycle_force and self._state.get(
-            "execution_interruption_kind"
-        ) == "operator_abort":
+        if (
+            self._lifecycle_force
+            and self._state.get("execution_interruption_kind") == "operator_abort"
+        ):
             failures = state.get("failed_executions")
             failure = (
                 failures.get(self._state.get("execution_ticket_id"))
@@ -4948,9 +4950,8 @@ class ServiceEngine:
                 isinstance(decision, dict)
                 and decision.get("status") in ("blocked", "skipped")
                 and decision.get("reason") != "ticket is not durably done"
-                and decision not in (self._state.get("workspace_cleanup") or {}).get(
-                    "last_pass", []
-                )
+                and decision
+                not in (self._state.get("workspace_cleanup") or {}).get("last_pass", [])
             ):
                 _log_cleanup_decision("historical", decision)
         self._publish_workspace_cleanup_inventory(decisions)
@@ -5437,12 +5438,19 @@ class ServiceEngine:
         if not all(isinstance(item, dict) for item in journal):
             return
         if [item.get("event") for item in journal] != [
-            "started", "created", "observed"
+            "started",
+            "created",
+            "observed",
         ]:
             return
         fields = (
-            "ticket_id", "execution_id", "nonce", "control_head",
-            "admitted_base_head", "branch", "path",
+            "ticket_id",
+            "execution_id",
+            "nonce",
+            "control_head",
+            "admitted_base_head",
+            "branch",
+            "path",
         )
         if not all(isinstance(intent.get(key), str) and intent[key] for key in fields):
             raise WorkspacePreparationBlockedError(
@@ -5463,7 +5471,9 @@ class ServiceEngine:
             )
         marker = created.get("marker")
         manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, workspace.ticket_id,
+            self.repo,
+            self.execution_worktree_root,
+            workspace.ticket_id,
             runner=self._git_runtime,
         )
         if not isinstance(marker, str) or not manager.verify_creation_observation(
@@ -5473,6 +5483,35 @@ class ServiceEngine:
                 "resource creation verification failed"
             )
         self._record_resource_preparation(execution_id, "verified", workspace, marker)
+
+    def _record_creation_transition(
+        self, execution_id: str, resource: str, event: str, expected_head: str
+    ) -> None:
+        """Persist a creation boundary around an independently checked effect."""
+        intents = self._state.get("execution_resource_intents")
+        intent = intents.get(execution_id) if isinstance(intents, dict) else None
+        if not isinstance(intent, dict):
+            raise WorkflowBlockedError("execution resource intent is missing")
+        journal = intent.get("creation_transitions", [])
+        if not isinstance(journal, list) or any(
+            not isinstance(entry, dict) for entry in journal
+        ):
+            raise WorkflowBlockedError(
+                "execution resource transition journal is malformed"
+            )
+        entry = {
+            "sequence": len(journal) + 1,
+            "resource": resource,
+            "event": event,
+            "expected_head": expected_head,
+        }
+        self._save_state(
+            str(self._state["phase"]),
+            execution_resource_intents={
+                **intents,
+                execution_id: {**intent, "creation_transitions": [*journal, entry]},
+            },
+        )
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
@@ -5601,14 +5640,29 @@ class ServiceEngine:
                 {"sequence": 1, "event": "started"}
             ]:
                 fields = (
-                    "ticket_id", "execution_id", "nonce", "control_head",
-                    "admitted_base_head", "branch", "path",
+                    "ticket_id",
+                    "execution_id",
+                    "nonce",
+                    "control_head",
+                    "admitted_base_head",
+                    "branch",
+                    "path",
                 )
                 if all(
                     isinstance(intent.get(key), str) and intent[key] for key in fields
                 ):
                     identity = {key: intent[key] for key in fields}
-            workspace = manager.prepare(base_head, creation_identity=identity)
+            transition = None
+            if identity is not None and isinstance(execution_id, str):
+
+                def transition(resource: str, event: str, head: str) -> None:
+                    self._record_creation_transition(
+                        execution_id, resource, event, head
+                    )
+
+            workspace = manager.prepare(
+                base_head, creation_identity=identity, creation_transition=transition
+            )
             if manager.creation_marker is not None:
                 self._record_resource_preparation(
                     execution_id, "created", workspace, manager.creation_marker
@@ -9503,7 +9557,10 @@ class ServiceEngine:
         return tuple(evaluated)
 
     def _failure_superseded(
-        self, ticket_id: str, metadata: object, state: dict[str, object],
+        self,
+        ticket_id: str,
+        metadata: object,
+        state: dict[str, object],
         control: GitObservation | None,
     ) -> bool:
         """Require published descendant history proving a ticket left its state.
@@ -9515,13 +9572,19 @@ class ServiceEngine:
         if not isinstance(metadata, dict) or control is None:
             return False
         if (
-            control.detached or control.branch != self.control_branch
-            or not control.working_tree_clean or not control.remote_head
+            control.detached
+            or control.branch != self.control_branch
+            or not control.working_tree_clean
+            or not control.remote_head
             or control.local_head != control.remote_head
         ):
             return False
-        for key in ("reconciliation", "accepted_integration", "automatic_retry",
-                    "manual_retry_required"):
+        for key in (
+            "reconciliation",
+            "accepted_integration",
+            "automatic_retry",
+            "manual_retry_required",
+        ):
             marker = state.get(key)
             if isinstance(marker, dict) and marker.get("ticket_id") == ticket_id:
                 return False
@@ -9547,23 +9610,38 @@ class ServiceEngine:
         # retains it at the merge. Only transitions of the observed first-parent
         # history can supersede this failure.
         lineage = self._git_runtime(
-            self.control_worktree, "rev-list", "--first-parent", control.local_head,
+            self.control_worktree,
+            "rev-list",
+            "--first-parent",
+            control.local_head,
             check=False,
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
             return False
         if not any(
             self._git_runtime(
-                self.control_worktree, "cat-file", "-e", f"{base}:{path}",
+                self.control_worktree,
+                "cat-file",
+                "-e",
+                f"{base}:{path}",
                 check=False,
-            ).returncode == 0
+            ).returncode
+            == 0
             for path in paths
         ):
             return False
         result = self._git_runtime(
-            self.control_worktree, "log", "--first-parent", "-m", "--format=",
-            "--name-only", "--no-renames",
-            "--diff-filter=D", f"{base}..{control.local_head}", "--", *paths,
+            self.control_worktree,
+            "log",
+            "--first-parent",
+            "-m",
+            "--format=",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=D",
+            f"{base}..{control.local_head}",
+            "--",
+            *paths,
             check=False,
         )
         return result.returncode == 0 and any(
@@ -9778,7 +9856,10 @@ class ServiceEngine:
                     control=control,
                 ),
                 failed_executions=self._evaluate_failed_executions(
-                    state.get("failed_executions", {}), TicketStore(()), code, None,
+                    state.get("failed_executions", {}),
+                    TicketStore(()),
+                    code,
+                    None,
                     str(workflow_error or "workflow is invalid"),
                 ),
                 lifecycle_integration=lifecycle_integration,
@@ -9841,7 +9922,8 @@ class ServiceEngine:
         )
         if isinstance(failures, dict):
             failed_executions = tuple(
-                failure for failure in failed_executions
+                failure
+                for failure in failed_executions
                 if not self._failure_superseded(
                     failure.ticket_id, failures.get(failure.ticket_id), state, control
                 )
@@ -9897,8 +9979,13 @@ class ServiceEngine:
             else None
         )
         blocked_entries = blocked_tickets(
-            ticket_store.tickets, dependency_blocked, eligible, bound_ticket_id,
-            integration_ticket_id, global_block_reason, BlockedReason,
+            ticket_store.tickets,
+            dependency_blocked,
+            eligible,
+            bound_ticket_id,
+            integration_ticket_id,
+            global_block_reason,
+            BlockedReason,
         )
         return StatusSnapshot(
             phase=str(state["phase"]),
