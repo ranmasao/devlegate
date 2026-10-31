@@ -14,6 +14,7 @@ from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.git import (
     GitObservationError,
     GitRunner,
+    commit_parents,
     history_changes,
     path_object,
     read_path,
@@ -68,6 +69,11 @@ def prove_single_execution_admission(
     )
     if original is None or original != ticket_blob:
         raise ValueError("execution ticket identity does not match current ticket")
+    parents = commit_parents(control, commit, runner=readonly)
+    if parents is None or len(parents) != 1 or path_object(
+        control, parents[0], f"{todo_path}/{ticket_id}.md", runner=readonly
+    ) != original:
+        raise ValueError("execution ticket identity changed before report admission")
     return {
         "execution_id": report.execution_id,
         "report_path": report_path,

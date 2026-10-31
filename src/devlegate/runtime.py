@@ -1295,6 +1295,25 @@ class ServiceEngine:
         except (ExecutionWorkspaceError, GitObservationError, OSError,
                 subprocess.SubprocessError, ValueError) as error:
             reasons.append(f"resource observation failed: {error}")
+        generation = result["generation"]
+        resources = result["resources"]
+        if isinstance(generation, dict) and isinstance(resources, dict):
+            if generation["path"] != resources["path"]:
+                reasons.append("reported execution path does not match managed path")
+            if generation["branch"] != resources["branch"]:
+                reasons.append(
+                    "reported execution branch does not match managed branch"
+                )
+            checkpoint = generation["checkpoint"]
+            for location in ("local_head", "remote_head"):
+                observed = resources[location]
+                if observed is not None and observed != checkpoint:
+                    reasons.append(f"{location} does not match reported checkpoint")
+            for item in resources["worktrees"]:
+                if item["expected"] and item.get("head") != checkpoint:
+                    reasons.append(
+                        "execution worktree HEAD does not match reported checkpoint"
+                    )
         return result
 
     def _submit_operator_command(

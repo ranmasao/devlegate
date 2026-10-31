@@ -72,6 +72,13 @@ def test_historical_admission_proof_rejects_changed_ticket_and_reports(tmp_path:
     observed = ServiceEngine._inspect_execution(engine, "TASK-1")
     assert observed["generation"] == proof
     assert observed["safe"] is False
+    assert (
+        "reported execution path does not match managed path"
+        in observed["unsafe_reasons"]
+    )
+    git(repo, "branch", "devlegate/work/TASK-1", admission)
+    changed = ServiceEngine._inspect_execution(engine, "TASK-1")
+    assert "local_head does not match reported checkpoint" in changed["unsafe_reasons"]
     with pytest.raises(ValueError, match="ticket identity"):
         prove_single_execution_admission(
             repo, admission, "TASK-1", "different", todo_path="todo",
@@ -119,6 +126,42 @@ def test_committed_evidence_and_pins_are_inventoried_without_writes(tmp_path: Pa
     }]
     assert observe_execution_evidence(repo, repo, head, "TASK-1") == result
     assert git(repo, "status", "--porcelain=v1") == before
+
+
+def test_admission_rejects_ticket_changed_after_execution_started(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    ticket = repo / "todo" / "TASK-1.md"
+    ticket.parent.mkdir()
+    ticket.write_text("original\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "original ticket")
+    original = git(repo, "rev-parse", "HEAD")
+    blob = git(repo, "rev-parse", "HEAD:todo/TASK-1.md")
+    ticket.write_text("changed during execution\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "change ticket")
+    report = build_execution_report(
+        execution_id="first", ticket_id="TASK-1", code_base_head=original,
+        control_head=original, execution_branch="devlegate/work/TASK-1",
+        execution_path=str(tmp_path / "work" / "TASK-1"), workspace_head=original,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("incomplete", "summary", (), (), None), None
+        ),
+    )
+    report_path = repo / "executions" / "TASK-1" / "first.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(report.to_json())
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "report")
+    with pytest.raises(ValueError, match="changed before report admission"):
+        prove_single_execution_admission(
+            repo, git(repo, "rev-parse", "HEAD"), "TASK-1", blob,
+            todo_path="todo", review_path="review",
+        )
 
 
 def test_real_git_resource_observation(tmp_path: Path) -> None:
