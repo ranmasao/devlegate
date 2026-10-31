@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "e9442877aebe2429547634676760da8b9ad7c79b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "1240ffd19ab24ae1b0db39f0bd983ef7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Prove the selected execution generation and checkpoint against exact control history and ticket identity, including stale and ambiguous generations.",
+    "Inspect persisted worker, owner, recovery, reconciliation and operator intents and pinned or retained evidence.",
+    "Produce a canonical confirmation-ready plan and identity digest with complete unsafe reasons and separately observable resource failures.",
+    "Add comprehensive real-Git and owner/IPC integration coverage for the complete proof, no-write guarantees and failure cases, and confirm CI."
+  ],
+  "report_artifact": "executions/TASK-129/1240ffd19ab24ae1b0db39f0bd983ef7.md",
+  "report_sha256": "20f4a3a5cb298e067e75c0a319280a72da8601d0d3ba64cc9d8adb6a9df97b12",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Prove the selected execution generation and checkpoint against exact control history and ticket identity, including stale and ambiguous generations.",
+      "Inspect persisted worker, owner, recovery, reconciliation and operator intents and pinned or retained evidence.",
+      "Produce a canonical confirmation-ready plan and identity digest with complete unsafe reasons and separately observable resource failures.",
+      "Add comprehensive real-Git and owner/IPC integration coverage for the complete proof, no-write guarantees and failure cases, and confirm CI."
+    ],
+    "report": "The owner-side inspection is deliberately incomplete: generation ownership and evidence have not been proven, so it cannot yet produce a safe or confirmation-ready plan. The remaining work should stay with the owner-side provenance and plan boundary before TASK-130 consumes it.",
+    "summary": "Added an owner-serialized, read-only execution inspection command through the existing CLI and IPC. It reports committed ticket locations and Git resource observations while conservatively marking every result unsafe."
+  },
+  "workspace_head": "7a2022fe4a341557375c456edbfa797d51da9666"
+}
