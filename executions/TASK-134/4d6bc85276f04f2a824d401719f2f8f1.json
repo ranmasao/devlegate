@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "9985713e9553c2707c1e5d828dfce89ab309fd97",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "4d6bc85276f04f2a824d401719f2f8f1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Journal and verify all worktree and local/upstream ref lifecycle transitions under owner serialization, including repair, rework, checkpoint, publication, reconciliation, cleanup, and revocation.",
+    "Publish an authoritative generation binding and implement independently observed positive proof, including restart and fail-closed recovery.",
+    "Replace the authoritative-binding expected failures with passing lifecycle and interruption tests, document the final semantics, and run focused validation and configured CI."
+  ],
+  "report_artifact": "executions/TASK-134/4d6bc85276f04f2a824d401719f2f8f1.md",
+  "report_sha256": "07e7fe168307e99ec1811e224aa0e3928adc95fad162d628be4e460900963ed2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Journal and verify all worktree and local/upstream ref lifecycle transitions under owner serialization, including repair, rework, checkpoint, publication, reconciliation, cleanup, and revocation.",
+      "Publish an authoritative generation binding and implement independently observed positive proof, including restart and fail-closed recovery.",
+      "Replace the authoritative-binding expected failures with passing lifecycle and interruption tests, document the final semantics, and run focused validation and configured CI."
+    ],
+    "report": "The cross-cutting lifecycle integration and its crash-ordering tests were not completed in this invocation; publishing positive proof before they are complete would be unsafe. No implementation files were changed. Focused pytest invocation could not run because pytest is not installed in the available environment.",
+    "summary": "Reviewed the existing preparation journal and identified execution-resource mutation paths that remain outside its authority."
+  },
+  "workspace_head": "7b49cd72fc80ac7ff9a663c5aaceeee3411e7ab2"
+}
