@@ -4489,6 +4489,7 @@ class ServiceEngine:
         except ExecutionWorkspaceError as error:
             raise WorkspacePreparationBlockedError(str(error)) from error
         self._record_resource_preparation(execution_id, "observed", workspace)
+        self._verify_resource_creation_observation(execution_id, workspace)
         self._workspace_preparation_blocker = None
         _log(
             "execution workspace "
@@ -5420,6 +5421,58 @@ class ServiceEngine:
             str(self._state["phase"]),
             execution_resource_intents={**intents, execution_id: updated},
         )
+
+    def _verify_resource_creation_observation(
+        self, execution_id: str | None, workspace: ExecutionWorkspace
+    ) -> None:
+        """Persist independently checked creation evidence, not a binding."""
+        intents = self._state.get("execution_resource_intents")
+        intent = intents.get(execution_id) if isinstance(intents, dict) else None
+        if not isinstance(intent, dict):
+            return
+        journal = intent.get("preparation_journal")
+        if not isinstance(journal, list) or len(journal) != 3:
+            return
+        started, created, observed = journal
+        if not all(isinstance(item, dict) for item in journal):
+            return
+        if [item.get("event") for item in journal] != [
+            "started", "created", "observed"
+        ]:
+            return
+        fields = (
+            "ticket_id", "execution_id", "nonce", "control_head",
+            "admitted_base_head", "branch", "path",
+        )
+        if not all(isinstance(intent.get(key), str) and intent[key] for key in fields):
+            raise WorkspacePreparationBlockedError(
+                "resource creation identity is malformed"
+            )
+        if (
+            intent["execution_id"] != execution_id
+            or intent["ticket_id"] != self._state.get("execution_ticket_id")
+            or intent["control_head"] != self._state.get("execution_control_head")
+            or intent["admitted_base_head"]
+            != self._state.get("execution_admitted_base_head")
+            or started.get("sequence") != 1
+            or created.get("sequence") != 2
+            or observed.get("sequence") != 3
+        ):
+            raise WorkspacePreparationBlockedError(
+                "resource creation provenance changed"
+            )
+        marker = created.get("marker")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, workspace.ticket_id,
+            runner=self._git_runtime,
+        )
+        if not isinstance(marker, str) or not manager.verify_creation_observation(
+            {key: intent[key] for key in fields}, workspace, marker
+        ):
+            raise WorkspacePreparationBlockedError(
+                "resource creation verification failed"
+            )
+        self._record_resource_preparation(execution_id, "verified", workspace, marker)
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
