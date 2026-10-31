@@ -1,0 +1,37 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "incomplete",
+  "control_head": "e8ded7704680321ed1507828eb3a232c8af803d3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "22ac8c9aa4e44954b32481d5a59fbab6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an owner-serialized, explicitly confirmed generation reset with durable identity-bound intent, dependency checks, fresh pre-effect observations, CAS and remote lease, and safe restart recovery.",
+    "Add isolated reset tests covering active ownership, persisted recovery, dirty or ambiguous worktrees, changed refs, repeated attempts and interrupted retirement.",
+    "Document operator usage and validate the complete reset workflow."
+  ],
+  "report_artifact": "executions/TASK-126/22ac8c9aa4e44954b32481d5a59fbab6.md",
+  "report_sha256": "8a2e547c5c5fb80a8a92a2abdfd404f7ba4325573d4e1668211c09eb12e57c0b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an owner-serialized, explicitly confirmed generation reset with durable identity-bound intent, dependency checks, fresh pre-effect observations, CAS and remote lease, and safe restart recovery.",
+      "Add isolated reset tests covering active ownership, persisted recovery, dirty or ambiguous worktrees, changed refs, repeated attempts and interrupted retirement.",
+      "Document operator usage and validate the complete reset workflow."
+    ],
+    "report": "The owner-serialized reset and its crash-safe authorization protocol were not completed in this invocation; the existing cleanup and recovery paths do not provide that operation safely.",
+    "summary": "Updated the retention diagnostic to reflect the curator's explicit-reset policy and added a real-Git regression demonstrating that historical cleanup retains deferred-ticket resources."
+  },
+  "workspace_head": "d883b2f56ba8f298d690a4d454e57e4ea71a05e6"
+}
