@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "85a36718cbdac6b0634a57eff47a9d130b8267bc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "8a38e26c41a94fbda4c6a86f8e8e27a6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-side ticket state, control HEAD/blob, execution-generation report and checkpoint provenance, ownership/recovery intents, and pinned-evidence proofs with fail-closed ambiguity handling.",
+    "Integrate a deterministic structured preview and identity digest into the operator CLI and IPC using owner-side serialization.",
+    "Add operator documentation and end-to-end real-Git coverage for stale or ambiguous generations, absent and foreign resources, locked and dirty worktrees, remote failures, and mutation-free preview."
+  ],
+  "report_artifact": "executions/TASK-129/8a38e26c41a94fbda4c6a86f8e8e27a6.md",
+  "report_sha256": "64f9cf0dccd76465d853b1e992d7833a05dbf5428a3c66fa91168a871aeda8ff",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-side ticket state, control HEAD/blob, execution-generation report and checkpoint provenance, ownership/recovery intents, and pinned-evidence proofs with fail-closed ambiguity handling.",
+      "Integrate a deterministic structured preview and identity digest into the operator CLI and IPC using owner-side serialization.",
+      "Add operator documentation and end-to-end real-Git coverage for stale or ambiguous generations, absent and foreign resources, locked and dirty worktrees, remote failures, and mutation-free preview."
+    ],
+    "report": "The Git inventory is only a partial observation and cannot safely serve as an authorization proof or operator preview without the remaining owner-side provenance and ownership integration.",
+    "summary": "Added a read-only Git observation helper for execution resources, including exact local and remote refs, worktree registration, cleanliness, and lock metadata. Fixed preservation of worktree lock and prune reasons in the existing parser."
+  },
+  "workspace_head": "207b6cbc7518bf069b88f7054f47fc33b7c6b202"
+}
