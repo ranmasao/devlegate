@@ -5,6 +5,8 @@
 """Daemon tests outside host, lifecycle, and worker-loss ownership."""
 
 import json
+import os
+import threading
 
 from _daemon_support import *  # noqa: F403,F405
 from _control_support import fresh_control_fixture
@@ -454,6 +456,104 @@ def test_iteration_body_does_not_reenter_scheduler():
     source = inspect.getsource(ServiceEngine._run_iteration_body)
     assert "run_iteration(" not in source
 
+
+def test_drop_timeout_after_effect_before_receipt(tmp_path, monkeypatch):
+    engine, config, _control, workspace, _ = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(runtime, "OPERATOR_ADMISSION_TIMEOUT", 0.05)
+    queued = threading.Event()
+    timed_out = threading.Event()
+    effect_done = threading.Event()
+    release = threading.Event()
+    responses = []
+    original_drop = engine._drop_owned
+
+    def wake():
+        event = engine._operator_command.admission_event
+        original_wait = event.wait
+
+        def wait(timeout):
+            result = original_wait(timeout)
+            if not result:
+                timed_out.set()
+            return result
+
+        event.wait = wait
+        queued.set()
+
+    def drop(*args):
+        original_drop(*args)
+        effect_done.set()
+        assert release.wait(10)
+
+    monkeypatch.setattr(engine, "wake", wake)
+    monkeypatch.setattr(engine, "_drop_owned", drop)
+    request_id = "drop-final-boundary-request"
+    client = threading.Thread(target=lambda: responses.append(engine.submit_drop(
+        "T-1", "drop-final-boundary", request_id=request_id
+    )))
+    client.start()
+    assert queued.wait(5)
+    command, _ = engine._claim_owner_work(True)
+    owner = threading.Thread(target=engine._admit_operator_command, args=(command,))
+    owner.start()
+    try:
+        assert effect_done.wait(10)
+        assert timed_out.wait(5)
+        ref = engine._drop_disposition_ref("T-1", "drop-final-boundary")
+        assert json.loads(git(engine.repo, "cat-file", "-p", ref).stdout)[
+            "disposition"
+        ] == "dropped"
+        assert not workspace.path.exists()
+        assert engine._mutable_receipt(request_id) is None
+    finally:
+        release.set()
+        owner.join(10)
+        client.join(10)
+    assert not owner.is_alive() and not client.is_alive()
+    assert responses == [{
+        "accepted": True, "ticket_id": "T-1", "execution_id": "drop-final-boundary"
+    }]
+    restarted = ServiceEngine(config)
+    assert restarted._mutable_receipt(request_id)["accepted"] is True
+    assert restarted.submit_drop(
+        "T-1", "drop-final-boundary", request_id=request_id
+    ) == responses[0]
+
+
+def test_drop_process_loss_after_effect_before_receipt(tmp_path, monkeypatch):
+    engine, config, _control, workspace, command = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    pid = os.fork()
+    if pid == 0:
+        original_save = engine._save_state
+
+        def save(phase, **fields):
+            if "mutable_receipts" in fields:
+                os._exit(91)
+            return original_save(phase, **fields)
+
+        engine._save_state = save
+        engine._admit_operator_command(command)
+        os._exit(92)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 91
+    restarted = ServiceEngine(config)
+    assert restarted._mutable_receipt(command.request_id) is None
+    ref = restarted._drop_disposition_ref("T-1", "drop-final-boundary")
+    assert json.loads(git(restarted.repo, "cat-file", "-p", ref).stdout)[
+        "disposition"
+    ] == "dropped"
+    assert not workspace.path.exists()
+    restarted._admit_operator_command(command)
+    assert restarted._mutable_receipt(command.request_id)["accepted"] is True
+    replay = ServiceEngine(config)
+    assert replay.submit_drop(
+        "T-1", "drop-final-boundary", request_id=command.request_id
+    ) == command.admission_result
+
 @pytest.mark.parametrize("boundary", ["after-clear", "before-receipt"])
 def test_drop_final_durable_boundaries_replay_without_active_state(
     tmp_path, monkeypatch, boundary
@@ -555,6 +655,7 @@ def test_drop_retirement_workspace_error_does_not_kill_owner_loop(
     assert not submit_thread.is_alive()
     assert len(submitted) == 1
     assert isinstance(submitted[0], DevlegateError)
+    assert "admission outcome is unknown" in str(submitted[0])
     assert "cannot retire execution worktree" in str(submitted[0])
     assert service_thread.is_alive()
     assert engine._state["phase"] == "agent_running"

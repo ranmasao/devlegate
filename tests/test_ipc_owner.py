@@ -34,7 +34,135 @@ from _ipc_support import (
 )
 from _ipc_support import running_server as running_server
 
+import devlegate.runtime as runtime
 from devlegate.execution_workspace import ExecutionWorkspaceManager
+
+
+@pytest.mark.parametrize("pause_at", ["validation", "receipt"])
+def test_timeout_waiting_for_owner_lock_returns_committed_admission(
+    tmp_path, monkeypatch, short_state_dir, pause_at
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    engine._interactive_retry_candidates = lambda: (
+        RetryCandidate("T-1", "Ticket", "failed", "failed"),
+    )
+    monkeypatch.setattr(runtime, "OPERATOR_ADMISSION_TIMEOUT", 0.05)
+    queued = threading.Event()
+    timed_out = threading.Event()
+    entered = threading.Event()
+    release = threading.Event()
+    result = []
+
+    def wake():
+        command = engine._operator_command
+        if command is None:
+            return
+        original_wait = command.admission_event.wait
+
+        def wait(timeout):
+            value = original_wait(timeout)
+            if not value:
+                timed_out.set()
+            return value
+
+        command.admission_event.wait = wait
+        queued.set()
+
+    monkeypatch.setattr(engine, "wake", wake)
+    original_validate = engine._validate_operator_admission
+    original_record = engine._record_operator_admission
+
+    def validate(command):
+        if pause_at == "validation":
+            entered.set()
+            assert release.wait(5)
+        original_validate(command)
+
+    def record(command):
+        original_record(command)
+        if pause_at == "receipt":
+            entered.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(engine, "_validate_operator_admission", validate)
+    monkeypatch.setattr(engine, "_record_operator_admission", record)
+    client = threading.Thread(
+        target=lambda: result.append(engine.submit_retry("T-1", request_id="race"))
+    )
+    client.start()
+    assert queued.wait(2)
+    command, scheduler = engine._claim_owner_work(True)
+    assert command is not None and not scheduler
+    owner = threading.Thread(target=engine._admit_operator_command, args=(command,))
+    owner.start()
+    drain_started = threading.Event()
+    drain_finished = threading.Event()
+
+    def drain():
+        drain_started.set()
+        engine.request_lifecycle("stop", "drain-race")
+        drain_finished.set()
+
+    drainer = threading.Thread(target=drain)
+    try:
+        assert entered.wait(2)
+        assert timed_out.wait(2)
+        drainer.start()
+        assert drain_started.wait(2)
+        assert not drain_finished.is_set()
+    finally:
+        release.set()
+        owner.join(5)
+        client.join(5)
+        if drainer.ident is not None:
+            drainer.join(5)
+    assert not owner.is_alive() and not client.is_alive() and not drainer.is_alive()
+    assert drain_finished.is_set()
+    assert result == [{"accepted": True, "ticket_id": "T-1"}]
+    assert engine._mutable_receipt("race")["accepted"] is True
+    restarted = ServiceEngine(engine.env_file)
+    assert restarted.submit_retry("T-1", request_id="race") == result[0]
+    with pytest.raises(DevlegateError, match="request id collision"):
+        restarted.submit_retry("T-2", request_id="race")
+
+
+def test_unclaimed_timeout_cancels_queue(tmp_path, monkeypatch, short_state_dir):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    monkeypatch.setattr(runtime, "OPERATOR_ADMISSION_TIMEOUT", 0.01)
+    with pytest.raises(DevlegateError, match="request was not admitted"):
+        engine.submit_retry("T-1", request_id="queued")
+    assert engine._mutable_receipt("queued") is None
+    assert engine._claim_owner_work(True) == (None, True)
+    engine._release_scheduler_iteration()
+
+
+def test_claimed_timeout_before_owner_admission_is_unknown(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    monkeypatch.setattr(runtime, "OPERATOR_ADMISSION_TIMEOUT", 0.05)
+    queued = threading.Event()
+    monkeypatch.setattr(engine, "wake", queued.set)
+    errors = []
+
+    def submit():
+        try:
+            engine.submit_retry("T-1", request_id="claimed")
+        except DevlegateError as error:
+            errors.append(str(error))
+
+    client = threading.Thread(target=submit)
+    client.start()
+    assert queued.wait(2)
+    command, _ = engine._claim_owner_work(True)
+    client.join(2)
+    assert not client.is_alive()
+    assert errors == [
+        "service admission outcome is unknown; retry with the same request id"
+    ]
+    assert not command.cancelled.is_set()
+    assert engine._mutable_receipt("claimed") is None
+    engine._release_operator_command()
 
 
 def test_stop_completed_receipt_cannot_overtake_accepted_receipt(

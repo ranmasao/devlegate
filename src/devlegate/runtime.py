@@ -1262,11 +1262,18 @@ class ServiceEngine:
                         "request was not admitted"
                     )
                     command.admission_event.set()
-                else:
-                    command.cancelled.set()
-            raise DevlegateError(
-                "service admission coordination timed out; request was not admitted"
-            )
+                    return self._admission_result(command)
+                if (
+                    command.admission_event.is_set()
+                    or command.admission_result is not None
+                ):
+                    return self._admission_result(command)
+                # The owner may have released the lock after committing, but
+                # not yet published its completion or error.
+                raise DevlegateError(
+                    "service admission outcome is unknown; "
+                    "retry with the same request id"
+                )
         return self._admission_result(command)
 
     def _validate_retry_admission(self, ticket_id: str, force: bool = False) -> None:
@@ -2477,6 +2484,7 @@ class ServiceEngine:
         return [candidates[key] for key in keys[:limit]]
 
     def _admit_operator_command(self, command: OperatorCommand) -> None:
+        recording = False
         try:
             with self._operator_command_lock:
                 if command.cancelled.is_set():
@@ -2492,6 +2500,7 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
+                recording = True
                 self._record_operator_admission(command)
                 if command.method == "cleanup-workspaces":
                     assert command.onto is not None
@@ -2539,13 +2548,25 @@ class ServiceEngine:
                     command.resolution_class,
                 )
         except DevlegateError as error:
-            command.admission_error = error
-            raise
-        except (GitObservationError, GitAncestryError) as error:
+            if not recording:
+                command.admission_error = error
+                raise
             command.admission_error = DevlegateError(
-                "service busy; mutable request was not admitted"
+                "service admission outcome is unknown; retry with the same request id: "
+                f"{error}"
             )
             raise command.admission_error from error
+        except (GitObservationError, GitAncestryError) as error:
+            command.admission_error = DevlegateError(
+                "service admission outcome is unknown; retry with the same request id"
+                if recording else "service busy; mutable request was not admitted"
+            )
+            raise command.admission_error from error
+        except Exception:
+            command.admission_error = DevlegateError(
+                "service admission outcome is unknown; retry with the same request id"
+            )
+            raise
         finally:
             command.admission_event.set()
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+import threading
 from git_support import control_publisher
 from runtime_helpers import run_test_iteration
 from _control_support import (
@@ -18,6 +19,7 @@ from _control_support import (
 )
 
 from devlegate.cli import DevlegateError
+import devlegate.runtime as runtime
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.runtime import (
     OperatorCommand,
@@ -35,6 +37,69 @@ def _force_command(request_id="force-request"):
         "T-1",
         force=True,
     )
+
+
+def test_force_retry_timeout_after_evidence_before_receipt(tmp_path, monkeypatch):
+    engine, workspace, _control, _old_control = _prepare_changed_descendant(
+        tmp_path, monkeypatch
+    )
+    (workspace.path / "progress.txt").write_text("preserved\n")
+    monkeypatch.setattr(runtime, "OPERATOR_ADMISSION_TIMEOUT", 0.05)
+    queued = threading.Event()
+    timed_out = threading.Event()
+    evidence_saved = threading.Event()
+    release = threading.Event()
+    responses = []
+    original_save = engine._save_state
+
+    def wake():
+        event = engine._operator_command.admission_event
+        original_wait = event.wait
+
+        def wait(timeout):
+            result = original_wait(timeout)
+            if not result:
+                timed_out.set()
+            return result
+
+        event.wait = wait
+        queued.set()
+
+    def save(phase, **fields):
+        if "force_retry_provenance" in fields:
+            evidence_saved.set()
+            assert release.wait(10)
+        return original_save(phase, **fields)
+
+    monkeypatch.setattr(engine, "wake", wake)
+    monkeypatch.setattr(engine, "_save_state", save)
+    client = threading.Thread(target=lambda: responses.append(engine.submit_retry(
+        "T-1", force=True, request_id="force-request"
+    )))
+    client.start()
+    assert queued.wait(5)
+    command, _ = engine._claim_owner_work(True)
+    owner = threading.Thread(target=engine._admit_operator_command, args=(command,))
+    owner.start()
+    try:
+        assert evidence_saved.wait(10)
+        assert timed_out.wait(5)
+        assert git(
+            engine.repo,
+            "show",
+            "refs/devlegate/recovery/force-retry/T-1/E1:progress.txt",
+        ).stdout == "preserved\n"
+    finally:
+        release.set()
+        owner.join(10)
+        client.join(10)
+    assert not owner.is_alive() and not client.is_alive()
+    assert responses == [{"accepted": True, "ticket_id": "T-1"}]
+    restarted = ServiceEngine(engine.env_file)
+    assert restarted._mutable_receipt("force-request")["accepted"] is True
+    assert restarted.submit_retry(
+        "T-1", force=True, request_id="force-request"
+    ) == responses[0]
 
 
 def test_force_retry_dogfood_preserves_progress_and_uses_current_ticket(
