@@ -59,3 +59,33 @@ serialized owner. Git cannot retrospectively detect an out-of-band deletion and
 recreation of a ref at the same object ID. Detectable drift and incomplete or
 unknown state must fail closed; stronger continuity requires an enforced
 exclusive-writer boundary.
+
+### Remaining transition-journal dependency
+
+Positive proof depends on a single owner-serialized journal covering every
+mutation of the execution resources, not just normal workspace preparation.
+The current paths include `ExecutionWorkspaceManager.prepare` and
+`prepare_rework`, `repair_bound_workspace`, checkpoint publication and rework
+predecessor publication, reconciliation rewrites, and the runtime's retirement
+and automatic cleanup paths. Several of these intentionally reuse, move, or
+remove an existing branch. They cannot safely be interpreted as fresh creation
+from their present path and commit observations.
+
+Implementation must first record a transition intent before each Git effect,
+then durably record its verified result before the next effect or worker
+launch. Each intent must identify the generation nonce, exact resource and
+expected predecessor; ref updates and deletes require exact leases or CAS.
+Fresh creation must refuse pre-existing unbound resources rather than adopt
+them. A worktree-specific marker in its Git administrative directory can tie
+the journal to the observed registration, but cannot establish ref continuity
+on its own. Ref continuity additionally depends on exclusive owner mediation;
+Git cannot detect a delete and recreate at the same object ID by another writer.
+
+Recovery must leave an interrupted transition unproven unless its outcome can
+be established without adopting a foreign resource. Retirement must revoke the
+old generation before removing or transferring any resource. Rework, retries,
+reconciliation, and automatic cleanup must use the same protocol before the
+proof API can return positive results. Tests must exercise interruption on both
+sides of each effect and journal write, including remote publication, and show
+that prior reports and evidence pins are retained. Until that integration is
+complete, the read-only proof remains negative for every generation.
