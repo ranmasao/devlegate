@@ -330,6 +330,20 @@ def _clean_daemon(env_file: Path, *, output_format: str) -> int:
     return 0
 
 
+def _inspect_execution_daemon(
+    env_file: Path, ticket_id: str, output_format: str
+) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        result = request(
+            locator.socket_path, "inspect-execution", {"ticket_id": ticket_id}
+        )
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    emit(result, output_format, json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -2679,6 +2693,11 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="show cleanup inventory without changing state"
     )
     add_output_arguments(clean_status_parser)
+    clean_inspect_parser = clean_commands.add_parser(
+        "inspect", help="inspect one ticket's execution resources"
+    )
+    clean_inspect_parser.add_argument("ticket_id")
+    add_output_arguments(clean_inspect_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3138,6 +3157,10 @@ def main() -> int:
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "clean":
+            if args.clean_command == "inspect":
+                return _inspect_execution_daemon(
+                    env_file, args.ticket_id, args.output_format
+                )
             return _clean_daemon(
                 env_file,
                 output_format=args.output_format,
