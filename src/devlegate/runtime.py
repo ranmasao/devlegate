@@ -4389,6 +4389,18 @@ class ServiceEngine:
                     "execution resource intent journal is malformed"
                 )
             if not pending_agent_execution:
+                expected_resource_intent = {
+                    "status": "intent",
+                    "ticket_id": selected_ticket.id,
+                    "execution_id": execution_id,
+                    "control_head": bound_execution_control,
+                    "admitted_base_head": execution_base_head,
+                    "remote_head": execution_remote_head,
+                    "branch": f"devlegate/work/{selected_ticket.id}",
+                    "path": str(
+                        self.execution_worktree_root / "work" / selected_ticket.id
+                    ),
+                }
                 if execution_id in resource_intents:
                     prior = resource_intents[execution_id]
                     if not (
@@ -4397,9 +4409,12 @@ class ServiceEngine:
                         and isinstance(automatic_retry, dict)
                         and automatic_retry.get("status") == "admitted"
                         and isinstance(prior, dict)
-                        and prior.get("execution_id") == execution_id
-                        and prior.get("ticket_id") == selected_ticket.id
-                        and prior.get("status") == "intent"
+                        and all(
+                            key in prior and prior[key] == value
+                            for key, value in expected_resource_intent.items()
+                        )
+                        and isinstance(prior.get("nonce"), str)
+                        and bool(prior["nonce"])
                     ):
                         raise WorkflowBlockedError(
                             "execution resource intent already exists"
@@ -4408,19 +4423,8 @@ class ServiceEngine:
                     resource_intents = {
                         **resource_intents,
                         execution_id: {
-                            "status": "intent",
+                            **expected_resource_intent,
                             "nonce": new_execution_id(),
-                            "ticket_id": selected_ticket.id,
-                            "execution_id": execution_id,
-                            "control_head": bound_execution_control,
-                            "admitted_base_head": execution_base_head,
-                            "remote_head": execution_remote_head,
-                            "branch": f"devlegate/work/{selected_ticket.id}",
-                            "path": str(
-                                self.execution_worktree_root
-                                / "work"
-                                / selected_ticket.id
-                            ),
                         },
                     }
             self._save_state(
