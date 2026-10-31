@@ -38,6 +38,31 @@ import devlegate.runtime as runtime
 from devlegate.execution_workspace import ExecutionWorkspaceManager
 
 
+def test_inspection_runs_on_owner_without_receipt(
+    tmp_path, monkeypatch, short_state_dir
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    queued = threading.Event()
+    monkeypatch.setattr(engine, "wake", queued.set)
+    results = []
+    client = threading.Thread(
+        target=lambda: results.append(
+            engine.submit_execution_inspection("T-1", request_id="inspection")
+        )
+    )
+    client.start()
+    assert queued.wait(2)
+    command, scheduler = engine._claim_owner_work(True)
+    assert command is not None and not scheduler
+    engine._admit_operator_command(command)
+    client.join(5)
+    assert not client.is_alive()
+    assert results[0]["ticket_id"] == "T-1"
+    assert results[0]["control_head"]
+    assert results[0]["safe"] is False
+    assert engine._mutable_receipt("inspection") is None
+
+
 @pytest.mark.parametrize("pause_at", ["validation", "receipt"])
 def test_timeout_waiting_for_owner_lock_returns_committed_admission(
     tmp_path, monkeypatch, short_state_dir, pause_at
