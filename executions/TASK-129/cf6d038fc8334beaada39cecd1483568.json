@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "35cbe14d2e9cf25e5bc098278e59452c48007871",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "cf6d038fc8334beaada39cecd1483568",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Prove the exact execution generation and lifecycle publication against ticket and control history, including reused-branch ambiguity and stale-control checks.",
+    "Validate all ownership, recovery, reconciliation and operator intents and bind resource identities to the proven generation before permitting safe previews.",
+    "Implement the canonical confirmation-ready plan, deterministic identity digest and revalidation contract.",
+    "Add comprehensive real-Git and owner/IPC coverage for successful previews and all specified blockers, and complete operator documentation and CI validation."
+  ],
+  "report_artifact": "executions/TASK-129/cf6d038fc8334beaada39cecd1483568.md",
+  "report_sha256": "6ea584202a3f05b6b6885fd0d033f00e06d11c04b271425c241a5400e81363c1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Prove the exact execution generation and lifecycle publication against ticket and control history, including reused-branch ambiguity and stale-control checks.",
+      "Validate all ownership, recovery, reconciliation and operator intents and bind resource identities to the proven generation before permitting safe previews.",
+      "Implement the canonical confirmation-ready plan, deterministic identity digest and revalidation contract.",
+      "Add comprehensive real-Git and owner/IPC coverage for successful previews and all specified blockers, and complete operator documentation and CI validation."
+    ],
+    "report": "The current inspection remains deliberately unsafe because the complete generation and ownership proof and confirmation contract have not been established; the evidence inventory alone cannot safely authorize resource cleanup.",
+    "summary": "Extended read-only inspection with committed execution and review evidence, local evidence pins, and selected runtime dependency observations. Corrected read-only admission failures so they do not imply uncertain mutable admission."
+  },
+  "workspace_head": "303527e06cc4a53fe4655a2fbbc2eb459e071530"
+}
