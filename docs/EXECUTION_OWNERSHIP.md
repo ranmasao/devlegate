@@ -47,3 +47,15 @@ of the resource cannot by itself establish that the resource was not replaced.
 Historical executions have no owner-published resource-continuity binding and
 must therefore be treated as unsafe by any generic reset proof. Existing
 workspace recovery classifications and checkpoint pins are not such a binding.
+
+New admissions also persist a nonce-bearing resource intent alongside the pending
+execution state, before workspace preparation. This is only an intent: it does
+not yet journal resource creation, publication or retirement, and must not be
+used as an ownership proof. A pending execution predating the intent is not
+assigned one on replay.
+
+A future resource proof must assume that resource mutations are mediated by the
+serialized owner. Git cannot retrospectively detect an out-of-band deletion and
+recreation of a ref at the same object ID. Detectable drift and incomplete or
+unknown state must fail closed; stronger continuity requires an enforced
+exclusive-writer boundary.
