@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "blocked",
+  "control_head": "8df974903abf7b6600e043252d7141a229b325e7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "b6da0188a8f94ab0990faa5f37b3f571",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Please provide the sanitized, read-only TASK-073 evidence artifact specified in docs/architecture/task-126-retention-diagnostic.md, including both reports, control transition and blob history, current owner/recovery state, worktree and ref identities, pinned evidence, cleanup refusal, observation times, and exact command outputs or failures."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Reconstruct the TASK-073 historical resource sequence and determine whether unwanted retention can recur.",
+    "Select and implement the evidence-supported remediation, including real-Git crash, restart, identity, ownership, and partial-retirement regression coverage."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Please provide the sanitized, read-only TASK-073 evidence artifact specified in docs/architecture/task-126-retention-diagnostic.md, including both reports, control transition and blob history, current owner/recovery state, worktree and ref identities, pinned evidence, cleanup refusal, observation times, and exact command outputs or failures."
+    ],
+    "remaining": [
+      "Reconstruct the TASK-073 historical resource sequence and determine whether unwanted retention can recur.",
+      "Select and implement the evidence-supported remediation, including real-Git crash, restart, identity, ownership, and partial-retirement regression coverage."
+    ],
+    "report": null,
+    "summary": "Reviewed the carried-forward TASK-073 retention diagnostic and the current review feedback. The existing diagnostic documents the evidence needed to distinguish protected resources from an obsolete generation."
+  },
+  "workspace_head": "757f4b85d355e08c9a84774787e6901c6e54974b"
+}
