@@ -1,0 +1,35 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "5a5214316d8b0c8548f4173bf7136d730f918989",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "7ee7e6eda2f4415ab168e1d4bdba2845",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized CLI/IPC preview and a deterministic identity-bound plan/proof covering ticket, execution generation, pending intents, retained evidence and exact Git observations.",
+    "Add owner/IPC and real-Git coverage for preview, ambiguity, failures, replay, stable digest and absence of writes; document operator usage."
+  ],
+  "report_artifact": "executions/TASK-129/7ee7e6eda2f4415ab168e1d4bdba2845.md",
+  "report_sha256": "85e5be515363c50a2f413ac3e7e8049d81cb636fd233259ffe6b570ea2caf77d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized CLI/IPC preview and a deterministic identity-bound plan/proof covering ticket, execution generation, pending intents, retained evidence and exact Git observations.",
+      "Add owner/IPC and real-Git coverage for preview, ambiguity, failures, replay, stable digest and absence of writes; document operator usage."
+    ],
+    "report": "The invocation is ending before the owner-side provenance and preview integration can be implemented and validated safely.",
+    "summary": "Fixed the reported Ruff failures and extended read-only execution resource observation to include exact worktree status and prunable-registration coverage."
+  },
+  "workspace_head": "e34a24c7637296d93b68fb1b3ea94333ef3463ad"
+}
