@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "752aef518872995ca26dacd3ba427947fd86f4a0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "d1c86cf135c047f9b6b60c2f2d8a59f3",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an owner-serialized durable generation journal and wire intent, verification, revocation, and replay into preparation, rework, repair, checkpoint publication, reconciliation, and cleanup.",
+    "Implement positive read-only proof using independently observed Git resources and the completed journal; reject historical, pending, stale, conflicting, and drifted bindings.",
+    "Add crash-boundary, restart, recreation, remote-error, and historical-report regressions; document exclusive-writer assumptions and recovery rules; rerun configured CI."
+  ],
+  "report_artifact": "executions/TASK-134/d1c86cf135c047f9b6b60c2f2d8a59f3.md",
+  "report_sha256": "5efaf9141f35caa3dc04412755688ebab02be6a634726f44e59ed4d2e160d652",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an owner-serialized durable generation journal and wire intent, verification, revocation, and replay into preparation, rework, repair, checkpoint publication, reconciliation, and cleanup.",
+      "Implement positive read-only proof using independently observed Git resources and the completed journal; reject historical, pending, stale, conflicting, and drifted bindings.",
+      "Add crash-boundary, restart, recreation, remote-error, and historical-report regressions; document exclusive-writer assumptions and recovery rules; rerun configured CI."
+    ],
+    "report": "The existing lifecycle can rediscover matching resources after restart and has multiple mutation paths outside preparation. A positive binding cannot safely be enabled until all those paths participate in the durable journal; that integration remains unfinished. The configured coverage run had one service-restart timeout, which passed when rerun individually.",
+    "summary": "Execution workspace preparation now rejects failed branch and worktree creation commands rather than adopting matching resources in the same attempt. Real-Git regressions cover both ambiguous creation failures."
+  },
+  "workspace_head": "ad8db3f738679afceffd1fdd1ef5e8d96919cfa1"
+}
