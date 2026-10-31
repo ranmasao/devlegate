@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "676ea9c413d1bdcd6123439c923a612f75b817ec",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "0554f09c5be4488ca42341d51ce31d47",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable owner-serialized generation bindings and independent continuity proofs for worktrees, local refs, and upstream refs.",
+    "Integrate binding publication and fail-closed recovery across preparation, rework, worker launch, retries, and cleanup uncertainty.",
+    "Expose the read-only proof API and add the required persistence, restart, interruption, and non-interference tests."
+  ],
+  "report_artifact": "executions/TASK-134/0554f09c5be4488ca42341d51ce31d47.md",
+  "report_sha256": "b4b3f6a76db4bcffe934eaac5fc15e82905671117d5e4876563fb686c27f6e07",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable owner-serialized generation bindings and independent continuity proofs for worktrees, local refs, and upstream refs.",
+      "Integrate binding publication and fail-closed recovery across preparation, rework, worker launch, retries, and cleanup uncertainty.",
+      "Expose the read-only proof API and add the required persistence, restart, interruption, and non-interference tests."
+    ],
+    "report": "A safe end-to-end continuity protocol has not been established: Git ref values and independent surviving markers cannot distinguish deletion and recreation at the same object ID. The configured coverage run had two service-busy failures; both passed when rerun individually.",
+    "summary": "Documented the distinction between workspace topology inspection and generation ownership, and added a real-Git regression demonstrating identical observations after worktree and ref recreation."
+  },
+  "workspace_head": "fa8d53f28f786610c1b5009e5683e8b7934bec21"
+}
