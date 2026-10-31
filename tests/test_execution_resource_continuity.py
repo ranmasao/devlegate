@@ -35,3 +35,22 @@ def test_recreated_worktree_and_ref_have_identical_topology(tmp_path):
     assert before.classification == after.classification == "REUSABLE"
     assert before.workspace == after.workspace
     assert git(repo, "rev-parse", ref) == base
+
+
+def test_recreated_upstream_ref_has_same_observed_oid(tmp_path):
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    git(tmp_path, "init", "--bare", remote)
+    git(tmp_path, "init", "-b", "main", repo)
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    ref = "refs/heads/devlegate/work/T-1"
+    git(repo, "push", remote, f"{base}:{ref}")
+    before = git(repo, "ls-remote", remote, ref)
+
+    git(repo, "push", remote, f":{ref}")
+    git(repo, "push", remote, f"{base}:{ref}")
+
+    assert git(repo, "ls-remote", remote, ref) == before == f"{base}\t{ref}"
