@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "bb0904feb3cb34a9f1f54180d107357ed7dac02c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "f3bd04b90e3c45149ea509a3868f0e83",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement generation-specific worktree creation metadata, independently verified binding, and positive read-only proof for freshly created resources.",
+    "Journal and mediate local and upstream ref creation, publication, rework, repair, reconciliation, retirement, and cleanup with durable revocation and CAS; safely reconcile interrupted transitions.",
+    "Add real-Git recreation, restart, drift, interruption-boundary, and report/pin non-interference coverage, and document complete binding and recovery semantics.",
+    "Run configured CI successfully after completing the implementation."
+  ],
+  "report_artifact": "executions/TASK-134/f3bd04b90e3c45149ea509a3868f0e83.md",
+  "report_sha256": "844bca01706bc874440a343403b1231ea85ca5fdfb30656c80e8b14d9fa88022",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement generation-specific worktree creation metadata, independently verified binding, and positive read-only proof for freshly created resources.",
+      "Journal and mediate local and upstream ref creation, publication, rework, repair, reconciliation, retirement, and cleanup with durable revocation and CAS; safely reconcile interrupted transitions.",
+      "Add real-Git recreation, restart, drift, interruption-boundary, and report/pin non-interference coverage, and document complete binding and recovery semantics.",
+      "Run configured CI successfully after completing the implementation."
+    ],
+    "report": "The available execution time was spent inspecting the lifecycle, implementing the initial preparation boundary, and running configured CI. Safe positive proof requires mediating the remaining mutation paths; enabling it with the current journal would allow false ownership claims. Configured CI had two service-busy failures that passed when rerun individually.",
+    "summary": "Added durable preparation start and observation events to existing execution resource intents, while keeping these observations explicitly insufficient as ownership proof. Added interruption and replay coverage for the preparation journal."
+  },
+  "workspace_head": "f8492438a71be0f08f743f144e45d3c0871c1bd2"
+}
