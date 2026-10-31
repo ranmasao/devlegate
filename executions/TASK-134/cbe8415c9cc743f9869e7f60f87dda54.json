@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "2cce43a6fd4b8c278f8e7ba3f5512693961a5fda",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "cbe8415c9cc743f9869e7f60f87dda54",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an authoritative BOUND result and read-only proof against independently observed Git resources, including positive proof after restart and failure on missing or mismatched markers.",
+    "Journal and mediate all local and upstream ref creation, publication, CAS updates, rework, repair, reconciliation, retirement, and cleanup, including revocation before destructive effects and fail-closed recovery.",
+    "Complete interruption and restart coverage at every transition, same-SHA recreation, ref and path drift, remote failures, and preservation of prior reports and pins; rerun configured CI for the finished protocol."
+  ],
+  "report_artifact": "executions/TASK-134/cbe8415c9cc743f9869e7f60f87dda54.md",
+  "report_sha256": "d2cdb757b3870ea61d6e1b6cdb3125d254c3109fd07409ce1e178dac75310f7a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an authoritative BOUND result and read-only proof against independently observed Git resources, including positive proof after restart and failure on missing or mismatched markers.",
+      "Journal and mediate all local and upstream ref creation, publication, CAS updates, rework, repair, reconciliation, retirement, and cleanup, including revocation before destructive effects and fail-closed recovery.",
+      "Complete interruption and restart coverage at every transition, same-SHA recreation, ref and path drift, remote failures, and preservation of prior reports and pins; rerun configured CI for the finished protocol."
+    ],
+    "report": "The full lifecycle mediation and proof protocol remain substantial and could not be completed within this execution. The positive lifecycle acceptance test is explicitly expected to fail; the proof API continues to return false. Configured coverage completed with 1641 passed, 1 skipped and 1 expected failure before the final test-only parameterization; focused checks afterwards passed with two expected failures. Configured lint passed.",
+    "summary": "Added durable nonce-bearing worktree creation markers and owner-journaled creation observations for freshly created branch/worktree pairs. Added production-lifecycle acceptance coverage and real-Git recreation coverage while keeping ownership proof fail-closed."
+  },
+  "workspace_head": "785c0b89e2f325988b2e0c1d3540723bbcd5b0be"
+}
