@@ -4,6 +4,8 @@
 # ruff: noqa: F403, F405, I001
 """Daemon owner-loop lifecycle, drain, stop, and restart semantics."""
 
+import json
+
 from _daemon_support import *  # noqa: F403,F405
 
 def test_lifecycle_drain_rejects_submitted_command_before_owner_admission(
@@ -653,17 +655,52 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
     journal = state["execution_resource_intents"][state["execution_id"]][
         "preparation_journal"
     ]
-    assert journal == [
-        {"sequence": 1, "event": "started"},
-        {
-            "sequence": 2,
-            "event": "observed",
-            "path": str(prepared[0].path),
-            "branch": prepared[0].branch,
-            "head": prepared[0].head,
-            "base_head": prepared[0].base_head,
-        },
-    ]
+    assert journal[0] == {"sequence": 1, "event": "started"}
+    created = journal[1]
+    assert created["event"] == "created"
+    marker = Path(created["marker"])
+    identity = json.loads(marker.read_text())
+    intent = state["execution_resource_intents"][state["execution_id"]]
+    for key in (
+        "ticket_id", "execution_id", "nonce", "control_head",
+        "admitted_base_head", "branch", "path",
+    ):
+        assert identity[key] == intent[key]
+    assert journal[2] == {
+        "sequence": 3,
+        "event": "observed",
+        "path": str(prepared[0].path),
+        "branch": prepared[0].branch,
+        "head": prepared[0].head,
+        "base_head": prepared[0].base_head,
+    }
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError,
+    reason="generation binding is not yet authoritative",
+)
+@pytest.mark.parametrize("restart", [False, True])
+def test_fresh_resource_binding_survives_owner_restart(tmp_path, monkeypatch, restart):
+    from devlegate.execution_resource_proof import inspect_execution_resource_proof
+
+    engine, config, _state = make_engine(tmp_path, monkeypatch)
+    stop_event = threading.Event()
+    original_prepare = engine._prepare_execution_workspace
+
+    def prepare(plan):
+        workspace = original_prepare(plan)
+        stop_event.set()
+        return workspace
+
+    monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
+    assert engine.serve(stop_event) == 0
+    state = engine._runtime_store.load()
+    ticket_id = state["execution_ticket_id"]
+    execution_id = state["execution_id"]
+    if restart:
+        state = ServiceEngine(config)._runtime_store.load()
+    assert inspect_execution_resource_proof(state, ticket_id, execution_id).proven
 
 
 def test_interrupted_workspace_preparation_leaves_durable_started_event(
