@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "eec71670bbbed384eab7d09fdee66ae51a2b7cab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "693aab1b42294378b55d0beb43e63b43",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized BOUND publication and a positive read-only proof using separately observed resources.",
+    "Mediate and durably revoke authority before all local and upstream ref mutations, rework, repair, checkpoint publication, reconciliation, cleanup, and retirement.",
+    "Add crash-boundary, restart, ref recreation, remote failure, and historical report/pin preservation coverage; document binding and recovery semantics."
+  ],
+  "report_artifact": "executions/TASK-134/693aab1b42294378b55d0beb43e63b43.md",
+  "report_sha256": "a010e406b736cfe6db840efc797f7381f64efb750334f23213ee4d71059d26ed",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized BOUND publication and a positive read-only proof using separately observed resources.",
+      "Mediate and durably revoke authority before all local and upstream ref mutations, rework, repair, checkpoint publication, reconciliation, cleanup, and retirement.",
+      "Add crash-boundary, restart, ref recreation, remote failure, and historical report/pin preservation coverage; document binding and recovery semantics."
+    ],
+    "report": "The authoritative lifecycle protocol and complete mutation mediation remain unimplemented; treating the verified creation observation as ownership would be unsafe. The configured parallel suite passed with the existing positive lifecycle cases still expected-failing.",
+    "summary": "Added independently verified and durable creation observations for fresh worktrees, including marker, registration, local ref, and admission provenance checks. Added real-Git drift coverage and updated lifecycle journal expectations while keeping ownership proofs fail-closed."
+  },
+  "workspace_head": "e4f2444ef1ba8dd9177800a33ae3e3d6d1272f2e"
+}
