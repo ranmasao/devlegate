@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Real-Git examples of observations that do not establish ownership."""
 
+import json
 import subprocess
+from pathlib import Path
 
 from devlegate.execution_workspace import ExecutionWorkspaceManager
 
@@ -54,3 +56,28 @@ def test_recreated_upstream_ref_has_same_observed_oid(tmp_path):
     git(repo, "push", remote, f"{base}:{ref}")
 
     assert git(repo, "ls-remote", remote, ref) == before == f"{base}\t{ref}"
+
+
+def test_fresh_creation_marker_is_not_transferred_to_identical_recreation(tmp_path):
+    repo = tmp_path / "repo"
+    git(tmp_path, "init", "-b", "main", repo)
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    identity = {"execution_id": "generation-1", "nonce": "nonce-1"}
+    manager = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
+    workspace = manager.prepare(base, creation_identity=identity)
+    marker = Path(manager.creation_marker)
+    assert json.loads(marker.read_text()) == identity
+
+    git(repo, "worktree", "remove", workspace.path)
+    git(repo, "update-ref", "-d", f"refs/heads/{workspace.branch}", base)
+    git(repo, "branch", workspace.branch, base)
+    git(repo, "worktree", "add", workspace.path, workspace.branch)
+    replacement_admin = Path(git(workspace.path, "rev-parse", "--absolute-git-dir"))
+    assert not (replacement_admin / marker.name).exists()
+    replay = ExecutionWorkspaceManager(repo, tmp_path / "state", "T-1")
+    replay.prepare(base, creation_identity=identity)
+    assert replay.creation_marker is None
+    assert not (replacement_admin / marker.name).exists()
