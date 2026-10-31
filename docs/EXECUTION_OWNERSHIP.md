@@ -59,6 +59,14 @@ marker and journal are not yet ownership proof: publication, ref mutations and
 retirement are not comprehensively journaled. A pending execution predating the
 intent is not assigned one on replay.
 
+Fresh preparation additionally records separate intent and verified events for
+branch creation, worktree creation, and marker installation. Each verified event
+follows a Git or marker observation, and a failed journal write stops the next
+effect. An unmatched intent is ambiguous after restart; neither it nor a complete
+creation sequence alone grants authority. Other mutation paths remain outside
+this journal, and same-OID ref replacement is not observable without exclusive
+owner mediation.
+
 A future resource proof must assume that resource mutations are mediated by the
 serialized owner. Git cannot retrospectively detect an out-of-band deletion and
 recreation of a ref at the same object ID. Detectable drift and incomplete or
