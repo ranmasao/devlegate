@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
@@ -95,12 +96,16 @@ class ExecutionWorkspaceManager:
         self.creation_marker: str | None = None
 
     def prepare(
-        self, base_head: str, *, creation_identity: dict[str, str] | None = None
+        self,
+        base_head: str,
+        *,
+        creation_identity: dict[str, str] | None = None,
+        creation_transition: Callable[[str, str, str], None] | None = None,
     ) -> ExecutionWorkspace:
         self._validate_base(base_head)
         if self.root.is_symlink() or (self.root / "work").is_symlink():
             raise self._path_conflict("has a symlinked workspace root")
-        branch_created = self._ensure_branch(base_head)
+        branch_created = self._ensure_branch(base_head, creation_transition)
         self._validate_branch(base_head)
         registrations = self._registrations()
         branch_path = next(
@@ -136,6 +141,8 @@ class ExecutionWorkspaceManager:
             )
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if creation_transition is not None:
+            creation_transition("worktree", "intent", base_head)
         created = self._runner(
             self.repo, "worktree", "add", str(self.path), self.branch, check=False
         )
@@ -150,9 +157,19 @@ class ExecutionWorkspaceManager:
                 f"created execution worktree {self.path} but Git did not register it"
             )
         workspace = self._validate_existing(registration, base_head)
+        if creation_transition is not None:
+            creation_transition("worktree", "verified", workspace.head)
         self._prepare_submodules(workspace.path)
         if branch_created and creation_identity is not None:
+            if creation_transition is not None:
+                creation_transition("marker", "intent", workspace.head)
             self.creation_marker = self._write_creation_marker(creation_identity)
+            if creation_transition is not None:
+                if not self.verify_creation_observation(
+                    creation_identity, workspace, self.creation_marker
+                ):
+                    raise ExecutionWorkspaceError("cannot verify creation marker")
+                creation_transition("marker", "verified", workspace.head)
         return workspace
 
     def _write_creation_marker(self, identity: dict[str, str]) -> str:
@@ -216,10 +233,17 @@ class ExecutionWorkspaceManager:
             if registration is None or registration.get("branch") != self.branch:
                 return False
             ref = self._runner(
-                self.repo, "rev-parse", "--verify", f"refs/heads/{self.branch}",
+                self.repo,
+                "rev-parse",
+                "--verify",
+                f"refs/heads/{self.branch}",
                 check=False,
             )
             head = self._runner(self.path, "rev-parse", "HEAD", check=False)
+            symbolic = self._runner(
+                self.path, "symbolic-ref", "--quiet", "HEAD", check=False
+            )
+            root = self._runner(self.path, "rev-parse", "--show-toplevel", check=False)
             admin_result = self._runner(
                 self.path, "rev-parse", "--absolute-git-dir", check=False
             )
@@ -227,12 +251,16 @@ class ExecutionWorkspaceManager:
                 self.repo, "rev-parse", "--git-common-dir", check=False
             )
             if any(
-                result.returncode for result in (ref, head, admin_result, common_result)
+                result.returncode
+                for result in (ref, head, symbolic, root, admin_result, common_result)
             ):
                 return False
             if (
                 ref.stdout.strip() != workspace.head
                 or head.stdout.strip() != workspace.head
+                or registration.get("head") != workspace.head
+                or symbolic.stdout.strip() != f"refs/heads/{self.branch}"
+                or Path(root.stdout.strip()).resolve() != self.path.resolve()
             ):
                 return False
             admin = Path(admin_result.stdout.strip()).resolve()
@@ -754,15 +782,32 @@ class ExecutionWorkspaceManager:
                 "product repository"
             )
 
-    def _ensure_branch(self, base_head: str) -> bool:
+    def _ensure_branch(
+        self,
+        base_head: str,
+        transition: Callable[[str, str, str], None] | None = None,
+    ) -> bool:
         if self._branch_exists():
             return False
+        if transition is not None:
+            transition("branch", "intent", base_head)
         created = self._runner(self.repo, "branch", self.branch, base_head, check=False)
         if created.returncode:
             raise ExecutionWorkspaceError(
                 f"cannot create execution branch {self.branch}: "
                 f"{created.stderr.strip() or 'unknown git error'}"
             )
+        if transition is not None:
+            observed = self._runner(
+                self.repo,
+                "rev-parse",
+                "--verify",
+                f"refs/heads/{self.branch}",
+                check=False,
+            )
+            if observed.returncode or observed.stdout.strip() != base_head:
+                raise ExecutionWorkspaceError("cannot verify created execution branch")
+            transition("branch", "verified", base_head)
         return True
 
     def _branch_exists(self) -> bool:
