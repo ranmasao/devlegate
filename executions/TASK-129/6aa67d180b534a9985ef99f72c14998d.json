@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "680d04c92177d1e379ede0e1a39c0a089673da7a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "6aa67d180b534a9985ef99f72c14998d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Prove the exact execution generation, report, checkpoint, control lineage, resource ownership and absence of conflicting persisted intents across history before allowing a safe preview.",
+    "Implement a canonical identity-bound plan and digest with fresh revalidation, and add safe deferred and adversarial owner/IPC real-Git coverage.",
+    "Complete the configured CI check and obtain independent review before downstream work."
+  ],
+  "report_artifact": "executions/TASK-129/6aa67d180b534a9985ef99f72c14998d.md",
+  "report_sha256": "ac3d50c831b347d4cfc83942f4b4becdc35ec1585425eb55024a51a84ac43625",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Prove the exact execution generation, report, checkpoint, control lineage, resource ownership and absence of conflicting persisted intents across history before allowing a safe preview.",
+      "Implement a canonical identity-bound plan and digest with fresh revalidation, and add safe deferred and adversarial owner/IPC real-Git coverage.",
+      "Complete the configured CI check and obtain independent review before downstream work."
+    ],
+    "report": "The generation ownership proof and plan contract remain unimplemented, so the preview deliberately stays unsafe. The full test suite exceeded the available command time; ./dev check also requires a missing .venv.",
+    "summary": "Updated inspection to recognize deferred backlog tickets without requiring done status, retain fail-closed ownership checks, and expose committed ticket-path history. Documented the read-only preview and added a real-Git regression test for backlog and active execution states."
+  },
+  "workspace_head": "3f4e8a3c3ff4bd1bf7befa74d15e0bedaf59d731"
+}
