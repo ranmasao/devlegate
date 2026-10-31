@@ -27,4 +27,5 @@ def test_missing_or_conflicting_evidence_is_not_proof():
         {"execution_resource_intents": []},
         {"execution_resource_intents": {"execution-1": {"ticket_id": "TASK-2"}}},
     ):
-        assert not inspect_execution_resource_proof(state, "TASK-1", "execution-1").proven
+        proof = inspect_execution_resource_proof(state, "TASK-1", "execution-1")
+        assert not proof.proven
