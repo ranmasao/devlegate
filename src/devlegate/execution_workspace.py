@@ -190,6 +190,67 @@ class ExecutionWorkspaceManager:
             ) from error
         return str(marker)
 
+    def verify_creation_observation(
+        self, identity: dict[str, str], workspace: ExecutionWorkspace, marker: str
+    ) -> bool:
+        """Check creation evidence against Git, without asserting ref continuity.
+
+        This observation is useful only while the owner serializes resource
+        mutations. Git cannot reveal deletion and recreation of a ref at the
+        same object ID, so this check alone is never an ownership proof.
+        """
+        if (
+            identity.get("ticket_id") != self.ticket_id
+            or identity.get("branch") != self.branch
+            or identity.get("path") != str(self.path)
+            or workspace.ticket_id != self.ticket_id
+            or workspace.branch != self.branch
+            or workspace.path != self.path
+            or self.root.is_symlink()
+            or self.path.parent.is_symlink()
+            or self.path.is_symlink()
+        ):
+            return False
+        try:
+            registration = self._registrations().get(self.path.resolve())
+            if registration is None or registration.get("branch") != self.branch:
+                return False
+            ref = self._runner(
+                self.repo, "rev-parse", "--verify", f"refs/heads/{self.branch}",
+                check=False,
+            )
+            head = self._runner(self.path, "rev-parse", "HEAD", check=False)
+            admin_result = self._runner(
+                self.path, "rev-parse", "--absolute-git-dir", check=False
+            )
+            common_result = self._runner(
+                self.repo, "rev-parse", "--git-common-dir", check=False
+            )
+            if any(
+                result.returncode for result in (ref, head, admin_result, common_result)
+            ):
+                return False
+            if (
+                ref.stdout.strip() != workspace.head
+                or head.stdout.strip() != workspace.head
+            ):
+                return False
+            admin = Path(admin_result.stdout.strip()).resolve()
+            common = Path(common_result.stdout.strip())
+            if not common.is_absolute():
+                common = self.repo / common
+            expected_marker = admin / "devlegate-generation.json"
+            if (
+                admin.parent != common.resolve() / "worktrees"
+                or Path(marker) != expected_marker
+                or expected_marker.is_symlink()
+                or not expected_marker.is_file()
+            ):
+                return False
+            return json.loads(expected_marker.read_text(encoding="utf-8")) == identity
+        except (OSError, ValueError, ExecutionWorkspaceError):
+            return False
+
     def prepare_rework(
         self, base_head: str, previous_base: str, previous_checkpoint: str
     ) -> ExecutionWorkspace:

@@ -674,6 +674,7 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
         "head": prepared[0].head,
         "base_head": prepared[0].base_head,
     }
+    assert journal[3] == {**journal[1], "sequence": 4, "event": "verified"}
 
 
 @pytest.mark.xfail(

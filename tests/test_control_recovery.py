@@ -1870,7 +1870,7 @@ def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
         == previous_journal
     )
     assert [event["event"] for event in replay_intent["preparation_journal"]] == [
-        "started", "created", "observed", "started", "observed"
+        "started", "created", "observed", "verified", "started", "observed"
     ]
 
 def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
