@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "145173cd4407d0d411e727936d89ea6508b91140",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "ed3f88baf0bd4661a5f16d13dcd03f46",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-journaled creation, publication, retirement, and recovery transitions for worktrees and execution refs, including generation-aware worker admission.",
+    "Implement positive resource continuity proof correlated with Git observations and the exclusive-writer assumption.",
+    "Add interruption, restart, recreation, foreign-resource, and noninterference coverage; document recovery semantics and run configured CI."
+  ],
+  "report_artifact": "executions/TASK-134/ed3f88baf0bd4661a5f16d13dcd03f46.md",
+  "report_sha256": "ebc0978d5154507ea298d7c86f9a55fd086dd223a970bd4a1e2ec497b5af12ac",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-journaled creation, publication, retirement, and recovery transitions for worktrees and execution refs, including generation-aware worker admission.",
+      "Implement positive resource continuity proof correlated with Git observations and the exclusive-writer assumption.",
+      "Add interruption, restart, recreation, foreign-resource, and noninterference coverage; document recovery semantics and run configured CI."
+    ],
+    "report": "The existing preparation and recovery paths reuse and retire resources across several boundaries without generation evidence. The complete cross-boundary protocol was not implemented in this invocation; treating the current intent as proof would be unsafe. Focused tests passed; ruff was unavailable.",
+    "summary": "Added a conservative read-only resource evidence assessment that never treats an admission intent as ownership proof, with tests for missing and conflicting evidence."
+  },
+  "workspace_head": "c4feabd4c1ad34b927abf635202ffb18d4046787"
+}
