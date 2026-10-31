@@ -15,8 +15,10 @@ Devlegate is a local orchestrator for coding agents.
 
 To inspect one ticket's execution resources through the running service, use
 `devlegate clean inspect TASK-123 --json`. The response includes the committed
-control HEAD, ticket blob locations, and observable execution worktree and ref
-metadata. This preliminary inspection always reports unsafe: generation
+control HEAD, ticket blob locations, observable execution worktree and ref
+metadata, committed report and review objects and their history, local evidence
+pins, and selected durable runtime dependencies. This preliminary inspection
+always reports unsafe: generation
 ownership and retained evidence are not yet proven. It does not remove resources.
 
 The agent writes the code. Devlegate chooses the work, prepares an isolated
