@@ -4480,10 +4480,15 @@ class ServiceEngine:
             self._owned_execution_id = execution_id
             self._publish_service_snapshot(worker_running=False)
 
+        # Record the preparation boundary before any worktree or ref effects.
+        # This journal is deliberately not a binding: prepare can reuse existing
+        # resources, and an interrupted attempt has an unknown Git outcome.
+        self._record_resource_preparation(execution_id, "started")
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
         except ExecutionWorkspaceError as error:
             raise WorkspacePreparationBlockedError(str(error)) from error
+        self._record_resource_preparation(execution_id, "observed", workspace)
         self._workspace_preparation_blocker = None
         _log(
             "execution workspace "
@@ -5377,6 +5382,41 @@ class ServiceEngine:
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
+
+    def _record_resource_preparation(
+        self,
+        execution_id: str | None,
+        event: str,
+        workspace: ExecutionWorkspace | None = None,
+    ) -> None:
+        """Persist preparation observations without asserting resource ownership."""
+        intents = self._state.get("execution_resource_intents")
+        if not isinstance(intents, dict) or not isinstance(execution_id, str):
+            return
+        intent = intents.get(execution_id)
+        if not isinstance(intent, dict):
+            # Historical pending executions do not acquire a binding by replay.
+            return
+        journal = intent.get("preparation_journal", [])
+        if not isinstance(journal, list) or any(
+            not isinstance(item, dict) for item in journal
+        ):
+            raise WorkflowBlockedError(
+                "execution resource preparation journal is malformed"
+            )
+        entry: dict[str, object] = {"sequence": len(journal) + 1, "event": event}
+        if workspace is not None:
+            entry.update(
+                path=str(workspace.path),
+                branch=workspace.branch,
+                head=workspace.head,
+                base_head=workspace.base_head,
+            )
+        updated = {**intent, "preparation_journal": [*journal, entry]}
+        self._save_state(
+            str(self._state["phase"]),
+            execution_resource_intents={**intents, execution_id: updated},
+        )
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
