@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: EUPL-1.2
 import dataclasses
 import inspect
+import json
 
 import pytest
 
-from devlegate.cli import _execution_projection, _render_status_text
+from devlegate.cli import _execution_projection, _render_check_text, _render_status_text
 from devlegate.ipc_client import decode_status
 from devlegate.output import render_grid, render_table
 from devlegate.runtime import (
@@ -468,3 +469,121 @@ def test_many_column_grid_keeps_frame_and_values(monkeypatch):
     assert _cell_width(lines[0]) <= 80
     assert output.count("one") == 8
     assert output.count("three") == 8
+
+
+@pytest.mark.parametrize("tty", [False, True])
+@pytest.mark.parametrize(
+    ("section", "row_count"),
+    [
+        ("Lifecycle", 1),
+        ("Reconciliation", 3),
+        ("Not ready.", 1),
+        ("Repository diagnostics:", 6),
+        ("Dirty working tree details:", 1),
+        ("Dirty summary:", 1),
+        ("Ticket storage:", 2),
+        ("Next runnable:", 2),
+        ("Control diagnostics:", 2),
+    ],
+)
+def test_cli_key_value_sections_share_logical_row_layout(
+    monkeypatch, tty, section, row_count
+):
+    from devlegate.output import _cell_width
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: tty)
+    monkeypatch.setenv("COLUMNS", "56")
+    path = "/repository/opaque-path-with-no-spaces"
+    title = "A long runnable title with many separate words for wrapping"
+    snapshot = dataclasses.replace(
+        _execution_snapshot("idle", None),
+        lifecycle_integration=("LAB-126", "in-progress"),
+        reconciliation={
+            "status": "pending",
+            "ticket_id": "LAB-1",
+            "original_base": "a" * 40,
+            "product_observation": "several words explaining the product observation",
+        },
+    )
+    result = {
+        "ready": False,
+        "checks": [],
+        "local_head": "a" * 40,
+        "known_remote_head": "b" * 40,
+        "ahead_behind": "0/0",
+        "todo_files": 1,
+        "todo_fingerprint": "fingerprint",
+        "work_generation_differs": False,
+        "dirty_files": [path],
+        "dirty_summary": {"modified": 1},
+        "ticket_counts": {"todo": 1},
+        "runnable_tickets": 1,
+        "next_runnable": {"id": "LAB-1", "title": title},
+        "control_head": "c" * 40,
+        "remote_note": "origin/long-opaque-ref",
+    }
+    text = _render_status_text(snapshot, "stopped", {"state": "idle"})
+    text += "\n" + _render_check_text(result)
+    lines = text.splitlines()
+    start = lines.index(section) + 1
+    end = next(i for i in range(start, len(lines)) if lines[i].startswith("└"))
+    frame = lines[start : end + 1]
+    assert sum(line.startswith("├") for line in frame) == row_count - 1
+    assert len({_cell_width(line) for line in frame}) == 1
+    if section == "Next runnable:":
+        value_lines = [
+            line.split("│")[2].strip() for line in frame if line.startswith("│")
+        ]
+        assert " ".join(value_lines[1:]).split() == title.split()
+        assert (len(value_lines) > 2) == tty
+    if section == "Dirty working tree details:":
+        assert path in "\n".join(frame)
+    if section == "Reconciliation":
+        assert "a" * 40 in "\n".join(frame)
+
+
+def test_unicode_width_policy_and_minimum_overflow(monkeypatch):
+    from devlegate.output import _cell_width, _display
+
+    assert _cell_width("e\u0301") == 1
+    assert _cell_width("\u754c") == 2
+    # The joiner is escaped before measurement, not treated as a grapheme.
+    assert _display("\U0001f469\u200d\U0001f4bb") == "\U0001f469\\u200d\U0001f4bb"
+    assert _display("\x1b[31m\t\r") == "\\x1b[31m\\t\\r"
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "8")
+    identity = "refs/heads/a-very-long-identity"
+    output = render_grid("Grid", ("ID", "Title"), [(identity, "short words")])
+    frame = output.splitlines()[1:]
+    assert identity in output
+    assert _cell_width(frame[0]) > 8
+    assert len({_cell_width(line) for line in frame}) == 1
+
+
+@pytest.mark.parametrize("output_format", ["json", "yaml"])
+def test_machine_status_round_trip_is_independent_of_table_layout(
+    monkeypatch, output_format
+):
+    from devlegate._vendor import nanoyaml
+    from devlegate.output import render_machine
+
+    title = "Long title with words and /opaque/path/that/must/remain/intact"
+    snapshot = dataclasses.replace(
+        _execution_snapshot("agent_pending", "lifecycle"),
+        bound_ticket_title=title,
+        eligible=(("LAB-2", title),),
+        blocked=(("LAB-3", title, BlockedReason("repository")),),
+    )
+    payload = snapshot.as_dict()
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "20")
+    _render_status_text(snapshot, "running", _execution_projection(snapshot, None))
+    serialized = render_machine(payload, output_format)
+    if output_format == "json":
+        decoded = json.loads(serialized)
+    else:
+        decoded = nanoyaml.loads(serialized)
+    assert decoded == payload
+    assert decoded["tickets"]["eligible"] == [{"id": "LAB-2", "title": title}]
+    assert decoded["tickets"]["blocked"][0]["reason"] == {"kind": "repository"}
+    assert decode_status(decoded).as_dict() == payload

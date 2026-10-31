@@ -45,8 +45,13 @@ large grids can still cost more than ordinary status tables. Candidate cell
 heights are cached. A local 8-column, 20-row test at 110 columns took 0.33s;
 this is a representative stress case, not a fixed runtime guarantee.
 
-Display width uses standard-library combining and East Asian width properties;
-complex emoji grapheme clusters and terminal-specific ambiguous widths are not
-fully modeled. Control characters, including ANSI escapes, are shown as escaped
-text rather than interpreted. Tabs and carriage returns are escaped; newlines
-are structural. Table headings are not constrained by the grid width.
+Display width counts characters with a nonzero Unicode combining class as zero,
+East Asian wide/fullwidth characters as two, and all others as one. This is a
+bounded approximation: combining marks with class zero, variation selectors,
+emoji sequences, and terminal-specific ambiguous widths can differ from the
+terminal's actual rendering. Format controls, including zero-width joiners, are
+escaped before measurement, so joined emoji are deliberately shown separately.
+Control characters, including ANSI escapes, are shown as escaped text rather
+than interpreted. Tabs and carriage returns are escaped; newlines are structural.
+Table headings are not constrained by the grid width. There is no fixed 23-cell
+title width: TTY titles use the allocated space and pipes retain natural width.
