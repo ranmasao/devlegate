@@ -1,0 +1,29 @@
+{
+  "code_base_head": "14c08a5597bfe68df97a6fafe5003b8a3fd09328",
+  "conclusion": "completed",
+  "control_head": "7047d41d0deed3c8042f6d814b9df41f96698184",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-128",
+  "execution_id": "c0ffdcf9559d4fbca867186a777ccba0",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-128",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-128",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Corrected operator admission timeout responses to distinguish queued cancellation, completed admission, and unknown outcomes. Added contention, durable evidence, replay, and process-loss regression coverage and documented remaining uncertainty."
+  },
+  "workspace_head": "5b81966afab8eac2d021332c22a04a34361736ef"
+}
