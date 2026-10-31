@@ -1194,6 +1194,7 @@ class ServiceEngine:
             "unsafe_reasons": ["execution generation ownership is not proven"],
             "control_head": None,
             "tickets": [],
+            "ticket_history": {},
             "resources": None,
             "evidence": None,
             "runtime_dependencies": json.loads(json.dumps({
@@ -1214,6 +1215,7 @@ class ServiceEngine:
                 raise GitObservationError("control HEAD is absent")
             result["control_head"] = head
             tickets = []
+            ticket_history: dict[str, object] = {}
             for state, directory in (
                 ("backlog", self.backlog_path), ("todo", self.todo_path),
                 ("review", self.review_path), ("accepted", self.accepted_path),
@@ -1221,13 +1223,22 @@ class ServiceEngine:
             ):
                 path = f"{directory}/{ticket_id}.md"
                 blob = path_object(self.control_worktree, head, path, runner=readonly)
+                ticket_history[state] = [
+                    {"commit": commit, "changes": list(changes)}
+                    for commit, changes in history_changes(
+                        self.control_worktree, head, path, runner=readonly
+                    )
+                ]
                 if blob is not None:
                     tickets.append({"state": state, "path": path, "blob": blob})
             result["tickets"] = tickets
+            result["ticket_history"] = ticket_history
             if len(tickets) != 1:
                 reasons.append("ticket state is absent or ambiguous")
-            elif tickets[0]["state"] != "done":
-                reasons.append("ticket is not done")
+            elif tickets[0]["state"] not in {"backlog", "done"}:
+                reasons.append("ticket state is not deferred backlog or done")
+            if self._state.get("execution_ticket_id") == ticket_id:
+                reasons.append("ticket has persisted execution ownership")
             try:
                 result["evidence"] = observe_execution_evidence(
                     self.repo, self.control_worktree, head, ticket_id,
