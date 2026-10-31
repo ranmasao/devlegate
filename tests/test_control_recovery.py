@@ -3547,17 +3547,31 @@ def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkey
         assert recovered.returncode == 0, recovered.stderr
         assert "recovery accepted: T-1" in recovered.stdout
         deadline = time.monotonic() + 10
+        resumed = None
+        resumed_status = None
         while time.monotonic() < deadline:
             payload = state_payload(state)
             if "operator_recovery" not in payload:
-                break
+                # State persistence precedes publication of the refreshed
+                # service snapshot. Observe both rather than assuming that a
+                # durable recovery also makes the cached plan current.
+                resumed = service.cli("plan", "--json")
+                resumed_status = service.cli("status", "--json")
+                if (
+                    resumed.returncode == 0
+                    and resumed_status.returncode in {0, 1}
+                    and json.loads(resumed.stdout)["action"] == "run-worker"
+                    and json.loads(resumed_status.stdout)["plan"]["action"]
+                    == "run-worker"
+                ):
+                    break
             time.sleep(0.05)
         assert "operator_recovery" not in payload
         assert payload["execution_id"] == "current"
-        resumed = service.cli("plan", "--json")
+        assert resumed is not None
         assert resumed.returncode == 0, resumed.stderr
         assert json.loads(resumed.stdout)["action"] == "run-worker"
-        resumed_status = service.cli("status", "--json")
+        assert resumed_status is not None
         assert resumed_status.returncode in {0, 1}
         resumed_payload = json.loads(resumed_status.stdout)
         assert resumed_payload["plan"]["action"] == "run-worker"
