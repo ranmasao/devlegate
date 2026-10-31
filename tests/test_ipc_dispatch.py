@@ -81,6 +81,21 @@ def test_clean_sweep_is_not_a_public_mutation(running_server):
         dispatch_mutation(engine, _request("clean-sweep", {}))
 
 
+def test_inspect_dispatch_validates_and_submits_to_owner(running_server):
+    engine, _state, _server = running_server
+    engine.submit_execution_inspection = lambda ticket_id, request_id: {
+        "ticket_id": ticket_id, "request_id": request_id
+    }
+    response = dispatch_read_only(
+        engine, _request("inspect-execution", {"ticket_id": "T-1"})
+    )
+    assert response == {
+        "ticket_id": "T-1", "request_id": "id"
+    }
+    with pytest.raises(IPCProtocolError, match="ticket ID"):
+        dispatch_read_only(engine, _request("inspect-execution", {}))
+
+
 def test_clean_status_is_read_only_and_unbounded(running_server):
     engine, _state, _server = running_server
     engine.workspace_cleanup_status = lambda: {
