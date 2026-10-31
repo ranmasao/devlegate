@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "blocked",
+  "control_head": "9be348ec9ce464a63bc2c02ca7e746fb82919f14",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "026edef98e2e46c9b4e04a04fd2f1c4b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Will the curator create the focused dependency tickets, define their ownership and dependency contracts, and schedule TASK-126 after them as required by the review?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and review the decomposed reset workflow and its isolated integration coverage under explicitly assigned dependency tickets.",
+    "Complete TASK-126 final integration and acceptance after its implementation dependencies are satisfied."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Will the curator create the focused dependency tickets, define their ownership and dependency contracts, and schedule TASK-126 after them as required by the review?"
+    ],
+    "remaining": [
+      "Implement and review the decomposed reset workflow and its isolated integration coverage under explicitly assigned dependency tickets.",
+      "Complete TASK-126 final integration and acceptance after its implementation dependencies are satisfied."
+    ],
+    "report": null,
+    "summary": "Inspected the carried-forward retention diagnostic, locked-worktree guard, and review feedback. The existing changes preserve non-done resource protection and identify the need for an explicitly authorized, owner-serialized reset."
+  },
+  "workspace_head": "4107451de2098bb57debafe2cf8f4e5d6d8a8bdb"
+}
