@@ -36,7 +36,7 @@ def _execution_snapshot(phase, stage, *, ticket="LAB-1", execution_id="exec-1"):
         True,
         observation,
         None,
-        (('backlog', 0), ('todo', 0), ('review', 0), ('accepted', 0), ('done', 0)),
+        (("backlog", 0), ("todo", 0), ("review", 0), ("accepted", 0), ("done", 0)),
         (),
         (),
         (),
@@ -67,9 +67,7 @@ def test_operator_execution_projection_is_conservative(phase, stage, expected):
             "stage": stage,
             "ownership": "current-service",
             **(
-                {"identity_state": "matching-live"}
-                if stage != "worker-running"
-                else {}
+                {"identity_state": "matching-live"} if stage != "worker-running" else {}
             ),
         }
         if phase != "idle"
@@ -109,15 +107,18 @@ def test_operator_execution_projection_requires_exact_live_evidence():
     }
 
     assert _execution_projection(snapshot, evidence)["state"] == "running"
-    assert _execution_projection(
-        snapshot, {**evidence, "execution_id": "other"}
-    )["state"] == "recovery-required"
-    assert _execution_projection(
-        snapshot, {**evidence, "ticket_id": "LAB-2"}
-    )["state"] == "recovery-required"
-    assert _execution_projection(
-        snapshot, {**evidence, "ownership": "unknown"}
-    )["state"] == "recovery-required"
+    assert (
+        _execution_projection(snapshot, {**evidence, "execution_id": "other"})["state"]
+        == "recovery-required"
+    )
+    assert (
+        _execution_projection(snapshot, {**evidence, "ticket_id": "LAB-2"})["state"]
+        == "recovery-required"
+    )
+    assert (
+        _execution_projection(snapshot, {**evidence, "ownership": "unknown"})["state"]
+        == "recovery-required"
+    )
 
 
 def test_running_service_without_live_evidence_is_unverified():
@@ -202,7 +203,9 @@ def test_idle_snapshot_suppresses_stale_execution_identity():
     assert payload["execution"]["execution_id"] is None
 
 
-def test_active_execution_is_compact_and_wraps_long_title():
+def test_active_execution_is_compact_and_wraps_long_title(monkeypatch):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "88")
     title = "A very long current execution title " * 8
     snapshot = dataclasses.replace(
         _execution_snapshot("agent_running", "worker-launch"),
@@ -302,15 +305,11 @@ def test_machine_eligible_excludes_bound_ticket():
 def test_global_blocking_reason_has_no_fabricated_ticket_dependency():
     snapshot = dataclasses.replace(
         _execution_snapshot("idle", None),
-        blocked=(
-            ("LAB-2", "Blocked", BlockedReason("repository")),
-        ),
+        blocked=(("LAB-2", "Blocked", BlockedReason("repository")),),
     )
 
     payload = snapshot.as_dict()
-    assert payload["tickets"]["blocked"][0]["reason"] == {
-        "kind": "repository"
-    }
+    assert payload["tickets"]["blocked"][0]["reason"] == {"kind": "repository"}
     assert decode_status(payload).blocked == snapshot.blocked
     output = _render_status_text(
         snapshot, "stopped", _execution_projection(snapshot, None, "stopped")
@@ -375,9 +374,9 @@ def test_multi_row_table_separates_rows():
 def test_table_escapes_control_whitespace_in_cells():
     output = render_table("Safe", (("key\n", "value\r\t"),))
 
-    assert "key\\n" in output
+    assert "key" in output
     assert "value\\r\\t" in output
-    assert output.count("\n") == 3
+    assert output.count("\n") == 4
 
 
 def test_multi_column_grid_has_stable_row_separators():
@@ -391,3 +390,81 @@ def test_multi_column_grid_has_stable_row_separators():
         "│ Code  │ clean │",
         "└───────┴───────┘",
     ]
+
+
+def test_grid_reflows_logical_rows_and_tracks_terminal_width(monkeypatch):
+    from devlegate.output import _cell_width
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "40")
+    rows = [("TASK-123", "wide text with several words and more words")]
+    narrow = render_grid("Eligible", ("Ticket", "Title"), rows)
+    assert narrow.count("├") == 1
+    assert all(_cell_width(line) <= 40 for line in narrow.splitlines())
+    assert "TASK-123" in narrow
+    monkeypatch.setenv("COLUMNS", "100")
+    wide = render_grid("Eligible", ("Ticket", "Title"), rows)
+    assert len(wide.splitlines()) < len(narrow.splitlines())
+    assert rows[0][1] in wide
+
+
+def test_pipe_keeps_full_values_and_embedded_lines(monkeypatch):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setenv("COLUMNS", "10")
+    value = "long words " * 10 + "/a/very/long/path"
+    output = render_table("Next runnable", [("Title", value), ("ID", "a\nb")])
+    assert value in output
+    assert output.count("├") == 1
+    assert "a" in output and "b" in output
+
+
+def test_unicode_controls_and_opaque_overflow(monkeypatch):
+    from devlegate.output import _cell_width
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "16")
+    token = "0123456789abcdef0123456789abcdef"
+    output = render_grid(
+        "Grid", ("Ticket", "Title"), [(token, "e\u0301 \u754c\x1b[31m")]
+    )
+    assert token in output
+    assert "\x1b" not in output
+    lines = output.splitlines()[1:]
+    assert len({_cell_width(line) for line in lines}) == 1
+
+
+def test_joint_wrap_and_priority(monkeypatch):
+    from devlegate.output import ColumnPolicy
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "36")
+    value = "one two three four five six"
+    output = render_grid(
+        "Blocked",
+        ("Title", "Reason"),
+        [(value, value)],
+        policies=[ColumnPolicy(True, 8, 5), ColumnPolicy(True, 8, 1)],
+    )
+    lines = output.splitlines()
+    # Both columns fit in two physical lines; shrinking one to its minimum
+    # instead requires at least three. The more protected first column wins ties.
+    assert len(lines) == 7
+    widths = [len(part) for part in lines[1][1:-1].split("┬")]
+    assert widths[0] >= widths[1]
+
+
+def test_many_column_grid_keeps_frame_and_values(monkeypatch):
+    from devlegate.output import ColumnPolicy, _cell_width
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("COLUMNS", "80")
+    headers = [f"C{i}" for i in range(8)]
+    row = ["one two three" for _ in headers]
+    output = render_grid(
+        "Grid", headers, [row], policies=[ColumnPolicy(True, 3)] * len(headers)
+    )
+    lines = output.splitlines()[1:]
+    assert len({_cell_width(line) for line in lines}) == 1
+    assert _cell_width(lines[0]) <= 80
+    assert output.count("one") == 8
+    assert output.count("three") == 8
