@@ -759,6 +759,8 @@ class ExecutionWorkspaceManager:
                         f"unexpected Git worktree branch metadata: {line}"
                     )
                 current["branch"] = value[11:]
+            elif key in {"locked", "prunable"}:
+                current[key] = value
         return entries
 
     def _registrations(self) -> dict[Path, WorktreeRegistration]:
