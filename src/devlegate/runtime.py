@@ -5513,6 +5513,25 @@ class ServiceEngine:
             },
         )
 
+    def _check_interrupted_resource_creation(self, execution_id: object) -> None:
+        intents = self._state.get("execution_resource_intents")
+        intent = intents.get(execution_id) if isinstance(intents, dict) else None
+        if not isinstance(intent, dict) or not intent.get("creation_transitions"):
+            return
+        journal = intent.get("preparation_journal")
+        events = (
+            [entry.get("event") for entry in journal if isinstance(entry, dict)]
+            if isinstance(journal, list)
+            else []
+        )
+        # A transition without the complete observation sequence can have
+        # taken effect before a crash. Do not adopt or repair its resources.
+        if events[:4] != ["started", "created", "observed", "verified"]:
+            raise ExecutionWorkspaceError(
+                "interrupted execution resource creation has an ambiguous "
+                "outcome; preserving resources for recovery"
+            )
+
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
             raise ExecutionWorkspaceError(
@@ -5636,6 +5655,7 @@ class ServiceEngine:
             intents = self._state.get("execution_resource_intents")
             intent = intents.get(execution_id) if isinstance(intents, dict) else None
             identity = None
+            self._check_interrupted_resource_creation(execution_id)
             if isinstance(intent, dict) and intent.get("preparation_journal") == [
                 {"sequence": 1, "event": "started"}
             ]:
@@ -10266,8 +10286,9 @@ class ServiceEngine:
     def _repair_bound_execution_workspace(self) -> None:
         """Repair only a pre-worker branch proven to be an older generation."""
         try:
+            self._check_interrupted_resource_creation(self._state.get("execution_id"))
             repair_bound_workspace(self, self._state)
-        except ValueError as error:
+        except (ValueError, ExecutionWorkspaceError) as error:
             raise DevlegateError(str(error)) from error
 
     def status_view(self) -> StatusSnapshot:
