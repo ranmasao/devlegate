@@ -19,6 +19,30 @@ from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
 
 
+@pytest.mark.parametrize("reason", [None, "operator investigation"])
+def test_retirement_refuses_locked_execution_worktree(tmp_path, reason):
+    working, _config, state = control_fixture(tmp_path)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, state / "managed", "T-1")
+    workspace = manager.prepare(base)
+    args = ["worktree", "lock"]
+    if reason is not None:
+        args += ["--reason", reason]
+    git(working, *args, str(workspace.path))
+
+    with pytest.raises(
+        execution_workspace_module.ExecutionWorkspaceError, match="locked"
+    ):
+        manager.retire(workspace, base)
+
+    assert workspace.path.is_dir()
+    assert manager._registrations()[workspace.path.resolve()]["locked"] == (
+        reason or ""
+    )
+    branch_head = git(working, "rev-parse", f"refs/heads/{workspace.branch}")
+    assert branch_head.stdout.strip() == base
+
+
 def _publish_done_execution(
     control, workspace, ticket_id, checkpoint, execution_id, *, trailers=True
 ):

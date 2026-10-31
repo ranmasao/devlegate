@@ -410,6 +410,8 @@ class ExecutionWorkspaceManager:
             if self.path.exists():
                 raise self._path_conflict("is not a registered execution worktree")
             return
+        if "locked" in registration:
+            raise self._path_conflict("is locked")
         validated = self._validate_existing(registration, workspace.base_head)
         if validated.head != expected_head or validated.dirty:
             raise ExecutionWorkspaceError("execution worktree changed before removal")
@@ -759,6 +761,8 @@ class ExecutionWorkspaceManager:
                         f"unexpected Git worktree branch metadata: {line}"
                     )
                 current["branch"] = value[11:]
+            elif key == "locked":
+                current["locked"] = value
         return entries
 
     def _registrations(self) -> dict[Path, WorktreeRegistration]:
