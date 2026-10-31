@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "incomplete",
+  "control_head": "4b6418cffae4b054f5151f999fcc4a13ad59e533",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "944f093e4c82464e9dc0e9e618aabcbf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an owner-serialized reset preview and explicit apply bound to the ticket, execution generation, control state, and exact resource identities.",
+    "Persist and validate reset intent before effects; revalidate ownership and dependencies at each stage, use local CAS and remote lease, and implement restart-safe partial retirement replay.",
+    "Add isolated real-Git coverage for identity, ownership, interrupted cleanup, replay, and fresh execution generation; document operator usage.",
+    "Establish the requested historical sequence and recurrence verdict from the authorized execution and control evidence."
+  ],
+  "report_artifact": "executions/TASK-126/944f093e4c82464e9dc0e9e618aabcbf.md",
+  "report_sha256": "21bf7d72922669e024a2763fd8156ad721e0b5e279d75088d94553c35c39e33c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an owner-serialized reset preview and explicit apply bound to the ticket, execution generation, control state, and exact resource identities.",
+      "Persist and validate reset intent before effects; revalidate ownership and dependencies at each stage, use local CAS and remote lease, and implement restart-safe partial retirement replay.",
+      "Add isolated real-Git coverage for identity, ownership, interrupted cleanup, replay, and fresh execution generation; document operator usage.",
+      "Establish the requested historical sequence and recurrence verdict from the authorized execution and control evidence."
+    ],
+    "report": "The existing cleanup proof explicitly requires a durably done ticket, and its persisted cohort does not provide the requested generation-bound authorization or restart replay for non-done work. I could not establish and implement the complete safety boundary within this invocation; no destructive reset or production change was made. The carried-forward locked-worktree tests passed.",
+    "summary": "Inspected the existing operator admission, durable state, and workspace retirement boundaries; preserved the carried-forward locked-worktree protection."
+  },
+  "workspace_head": "a48b72919ecd4ab79f91a3433d7589f7d6e7b3cc"
+}
