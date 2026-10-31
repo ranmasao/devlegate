@@ -1,0 +1,37 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "blocked",
+  "control_head": "04c584f1e0149e14dda4db84eb7fbce2a16ddc19",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-127",
+  "execution_id": "ea5f01a5ae5a42ceae30b7d437f91780",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-127",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate create the implementation checkpoint and run configured CI for that exact checkpoint? The worker contract prohibits creating the checkpoint."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Confirm configured CI succeeds on the checkpoint containing these changes and address any failures."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-127",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate create the implementation checkpoint and run configured CI for that exact checkpoint? The worker contract prohibits creating the checkpoint."
+    ],
+    "remaining": [
+      "Confirm configured CI succeeds on the checkpoint containing these changes and address any failures."
+    ],
+    "report": null,
+    "summary": "Added structural coverage for all nine CLI key/value sections, status JSON/YAML and IPC round trips, and Unicode and overflow behavior. Clarified the renderer's Unicode approximation and title-width policy."
+  },
+  "workspace_head": "14c08a5597bfe68df97a6fafe5003b8a3fd09328"
+}
