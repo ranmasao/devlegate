@@ -1144,6 +1144,20 @@ class ServiceEngine:
             mutable=apply,
         )
 
+    def submit_execution_inspection(
+        self, ticket_id: str, *, request_id: str
+    ) -> dict[str, object]:
+        """Observe one ticket on the service owner without recording admission."""
+        if not is_canonical_ticket_name(f"{ticket_id}.md"):
+            raise DevlegateError("invalid ticket identity")
+        return self._submit_operator_command(
+            method="inspect-execution",
+            ticket_id=ticket_id,
+            request_id=request_id,
+            fingerprint=f"inspect-execution:{ticket_id}",
+            mutable=False,
+        )
+
     def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
         """Return the last owner-published cleanup inventory.
 
@@ -1165,6 +1179,71 @@ class ServiceEngine:
                     "reason": "workspace inventory has not been observed yet",
                 }
             return json.loads(json.dumps(cleanup))
+
+    def _inspect_execution(self, ticket_id: str) -> dict[str, object]:
+        """Return a conservative owner-side observation, never an authorization."""
+        from devlegate.execution_resource_observation import observe_execution_resources
+
+        def readonly(cwd: Path, *args: str, **kwargs: object):
+            return self._git_runtime(cwd, "--no-optional-locks", *args, **kwargs)
+
+        result: dict[str, object] = {
+            "ticket_id": ticket_id,
+            "safe": False,
+            "unsafe_reasons": ["execution generation ownership is not proven"],
+            "control_head": None,
+            "tickets": [],
+            "resources": None,
+        }
+        reasons = result["unsafe_reasons"]
+        assert isinstance(reasons, list)
+        try:
+            head = resolve_ref_commit(self.control_worktree, "HEAD", runner=readonly)
+            if head is None:
+                raise GitObservationError("control HEAD is absent")
+            result["control_head"] = head
+            tickets = []
+            for state, directory in (
+                ("backlog", self.backlog_path), ("todo", self.todo_path),
+                ("review", self.review_path), ("accepted", self.accepted_path),
+                ("done", self.done_path),
+            ):
+                path = f"{directory}/{ticket_id}.md"
+                blob = path_object(self.control_worktree, head, path, runner=readonly)
+                if blob is not None:
+                    tickets.append({"state": state, "path": path, "blob": blob})
+            result["tickets"] = tickets
+            if len(tickets) != 1:
+                reasons.append("ticket state is absent or ambiguous")
+        except (GitObservationError, OSError, subprocess.SubprocessError) as error:
+            reasons.append(f"control observation failed: {error}")
+        try:
+            resources = observe_execution_resources(
+                self.repo, self.execution_worktree_root, ticket_id, self.remote_name,
+                runner=self._git_runtime,
+            )
+            result["resources"] = resources
+            if resources["path_symlink"] or resources["root_symlink"]:
+                reasons.append("execution workspace path contains a symlink")
+            worktrees = resources["worktrees"]
+            assert isinstance(worktrees, list)
+            if resources["path_exists"] and not any(
+                item["expected"] for item in worktrees
+            ):
+                reasons.append("execution path has no Git registration")
+            for item in worktrees:
+                if not item["expected"]:
+                    reasons.append("execution branch has a foreign registration")
+                if item.get("locked") is not None:
+                    reasons.append("execution worktree is locked")
+                if item.get("prunable") is not None:
+                    reasons.append("execution worktree is prunable")
+                if item.get("dirty") is True:
+                    reasons.append("execution worktree is dirty")
+        except (ExecutionWorkspaceError, GitObservationError, OSError,
+                subprocess.SubprocessError, ValueError) as error:
+            reasons.append(f"resource observation failed: {error}")
+        return result
 
     def _submit_operator_command(
         self,
@@ -2063,6 +2142,10 @@ class ServiceEngine:
             )
 
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
+        if command.method == "inspect-execution":
+            if not is_canonical_ticket_name(f"{command.ticket_id}.md"):
+                raise DevlegateError("invalid ticket identity")
+            return
         if command.method == "cleanup-workspaces":
             if command.ticket_id != "__workspaces__" or command.onto is None:
                 raise DevlegateError("workspace cleanup request identity is incomplete")
@@ -2502,6 +2585,11 @@ class ServiceEngine:
                     )
                 recording = True
                 self._record_operator_admission(command)
+                if command.method == "inspect-execution":
+                    command.admission_result = self._inspect_execution(
+                        command.ticket_id
+                    )
+                    return
                 if command.method == "cleanup-workspaces":
                     assert command.onto is not None
                     result = self.cleanup_workspaces(
@@ -9037,7 +9125,9 @@ class ServiceEngine:
                         self._admit_operator_command(operator_command)
                         status = (
                             0
-                            if operator_command.method == "cleanup-workspaces"
+                            if operator_command.method in {
+                                "cleanup-workspaces", "inspect-execution"
+                            }
                             else self._dispatch_operator_command(
                                 operator_command, stop_event
                             )
