@@ -1,0 +1,39 @@
+{
+  "code_base_head": "75d1b4ff54921d84aa3ecf69a6f5c846a9c24187",
+  "conclusion": "incomplete",
+  "control_head": "03697c46698d62646788e3b1a5a1816937ad8f2b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-126",
+  "execution_id": "9f70532f400e4ef4ac8fc6cc0e121b39",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-126",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-serialized generation reset preview and identity-bound operator apply, including durable admission and reset intent.",
+    "Implement fresh ticket, owner, recovery, workspace, and ref verification at each effect, local CAS, remote lease, and safe restart replay.",
+    "Add isolated real-Git reset refusal, interruption, replay, and fresh-execution coverage; document operator commands and run configured CI.",
+    "Complete the root-cause and recurrence verdict to the extent supported by authorized evidence."
+  ],
+  "report_artifact": "executions/TASK-126/9f70532f400e4ef4ac8fc6cc0e121b39.md",
+  "report_sha256": "5dfa1382975c3d3ef16c0c130473e3171056e1d6a334abbcad9c647428e247ac",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-126",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-serialized generation reset preview and identity-bound operator apply, including durable admission and reset intent.",
+      "Implement fresh ticket, owner, recovery, workspace, and ref verification at each effect, local CAS, remote lease, and safe restart replay.",
+      "Add isolated real-Git reset refusal, interruption, replay, and fresh-execution coverage; document operator commands and run configured CI.",
+      "Complete the root-cause and recurrence verdict to the extent supported by authorized evidence."
+    ],
+    "report": "The requested reset is not implemented: existing historical cleanup requires a durably done ticket, and its accepted-integration proof cannot safely authorize retirement of a deferred generation. A separate identity-bound durable intent and recovery path must be implemented before destructive effects can be authorized; the lock hardening alone does not supply that path.",
+    "summary": "Hardened execution worktree retirement to retain and respect Git worktree locks, including locks with a reason. Added real-Git regression coverage for locked worktrees."
+  },
+  "workspace_head": "beb14f3c86d47041097820c5968ea3bc54f112b5"
+}
