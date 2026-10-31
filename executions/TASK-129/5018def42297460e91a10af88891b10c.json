@@ -1,0 +1,41 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "blocked",
+  "control_head": "8b4ed55dec7c30b139809efde7a571cb92d11fd4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-129",
+  "execution_id": "5018def42297460e91a10af88891b10c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-129",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "How should historical resources be authorized when the shared execution branch and worktree can be deleted and recreated at the same checkpoint, making reuse indistinguishable from the original generation? A narrow remedy is a durable generation-specific ownership binding recorded by the owner at resource admission, with historical generations lacking that binding remaining unsafe; should that change be authorized?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Prove current worktree and ref ownership against an unambiguous execution generation, including pending durable intents and recovery state.",
+    "Implement the canonical identity-bound plan, digest, revalidation API, comprehensive owner/IPC tests, and operator documentation.",
+    "Obtain the final result of CI run 41200631660."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-129",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "How should historical resources be authorized when the shared execution branch and worktree can be deleted and recreated at the same checkpoint, making reuse indistinguishable from the original generation? A narrow remedy is a durable generation-specific ownership binding recorded by the owner at resource admission, with historical generations lacking that binding remaining unsafe; should that change be authorized?"
+    ],
+    "remaining": [
+      "Prove current worktree and ref ownership against an unambiguous execution generation, including pending durable intents and recovery state.",
+      "Implement the canonical identity-bound plan, digest, revalidation API, comprehensive owner/IPC tests, and operator documentation.",
+      "Obtain the final result of CI run 41200631660."
+    ],
+    "report": null,
+    "summary": "Added a read-only control-history proof for a single execution report, its exact lifecycle admission, and the original ticket blob. The owner preview exposes the proven generation while remaining fail-closed."
+  },
+  "workspace_head": "4c33e0189791481d5d0a6a2ec67ca712b78c983b"
+}
