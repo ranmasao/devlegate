@@ -1860,7 +1860,18 @@ def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
     monkeypatch.setattr(replay._workers, "run", resumed_worker)
     assert run_test_iteration(replay) == 0
     assert ids == [pending["fresh_execution_id"]]
-    assert replay._state["execution_resource_intents"][ids[0]] == retry_intent
+    replay_intent = replay._state["execution_resource_intents"][ids[0]]
+    assert {k: v for k, v in replay_intent.items() if k != "preparation_journal"} == {
+        k: v for k, v in retry_intent.items() if k != "preparation_journal"
+    }
+    previous_journal = retry_intent["preparation_journal"]
+    assert (
+        replay_intent["preparation_journal"][: len(previous_journal)]
+        == previous_journal
+    )
+    assert [event["event"] for event in replay_intent["preparation_journal"]] == [
+        "started", "observed", "started", "observed"
+    ]
 
 def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     tmp_path, monkeypatch
