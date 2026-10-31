@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "dab6bf968618523379656067ee08300076c6c1c2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "e394aacec4894be89aaef305c1be1b61",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized WAL/CAS transitions and verified creation, publication, recovery, revocation, and retirement of generation-bound worktree and refs across all execution lifecycle paths.",
+    "Implement positive read-only ownership proof based on independently observed resources, with fail-closed handling of interrupted or conflicting transitions.",
+    "Add real-Git and owner crash-boundary coverage, document the exclusive-writer assumption and recovery semantics, and run configured CI with its coverage and xdist dependencies."
+  ],
+  "report_artifact": "executions/TASK-134/e394aacec4894be89aaef305c1be1b61.md",
+  "report_sha256": "88d0b3a28c35b45a6384378939f66cea7632393ec3c8a00b3c536562f144ea08",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized WAL/CAS transitions and verified creation, publication, recovery, revocation, and retirement of generation-bound worktree and refs across all execution lifecycle paths.",
+      "Implement positive read-only ownership proof based on independently observed resources, with fail-closed handling of interrupted or conflicting transitions.",
+      "Add real-Git and owner crash-boundary coverage, document the exclusive-writer assumption and recovery semantics, and run configured CI with its coverage and xdist dependencies."
+    ],
+    "report": "The existing lifecycle has multiple reuse, rework, recovery, publication and cleanup paths without generation-aware transition records; these must be integrated before a positive ownership claim is safe. Configured CI could not run because coverage and pytest-xdist are unavailable in the current Python environment.",
+    "summary": "Tightened zero-delta retry admission to reject reused resource intents whose nonce or admission provenance does not match the current generation."
+  },
+  "workspace_head": "ff1359d50b7fad45579e4466f140eb73d0122f84"
+}
