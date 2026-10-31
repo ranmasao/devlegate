@@ -4383,6 +4383,46 @@ class ServiceEngine:
                         "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
                     }
+            resource_intents = self._state.get("execution_resource_intents", {})
+            if not isinstance(resource_intents, dict):
+                raise WorkflowBlockedError(
+                    "execution resource intent journal is malformed"
+                )
+            if not pending_agent_execution:
+                if execution_id in resource_intents:
+                    prior = resource_intents[execution_id]
+                    if not (
+                        authorization is not None
+                        and authorization.is_zero_delta_retry
+                        and isinstance(automatic_retry, dict)
+                        and automatic_retry.get("status") == "admitted"
+                        and isinstance(prior, dict)
+                        and prior.get("execution_id") == execution_id
+                        and prior.get("ticket_id") == selected_ticket.id
+                        and prior.get("status") == "intent"
+                    ):
+                        raise WorkflowBlockedError(
+                            "execution resource intent already exists"
+                        )
+                else:
+                    resource_intents = {
+                        **resource_intents,
+                        execution_id: {
+                            "status": "intent",
+                            "nonce": new_execution_id(),
+                            "ticket_id": selected_ticket.id,
+                            "execution_id": execution_id,
+                            "control_head": bound_execution_control,
+                            "admitted_base_head": execution_base_head,
+                            "remote_head": execution_remote_head,
+                            "branch": f"devlegate/work/{selected_ticket.id}",
+                            "path": str(
+                                self.execution_worktree_root
+                                / "work"
+                                / selected_ticket.id
+                            ),
+                        },
+                    }
             self._save_state(
                 "agent_pending",
                 clear_execution=not pending_agent_execution,
@@ -4413,6 +4453,7 @@ class ServiceEngine:
                     self.execution_worktree_root / "work" / selected_ticket.id
                 ),
                 execution_id=execution_id,
+                execution_resource_intents=resource_intents,
                 execution_remote_head=execution_remote_head,
                 worker_identity=None,
                 rework_provenance=rework_provenance,
