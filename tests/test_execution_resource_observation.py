@@ -8,16 +8,83 @@ from types import SimpleNamespace
 
 import pytest
 
-from devlegate.execution_inspection_evidence import observe_execution_evidence
+from devlegate.execution_inspection_evidence import (
+    observe_execution_evidence,
+    prove_single_execution_admission,
+)
 from devlegate.execution_resource_observation import observe_execution_resources
+from devlegate.execution_result import build_execution_report
 from devlegate.git import GitObservationError, run_git
 from devlegate.runtime import ServiceEngine
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
 def git(path: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(path), *args], check=True, text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_historical_admission_proof_rejects_changed_ticket_and_reports(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    ticket = repo / "todo" / "TASK-1.md"
+    ticket.parent.mkdir()
+    ticket.write_text("original\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "ticket")
+    original = git(repo, "rev-parse", "HEAD")
+    blob = git(repo, "rev-parse", "HEAD:todo/TASK-1.md")
+    report = build_execution_report(
+        execution_id="first", ticket_id="TASK-1", code_base_head=original,
+        control_head=original, execution_branch="devlegate/work/TASK-1",
+        execution_path=str(tmp_path / "work" / "TASK-1"), workspace_head=original,
+        run=WorkerRunResult(
+            0, None, WorkerClaim("incomplete", "summary", (), (), None), None
+        ),
+    )
+    report_path = repo / "executions" / "TASK-1" / "first.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(report.to_json())
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "historical report")
+    admission = git(repo, "rev-parse", "HEAD")
+    proof = prove_single_execution_admission(
+        repo, admission, "TASK-1", blob, todo_path="todo", review_path="review"
+    )
+    assert proof["admission_commit"] == admission
+    assert proof["checkpoint"] == original
+    backlog = repo / "backlog" / "TASK-1.md"
+    backlog.parent.mkdir()
+    ticket.rename(backlog)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "defer")
+    git(repo, "remote", "add", "origin", str(repo))
+    engine = SimpleNamespace(
+        repo=repo, control_worktree=repo, execution_worktree_root=tmp_path / "managed",
+        remote_name="origin", backlog_path="backlog", todo_path="todo",
+        review_path="review", accepted_path="accepted", done_path="done",
+        _state={"phase": "idle"}, _git_runtime=run_git,
+    )
+    observed = ServiceEngine._inspect_execution(engine, "TASK-1")
+    assert observed["generation"] == proof
+    assert observed["safe"] is False
+    with pytest.raises(ValueError, match="ticket identity"):
+        prove_single_execution_admission(
+            repo, admission, "TASK-1", "different", todo_path="todo",
+            review_path="review",
+        )
+    (report_path.parent / "second.json").write_text(report.to_json())
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "another report")
+    with pytest.raises(ValueError, match="ambiguous"):
+        prove_single_execution_admission(
+            repo, git(repo, "rev-parse", "HEAD"), "TASK-1", blob,
+            todo_path="todo", review_path="review",
+        )
 
 
 def test_committed_evidence_and_pins_are_inventoried_without_writes(tmp_path: Path):

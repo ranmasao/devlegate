@@ -1182,7 +1182,10 @@ class ServiceEngine:
 
     def _inspect_execution(self, ticket_id: str) -> dict[str, object]:
         """Return a conservative owner-side observation, never an authorization."""
-        from devlegate.execution_inspection_evidence import observe_execution_evidence
+        from devlegate.execution_inspection_evidence import (
+            observe_execution_evidence,
+            prove_single_execution_admission,
+        )
         from devlegate.execution_resource_observation import observe_execution_resources
 
         def readonly(cwd: Path, *args: str, **kwargs: object):
@@ -1197,6 +1200,7 @@ class ServiceEngine:
             "ticket_history": {},
             "resources": None,
             "evidence": None,
+            "generation": None,
             "runtime_dependencies": json.loads(json.dumps({
                 key: self._state.get(key)
                 for key in (
@@ -1244,6 +1248,19 @@ class ServiceEngine:
                     self.repo, self.control_worktree, head, ticket_id,
                     runner=self._git_runtime,
                 )
+                if len(tickets) == 1 and any(
+                    item["path"].endswith(".json")
+                    and item["path"].startswith(f"executions/{ticket_id}/")
+                    for item in result["evidence"]["files"]
+                ):
+                    try:
+                        result["generation"] = prove_single_execution_admission(
+                            self.control_worktree, head, ticket_id, tickets[0]["blob"],
+                            todo_path=self.todo_path, review_path=self.review_path,
+                            runner=self._git_runtime,
+                        )
+                    except ValueError as error:
+                        reasons.append(f"generation proof failed: {error}")
             except (GitObservationError, OSError, subprocess.SubprocessError) as error:
                 reasons.append(f"evidence observation failed: {error}")
         except (GitObservationError, OSError, subprocess.SubprocessError) as error:
