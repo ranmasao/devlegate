@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "b46552dbf7d9a77c3ebe4dfeb43f3d65e0114b2b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "829e5407591d4f85aeaafe1d3da7e804",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement crash-safe owner-journaled creation, publication, retirement and recreation of worktrees and local/upstream refs, including fail-closed replay and CAS handling.",
+    "Implement the read-only generation binding proof API and correlate it with owner state and real Git observations.",
+    "Add the required interruption, restart, recreation, foreign-resource and noninterference coverage; achieve a successful configured CI run."
+  ],
+  "report_artifact": "executions/TASK-134/829e5407591d4f85aeaafe1d3da7e804.md",
+  "report_sha256": "09674d0a12912c43d45403f000d556c3a60d277e0b3f3214c0735076a76ae228",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement crash-safe owner-journaled creation, publication, retirement and recreation of worktrees and local/upstream refs, including fail-closed replay and CAS handling.",
+      "Implement the read-only generation binding proof API and correlate it with owner state and real Git observations.",
+      "Add the required interruption, restart, recreation, foreign-resource and noninterference coverage; achieve a successful configured CI run."
+    ],
+    "report": "The intent record alone cannot safely establish ownership: the existing rework, publication, cleanup and recovery paths still mutate resources without generation-aware journaling. Completing those transitions and validating their crash ordering requires further implementation. The configured coverage run also failed the service retry IPC test with a busy response; that test passed in isolation.",
+    "summary": "Persisted nonce-bearing execution resource intents at owner admission, preserving the intent across the admitted zero-delta retry replay. Documented that these intents are not ownership proofs and described the exclusive-writer trust boundary."
+  },
+  "workspace_head": "e04d53da3387ce25d4e10be1e1765d5225b31424"
+}
