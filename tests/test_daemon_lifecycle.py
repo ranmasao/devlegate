@@ -752,6 +752,72 @@ def test_interrupted_workspace_preparation_leaves_durable_started_event(
     assert intent["preparation_journal"] == [{"sequence": 1, "event": "started"}]
 
 
+@pytest.mark.parametrize(
+    ("resource", "event", "worktree_exists"),
+    [
+        ("branch", "intent", False),
+        ("branch", "verified", False),
+        ("worktree", "intent", False),
+        ("worktree", "verified", True),
+        ("marker", "intent", True),
+        ("marker", "verified", True),
+    ],
+)
+def test_interrupted_creation_is_not_adopted_on_restart(
+    tmp_path, monkeypatch, resource, event, worktree_exists
+):
+    engine, config, _state = make_engine(tmp_path, monkeypatch)
+    original = engine._record_creation_transition
+
+    def interrupt(execution_id, actual_resource, actual_event, head):
+        original(execution_id, actual_resource, actual_event, head)
+        if (actual_resource, actual_event) == (resource, event):
+            raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(engine, "_record_creation_transition", interrupt)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        engine.serve(threading.Event())
+    state = engine._runtime_store.load()
+    workspace = Path(state["execution_path"])
+    assert workspace.is_dir() == worktree_exists
+    restarted = ServiceEngine(config)
+    stop_event = threading.Event()
+    prepare = restarted._prepare_execution_workspace
+    repair = restarted._repair_bound_execution_workspace
+
+    def stop_after_prepare(plan):
+        try:
+            return prepare(plan)
+        finally:
+            stop_event.set()
+
+    def stop_if_repair_fails():
+        try:
+            return repair()
+        except Exception:
+            stop_event.set()
+            raise
+
+    monkeypatch.setattr(restarted, "_prepare_execution_workspace", stop_after_prepare)
+    monkeypatch.setattr(
+        restarted, "_repair_bound_execution_workspace", stop_if_repair_fails
+    )
+    monkeypatch.setattr(
+        restarted._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker")
+    )
+    if worktree_exists:
+        restarted.serve(stop_event)
+    else:
+        with pytest.raises(Exception, match="interrupted execution resource creation"):
+            restarted.serve(stop_event)
+    assert workspace.is_dir() == worktree_exists
+    state = restarted._runtime_store.load()
+    intent = state["execution_resource_intents"][state["execution_id"]]
+    assert not any(
+        entry["event"] == "verified" for entry in intent["preparation_journal"]
+    )
+
+
 def test_stop_after_agent_running_commit_still_drains_attempt(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     stop_event = threading.Event()
