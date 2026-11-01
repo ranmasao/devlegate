@@ -15,10 +15,10 @@ from devlegate.worker_supervisor import _run_opencode
 
 PLUGIN = files("devlegate").joinpath("diagnostics_plugin.mjs")
 NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="Node is needed to exercise ESM")
 
 
 def run_hook(tool, args, result):
+    assert NODE is not None, "Node is required to exercise the diagnostics plugin"
     script = """
 const {default: plugin} = await import(process.argv[1]);
 let data = ''; for await (const c of process.stdin) data += c;
@@ -66,14 +66,9 @@ def test_large_diagnostics_bounded(count):
     actual = run_hook("apply_patch", {}, result)
     output = actual["metadata"]["diagnostics"]
     assert byte_size(output) <= 65536
-    assert output["$devlegate_truncated"] is True
-    assert set(output) - {"$devlegate_truncated"} <= set(list(source)[:count])
-    assert all(
-        d["severity"] == 1
-        for k, v in output.items()
-        if k != "$devlegate_truncated"
-        for d in v
-    )
+    assert actual["metadata"]["devlegateDiagnosticsTruncated"] is True
+    assert set(output) <= set(list(source)[:count])
+    assert all(d["severity"] == 1 for v in output.values() for d in v)
     assert actual["output"] == result["output"]
     assert actual["title"] == result["title"]
     assert actual["metadata"]["diff"] == "diff"
@@ -95,16 +90,29 @@ def test_moves_deletions_unknown_and_unicode():
             ],
         }
     }
-    output = run_hook("apply_patch", {}, result)["metadata"]["diagnostics"]
+    metadata = run_hook("apply_patch", {}, result)["metadata"]
+    output = metadata["diagnostics"]
     assert byte_size(output) <= 65536
+    assert metadata["devlegateDiagnosticsTruncated"] is True
     assert output == {
-        "$devlegate_truncated": True,
         "/work/deleted": source["/work/deleted"],
     }
     result["metadata"]["files"] = [{"filePath": "relative"}]
-    assert run_hook("apply_patch", {}, result)["metadata"]["diagnostics"] == {
-        "$devlegate_truncated": True
-    }
+    metadata = run_hook("apply_patch", {}, result)["metadata"]
+    assert metadata["diagnostics"] == {}
+    assert metadata["devlegateDiagnosticsTruncated"] is True
+
+
+def test_exact_utf8_budget_and_severity_priority():
+    diagnostic = {"severity": 1, "message": '\u00e9"\\\n'}
+    source = {"/work/\u00e9": [diagnostic]}
+    diagnostic["message"] += "x" * (65536 - byte_size(source))
+    warning = {"severity": 2, "message": "warning"}
+    result = {"metadata": {"diagnostics": {"/work/\u00e9": [warning, diagnostic]}}}
+    metadata = run_hook("write", {"filePath": "/work/\u00e9"}, result)["metadata"]
+    assert metadata["diagnostics"] == source
+    assert byte_size(metadata["diagnostics"]) == 65536
+    assert metadata["devlegateDiagnosticsTruncated"] is True
 
 
 @pytest.mark.parametrize("tool", ["edit", "write"])
@@ -119,9 +127,10 @@ def test_single_file_and_malformed(tool):
         "diagnostics": {"/work/a": [{"severity": 1}]},
         "other": 3,
     }
-    assert run_hook(tool, {}, {"metadata": {"diagnostics": None}})["metadata"][
-        "diagnostics"
-    ] == {"$devlegate_truncated": True}
+    assert run_hook(tool, {}, {"metadata": {"diagnostics": None}})["metadata"] == {
+        "diagnostics": {},
+        "devlegateDiagnosticsTruncated": True,
+    }
     assert run_hook(tool, {}, {"metadata": None}) == {"metadata": None}
     assert run_hook("devlegate_report", {}, result) == result
 
@@ -261,8 +270,8 @@ def test_live_opencode_loads_hook(tmp_path):
     ]
     assert writes
     filtered = writes[-1]["state"]["metadata"]["diagnostics"]
-    assert filtered["$devlegate_truncated"]
-    assert set(filtered) == {"$devlegate_truncated", str(tmp_path / "hello.py")}
+    assert writes[-1]["state"]["metadata"]["devlegateDiagnosticsTruncated"]
+    assert set(filtered) == {str(tmp_path / "hello.py")}
     assert byte_size(filtered) <= 65536
     assert all(byte_size(event) < 1048576 for event in events)
     print(
