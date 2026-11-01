@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "8f328386e7b65af79099f78edeaf18b88f2bb986",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "4be8c2ff86b746f6a0e11df83b722f38",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Integrate durable generation-specific transitions and revocation across preparation, checkpointing, publication, rework, retry, repair, reconciliation, recovery, retirement and automatic cleanup.",
+    "Publish authoritative BOUND records and implement independently observed read-only proof, including restart and same-SHA recreation coverage.",
+    "Complete lifecycle interruption, drift, remote-error and historic evidence tests and document binding and recovery semantics."
+  ],
+  "report_artifact": "executions/TASK-134/4be8c2ff86b746f6a0e11df83b722f38.md",
+  "report_sha256": "d8029e77baa56d1d14cc596677f6727615ab5bb542915cfc5df4104fc76d837b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Integrate durable generation-specific transitions and revocation across preparation, checkpointing, publication, rework, retry, repair, reconciliation, recovery, retirement and automatic cleanup.",
+      "Publish authoritative BOUND records and implement independently observed read-only proof, including restart and same-SHA recreation coverage.",
+      "Complete lifecycle interruption, drift, remote-error and historic evidence tests and document binding and recovery semantics."
+    ],
+    "report": "This invocation ends with the broader lifecycle protocol unimplemented. Positive proof remains unsafe: for example, ExecutionWorkspaceManager.prepare_rework retires the worktree and moves its branch without a generation-binding revocation, and recovery_workspace.py also removes and replaces resources outside that protocol.",
+    "summary": "Hardened drop intent, evidence pin, and disposition ref publication with create-if-absent or compare-and-swap, preserving concurrent replacements. Added real-Git tests for races at each publication boundary."
+  },
+  "workspace_head": "6f18385384ebafc7b02a2bc5462ef18ecc99e652"
+}
