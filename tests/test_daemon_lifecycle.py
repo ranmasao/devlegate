@@ -76,6 +76,48 @@ def test_drop_disposition_wrong_thread_never_spawns_git(tmp_path, monkeypatch):
     assert calls == []
 
 
+@pytest.mark.parametrize("boundary", ["intent", "evidence", "disposition"])
+def test_drop_ref_publication_preserves_concurrent_replacement(
+    tmp_path, monkeypatch, boundary
+):
+    from devlegate.execution_result import ExecutionReport
+
+    engine, _config, _control, workspace, _command = _prepare_drop_owner_command(
+        tmp_path, monkeypatch
+    )
+    report = ExecutionReport.from_dict(engine._state["pending_execution_report"])
+    if boundary != "intent":
+        engine._persist_drop_intent(report)
+    if boundary == "evidence":
+        target = engine._drop_evidence_ref(report.ticket_id, report.execution_id)
+        replacement = workspace.base_head
+        assert replacement != report.workspace_head
+    else:
+        target = engine._drop_disposition_ref(report.ticket_id, report.execution_id)
+        payload = tmp_path / "conflicting-disposition.json"
+        payload.write_text('{"disposition":"conflicting"}\n')
+        replacement = git(engine.repo, "hash-object", "-w", str(payload)).stdout.strip()
+
+    original_git = engine._git_runtime
+    injected = False
+
+    def concurrent_update(repo, *args, **kwargs):
+        nonlocal injected
+        if not injected and len(args) >= 2 and args[:2] == ("update-ref", target):
+            git(engine.repo, "update-ref", target, replacement)
+            injected = True
+        return original_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", concurrent_update)
+    with pytest.raises(DevlegateError):
+        if boundary == "intent":
+            engine._persist_drop_intent(report)
+        else:
+            engine._pin_drop_evidence(report)
+    assert injected
+    assert git(engine.repo, "rev-parse", target).stdout.strip() == replacement
+
+
 def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     intent = daemon.ShutdownIntent()
