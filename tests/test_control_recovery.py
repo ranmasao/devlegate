@@ -2758,7 +2758,6 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     git(control, "commit", "-m", "transition ticket")
     if destination == "todo":
         target.rename(source)
-        source.write_text(source.read_text() + "\nnew work\n")
         git(control, "add", "-A")
         git(control, "commit", "-m", "return ticket to todo")
 
@@ -2767,6 +2766,11 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     restarted = Devlegate(config)
     snapshot = restarted.status_view()
+    if destination == "deleted":
+        assert snapshot.failed_executions
+        assert restarted._state["failed_executions"]["T-1"] == metadata
+        assert report_store.read("T-1", metadata["execution_id"]) == report
+        return
     assert not snapshot.failed_executions
     assert not snapshot.as_dict()["failed_executions"]
     assert "Failed executions" not in restarted._render_status_text(snapshot)
@@ -2799,8 +2803,6 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     pending = {**restarted._state, "reconciliation": {"ticket_id": "T-1"}}
     assert not restarted._failure_superseded("T-1", metadata, pending, observation)
     if destination == "todo":
-        # Model a separately admitted fresh execution after operator recovery.
-        restarted._save_state("idle", failed_executions={})
         monkeypatch.setattr(
             restarted._workers, "run",
             lambda _workspace, _prompt, **_kwargs: WorkerRunResult(1, None, None, None),
@@ -2868,6 +2870,50 @@ def test_side_branch_deletion_and_divergent_remote_do_not_supersede_failure(
     assert human.returncode == structured.returncode == 0
     assert "Failed executions" in human.stdout and "T-1" in human.stdout
     assert json.loads(structured.stdout)["failed_executions"][0]["id"] == "T-1"
+
+
+@pytest.mark.parametrize("change", ["unrelated", "edited"])
+def test_changed_control_without_immutable_transition_stays_blocked(
+    tmp_path, monkeypatch, change
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    calls = []
+
+    def worker(*_args, **_kwargs):
+        calls.append(1)
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    metadata = dict(engine._state["failed_executions"]["T-1"])
+    control = next((state / "worktrees").glob("*/control"))
+    source = control / "kanban/todo/T-1.md"
+    if change == "edited":
+        target = control / "kanban/backlog/T-1.md"
+        source.rename(target)
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "defer ticket")
+        target.rename(source)
+        source.write_text(source.read_text() + "edited\n")
+    else:
+        (control / "unrelated.txt").write_text("unrelated\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "update control")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    for _ in range(2):
+        restarted = Devlegate(config)
+        monkeypatch.setattr(restarted._workers, "run", worker)
+        snapshot = restarted.status_view()
+        assert snapshot.plan.action == "none"
+        assert "failed execution" in snapshot.plan.reason
+        assert snapshot.failed_executions[0].nonretryable_reason
+        assert restarted._retry_candidates() == ()
+        run_test_iteration(restarted)
+        assert restarted._state["failed_executions"]["T-1"] == metadata
+    assert len(calls) == 1
 
 def test_clean_local_product_advance_invalidates_retry(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
