@@ -1,0 +1,39 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "c3f318bbb0b0029dfbb19ae7f10375933b370413",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "09ed7769317847acba5a65c6dac72fe6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Mediate all execution worktree, local ref, and upstream ref lifecycle mutations with durable intent, expected-value CAS or leases, verification, outcomes, and revocation.",
+    "Publish authoritative generation-specific BOUND records and implement independently observed positive ownership proof, including restart and exclusive-writer semantics.",
+    "Complete lifecycle crash, recreation, remote-error, drift, and non-interference coverage; replace the two authoritative binding xfails and document recovery semantics.",
+    "Run configured CI successfully after the full implementation; investigate the two service-process timeout failures observed in the coverage run."
+  ],
+  "report_artifact": "executions/TASK-134/09ed7769317847acba5a65c6dac72fe6.md",
+  "report_sha256": "2d1d81ebaf1dc7ddd02b29c1f389453eab1b07b42a0bf24b969c8f0912f378ae",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Mediate all execution worktree, local ref, and upstream ref lifecycle mutations with durable intent, expected-value CAS or leases, verification, outcomes, and revocation.",
+      "Publish authoritative generation-specific BOUND records and implement independently observed positive ownership proof, including restart and exclusive-writer semantics.",
+      "Complete lifecycle crash, recreation, remote-error, drift, and non-interference coverage; replace the two authoritative binding xfails and document recovery semantics.",
+      "Run configured CI successfully after the full implementation; investigate the two service-process timeout failures observed in the coverage run."
+    ],
+    "report": "The lifecycle-wide ownership protocol remains substantial and cannot be safely completed within this invocation; the existing always-negative proof is retained to avoid asserting ownership without complete mutation mediation. Configured coverage produced 1662 passed, 1 skipped, 2 xfailed, and 2 timeout failures; both failures passed when rerun in isolation. Focused lifecycle tests and lint passed.",
+    "summary": "Strengthened creation-transition journaling to reject reordered or inconsistent generation, nonce, and head evidence before the next resource effect. Added lifecycle regression coverage for corrupted transition prefixes."
+  },
+  "workspace_head": "52dc84d046a95b88ac5d5bcdaa4c37ee41e11fe6"
+}
