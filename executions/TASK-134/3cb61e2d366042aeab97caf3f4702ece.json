@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "failed",
+  "control_head": "28423e31d9a6eaab936c74c2aa3bee622d4db2c5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "3cb61e2d366042aeab97caf3f4702ece",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "stdout event exceeds maximum size",
+  "remaining": [
+    "Implement and integrate an owner-serialized generation-bound transition protocol for worktrees and local/upstream refs across all lifecycle and recovery boundaries.",
+    "Implement authoritative BOUND evidence and independently observed read-only proof, including same-OID recreation protection and positive-after-restart real-Git regressions.",
+    "Document the completed binding semantics, exclusive-writer assumptions, and recovery rules."
+  ],
+  "report_artifact": "executions/TASK-134/3cb61e2d366042aeab97caf3f4702ece.md",
+  "report_sha256": "299abbeb27967e73f7a96a6ca3b1eb0f2edf644b351f4c68d17d86dbc7e8c81b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": "stdout event exceeds maximum size",
+  "transport_ok": false,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement and integrate an owner-serialized generation-bound transition protocol for worktrees and local/upstream refs across all lifecycle and recovery boundaries.",
+      "Implement authoritative BOUND evidence and independently observed read-only proof, including same-OID recreation protection and positive-after-restart real-Git regressions.",
+      "Document the completed binding semantics, exclusive-writer assumptions, and recovery rules."
+    ],
+    "report": "The existing creation observations cannot safely establish ref continuity or a positive ownership proof; the integrated exclusive-writer and transition protocol remains unimplemented. Configured coverage and lint passed, with the two positive-proof tests still expected failures.",
+    "summary": "Durably revoke execution resource creation observations before normal, forced-retry, and recovery checkpoint mutations. Updated lifecycle regressions to verify revocation is persisted before checkpoint effects."
+  },
+  "workspace_head": "7c8274a837bd5579b3ac607bd570ff8d14e5016b"
+}
