@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from importlib.resources import files
 from pathlib import Path
 
 from devlegate.execution_containment import (
@@ -681,6 +682,11 @@ class WorkerSupervisor:
         config_dir = Path(tempfile.mkdtemp(prefix="devlegate-opencode-"))
         tool_dir = config_dir / "tools"
         tool_dir.mkdir()
+        plugin_dir = config_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "diagnostics.js").write_bytes(
+            files("devlegate").joinpath("diagnostics_plugin.mjs").read_bytes()
+        )
         (tool_dir / "devlegate_report.ts").write_text(
             """import { tool } from "@opencode-ai/plugin"
 
