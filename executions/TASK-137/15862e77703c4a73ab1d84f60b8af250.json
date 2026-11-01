@@ -1,0 +1,35 @@
+{
+  "code_base_head": "5028a73eadef40a9b4d2930ea28ee1b32ed5e664",
+  "conclusion": "incomplete",
+  "control_head": "61350d018cf54e9501eb9fb4fdecb644eb6bb40a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-137",
+  "execution_id": "15862e77703c4a73ab1d84f60b8af250",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-137",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve safe successor workspace preparation when the retained execution branch predates the advanced product base, without destroying historical evidence or bypassing ownership checks.",
+    "Run configured GitHub CI against the final implementation checkpoint."
+  ],
+  "report_artifact": "executions/TASK-137/15862e77703c4a73ab1d84f60b8af250.md",
+  "report_sha256": "780c64353adb584a308f201145d7468aab492f38cd2c8fedfdbf376299804b6f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-137",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve safe successor workspace preparation when the retained execution branch predates the advanced product base, without destroying historical evidence or bypassing ownership checks.",
+      "Run configured GitHub CI against the final implementation checkpoint."
+    ],
+    "report": "The successor regression reaches owner admission but existing workspace preparation rejects the retained execution branch as unrelated to the newer base. The final edits are uncommitted and the worker contract reserves checkpoint creation and Git lifecycle to Devlegate, so exact-checkpoint GitHub CI cannot be run on these edits in this invocation.",
+    "summary": "Updated failed-generation supersession to accept a synchronized product descendant only when immutable control history independently proves a ticket transition. Added real-Git regressions for product fast-forward, product-only drift, rewrites, and divergent observations while preserving exact binding for explicit retry."
+  },
+  "workspace_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e"
+}
