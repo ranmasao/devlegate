@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "74f16861e20556a13b2ce8eeb9ae482b7161889c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-136",
+  "execution_id": "24ecd7aed84640d38fc69cf1c8b699b4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-136",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and run an opt-in genuine LSP-published oversized-diagnostics acceptance test inspecting the entire OpenCode JSONL stream and agent-visible feedback.",
+    "Verify generated worker configuration loads the resource from both installed distribution forms.",
+    "Obtain exact-checkpoint CI for the revised implementation after Devlegate creates the checkpoint."
+  ],
+  "report_artifact": "executions/TASK-136/24ecd7aed84640d38fc69cf1c8b699b4.md",
+  "report_sha256": "430ba213483af024f54e2bf74b1081c078d893c54bb4f2330edb79801e214399",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-136",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement and run an opt-in genuine LSP-published oversized-diagnostics acceptance test inspecting the entire OpenCode JSONL stream and agent-visible feedback.",
+      "Verify generated worker configuration loads the resource from both installed distribution forms.",
+      "Obtain exact-checkpoint CI for the revised implementation after Devlegate creates the checkpoint."
+    ],
+    "report": "The available live OpenCode test injects diagnostics with a test hook rather than an LSP, and no language-server executable was found on PATH, so the required LSP-to-JSONL boundary is not yet established. The worker contract reserves checkpoint creation and CI integration to Devlegate.",
+    "summary": "Reworked diagnostic filtering to use incremental UTF-8 byte accounting and a separate truncation flag while preserving the diagnostic map schema. Added exact-budget and severity-priority coverage and made missing Node fail hook tests."
+  },
+  "workspace_head": "8a81f34ddb0a79e847f5fee813058b3bab948f64"
+}
