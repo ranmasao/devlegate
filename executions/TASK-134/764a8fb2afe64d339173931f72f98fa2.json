@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "4ef4a733064b68f35cc02459388a48c4e4cc2b00",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "764a8fb2afe64d339173931f72f98fa2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the shared durable transition protocol for checkpoint and predecessor publication, upstream refs, prepare_rework, repair_bound_workspace, reconciliation, retirement, and automatic cleanup in runtime.py, execution_workspace.py, recovery_workspace.py, and reconciliation_transactions.py.",
+    "Publish and revoke authoritative BOUND records only around fully mediated lifecycle transitions, and implement independent positive Git resource proof in execution_resource_proof.py.",
+    "Complete the crash, remote failure, recreation, drift, and evidence-preservation matrix; make the two positive lifecycle tests pass without xfail and document the exclusive-writer boundary and recovery rules."
+  ],
+  "report_artifact": "executions/TASK-134/764a8fb2afe64d339173931f72f98fa2.md",
+  "report_sha256": "74abe3d4845788ef24a3aaa475d03c4596ca6a0bd91a3bb8f2cf146e3268bdd4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the shared durable transition protocol for checkpoint and predecessor publication, upstream refs, prepare_rework, repair_bound_workspace, reconciliation, retirement, and automatic cleanup in runtime.py, execution_workspace.py, recovery_workspace.py, and reconciliation_transactions.py.",
+      "Publish and revoke authoritative BOUND records only around fully mediated lifecycle transitions, and implement independent positive Git resource proof in execution_resource_proof.py.",
+      "Complete the crash, remote failure, recreation, drift, and evidence-preservation matrix; make the two positive lifecycle tests pass without xfail and document the exclusive-writer boundary and recovery rules."
+    ],
+    "report": "The creation transcript alone cannot safely establish continuity while other lifecycle mutators bypass it. The requested positive proof therefore remains unimplemented; a complete lifecycle protocol is still needed before it can be published safely. Configured CI coverage completed with 1661 passed, 1 skipped, and 2 xfailed; configured lint passed.",
+    "summary": "Creation transition entries now carry execution generation identity and resource coordinates, and creation verification and restart reject inconsistent transcripts. Added lifecycle tests for identity, ordering, and expected-head corruption."
+  },
+  "workspace_head": "f92714e2f76ff80d169879501fb9a12ebcd3ac48"
+}
