@@ -4118,6 +4118,13 @@ class ServiceEngine:
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
             )
+            if authorization is None and isinstance(failed_for_ticket, dict):
+                observations = self._status_git_observation()
+                if self._failure_superseded(
+                    selected_ticket.id, failed_for_ticket, self._state,
+                    observations["control"], observations["code"],
+                ):
+                    failed_for_ticket = None
             manual_retry = self._state.get("manual_retry_required")
             if isinstance(manual_retry, dict) and (
                 manual_retry.get("ticket_id") != selected_ticket.id
@@ -9345,6 +9352,7 @@ class ServiceEngine:
     def _failure_superseded(
         self, ticket_id: str, metadata: object, state: dict[str, object],
         control: GitObservation | None,
+        code: GitObservation | None = None,
     ) -> bool:
         """Require published descendant history proving a ticket left its state.
 
@@ -9354,6 +9362,13 @@ class ServiceEngine:
         """
         if not isinstance(metadata, dict) or control is None:
             return False
+        if code is not None and (
+            code.detached or code.branch != self.remote_branch
+            or not code.working_tree_clean or not code.remote_head
+            or code.local_head != metadata.get("product_head")
+            or code.remote_head != metadata.get("remote_head")
+        ):
+            return False
         if (
             control.detached or control.branch != self.control_branch
             or not control.working_tree_clean or not control.remote_head
@@ -9361,10 +9376,19 @@ class ServiceEngine:
         ):
             return False
         for key in ("reconciliation", "accepted_integration", "automatic_retry",
-                    "manual_retry_required"):
+                    "manual_retry_required", "resume_required", "operator_recovery",
+                    "force_retry_authorization", "execution_ref_retirement"):
             marker = state.get(key)
-            if isinstance(marker, dict) and marker.get("ticket_id") == ticket_id:
+            if (
+                isinstance(marker, dict)
+                and marker.get("ticket_id", ticket_id) == ticket_id
+            ):
                 return False
+        if state.get("worker_identity") is not None:
+            return False
+        live = self.live_execution_evidence()
+        if isinstance(live, dict) and live.get("ticket_id") == ticket_id:
+            return False
         if (
             state.get("phase") != "idle"
             and state.get("selected_ticket_id") == ticket_id
@@ -9392,23 +9416,36 @@ class ServiceEngine:
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
             return False
-        if not any(
-            self._git_runtime(
-                self.control_worktree, "cat-file", "-e", f"{base}:{path}",
+        commits = lineage.stdout.splitlines()
+        commits = list(reversed(commits[:commits.index(base) + 1]))
+        original_blob = None
+        previous_path = None
+        transitioned = False
+        todo_path = f"{self.todo_path}/{ticket_id}.md"
+        for commit in commits:
+            tree = self._git_runtime(
+                self.control_worktree, "ls-tree", "--full-tree", commit, "--", *paths,
                 check=False,
-            ).returncode == 0
-            for path in paths
-        ):
-            return False
-        result = self._git_runtime(
-            self.control_worktree, "log", "--first-parent", "-m", "--format=",
-            "--name-only", "--no-renames",
-            "--diff-filter=D", f"{base}..{control.local_head}", "--", *paths,
-            check=False,
-        )
-        return result.returncode == 0 and any(
-            line in paths for line in result.stdout.splitlines()
-        )
+            )
+            if tree.returncode != 0:
+                return False
+            entries = tree.stdout.splitlines()
+            if len(entries) != 1 or "\t" not in entries[0]:
+                return False
+            descriptor, path = entries[0].split("\t", 1)
+            fields = descriptor.split()
+            if len(fields) != 3 or fields[1] != "blob" or path not in paths:
+                return False
+            if original_blob is None:
+                if path != todo_path:
+                    return False
+                original_blob = fields[2]
+            elif fields[2] != original_blob:
+                return False
+            if previous_path == todo_path and path != todo_path:
+                transitioned = True
+            previous_path = path
+        return transitioned
 
     def _collect_status_attempt(
         self, *, allow_workflow_blocked: bool = False
@@ -9683,7 +9720,8 @@ class ServiceEngine:
             failed_executions = tuple(
                 failure for failure in failed_executions
                 if not self._failure_superseded(
-                    failure.ticket_id, failures.get(failure.ticket_id), state, control
+                    failure.ticket_id, failures.get(failure.ticket_id), state,
+                    control, code,
                 )
             )
         live_evidence = self.live_execution_evidence()
@@ -9694,6 +9732,19 @@ class ServiceEngine:
                 for failure in failed_executions
                 if failure.ticket_id != active_ticket_id
             )
+        selected_failure = None
+        if plan.action == "run-worker" and not plan.bound:
+            selected_failure = next(
+                (failure for failure in failed_executions
+                 if failure.ticket_id == plan.ticket_id), None
+            )
+            if selected_failure is not None:
+                reason = selected_failure.nonretryable_reason
+                plan = dataclasses.replace(
+                    plan, action="none",
+                    reason=("failed execution requires explicit retry" if reason is None
+                            else f"failed execution blocks admission: {reason}"),
+                )
         next_ticket = (
             (
                 ticket_store.by_id[plan.ticket_id].id,
@@ -9716,6 +9767,10 @@ class ServiceEngine:
         )
         if pre_barrier is not None:
             global_barrier = pre_barrier
+        elif selected_failure is not None:
+            global_barrier = AdmissionBarrier(
+                "blocked", "failed-execution", plan.reason, selected_failure.ticket_id
+            )
         elif bound_ticket_id is not None:
             global_barrier = AdmissionBarrier(
                 "blocked",
