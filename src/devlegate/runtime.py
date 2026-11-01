@@ -1437,6 +1437,9 @@ class ServiceEngine:
                 registration, str(state["execution_base_head"])
             )
             manager.verify_submodules(workspace)
+            self._revoke_resource_observations(
+                manager.branch, "forced retry checkpoint"
+            )
             checkpoint = manager.checkpoint(
                 workspace,
                 execution_id,
@@ -4702,6 +4705,7 @@ class ServiceEngine:
             self._iteration_diagnostic = (
                 f"worker failed: {execution_result.result.reason}"
             )
+        self._revoke_resource_observations(workspace.branch, "execution checkpoint")
         self._save_state(
             "agent_running",
             execution_stage="checkpointing",
@@ -10668,6 +10672,9 @@ class ServiceEngine:
         self._save_state(state, **values)
         if values.get("accepted_integration", _UNSET) is None:
             self._finish_integrated_workspace_cleanup()
+
+    def recovery_revoke_resource_observations(self, branch: str) -> None:
+        self._revoke_resource_observations(branch, "recovered execution checkpoint")
 
     def recovery_worker_observation(self, identity) -> str:
         return self._workers.observe(identity)

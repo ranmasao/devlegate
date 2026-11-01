@@ -1038,17 +1038,21 @@ def test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary(
         )
 
     monkeypatch.setattr(engine._workers, "run", worker)
-    monkeypatch.setattr(
-        ExecutionWorkspaceManager,
-        "checkpoint",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ExecutionWorkspaceError("checkpoint unavailable")
-        ),
-    )
+    def checkpoint(*_args, **_kwargs):
+        state = engine._runtime_store.load()
+        intent = state["execution_resource_intents"][state["execution_id"]]
+        assert intent["revoked"] == "execution checkpoint"
+        raise ExecutionWorkspaceError("checkpoint unavailable")
+
+    monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", checkpoint)
     with pytest.raises(DevlegateError, match="execution checkpoint failed"):
         run_test_iteration(engine)
     assert engine.lifecycle_intent() == "stop"
     assert engine._state["execution_stage"] == "checkpointing"
+    saved = engine._runtime_store.load()
+    assert saved["execution_resource_intents"][saved["execution_id"]]["revoked"] == (
+        "execution checkpoint"
+    )
 
 
 @pytest.mark.parametrize("drain_stage", ["post-checkpoint", "publishing", "lifecycle"])

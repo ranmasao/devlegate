@@ -144,6 +144,7 @@ def test_force_retry_evidence_observation_requires_owner(tmp_path, monkeypatch):
 
     class WorkspaceManager:
         path = tmp_path
+        branch = "devlegate/work/T-1"
 
         def __init__(self, *args, **kwargs):
             pass

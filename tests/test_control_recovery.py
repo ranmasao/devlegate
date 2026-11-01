@@ -1861,8 +1861,13 @@ def test_zero_delta_retry_reuses_admitted_id_after_worker_launch_crash(
     assert run_test_iteration(replay) == 0
     assert ids == [pending["fresh_execution_id"]]
     replay_intent = replay._state["execution_resource_intents"][ids[0]]
-    assert {k: v for k, v in replay_intent.items() if k != "preparation_journal"} == {
-        k: v for k, v in retry_intent.items() if k != "preparation_journal"
+    assert replay_intent["revoked"] == "execution checkpoint"
+    assert {
+        k: v for k, v in replay_intent.items()
+        if k not in {"preparation_journal", "revoked"}
+    } == {
+        k: v for k, v in retry_intent.items()
+        if k not in {"preparation_journal", "revoked"}
     }
     previous_journal = retry_intent["preparation_journal"]
     assert (
