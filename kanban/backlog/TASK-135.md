@@ -1,7 +1,6 @@
 ---
 "type": "devlegate.ticket"
 "title": "Publish iteration-scoped coverage badges for release branches"
-"depends_on": []
 ---
 
 ## Goal
