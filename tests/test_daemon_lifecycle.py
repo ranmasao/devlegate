@@ -747,6 +747,39 @@ def test_restart_rejects_inconsistent_creation_transcript(
         engine._check_interrupted_resource_creation(execution_id)
 
 
+@pytest.mark.parametrize("corruption", ["order", "head", "nonce"])
+def test_creation_transition_rejects_inconsistent_prefix_before_next_effect(
+    tmp_path, monkeypatch, corruption
+):
+    from devlegate.runtime import WorkflowBlockedError
+
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    original = engine._record_creation_transition
+
+    def interrupt(execution_id, resource, event, head):
+        if (resource, event) == ("worktree", "intent"):
+            raise RuntimeError("interrupt before worktree creation")
+        return original(execution_id, resource, event, head)
+
+    monkeypatch.setattr(engine, "_record_creation_transition", interrupt)
+    with pytest.raises(RuntimeError, match="interrupt before"):
+        engine.serve(threading.Event())
+    execution_id = engine._state["execution_id"]
+    journal = engine._state["execution_resource_intents"][execution_id][
+        "creation_transitions"
+    ]
+    head = journal[0]["expected_head"]
+    if corruption == "order":
+        journal.reverse()
+    elif corruption == "head":
+        journal[0]["expected_head"] = "different"
+    else:
+        journal[0]["nonce"] = "different"
+    with pytest.raises(WorkflowBlockedError, match="creation transition"):
+        original(execution_id, "worktree", "intent", head)
+    assert not Path(engine._state["execution_path"]).exists()
+
+
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
