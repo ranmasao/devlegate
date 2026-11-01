@@ -9362,13 +9362,26 @@ class ServiceEngine:
         """
         if not isinstance(metadata, dict) or control is None:
             return False
-        if code is not None and (
-            code.detached or code.branch != self.remote_branch
-            or not code.working_tree_clean or not code.remote_head
-            or code.local_head != metadata.get("product_head")
-            or code.remote_head != metadata.get("remote_head")
-        ):
-            return False
+        if code is not None:
+            product_base = metadata.get("product_head")
+            remote_base = metadata.get("remote_head")
+            if (
+                code.detached or code.branch != self.remote_branch
+                or not code.working_tree_clean or not code.remote_head
+                or code.local_head != code.remote_head
+                or not isinstance(product_base, str)
+                or not _is_git_identity(product_base)
+                or not isinstance(remote_base, str) or not _is_git_identity(remote_base)
+            ):
+                return False
+            try:
+                if not all(
+                    self._is_ancestor_runtime(self.repo, base, code.local_head)
+                    for base in (product_base, remote_base)
+                ):
+                    return False
+            except WorkflowBlockedError:
+                return False
         if (
             control.detached or control.branch != self.control_branch
             or not control.working_tree_clean or not control.remote_head

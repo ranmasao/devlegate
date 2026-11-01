@@ -2823,6 +2823,86 @@ def test_published_ticket_transition_supersedes_only_current_failure(
         ]] == ["T-1"]
 
 
+@pytest.mark.parametrize(
+    "scenario", ["successor", "product-only", "rewrite", "divergent"]
+)
+def test_failed_generation_product_lineage_and_ticket_transition(
+    tmp_path, monkeypatch, scenario
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    calls = []
+
+    def worker(*_args, **_kwargs):
+        calls.append(1)
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    metadata = dict(engine._state["failed_executions"]["T-1"])
+    control = next((state / "worktrees").glob("*/control"))
+    report_store = ExecutionReportStore(control)
+    report = report_store.read("T-1", metadata["execution_id"])
+    source = control / "kanban/todo/T-1.md"
+    deferred = control / "kanban/backlog/T-1.md"
+    original = source.read_bytes()
+    if scenario != "product-only":
+        source.rename(deferred)
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "defer ticket")
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    (working / "integrated.txt").write_text("another ticket integrated\n")
+    git(working, "add", "integrated.txt")
+    git(working, "commit", "-m", "integrate another ticket")
+    if scenario == "rewrite":
+        tree = git(working, "rev-parse", "HEAD^{tree}").stdout.strip()
+        unrelated = git(
+            working, "commit-tree", tree, "-m", "rewritten product"
+        ).stdout.strip()
+        git(working, "reset", "--hard", unrelated)
+        git(working, "push", "--force", "origin", "HEAD")
+    elif scenario != "divergent":
+        git(working, "push", "origin", "HEAD")
+
+    if scenario != "product-only":
+        deferred.rename(source)
+        assert source.read_bytes() == original
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "requeue ticket")
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    restarted = Devlegate(config)
+    monkeypatch.setattr(restarted._workers, "run", worker)
+    snapshot = restarted.status_view()
+    assert restarted._retry_candidates() == ()
+    assert report_store.read("T-1", metadata["execution_id"]) == report
+    assert restarted._state["failed_executions"]["T-1"] == metadata
+    if scenario == "successor":
+        assert not snapshot.failed_executions
+        assert snapshot.plan.action == "run-worker"
+        # The old execution branch is retained at the old base. Admission must
+        # create a distinct generation without resetting that historical ref.
+        with pytest.raises(DevlegateError, match="execution branch .* unrelated"):
+            run_test_iteration(restarted)
+        assert len(calls) == 1
+        assert restarted._state["execution_id"] != metadata["execution_id"]
+        assert restarted._state["execution_base_head"] == git(
+            working, "rev-parse", "HEAD"
+        ).stdout.strip()
+        assert report_store.read("T-1", metadata["execution_id"]) == report
+        assert restarted._state["failed_executions"]["T-1"] == metadata
+    else:
+        assert snapshot.failed_executions
+        assert not snapshot.failed_executions[0].retryable
+        assert snapshot.plan.action != "run-worker"
+        run_test_iteration(restarted)
+        assert len(calls) == 1
+        assert restarted._state["failed_executions"]["T-1"] == metadata
+
+
 def test_side_branch_deletion_and_divergent_remote_do_not_supersede_failure(
     tmp_path, monkeypatch
 ):
