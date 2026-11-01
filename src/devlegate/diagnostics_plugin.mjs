@@ -1,9 +1,15 @@
 // Copyright (c) 2026 Daniil Romanov
 // SPDX-License-Identifier: EUPL-1.2
+/*
+ * OpenCode attaches workspace-wide LSP diagnostic snapshots to edit-tool
+ * metadata. Unrelated and unchanged diagnostics can be repeatedly serialized
+ * into session history and JSONL events; their size is not bounded by the edit.
+ * Bound this redundant metadata without modifying tool output or disabling
+ * automatic LSP feedback for coding agents.
+ */
 import path from "node:path"
 
 const limit = 65536
-const marker = "$devlegate_truncated"
 const size = (value) => Buffer.byteLength(JSON.stringify(value), "utf8")
 
 export default async function diagnosticsPlugin({ directory }) {
@@ -37,6 +43,7 @@ export default async function diagnosticsPlugin({ directory }) {
 
       const filtered = Object.create(null)
       let truncated = false
+      let bytes = 2 // braces
       if (diagnostics && typeof diagnostics === "object" && !Array.isArray(diagnostics)) {
         const candidates = []
         for (const key of Object.keys(diagnostics).sort()) {
@@ -48,22 +55,21 @@ export default async function diagnosticsPlugin({ directory }) {
           const rank = (d) => d?.severity === 1 ? 0 : d?.severity === 2 ? 1 : 2
           return rank(a[1]) - rank(b[1])
         })
-        // Reserve space for the marker even if the last diagnostic does not fit.
-        filtered[marker] = true
         for (const [key, diagnostic] of candidates) {
-          if (!Object.hasOwn(filtered, key)) filtered[key] = []
-          filtered[key].push(diagnostic)
-          if (size(filtered) > limit) {
-            filtered[key].pop()
-            if (!filtered[key].length) delete filtered[key]
+          const exists = Object.hasOwn(filtered, key)
+          const extra = size(diagnostic) + (exists ? 1 : size(key) + 3 + (bytes > 2 ? 1 : 0))
+          if (bytes + extra > limit) {
             truncated = true
+            continue
           }
+          if (!exists) filtered[key] = []
+          filtered[key].push(diagnostic)
+          bytes += extra
         }
       } else truncated = true
       if (!touched.size && diagnostics && Object.keys(diagnostics).length) truncated = true
-      if (truncated) filtered[marker] = true
-      else delete filtered[marker]
       metadata.diagnostics = filtered
+      if (truncated) metadata.devlegateDiagnosticsTruncated = true
     },
   }
 }
