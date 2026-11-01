@@ -135,6 +135,9 @@ def test_single_file_and_malformed(tool):
     assert run_hook("devlegate_report", {}, result) == result
 
 
+# The genuine high-volume LSP-to-JSONL acceptance check is deliberately excluded
+# from GitHub Actions: external OpenCode and LSP orchestration require substantial
+# setup and runtime, so it is performed locally. The hook unit tests run in CI.
 @pytest.mark.skipif(not os.environ.get("DEVLEGATE_LIVE_OPENCODE"), reason="opt-in")
 def test_live_opencode_loads_hook(tmp_path):
     config_dir = tmp_path / "worker-config"
