@@ -1,0 +1,29 @@
+{
+  "code_base_head": "5028a73eadef40a9b4d2930ea28ee1b32ed5e664",
+  "conclusion": "completed",
+  "control_head": "4e28ec88d0f052d74ea3ec2d8c13ead265d702ea",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-137",
+  "execution_id": "af76ff4c6a994993aa6cfe3e3ee1a4c2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-137",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-137",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Aligned scheduler admission and status with a shared immutable first-parent ticket transition proof while preserving failed execution evidence. Added real-Git regressions for requeue, altered tickets, unrelated control changes, and repeated restarts."
+  },
+  "workspace_head": "6a9e54e71a6e76922a00a4394afd5d67fec45e97"
+}
