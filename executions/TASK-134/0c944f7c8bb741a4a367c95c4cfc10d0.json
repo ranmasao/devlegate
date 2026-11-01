@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "f4dbd4e6ae2594166c7c036d0d704aa8535c3a2c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "0c944f7c8bb741a4a367c95c4cfc10d0",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized binding and comprehensive mutation journaling for worktree, local ref, and upstream ref lifecycles, including checkpoint, publication, reconciliation, retries, and recovery.",
+    "Publish and independently verify authoritative generation-specific BOUND records, including positive restart and recreation proofs under an explicit exclusive-writer boundary.",
+    "Add complete interruption, drift, remote-error, and non-interference coverage and run configured CI."
+  ],
+  "report_artifact": "executions/TASK-134/0c944f7c8bb741a4a367c95c4cfc10d0.md",
+  "report_sha256": "2986502dcae2e47ea0372859864991a0a886c05156f5d6bb45612097b3ceff6c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized binding and comprehensive mutation journaling for worktree, local ref, and upstream ref lifecycles, including checkpoint, publication, reconciliation, retries, and recovery.",
+      "Publish and independently verify authoritative generation-specific BOUND records, including positive restart and recreation proofs under an explicit exclusive-writer boundary.",
+      "Add complete interruption, drift, remote-error, and non-interference coverage and run configured CI."
+    ],
+    "report": "The existing creation journal and worktree marker do not establish ref continuity, and the remaining mutation paths have not been mediated. Publishing positive ownership from that evidence would be unsafe; this invocation did not complete the integrated protocol.",
+    "summary": "Added durable, branch-scoped revocation of creation observations before rework, workspace repair, retirement, and applied cleanup. Documented the revocation semantics and kept the proof API fail-closed."
+  },
+  "workspace_head": "a5cfa0962934123e45ccd0c8a384dd3979a8b5c2"
+}
