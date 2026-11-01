@@ -67,6 +67,13 @@ creation sequence alone grants authority. Other mutation paths remain outside
 this journal, and same-OID ref replacement is not observable without exclusive
 owner mediation.
 
+Before rework preparation, workspace repair, zero-delta retirement, drop
+retirement, and applied cleanup, the owner durably marks matching branch
+creation observations revoked. Revocation is idempotent and survives a failed
+or interrupted mutation; it does not establish the identity of a replacement.
+Other mutation paths still lack complete mediation, so revocation does not make
+the creation observations an authoritative binding.
+
 A future resource proof must assume that resource mutations are mediated by the
 serialized owner. Git cannot retrospectively detect an out-of-band deletion and
 recreation of a ref at the same object ID. Detectable drift and incomplete or
