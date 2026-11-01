@@ -1,0 +1,35 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "36d4ef8a20b86e7dedcc57a1c44496d0c293c79a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-136",
+  "execution_id": "02e5973eade6432eb5b0377fbd07a2bf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-136",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Verify the JSONL boundary with a genuinely oversized LSP-produced diagnostic snapshot rather than metadata injected by a test hook.",
+    "Run configured exact-commit CI after Devlegate creates the implementation commit."
+  ],
+  "report_artifact": "executions/TASK-136/02e5973eade6432eb5b0377fbd07a2bf.md",
+  "report_sha256": "aee986b635009ac27f083dafc03a3ae1323bff629275e7a83f72e463c2e1d123",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-136",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Verify the JSONL boundary with a genuinely oversized LSP-produced diagnostic snapshot rather than metadata injected by a test hook.",
+      "Run configured exact-commit CI after Devlegate creates the implementation commit."
+    ],
+    "report": "The live OpenCode check injected the oversized snapshot after tool execution, so it cannot establish whether a real oversized LSP snapshot is emitted in an earlier intermediate event. The worker contract prohibits creating the commit required for exact-commit CI.",
+    "summary": "Added a packaged OpenCode hook that bounds edit-tool diagnostic metadata while preserving agent-visible output and other metadata. Added synthetic diagnostics coverage and a real OpenCode JSONL integration check with LSP feedback."
+  },
+  "workspace_head": "69538da076c7161d5cb634e7c63442b1f65e4f93"
+}
