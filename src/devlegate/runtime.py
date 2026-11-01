@@ -92,7 +92,6 @@ from devlegate.git import (
     resolve_object,
     resolve_ref_commit,
     run_git,
-    update_ref,
     working_tree_status,
     worktree_paths,
     worktree_root,
@@ -8032,6 +8031,10 @@ class ServiceEngine:
         object_id = resolve_object(self.repo, ref, runner=self._git_runtime)
         if object_id is None:
             return None
+        return self._read_drop_disposition_object(object_id)
+
+    def _read_drop_disposition_object(self, object_id: str) -> dict[str, object]:
+        """Read the exact object observed before a disposition CAS."""
         object = read_object(self.repo, object_id, runner=self._git_runtime)
         if object is None or object[0] != "blob":
             raise DevlegateError("drop disposition ref does not point to a blob")
@@ -8089,7 +8092,7 @@ class ServiceEngine:
         blob = hash_object(self.repo, encoded, runner=self._git_runtime)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition intent")
-        updated = update_ref(
+        updated = create_ref_if_absent(
             self.repo,
             self._drop_disposition_ref(report.ticket_id, report.execution_id),
             blob.stdout.strip(),
@@ -8109,7 +8112,7 @@ class ServiceEngine:
         if observed is not None and observed != checkpoint:
             raise DevlegateError("drop execution evidence ref is inconsistent")
         if observed is None:
-            pinned = update_ref(
+            pinned = create_ref_if_absent(
                 self.repo, evidence_ref, checkpoint, runner=self._git_runtime
             )
             if pinned.returncode:
@@ -8119,21 +8122,38 @@ class ServiceEngine:
                 if reread != checkpoint:
                     raise DevlegateError("cannot pin drop execution evidence")
         payload = self._drop_disposition_payload(report, checkpoint)
-        existing = self._read_drop_disposition(report.ticket_id, report.execution_id)
+        disposition_ref = self._drop_disposition_ref(
+            report.ticket_id, report.execution_id
+        )
+        old_object = resolve_object(
+            self.repo, disposition_ref, runner=self._git_runtime
+        )
+        existing = (
+            self._read_drop_disposition_object(old_object)
+            if old_object is not None
+            else None
+        )
         if existing is not None:
             if existing.get("disposition") == "dropped" and existing != payload:
                 raise DevlegateError("drop disposition evidence is inconsistent")
             if existing.get("disposition") not in {"dropping", "dropped"}:
                 raise DevlegateError("drop disposition evidence is inconsistent")
+            if existing.get("disposition") == "dropping" and existing != (
+                self._drop_disposition_payload_for(
+                    report, checkpoint, disposition="dropping"
+                )
+            ):
+                raise DevlegateError("drop disposition evidence is inconsistent")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         blob = hash_object(self.repo, encoded, runner=self._git_runtime)
         if blob.returncode or not blob.stdout.strip():
             raise DevlegateError("cannot persist drop disposition evidence")
-        disposition_ref = self._drop_disposition_ref(
-            report.ticket_id, report.execution_id
-        )
-        updated = update_ref(
-            self.repo, disposition_ref, blob.stdout.strip(), runner=self._git_runtime
+        updated = compare_and_swap_ref(
+            self.repo,
+            disposition_ref,
+            blob.stdout.strip(),
+            old_object or "",
+            runner=self._git_runtime,
         )
         if updated.returncode:
             reread = self._read_drop_disposition(report.ticket_id, report.execution_id)
