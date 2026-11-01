@@ -677,6 +677,10 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
             "resource": resource,
             "event": event,
             "expected_head": prepared[0].head,
+            "execution_id": state["execution_id"],
+            "nonce": intent["nonce"],
+            "branch": intent["branch"],
+            "path": intent["path"],
         }
         for index, (resource, event) in enumerate(
             (
@@ -706,6 +710,41 @@ def test_stop_after_workspace_preparation_preserves_pending_execution(
         "base_head": prepared[0].base_head,
     }
     assert journal[3] == {**journal[1], "sequence": 4, "event": "verified"}
+
+
+@pytest.mark.parametrize(
+    ("entry", "field", "value"),
+    [
+        (0, "nonce", "another-generation"),
+        (1, "execution_id", "another-execution"),
+        (2, "branch", "devlegate/work/OTHER"),
+        (3, "path", "/unexpected"),
+        (4, "expected_head", "wrong-head"),
+        (5, "sequence", 7),
+    ],
+)
+def test_restart_rejects_inconsistent_creation_transcript(
+    tmp_path, monkeypatch, entry, field, value
+):
+    from devlegate.execution_workspace import ExecutionWorkspaceError
+
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    stop_event = threading.Event()
+    original_prepare = engine._prepare_execution_workspace
+
+    def prepare(plan):
+        workspace = original_prepare(plan)
+        stop_event.set()
+        return workspace
+
+    monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
+    assert engine.serve(stop_event) == 0
+    execution_id = engine._state["execution_id"]
+    engine._state["execution_resource_intents"][execution_id]["creation_transitions"][
+        entry
+    ][field] = value
+    with pytest.raises(ExecutionWorkspaceError, match="ambiguous"):
+        engine._check_interrupted_resource_creation(execution_id)
 
 
 @pytest.mark.xfail(
