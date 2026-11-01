@@ -5145,6 +5145,7 @@ class ServiceEngine:
             report.ticket_id,
             runner=self._git_runtime,
         )
+        self._revoke_resource_observations(manager.branch, "zero-delta retirement")
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is not None:
@@ -5383,6 +5384,30 @@ class ServiceEngine:
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
+
+    def _revoke_resource_observations(self, branch: str, reason: str) -> None:
+        """Durably invalidate existing observations before replacing resources.
+
+        This does not create an ownership binding. A failed or interrupted
+        mutation must not make earlier creation evidence current again.
+        """
+        intents = self._state.get("execution_resource_intents")
+        if intents is None:
+            return
+        if not isinstance(intents, dict):
+            raise WorkflowBlockedError("execution resource intents are malformed")
+        updated = dict(intents)
+        changed = False
+        for execution_id, intent in intents.items():
+            if not isinstance(intent, dict):
+                raise WorkflowBlockedError("execution resource intent is malformed")
+            if intent.get("branch") == branch and "revoked" not in intent:
+                updated[execution_id] = {**intent, "revoked": reason}
+                changed = True
+        if changed:
+            self._save_state(
+                str(self._state["phase"]), execution_resource_intents=updated
+            )
 
     def _record_resource_preparation(
         self,
@@ -5676,6 +5701,7 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "persisted rework provenance is incomplete"
                 )
+            self._revoke_resource_observations(manager.branch, "rework preparation")
             # Prove and pin remote history before retiring or moving any local
             # ticket workspace.  A remote conflict must leave local code intact.
             # Re-observe the exact old remote predecessor before every local
@@ -6687,6 +6713,7 @@ class ServiceEngine:
                 "accepted execution workspace branch is not exact"
             )
         self._assert_cleanup_has_no_execution_dependency(report)
+        self._revoke_resource_observations(manager.branch, "accepted cleanup")
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is None:
@@ -7398,6 +7425,9 @@ class ServiceEngine:
                     # each destructive stage, so interrupted cleanup converges.
                     manager, current, _binding = self._observe_cleanup_candidate(
                         target, manager._registrations()
+                    )
+                    self._revoke_resource_observations(
+                        manager.branch, "workspace cleanup"
                     )
                     if current is not None:
                         manager.retire(current, target["head"])
@@ -8275,6 +8305,7 @@ class ServiceEngine:
         expected = report.workspace_head
         if expected is None:
             raise DevlegateError("drop execution checkpoint identity is missing")
+        self._revoke_resource_observations(report.execution_branch, "drop retirement")
         remote = self._execution_remote_head(report.execution_branch)
         if remote is not None and remote != expected:
             raise DevlegateError("execution remote changed before drop")
@@ -10387,6 +10418,9 @@ class ServiceEngine:
         """Repair only a pre-worker branch proven to be an older generation."""
         try:
             self._check_interrupted_resource_creation(self._state.get("execution_id"))
+            branch = self._state.get("execution_branch")
+            if isinstance(branch, str) and branch:
+                self._revoke_resource_observations(branch, "workspace repair")
             repair_bound_workspace(self, self._state)
         except (ValueError, ExecutionWorkspaceError) as error:
             raise DevlegateError(str(error)) from error

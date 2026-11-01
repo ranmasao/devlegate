@@ -682,6 +682,24 @@ def test_stop_after_agent_pending_commit_preserves_binding(tmp_path, monkeypatch
     assert not Path(intent["path"]).exists()
 
 
+def test_resource_observation_revocation_is_durable_and_scoped(tmp_path, monkeypatch):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine._save_state(
+        "idle",
+        execution_resource_intents={
+            "old": {"branch": "devlegate/work/TASK-1", "nonce": "old"},
+            "new": {"branch": "devlegate/work/TASK-1", "nonce": "new"},
+            "other": {"branch": "devlegate/work/TASK-2", "nonce": "other"},
+        },
+    )
+    engine._revoke_resource_observations("devlegate/work/TASK-1", "rework")
+    engine._revoke_resource_observations("devlegate/work/TASK-1", "retry")
+    saved = engine._runtime_store.load()["execution_resource_intents"]
+    assert saved["old"]["revoked"] == "rework"
+    assert saved["new"]["revoked"] == "rework"
+    assert "revoked" not in saved["other"]
+
+
 def test_stop_after_workspace_preparation_preserves_pending_execution(
     tmp_path, monkeypatch
 ):

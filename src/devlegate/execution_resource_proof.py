@@ -43,6 +43,8 @@ def inspect_execution_resource_proof(
             or intent.get("ticket_id") != ticket_id
         ):
             reason = "resource intent identity does not match the requested execution"
+        elif "revoked" in intent:
+            reason = "resource creation evidence was revoked"
         else:
             reason = "resource intent does not prove creation or continuity"
     return ExecutionResourceProof(ticket_id, execution_id, False, reason)
