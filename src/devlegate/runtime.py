@@ -5503,6 +5503,37 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "execution resource transition journal is malformed"
             )
+        identity = ("execution_id", "nonce", "branch", "path")
+        boundaries = [
+            (name, action)
+            for name in ("branch", "worktree", "marker")
+            for action in ("intent", "verified")
+        ]
+        if (
+            not isinstance(expected_head, str)
+            or not expected_head
+            or intent.get("execution_id") != execution_id
+            or not all(
+                isinstance(intent.get(key), str) and intent[key] for key in identity
+            )
+            or len(journal) >= len(boundaries)
+            or boundaries[len(journal)] != (resource, event)
+        ):
+            raise WorkflowBlockedError("invalid execution resource creation transition")
+        expected_prefix = [
+            {
+                "sequence": index,
+                "resource": name,
+                "event": action,
+                "expected_head": expected_head,
+                **{key: intent[key] for key in identity},
+            }
+            for index, (name, action) in enumerate(boundaries[: len(journal)], 1)
+        ]
+        if journal != expected_prefix:
+            raise WorkflowBlockedError(
+                "inconsistent execution resource creation transition"
+            )
         entry = {
             "sequence": len(journal) + 1,
             "resource": resource,
