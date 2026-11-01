@@ -1,0 +1,37 @@
+{
+  "code_base_head": "5b81966afab8eac2d021332c22a04a34361736ef",
+  "conclusion": "incomplete",
+  "control_head": "49d1840f085203ce3c96c2f05cfc9a34104bcbf6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-134",
+  "execution_id": "78fdd742883d433eba743ba255cc15d4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-134",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable generation binding and revocation across rework, recovery, checkpoint/ref publication, reconciliation, retirement, cleanup, and restart recovery.",
+    "Implement independently observed positive proof and complete crash-boundary, remote, drift, and restart coverage.",
+    "Document binding and recovery semantics and run configured CI after implementation."
+  ],
+  "report_artifact": "executions/TASK-134/78fdd742883d433eba743ba255cc15d4.md",
+  "report_sha256": "f267b80093940997be73475f050994782bd208a9f97d46ff4fefc81418b9066f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-134",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable generation binding and revocation across rework, recovery, checkpoint/ref publication, reconciliation, retirement, cleanup, and restart recovery.",
+      "Implement independently observed positive proof and complete crash-boundary, remote, drift, and restart coverage.",
+      "Document binding and recovery semantics and run configured CI after implementation."
+    ],
+    "report": "The existing journal covers creation observations only. I could not safely establish a positive ownership proof without first mediating all authority-changing paths; the proof remains fail-closed.",
+    "summary": "Added a real-Git regression showing that rework can recreate an identical-SHA worktree without inheriting its predecessor's creation marker."
+  },
+  "workspace_head": "2412dcf219b15bfb162b9f8cf0ab43b7253847b4"
+}
