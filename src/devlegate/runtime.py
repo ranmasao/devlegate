@@ -5469,6 +5469,10 @@ class ServiceEngine:
             raise WorkspacePreparationBlockedError(
                 "resource creation provenance changed"
             )
+        if not self._resource_creation_transitions_complete(intent, workspace.head):
+            raise WorkspacePreparationBlockedError(
+                "resource creation transition journal is incomplete or inconsistent"
+            )
         marker = created.get("marker")
         manager = ExecutionWorkspaceManager(
             self.repo,
@@ -5504,6 +5508,10 @@ class ServiceEngine:
             "resource": resource,
             "event": event,
             "expected_head": expected_head,
+            "execution_id": execution_id,
+            "nonce": intent.get("nonce"),
+            "branch": intent.get("branch"),
+            "path": intent.get("path"),
         }
         self._save_state(
             str(self._state["phase"]),
@@ -5512,6 +5520,40 @@ class ServiceEngine:
                 execution_id: {**intent, "creation_transitions": [*journal, entry]},
             },
         )
+
+    @staticmethod
+    def _resource_creation_transitions_complete(
+        intent: dict[str, object], expected_head: object
+    ) -> bool:
+        """Validate the complete generation-specific creation transcript.
+
+        This transcript is creation evidence only, not proof of ref continuity.
+        """
+        if not isinstance(expected_head, str) or not expected_head:
+            return False
+        identity = ("execution_id", "nonce", "branch", "path")
+        if not all(
+            isinstance(intent.get(key), str) and intent[key] for key in identity
+        ):
+            return False
+        expected = [
+            {
+                "sequence": index,
+                "resource": resource,
+                "event": event,
+                "expected_head": expected_head,
+                **{key: intent[key] for key in identity},
+            }
+            for index, (resource, event) in enumerate(
+                (
+                    (resource, event)
+                    for resource in ("branch", "worktree", "marker")
+                    for event in ("intent", "verified")
+                ),
+                1,
+            )
+        ]
+        return intent.get("creation_transitions") == expected
 
     def _check_interrupted_resource_creation(self, execution_id: object) -> None:
         intents = self._state.get("execution_resource_intents")
@@ -5526,7 +5568,14 @@ class ServiceEngine:
         )
         # A transition without the complete observation sequence can have
         # taken effect before a crash. Do not adopt or repair its resources.
-        if events[:4] != ["started", "created", "observed", "verified"]:
+        verified = journal[3] if isinstance(journal, list) and len(journal) >= 4 else {}
+        if (
+            events[:4] != ["started", "created", "observed", "verified"]
+            or not isinstance(verified, dict)
+            or not self._resource_creation_transitions_complete(
+                intent, verified.get("head")
+            )
+        ):
             raise ExecutionWorkspaceError(
                 "interrupted execution resource creation has an ambiguous "
                 "outcome; preserving resources for recovery"
