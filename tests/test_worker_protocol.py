@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -117,6 +118,9 @@ def test_worker_config_is_ephemeral_reserved_and_does_not_mutate_environment(
         captured.update(command=command, **kwargs)
         config_dir = Path(kwargs["env"]["OPENCODE_CONFIG_DIR"])
         assert (config_dir / "tools/devlegate_report.ts").is_file()
+        assert (config_dir / "plugins/diagnostics.js").read_bytes() == (
+            files("devlegate").joinpath("diagnostics_plugin.mjs").read_bytes()
+        )
         config = json.loads(kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
         assert config["$schema"] == "https://opencode.ai/config.json"
         assert config["permission"]["external_directory"] == {

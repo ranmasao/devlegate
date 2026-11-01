@@ -39,7 +39,7 @@ devlegate = "devlegate.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-devlegate = ["default_templates/.env.example", "default_templates/**/*"]
+devlegate = ["default_templates/.env.example", "default_templates/**/*", "diagnostics_plugin.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
