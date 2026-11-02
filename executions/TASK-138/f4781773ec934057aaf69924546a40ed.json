@@ -1,0 +1,37 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "49cc10c10624eb90a39cd776ec6643d1afbc7456",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "f4781773ec934057aaf69924546a40ed",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable failed-checkpoint ownership and continuation proof that preserves the prior review binding and safely resumes the proved generation.",
+    "Add end-to-end real-Git regressions for failed checkpoint recovery, restart, drift, and ambiguous or altered evidence.",
+    "Document the recovery contract and run the configured exact-checkpoint CI checks."
+  ],
+  "report_artifact": "executions/TASK-138/f4781773ec934057aaf69924546a40ed.md",
+  "report_sha256": "d5243d6ef2ece967e702cb68501e13646c90a42492bc153bbaa66644f22de5e3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable failed-checkpoint ownership and continuation proof that preserves the prior review binding and safely resumes the proved generation.",
+      "Add end-to-end real-Git regressions for failed checkpoint recovery, restart, drift, and ambiguous or altered evidence.",
+      "Document the recovery contract and run the configured exact-checkpoint CI checks."
+    ],
+    "report": "The failed-checkpoint continuation path has not been implemented or verified; launching based on the retained report alone would not prove ownership of the worktree or published delta. Configured lint could not run because the repository development environment is not installed.",
+    "summary": "Extended review disposition proof to recognize a verified todo-to-backlog-to-todo pause and requeue. Prevented transport-failed executions from being selected as reviewed generations and added focused provenance regressions."
+  },
+  "workspace_head": "5509821cbd607bae20562056fa4657fd243e3f3f"
+}
