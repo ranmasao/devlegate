@@ -825,6 +825,45 @@ def test_published_update_base_interruption_keeps_base_and_replays(
         assert git(execution, "rev-parse", "HEAD").stdout.strip() == pinned
 
 
+def test_remote_replay_rejects_changed_recorded_delta_length(tmp_path, monkeypatch):
+    devlegate, _working, state, execution, reconciliation, _first, second, target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    git(
+        execution, "push", "origin",
+        f"{second}:refs/heads/{reconciliation['execution_branch']}",
+    )
+    devlegate._save_state(
+        "idle", reconciliation={**reconciliation, "execution_remote_head": second}
+    )
+
+    def interrupt(*args, **kwargs):
+        raise RuntimeError("injected interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(devlegate, "reconciliation_publish_rewrite", interrupt)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
+
+    pending = dict(state_payload(state)["reconciliation"])
+    rewritten = git(execution, "rev-parse", "HEAD").stdout.strip()
+    devlegate._save_state(
+        "idle",
+        reconciliation={**pending, "rewrite_count": pending["rewrite_count"] + 1},
+    )
+    with pytest.raises(DevlegateError, match="rewrite result is invalid"):
+        devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == rewritten
+    displaced = git(execution, "rev-parse", pending["displaced_evidence_ref"])
+    pinned = git(execution, "rev-parse", pending["rewritten_evidence_ref"])
+    assert displaced.stdout.strip() == second
+    assert pinned.stdout.strip() == rewritten
+    assert git(
+        execution, "ls-remote", "origin",
+        f"refs/heads/{reconciliation['execution_branch']}",
+    ).stdout.split()[0] == second
+
+
 def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
     tmp_path, monkeypatch
 ):

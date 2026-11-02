@@ -428,7 +428,7 @@ def recover_remote_pending(owner: Any, ticket_id: str, admission: UpdateBaseAdmi
         raise ReconciliationTransactionError(
             f"cannot inspect interrupted execution rewrite: {error}"
         ) from error
-    if not commits:
+    if not commits or len(commits) != reconciliation.get("rewrite_count"):
         raise ReconciliationTransactionError(
             "interrupted execution rewrite result is invalid"
         )
