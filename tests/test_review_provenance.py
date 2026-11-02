@@ -124,5 +124,27 @@ def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
         runtime, "history_changes", lambda *a, **kw: (("b" * 40, (f"A\t{path}",)),)
     )
     engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
-    with pytest.raises(runtime.WorkflowBlockedError, match="newest execution failed"):
-        runtime.ServiceEngine._latest_reviewed_rework_report(engine, (report,))
+    assert (
+        runtime.ServiceEngine._latest_reviewed_rework_report(engine, (report,)) is None
+    )
+
+
+def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_path):
+    failed = SimpleNamespace(
+        ticket_id="TASK-1", execution_id="a" * 32,
+        result=SimpleNamespace(egress_ok=True, transport_error="oversized event"),
+    )
+    older = SimpleNamespace(
+        ticket_id="TASK-1", execution_id="b" * 32,
+        result=SimpleNamespace(egress_ok=True, transport_error=None),
+    )
+    monkeypatch.setattr(
+        runtime, "history_changes",
+        lambda *a, **kw: tuple(
+            (commit * 40, (f"A\texecutions/TASK-1/{report.execution_id}.json",))
+            for commit, report in (("c", failed), ("d", older))
+        ),
+    )
+    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+    with pytest.raises(runtime.WorkflowBlockedError, match="continuation ownership"):
+        runtime.ServiceEngine._latest_reviewed_rework_report(engine, (failed, older))
