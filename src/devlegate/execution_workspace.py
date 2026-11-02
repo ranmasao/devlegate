@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
@@ -259,12 +260,19 @@ class ExecutionWorkspaceManager:
                 if self.path.is_symlink():
                     raise self._path_conflict("is a symlink")
                 return workspace
+            candidate = base_head
+            if delta and not already_integrated:
+                candidate = self._build_rework_candidate(
+                    base_head, previous_checkpoint, delta
+                )
+            # Revalidate the source after the potentially lengthy transplant.
+            # retire() checks its identity and cleanliness again before removal.
             self.retire(workspace, previous_checkpoint)
             moved = self._runner(
                 self.repo,
                 "update-ref",
                 branch_ref,
-                base_head,
+                candidate,
                 previous_checkpoint,
                 check=False,
             )
@@ -334,6 +342,65 @@ class ExecutionWorkspaceManager:
                 "rework preparation conflict: previous implementation was not ported"
             )
         return prepared
+
+    def _build_rework_candidate(
+        self, base_head: str, previous_checkpoint: str, delta: list[str]
+    ) -> str:
+        """Build and verify a port without changing the canonical worktree."""
+        with tempfile.TemporaryDirectory(prefix="devlegate-rework-") as directory:
+            path = Path(directory) / "candidate"
+            added = self._runner(
+                self.repo, "worktree", "add", "--detach", str(path), base_head,
+                check=False,
+            )
+            if added.returncode:
+                raise ExecutionWorkspaceError("cannot create rework candidate worktree")
+            try:
+                self._prepare_submodules(path)
+                transplanted = self._runner(
+                    path, "cherry-pick", "--no-edit", *delta, check=False
+                )
+                if transplanted.returncode:
+                    self._runner(path, "cherry-pick", "--abort", check=False)
+                    raise ExecutionWorkspaceConflict(
+                        "rework preparation conflict: previous checkpoint cannot be "
+                        "applied to the new product base"
+                    )
+                head = self._runner(path, "rev-parse", "HEAD", check=False)
+                if head.returncode or not head.stdout.strip():
+                    raise ExecutionWorkspaceError("cannot observe rework candidate")
+                candidate = head.stdout.strip()
+                replay = self._runner(
+                    self.repo, "rev-list", "--reverse", f"{base_head}..{candidate}",
+                    check=False,
+                )
+                try:
+                    equivalent = patch_equivalence(
+                        self.repo, previous_checkpoint, candidate, base_head,
+                        runner=self._runner,
+                    )
+                except GitObservationError as error:
+                    raise ExecutionWorkspaceError(
+                        f"cannot prove candidate patch equivalence: {error}"
+                    ) from error
+                status = self._runner(path, "status", "--porcelain", check=False)
+                if (
+                    replay.returncode
+                    or len(replay.stdout.splitlines()) != len(delta)
+                    or equivalent != ("-",) * len(delta)
+                    or status.returncode
+                    or status.stdout.strip()
+                ):
+                    raise ExecutionWorkspaceConflict(
+                        "rework candidate is not the exact clean transplanted "
+                        "implementation"
+                    )
+                self._verify_submodules(path)
+                return candidate
+            finally:
+                self._runner(
+                    self.repo, "worktree", "remove", "--force", str(path), check=False
+                )
 
     def inspect(
         self, base_head: str, expected_head: str | None = None

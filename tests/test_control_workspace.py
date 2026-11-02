@@ -16,6 +16,7 @@ from devlegate import recovery_workspace
 import devlegate.execution_workspace as execution_workspace_module
 import devlegate.runtime as runtime_module
 from devlegate.execution_result import ExecutionReport, ExecutionResult
+from devlegate.execution_workspace import ExecutionWorkspaceConflict
 from devlegate.git import resolve_commit
 
 
@@ -3345,6 +3346,34 @@ def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
         ported.path, "rev-list", f"{new_base}..HEAD"
     ).stdout.splitlines()
     assert len(ported_commits) == 2
+
+
+def test_rework_conflict_preserves_original_worktree_and_branch(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    (working / "shared.txt").write_text("original\n")
+    git(working, "add", "shared.txt")
+    git(working, "commit", "-m", "add shared file")
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(old_base)
+    (workspace.path / "shared.txt").write_text("worker\n")
+    git(workspace.path, "add", "shared.txt")
+    git(workspace.path, "commit", "-m", "worker change")
+    old_checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    (working / "shared.txt").write_text("product\n")
+    git(working, "add", "shared.txt")
+    git(working, "commit", "-m", "product change")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(ExecutionWorkspaceConflict, match="cannot be applied"):
+        manager.prepare_rework(new_base, old_base, old_checkpoint)
+
+    assert workspace.path.is_dir()
+    assert (workspace.path / "shared.txt").read_text() == "worker\n"
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == old_checkpoint
+    assert git(working, "rev-parse", workspace.branch).stdout.strip() == old_checkpoint
 
 
 def test_rework_failed_ancestry_does_not_retire_or_move_workspace(
