@@ -1,0 +1,37 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "8b77070b5e0c812e9448471f58620d691e3c39dd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "1c3d807210a14d0584c0b0215c281c88",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized, durable continuation of the failed checkpoint with exact execution, worktree, local and remote ref ownership, product ancestry, CAS and restart proofs, while retaining the original curator feedback.",
+    "Add the complete disposable real-Git positive continuation and negative boundary/restart regressions, and document the recovery contract.",
+    "Run configured coverage validation and obtain successful exact-checkpoint CI after the continuation implementation."
+  ],
+  "report_artifact": "executions/TASK-138/1c3d807210a14d0584c0b0215c281c88.md",
+  "report_sha256": "78f4f89ad64f3a4ac1e5e5b63b604081518b1e109c14dac614524fa6cfbdfe29",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized, durable continuation of the failed checkpoint with exact execution, worktree, local and remote ref ownership, product ancestry, CAS and restart proofs, while retaining the original curator feedback.",
+      "Add the complete disposable real-Git positive continuation and negative boundary/restart regressions, and document the recovery contract.",
+      "Run configured coverage validation and obtain successful exact-checkpoint CI after the continuation implementation."
+    ],
+    "report": "The existing rework preparation retires and replaces the previous workspace, so reusing it for the failed checkpoint without a durable ownership and restart protocol would risk losing retained work. That protocol has not been established in this invocation; the reviewed-then-failed sequence remains fail-closed. The broad local test run had 1649 passing and three environment failures; those three passed after installing the configured development environment. Ruff passed for src and tests.",
+    "summary": "Restored ordinary failed-only retry and interrupted recovery while preventing failed reports from being selected as reviewed generations or silently falling back to an older generation. Added regression coverage for both cases."
+  },
+  "workspace_head": "cf0e641f43a76de8a588c1a3e0956eb17886e5f2"
+}
