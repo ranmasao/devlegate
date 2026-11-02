@@ -3783,16 +3783,38 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
     assert feedback in prompts[1]
 
 
-@pytest.mark.parametrize("advance_product", [False, True])
 @pytest.mark.parametrize(
-    "crash_point",
-    [None, "pinned", "ready", "retired", "moved", "attached", "published"],
+    ("advance_product", "crash_point", "corruption"),
+    [(False, None, None)]
+    + [
+        (True, point, None)
+        for point in (
+            None,
+            "pinned",
+            "ready",
+            "retired",
+            "moved",
+            "attached",
+            "published",
+        )
+    ]
+    + [
+        (True, "ready", corruption)
+        for corruption in (
+            "pin",
+            "local",
+            "remote",
+            "dirty",
+            "locked",
+            "foreign",
+            "identity",
+            "ticket",
+        )
+    ],
 )
 def test_failed_rework_deferral_resumes_checkpoint_and_review(
-    tmp_path, monkeypatch, advance_product, crash_point
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
 ):
-    if crash_point is not None and not advance_product:
-        pytest.skip("swap interruption applies only to an advanced product base")
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -3932,9 +3954,70 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         interrupt_swap()
         pending = devlegate._state["rework_provenance"]
         assert pending["code_predecessor"]["checkpoint"] == checkpoint
+        if corruption:
+            swap = pending["swap"]
+            branch = devlegate._state["execution_branch"]
+            if corruption == "pin":
+                git(working, "update-ref", "-d", swap["candidate_ref"])
+            elif corruption == "local":
+                git(workspace, "checkout", "--detach")
+                git(
+                    working,
+                    "update-ref",
+                    f"refs/heads/{branch}",
+                    swap["candidate_head"],
+                )
+            elif corruption == "remote":
+                git(
+                    working,
+                    "push",
+                    "--force",
+                    "origin",
+                    f"{swap['candidate_head']}:refs/heads/{branch}",
+                )
+            elif corruption == "dirty":
+                (workspace / "foreign.txt").write_text("foreign\n")
+            elif corruption == "locked":
+                git(working, "worktree", "lock", str(workspace))
+            elif corruption == "foreign":
+                git(working, "worktree", "remove", str(workspace))
+                workspace.mkdir()
+            elif corruption == "identity":
+                devlegate._save_state(
+                    "agent_pending",
+                    rework_provenance={**pending, "swap": {**swap, "stage": "invalid"}},
+                )
+            elif corruption == "ticket":
+                ticket = control / "kanban/todo/T-1.md"
+                ticket.write_text(ticket.read_text() + "\nchanged\n")
+                git(control, "add", str(ticket.relative_to(control)))
+                git(control, "commit", "-m", "change ticket")
+                git(control, "push", "origin", "devlegate/control")
         devlegate = Devlegate(config)
-        assert devlegate._state["rework_provenance"] == pending
+        if not corruption:
+            assert devlegate._state["rework_provenance"] == pending
         monkeypatch.setattr(devlegate._workers, "run", worker)
+        if corruption:
+            plan = devlegate.status_view().plan
+            assert plan.action == "blocked", plan.reason
+            expected = {
+                "pin": "candidate pin",
+                "local": "topology",
+                "remote": "remote",
+                "dirty": "dirty",
+                "locked": "locked",
+                "foreign": "foreign",
+                "identity": "identity",
+                "ticket": "ticket",
+            }
+            assert expected[corruption] in plan.reason
+            assert len(prompts) == 2
+            evidence = f"refs/devlegate/recovery/workspace/T-1/{failed.execution_id}"
+            assert git(working, "rev-parse", evidence).stdout.strip() == checkpoint
+            assert report_path.read_bytes() == report_bytes
+            assert reviewed_path.read_bytes() == reviewed_bytes
+            assert artifact.read_bytes() == review_bytes
+            return
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3
     assert devlegate._state["execution_id"] not in {

@@ -464,7 +464,13 @@ class ExecutionWorkspaceManager:
                         raise ExecutionWorkspaceError(cleanup_error)
 
     def _pinned_rework_candidate(
-        self, base: str, old_base: str, checkpoint: str, candidate_ref: str
+        self,
+        base: str,
+        old_base: str,
+        checkpoint: str,
+        candidate_ref: str,
+        *,
+        create: bool = True,
     ) -> str:
         """Create or verify the one candidate owned by a pending execution."""
         for commit in (base, old_base, checkpoint):
@@ -492,6 +498,10 @@ class ExecutionWorkspaceManager:
         delta = commits.stdout.splitlines()
         candidate = resolve_commit(self.repo, candidate_ref, runner=self._runner)
         if candidate is None:
+            if not create:
+                raise ExecutionWorkspaceConflict(
+                    "rework candidate pin is missing or changed"
+                )
             if not delta or integrated:
                 created = self._runner(
                     self.repo, "update-ref", candidate_ref, base, "", check=False
