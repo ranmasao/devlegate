@@ -5856,7 +5856,11 @@ class ServiceEngine:
                     not report.result.egress_ok
                     or report.result.transport_error is not None
                 ):
-                    failed_execution = report
+                    # History is traversed newest first.  Keep the most recent
+                    # failed generation in the diagnostic even when several
+                    # failures precede the reviewed generation.
+                    if failed_execution is None:
+                        failed_execution = report
                     continue
                 if failed_execution is not None:
                     raise WorkflowBlockedError(
