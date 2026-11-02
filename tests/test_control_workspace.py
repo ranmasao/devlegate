@@ -3276,6 +3276,47 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     assert len({report.workspace_head for report in reports}) == 3
 
 
+def test_rework_same_base_preserves_checkpoint_and_worktree(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(base)
+    for name in ("first.txt", "second.txt"):
+        (workspace.path / name).write_text(f"{name}\n")
+        git(workspace.path, "add", name)
+        git(workspace.path, "commit", "-m", f"add {name}")
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    inode = workspace.path.stat().st_ino
+
+    def no_retire(*args, **kwargs):
+        pytest.fail("unchanged base must not retire the worktree")
+
+    monkeypatch.setattr(manager, "retire", no_retire)
+    for _ in range(2):
+        resumed = manager.prepare_rework(base, base, checkpoint)
+        assert resumed.head == checkpoint
+        assert resumed.path.stat().st_ino == inode
+        assert (resumed.path / "first.txt").read_text() == "first.txt\n"
+        assert (resumed.path / "second.txt").read_text() == "second.txt\n"
+
+
+def test_rework_same_base_rejects_locked_worktree(tmp_path):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(base)
+    git(working, "worktree", "lock", str(workspace.path))
+
+    with pytest.raises(ExecutionWorkspaceError, match="worktree is locked"):
+        manager.prepare_rework(base, base, base)
+    assert workspace.path.exists()
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == base
+
+
 def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
