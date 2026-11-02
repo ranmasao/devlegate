@@ -5837,6 +5837,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "cannot inspect reviewed execution lifecycle history"
             ) from error
+        failed_execution = False
         for commit, changes in history:
             touched = [
                 by_path[path]
@@ -5855,10 +5856,13 @@ class ServiceEngine:
                     not report.result.egress_ok
                     or report.result.transport_error is not None
                 ):
+                    failed_execution = True
+                    continue
+                if failed_execution:
                     raise WorkflowBlockedError(
-                        "newest execution failed; preserve its checkpoint and "
-                        "execution evidence and use the proved failure recovery "
-                        "path before scheduling rework"
+                        "a failed execution follows an earlier potentially reviewed "
+                        "generation; preserve both checkpoints and execution "
+                        "evidence until their continuation ownership is proven"
                     )
                 if not self._lifecycle_commit_is_exact(commit, report):
                     raise WorkflowBlockedError(
