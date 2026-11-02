@@ -6144,16 +6144,21 @@ class ServiceEngine:
                     "failed checkpoint does not preserve the reviewed "
                     "checkpoint lineage"
                 )
-            if metadata is None and (
-                state.get("execution_id") != failed.execution_id
-                or state.get("execution_ticket_id") != ticket
-                or state.get("execution_branch") != failed.execution_branch
-                or state.get("execution_path") != failed.execution_path
-            ):
-                raise WorkflowBlockedError(
-                    "failed continuation lacks persisted ownership of the failed "
-                    "execution workspace"
-                )
+            if metadata is None:
+                identity = {
+                    "execution_id": failed.execution_id,
+                    "execution_ticket_id": ticket,
+                    "execution_branch": failed.execution_branch,
+                    "execution_path": failed.execution_path,
+                }
+                if any(state.get(key) != value for key, value in identity.items()):
+                    present = any(state.get(key) is not None for key in identity)
+                    detail = "conflicts with" if present else "is missing for"
+                    raise WorkflowBlockedError(
+                        f"failed continuation persisted workspace ownership {detail} "
+                        "the failed execution; Git report and worktree topology alone "
+                        "cannot prove current ownership"
+                    )
             todo = f"{self.todo_path}/{ticket}.md"
             backlog = f"{self.backlog_path}/{ticket}.md"
             original = path_object(

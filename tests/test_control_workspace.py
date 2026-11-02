@@ -3785,7 +3785,11 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
 
 @pytest.mark.parametrize(
     ("advance_product", "crash_point", "corruption"),
-    [(False, None, None)]
+    [
+        (False, None, None),
+        (True, None, "cleared_identity"),
+        (True, None, "changed_identity"),
+    ]
     + [
         (True, point, None)
         for point in (
@@ -3992,10 +3996,46 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         assert artifact.read_bytes() == review_bytes
         # Recreate the incident's persisted idle state without a failure cache.
         del failures["T-1"]
-        devlegate._save_state("idle", failed_executions=failures)
+        devlegate._save_state(
+            "idle", failed_executions=failures,
+            clear_execution=corruption == "cleared_identity",
+        )
+        if corruption == "changed_identity":
+            devlegate._save_state("idle", execution_id="another-execution")
         devlegate = Devlegate(config)
         monkeypatch.setattr(devlegate._workers, "run", worker)
         assert "T-1" not in devlegate._state["failed_executions"]
+        if corruption in {"cleared_identity", "changed_identity"}:
+            reason = (
+                "ownership is missing" if corruption == "cleared_identity"
+                else "ownership conflicts"
+            )
+            before = git(working, "worktree", "list", "--porcelain").stdout
+            branch = git(working, "rev-parse", "refs/heads/devlegate/work/T-1").stdout
+            remote = git(
+                working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+            ).stdout
+            for _ in range(2):
+                plan = devlegate.status_view().plan
+                assert plan.action == "blocked"
+                assert reason in plan.reason
+                with pytest.raises(DevlegateError, match=reason):
+                    run_test_iteration(devlegate)
+                devlegate = Devlegate(config)
+                monkeypatch.setattr(devlegate._workers, "run", worker)
+                assert len(prompts) == 2
+                assert git(working, "worktree", "list", "--porcelain").stdout == before
+                assert (
+                    git(working, "rev-parse", "refs/heads/devlegate/work/T-1").stdout
+                    == branch
+                )
+                assert git(
+                    working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+                ).stdout == remote
+                assert report_path.read_bytes() == report_bytes
+                assert reviewed_path.read_bytes() == reviewed_bytes
+                assert artifact.read_bytes() == review_bytes
+            return
         assert devlegate.status_view().plan.action == "run-worker"
 
     if crash_point is not None:
