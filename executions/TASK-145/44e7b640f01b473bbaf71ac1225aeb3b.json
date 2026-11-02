@@ -1,0 +1,39 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "5a6854a58debcff230fc8ae0809eaa34d6d0fa0c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "44e7b640f01b473bbaf71ac1225aeb3b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-verified admission of the latest failed checkpoint with independent genuine review provenance and restart-safe workspace ownership proof.",
+    "Reuse or transplant the failed checkpoint safely, including evidence pinning, CAS/lease protection, conflict handling and idempotent replay.",
+    "Make the expected-failing ordinary scheduler regression pass and add the required advanced-base, ownership, race, conflict and restart coverage.",
+    "Run the focused suite, Ruff and full configured CI after the implementation is complete."
+  ],
+  "report_artifact": "executions/TASK-145/44e7b640f01b473bbaf71ac1225aeb3b.md",
+  "report_sha256": "994ddb3f16f318b38075e9f200ecdbd944784f2bd1656d4be327a89002a8b40c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-verified admission of the latest failed checkpoint with independent genuine review provenance and restart-safe workspace ownership proof.",
+      "Reuse or transplant the failed checkpoint safely, including evidence pinning, CAS/lease protection, conflict handling and idempotent replay.",
+      "Make the expected-failing ordinary scheduler regression pass and add the required advanced-base, ownership, race, conflict and restart coverage.",
+      "Run the focused suite, Ruff and full configured CI after the implementation is complete."
+    ],
+    "report": "The scheduler still rejects a failed generation after review. I could not establish a safe continuation using historical reports alone: durable proof of uninterrupted ownership and separate code-predecessor/review bindings must be designed and validated before relaxing that gate. The focused regression remains expected-failing; full CI was not run.",
+    "summary": "Strengthened the deferred rework regression with checks for checkpoint ancestry, preserved initial code, a distinct new execution identity, and immutable reviewed-report bytes."
+  },
+  "workspace_head": "3d8b882d5ceb0ecbcdfd5f33cbe6d90a24fa3353"
+}
