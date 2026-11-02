@@ -5851,8 +5851,15 @@ class ServiceEngine:
                 report = touched[0]
                 # Failed transport attempts are not completed worker generations.
                 # A valid worker claim can still be reviewed after a no-op result.
-                if not report.result.egress_ok:
-                    return None
+                if (
+                    not report.result.egress_ok
+                    or report.result.transport_error is not None
+                ):
+                    raise WorkflowBlockedError(
+                        "newest execution failed; preserve its checkpoint and "
+                        "execution evidence and use the proved failure recovery "
+                        "path before scheduling rework"
+                    )
                 if not self._lifecycle_commit_is_exact(commit, report):
                     raise WorkflowBlockedError(
                         "newest completed execution report lacks exact lifecycle "
