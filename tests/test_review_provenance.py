@@ -230,6 +230,29 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         assert binding.path == str(artifact.relative_to(tmp_path))
         assert binding.publication == publication
         assert binding.transition == (publication, deferred, head)
+        observer = SimpleNamespace(
+            control_worktree=tmp_path, _git_runtime=run_git,
+            todo_path="todo", review_path="review", backlog_path="backlog",
+            # This fixture publishes the reports without normal lifecycle moves.
+            _lifecycle_commit_is_exact=lambda commit, report: True,
+        )
+        observed = runtime.ServiceEngine._observe_historical_repair_review(
+            observer, (reviewed, failed), control_head=head,
+            failed_execution_id=failed.execution_id,
+            reviewed_execution_id=reviewed.execution_id,
+        )
+        assert observed[1] == failed
+        assert observed[2] == lifecycle
+        assert observed[3] == reviewed
+        assert observed[4] == binding
+        with pytest.raises(
+            runtime.WorkflowBlockedError, match="identities do not match"
+        ):
+            runtime.ServiceEngine._observe_historical_repair_review(
+                observer, (reviewed, failed), control_head=head,
+                failed_execution_id=reviewed.execution_id,
+                reviewed_execution_id=failed.execution_id,
+            )
         with pytest.raises(ReviewProvenanceError, match="failed worker execution"):
             resolve_rework_review(
                 tmp_path, head, lifecycle, failed,
@@ -247,6 +270,16 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         assert git("status", "--porcelain") == ""
         assert {path: path.read_bytes() for path in evidence} == evidence
         assert (tmp_path / "todo/TASK-1.md").read_text() == "canonical ticket\n"
+
+    failed_path.write_text(failed_path.read_text() + " ")
+    git("add", ".")
+    git("commit", "-qm", "change failed report")
+    with pytest.raises(runtime.WorkflowBlockedError, match="ambiguous or modified"):
+        runtime.ServiceEngine._observe_historical_repair_review(
+            observer, (reviewed, failed), control_head=git("rev-parse", "HEAD"),
+            failed_execution_id=failed.execution_id,
+            reviewed_execution_id=reviewed.execution_id,
+        )
 
 
 def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_path):

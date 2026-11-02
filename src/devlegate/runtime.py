@@ -134,6 +134,7 @@ from devlegate.recovery_workspace import (
     repair_bound_workspace,
 )
 from devlegate.review_provenance import (
+    ReviewBinding,
     ReviewProvenanceError,
     resolve_rework_review,
     restore_review_binding,
@@ -5874,6 +5875,106 @@ class ServiceEngine:
                     )
                 return commit, report
         return None
+
+    def _observe_historical_repair_review(
+        self,
+        reports: tuple[ExecutionReport, ...],
+        *,
+        control_head: str,
+        failed_execution_id: str,
+        reviewed_execution_id: str,
+    ) -> tuple[str, ExecutionReport, str, ExecutionReport, ReviewBinding]:
+        """Observe a single failed-after-reviewed pair without authorizing its reuse.
+
+        This proves the control-history side of a possible repair only.  It does
+        not establish ownership of any execution workspace or authorize a ref
+        rewrite.
+        """
+        if not reports or len({report.ticket_id for report in reports}) != 1:
+            raise WorkflowBlockedError(
+                "historical repair report identities are invalid"
+            )
+        ticket_id = reports[0].ticket_id
+        by_path = {
+            f"executions/{ticket_id}/{report.execution_id}.json": report
+            for report in reports
+        }
+        if len(by_path) != len(reports) or failed_execution_id == reviewed_execution_id:
+            raise WorkflowBlockedError(
+                "historical repair report identities are invalid"
+            )
+        try:
+            history = history_changes(
+                self.control_worktree,
+                control_head,
+                f"executions/{ticket_id}",
+                runner=self._git_runtime,
+            )
+            observed = []
+            for commit, changes in history:
+                prefix = f"executions/{ticket_id}/"
+                touched = [
+                    change for change in changes
+                    if len(change) > 2 and change[1] == "\t"
+                    and change[2:].startswith(prefix) and change.endswith(".json")
+                ]
+                if not touched:
+                    continue
+                if (
+                    len(touched) != 1
+                    or not touched[0].startswith("A\t")
+                    or touched[0][2:] not in by_path
+                ):
+                    raise WorkflowBlockedError(
+                        "historical repair report history is ambiguous or modified"
+                    )
+                path = touched[0][2:]
+                report = by_path[path]
+                original = path_object(
+                    self.control_worktree, commit, path, runner=self._git_runtime
+                )
+                if original is None or original != path_object(
+                    self.control_worktree, control_head, path, runner=self._git_runtime
+                ):
+                    raise WorkflowBlockedError("historical repair report changed")
+                observed.append((commit, report))
+                if len(observed) == 2:
+                    break
+        except GitObservationError as error:
+            raise WorkflowBlockedError(
+                "cannot inspect historical repair report history"
+            ) from error
+        if len(observed) != 2:
+            raise WorkflowBlockedError("historical repair report history is incomplete")
+        (failed_commit, failed), (reviewed_commit, reviewed) = observed
+        if (
+            failed.execution_id != failed_execution_id
+            or reviewed.execution_id != reviewed_execution_id
+            or (failed.result.egress_ok and failed.result.transport_error is None)
+            or not reviewed.result.egress_ok
+            or reviewed.result.transport_error is not None
+            or not self._lifecycle_commit_is_exact(failed_commit, failed)
+            or not self._lifecycle_commit_is_exact(reviewed_commit, reviewed)
+        ):
+            raise WorkflowBlockedError(
+                "historical repair lifecycle identities do not match"
+            )
+        try:
+            binding = resolve_rework_review(
+                self.control_worktree,
+                control_head,
+                reviewed_commit,
+                reviewed,
+                todo_path=self.todo_path,
+                review_path=self.review_path,
+                backlog_path=self.backlog_path,
+                runner=self._git_runtime,
+            )
+        except ReviewProvenanceError as error:
+            raise WorkflowBlockedError(
+                f"cannot bind historical repair curator feedback: {error}"
+            ) from error
+        return failed_commit, failed, reviewed_commit, reviewed, binding
 
     def _prepare_rework_remote_predecessor(
         self,
