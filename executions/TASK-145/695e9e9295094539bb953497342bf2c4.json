@@ -1,0 +1,29 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "completed",
+  "control_head": "1cf9b22960d46ac2f494f98d560dd945aa4a382a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "695e9e9295094539bb953497342bf2c4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Extended deferred-rework refusal coverage across repeated owner polls, later swap stages, submodules, read-only inspection, and live service restarts. Fixed pending-rework blockers to keep the service available and display the actual blocked reason in status."
+  },
+  "workspace_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7"
+}
