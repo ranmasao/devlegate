@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "577e8a128c043db64a6c6a5c08b0d8e734f8cfae",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "531df1cca4a24266b5b6b3ac4fb1668b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Persist and pin candidate identities before canonical worktree retirement, and implement safe staged recovery across retirement, local CAS, worktree attachment, and remote lease publication.",
+    "Add the required persisted-owner crash, race, lease, evidence, and full scheduler conflict regressions.",
+    "Complete the full configured CI run after the durable transition is implemented."
+  ],
+  "report_artifact": "executions/TASK-145/531df1cca4a24266b5b6b3ac4fb1668b.md",
+  "report_sha256": "cb54e89776284d6b761025bc1a40c5da625696aa85c59c4ffe761e5146698ff6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Persist and pin candidate identities before canonical worktree retirement, and implement safe staged recovery across retirement, local CAS, worktree attachment, and remote lease publication.",
+      "Add the required persisted-owner crash, race, lease, evidence, and full scheduler conflict regressions.",
+      "Complete the full configured CI run after the durable transition is implemented."
+    ],
+    "report": "The focused workspace suite and Ruff pass. The full pytest run exceeded the 10-minute command timeout. The durable swap and restart recovery are not yet implemented, so the ticket cannot be claimed complete.",
+    "summary": "Build and verify advanced-base rework in a detached candidate worktree before changing the canonical workspace. Add a real-Git regression showing that a conflicting transplant preserves the original worktree and branch."
+  },
+  "workspace_head": "b20dadfa235f89eecf035584048f23db8739b226"
+}
