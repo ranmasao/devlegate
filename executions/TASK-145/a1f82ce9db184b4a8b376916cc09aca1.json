@@ -1,0 +1,39 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "59350ac5a3fa55d0666af7131dd8c074742398bb",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "a1f82ce9db184b4a8b376916cc09aca1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement scheduler selection and exact chronology proof for the reviewed and later failed generations after deferral and requeue.",
+    "Persist and verify uninterrupted failed-workspace ownership and separate feedback provenance from the code predecessor across admission and restart.",
+    "Integrate safe checkpoint pinning and one-time transplant into the ordinary scheduler with race, conflict, crash, and worker-launch safeguards.",
+    "Add the required full workflow and persisted owner-state/IPC regressions and rerun full configured CI."
+  ],
+  "report_artifact": "executions/TASK-145/a1f82ce9db184b4a8b376916cc09aca1.md",
+  "report_sha256": "113c0a39319a240c2a36a8739c55b25f1dc89675a4064b5d6ce1e335390939aa",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement scheduler selection and exact chronology proof for the reviewed and later failed generations after deferral and requeue.",
+      "Persist and verify uninterrupted failed-workspace ownership and separate feedback provenance from the code predecessor across admission and restart.",
+      "Integrate safe checkpoint pinning and one-time transplant into the ordinary scheduler with race, conflict, crash, and worker-launch safeguards.",
+      "Add the required full workflow and persisted owner-state/IPC regressions and rerun full configured CI."
+    ],
+    "report": "The scheduler still deliberately blocks the required failed-after-review case; safely removing that gate requires an ownership and restart proof that has not been implemented. Full CI had one live-service Git commit failure; the failed test passed when rerun separately.",
+    "summary": "Rework preparation reuses the validated checkpoint and worktree when the product base is unchanged, and rejects locked predecessor worktrees. Added disposable Git regression coverage for checkpoint preservation and locked worktrees."
+  },
+  "workspace_head": "489fc50163df38b9811b9481ba01c593e178b1e6"
+}
