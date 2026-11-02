@@ -240,12 +240,25 @@ class ExecutionWorkspaceManager:
                 raise ExecutionWorkspaceConflict(
                     "previous execution worktree is missing"
                 )
+            if "locked" in registration:
+                raise ExecutionWorkspaceConflict(
+                    "previous execution worktree is locked"
+                )
             workspace = self._validate_existing(registration, previous_base)
             if workspace.head != previous_checkpoint or workspace.dirty:
                 raise ExecutionWorkspaceConflict(
                     "previous execution worktree is not clean at its reported "
                     "checkpoint"
                 )
+            if base_head == previous_base:
+                # The checkpoint already contains the complete worker lineage on
+                # the admitted base. Keep its identity and commit IDs intact.
+                if self.root.is_symlink() or (self.root / "work").is_symlink():
+                    raise self._path_conflict("has a symlinked workspace root")
+                if self.path.is_symlink():
+                    raise self._path_conflict("is a symlink")
+                self.verify_submodules(workspace)
+                return workspace
             self.retire(workspace, previous_checkpoint)
             moved = self._runner(
                 self.repo,
