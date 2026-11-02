@@ -250,6 +250,7 @@ class ExecutionWorkspaceManager:
                     "previous execution worktree is not clean at its reported "
                     "checkpoint"
                 )
+            self.verify_submodules(workspace)
             if base_head == previous_base:
                 # The checkpoint already contains the complete worker lineage on
                 # the admitted base. Keep its identity and commit IDs intact.
@@ -257,7 +258,6 @@ class ExecutionWorkspaceManager:
                     raise self._path_conflict("has a symlinked workspace root")
                 if self.path.is_symlink():
                     raise self._path_conflict("is a symlink")
-                self.verify_submodules(workspace)
                 return workspace
             self.retire(workspace, previous_checkpoint)
             moved = self._runner(
