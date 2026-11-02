@@ -1,0 +1,39 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "9d38552a0245c856a54b3feaa9a7ad19faffab3a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "da71c07134814b07ad7440bb9545d072",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement a distinct operator-authorized historical-failure recovery transaction that binds both reports, immutable feedback, ticket and transition evidence, checkpoint, worktree, refs, and product base.",
+    "Implement durable intent and evidence pinning, exclusive ownership checks, CAS and remote-lease fencing, and restart-safe continuation preserving the failed worker delta.",
+    "Add the positive real-Git end-to-end recovery regression and negative drift, ownership, remote-error, and interrupted-effect tests.",
+    "Document operator recovery and run final focused tests, lint, and configured exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-138/da71c07134814b07ad7440bb9545d072.md",
+  "report_sha256": "37ab6082164359e741016ea6f4fddba997b5bc74c24b5b0f13c1c5fb33e997ab",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement a distinct operator-authorized historical-failure recovery transaction that binds both reports, immutable feedback, ticket and transition evidence, checkpoint, worktree, refs, and product base.",
+      "Implement durable intent and evidence pinning, exclusive ownership checks, CAS and remote-lease fencing, and restart-safe continuation preserving the failed worker delta.",
+      "Add the positive real-Git end-to-end recovery regression and negative drift, ownership, remote-error, and interrupted-effect tests.",
+      "Document operator recovery and run final focused tests, lint, and configured exact-checkpoint CI."
+    ],
+    "report": "The required historical ownership and crash-recovery transaction was not implemented in this invocation; the existing fail-closed guard still blocks the scenario. Reusing the existing rework preparation directly would risk retiring or replacing the failed checkpoint without the required authorization and fencing.",
+    "summary": "Inspected the existing review provenance and workspace recovery paths; no implementation changes were made."
+  },
+  "workspace_head": "65cc56a25e7f072d3253064d253f668b96ae3fc4"
+}
