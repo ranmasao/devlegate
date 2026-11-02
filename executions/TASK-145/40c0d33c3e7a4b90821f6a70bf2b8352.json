@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "82106ce9a41984075bd603d48a449257899911a5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "40c0d33c3e7a4b90821f6a70bf2b8352",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Make advanced-base transplant and replay preserve the original worktree and ref on conflict or interruption, with durable ownership and transition proof at every boundary.",
+    "Add the required persisted-owner and IPC regressions for crash/restart, resource replacement, dirty or locked worktrees, ref races, conflicting intents, invalid history, and absent review; verify blocker reporting.",
+    "Validate cumulative patch equivalence and one-time transplant across all restart stages, then rerun the configured CI suite and Ruff on the final changes."
+  ],
+  "report_artifact": "executions/TASK-145/40c0d33c3e7a4b90821f6a70bf2b8352.md",
+  "report_sha256": "f25b70c78f570d6a068f883a2b33b69d3e9aaddf39bb90435a401c2d6f0c0bb7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Make advanced-base transplant and replay preserve the original worktree and ref on conflict or interruption, with durable ownership and transition proof at every boundary.",
+      "Add the required persisted-owner and IPC regressions for crash/restart, resource replacement, dirty or locked worktrees, ref races, conflicting intents, invalid history, and absent review; verify blocker reporting.",
+      "Validate cumulative patch equivalence and one-time transplant across all restart stages, then rerun the configured CI suite and Ruff on the final changes."
+    ],
+    "report": "The existing prepare_rework transaction retires the original worktree and moves its branch before cherry-pick can fail. A safe crash- and conflict-preserving transition requires further design and verification; the present implementation must not be claimed complete.",
+    "summary": "Added ordinary deferred-rework admission that separates genuine review feedback from the later failed checkpoint, reuses existing checkpoint pinning and rework preparation, and validates submodules before worktree transition. The real-Git workflow now exercises unchanged and advanced product bases without an XFAIL."
+  },
+  "workspace_head": "6f04a51d467ac34e1e99bd2094c4262465a77194"
+}
