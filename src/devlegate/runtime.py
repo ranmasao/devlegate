@@ -2559,7 +2559,8 @@ class ServiceEngine:
         except (GitObservationError, GitAncestryError) as error:
             command.admission_error = DevlegateError(
                 "service admission outcome is unknown; retry with the same request id"
-                if recording else "service busy; mutable request was not admitted"
+                if recording
+                else "service busy; mutable request was not admitted"
             )
             raise command.admission_error from error
         except Exception:
@@ -3387,9 +3388,10 @@ class ServiceEngine:
         # A completion prepared before the abort must not turn an accepted
         # forced interruption into a normal completion. Recovery after restart
         # can resolve the persisted interruption using its usual evidence.
-        if self._lifecycle_force and self._state.get(
-            "execution_interruption_kind"
-        ) == "operator_abort":
+        if (
+            self._lifecycle_force
+            and self._state.get("execution_interruption_kind") == "operator_abort"
+        ):
             failures = state.get("failed_executions")
             failure = (
                 failures.get(self._state.get("execution_ticket_id"))
@@ -4121,8 +4123,11 @@ class ServiceEngine:
             if authorization is None and isinstance(failed_for_ticket, dict):
                 observations = self._status_git_observation()
                 if self._failure_superseded(
-                    selected_ticket.id, failed_for_ticket, self._state,
-                    observations["control"], observations["code"],
+                    selected_ticket.id,
+                    failed_for_ticket,
+                    self._state,
+                    observations["control"],
+                    observations["code"],
                 ):
                     failed_for_ticket = None
             manual_retry = self._state.get("manual_retry_required")
@@ -4341,9 +4346,19 @@ class ServiceEngine:
                         "cannot read previous execution evidence for "
                         f"{selected_ticket.id}"
                     ) from error
-                previous_generation = self._latest_reviewed_rework_report(reports)
+                continuation = (
+                    self._deferred_failed_rework(reports)
+                    if authorization is None
+                    else None
+                )
+                previous_generation = (
+                    continuation[:2]
+                    if continuation is not None
+                    else self._latest_reviewed_rework_report(reports)
+                )
                 if previous_generation is not None:
                     lifecycle_commit, previous = previous_generation
+                    code_previous = continuation[2] if continuation else previous
                     if (
                         previous.workspace_head is None
                         or previous.execution_branch
@@ -4360,7 +4375,7 @@ class ServiceEngine:
                         f"refs/heads/devlegate/work/{selected_ticket.id}",
                         runner=self._git_runtime,
                     )
-                    if branch_head not in {None, previous.workspace_head}:
+                    if branch_head not in {None, code_previous.workspace_head}:
                         raise WorkflowBlockedError(
                             "cannot prove the exact previous rework generation"
                         )
@@ -4390,6 +4405,12 @@ class ServiceEngine:
                         "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
                     }
+                    if continuation is not None:
+                        rework_provenance["code_predecessor"] = {
+                            "execution_id": code_previous.execution_id,
+                            "checkpoint": code_previous.workspace_head,
+                            "base_head": code_previous.code_base_head,
+                        }
             self._save_state(
                 "agent_pending",
                 clear_execution=not pending_agent_execution,
@@ -4904,9 +4925,8 @@ class ServiceEngine:
                 isinstance(decision, dict)
                 and decision.get("status") in ("blocked", "skipped")
                 and decision.get("reason") != "ticket is not durably done"
-                and decision not in (self._state.get("workspace_cleanup") or {}).get(
-                    "last_pass", []
-                )
+                and decision
+                not in (self._state.get("workspace_cleanup") or {}).get("last_pass", [])
             ):
                 _log_cleanup_decision("historical", decision)
         self._publish_workspace_cleanup_inventory(decisions)
@@ -5395,9 +5415,24 @@ class ServiceEngine:
             )
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict):
-            previous_base = rework.get("previous_base_head")
-            previous_checkpoint = rework.get("previous_report_checkpoint")
-            previous_execution = rework.get("previous_execution_id")
+            code_predecessor = rework.get("code_predecessor")
+            if code_predecessor is not None and not isinstance(code_predecessor, dict):
+                raise ExecutionWorkspaceError("persisted code predecessor is malformed")
+            previous_base = (
+                code_predecessor.get("base_head")
+                if code_predecessor is not None
+                else rework.get("previous_base_head")
+            )
+            previous_checkpoint = (
+                code_predecessor.get("checkpoint")
+                if code_predecessor is not None
+                else rework.get("previous_report_checkpoint")
+            )
+            previous_execution = (
+                code_predecessor.get("execution_id")
+                if code_predecessor is not None
+                else rework.get("previous_execution_id")
+            )
             if not all(
                 isinstance(value, str) and value
                 for value in (previous_base, previous_checkpoint, previous_execution)
@@ -5810,6 +5845,142 @@ class ServiceEngine:
                 "rework preparation conflict: remote execution branch changed "
                 "after evidence publication"
             )
+
+    def _deferred_failed_rework(
+        self, reports: tuple[ExecutionReport, ...]
+    ) -> tuple[str, ExecutionReport, ExecutionReport] | None:
+        """Bind a deferred failed checkpoint to its preceding genuine review."""
+        if not reports:
+            return None
+        ticket = reports[0].ticket_id
+        by_path = {
+            f"executions/{ticket}/{report.execution_id}.json": report
+            for report in reports
+        }
+        try:
+            history = history_changes(
+                self.control_worktree,
+                "HEAD",
+                f"executions/{ticket}",
+                runner=self._git_runtime,
+            )
+            generations = []
+            for commit, changes in history:
+                touched = [by_path[c[2:]] for c in changes if c[2:] in by_path]
+                if len(touched) > 1:
+                    raise WorkflowBlockedError(
+                        "execution lifecycle history is ambiguous"
+                    )
+                if touched:
+                    generations.append((commit, touched[0]))
+            if not generations:
+                return None
+            failed_commit, failed = generations[0]
+            if failed.result.egress_ok and failed.result.transport_error is None:
+                return None
+            if len(generations) < 2 and failed.workspace_head == failed.code_base_head:
+                return None
+            failures = self._state.get("failed_executions")
+            metadata = failures.get(ticket) if isinstance(failures, dict) else None
+            observations = self._status_git_observation()
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("execution_id") != failed.execution_id
+                or not self._failure_superseded(
+                    ticket,
+                    metadata,
+                    self._state,
+                    observations["control"],
+                    observations["code"],
+                )
+            ):
+                raise WorkflowBlockedError(
+                    "failed execution continuation lacks a safe current admission"
+                )
+            if len(generations) < 2:
+                raise WorkflowBlockedError(
+                    "failed execution has no proven preceding review for continuation"
+                )
+            review_commit, reviewed = generations[1]
+            if (
+                not reviewed.result.egress_ok
+                or reviewed.result.transport_error is not None
+                or not self._lifecycle_commit_is_exact(failed_commit, failed)
+                or not self._lifecycle_commit_is_exact(review_commit, reviewed)
+                or not failed.workspace_head
+                or not failed.code_base_head
+                or failed.execution_branch != f"devlegate/work/{ticket}"
+                or Path(failed.execution_path)
+                != self.execution_worktree_root / "work" / ticket
+                or not reviewed.workspace_head
+            ):
+                raise WorkflowBlockedError(
+                    "failed rework lifecycle provenance is invalid"
+                )
+            if not is_ancestor(
+                self.repo,
+                reviewed.workspace_head,
+                failed.workspace_head,
+                runner=self._git_runtime,
+            ):
+                raise WorkflowBlockedError(
+                    "failed checkpoint does not preserve the reviewed "
+                    "checkpoint lineage"
+                )
+            todo = f"{self.todo_path}/{ticket}.md"
+            backlog = f"{self.backlog_path}/{ticket}.md"
+            original = path_object(
+                self.control_worktree, failed_commit, todo, runner=self._git_runtime
+            )
+            if original is None:
+                raise WorkflowBlockedError("failed execution ticket blob is missing")
+            parent = failed_commit
+            deferred = False
+            requeued = False
+            for commit in commit_range(
+                self.control_worktree,
+                f"{failed_commit}..HEAD",
+                reverse=True,
+                runner=self._git_runtime,
+            ):
+                if commit_parents(
+                    self.control_worktree, commit, runner=self._git_runtime
+                ) != (parent,):
+                    raise WorkflowBlockedError("failed rework history is not linear")
+                parent = commit
+                changes = set(
+                    commit_changes(
+                        self.control_worktree, commit, runner=self._git_runtime
+                    )
+                )
+                workflow = {c for c in changes if c.endswith(f"/{ticket}.md")}
+                if workflow == {f"D\t{todo}", f"A\t{backlog}"} and not deferred:
+                    deferred = True
+                elif (
+                    workflow == {f"D\t{backlog}", f"A\t{todo}"}
+                    and deferred
+                    and not requeued
+                ):
+                    requeued = True
+                elif workflow:
+                    raise WorkflowBlockedError(
+                        "failed rework ticket disposition is conflicting"
+                    )
+                current = backlog if deferred and not requeued else todo
+                if (
+                    path_object(
+                        self.control_worktree, commit, current, runner=self._git_runtime
+                    )
+                    != original
+                ):
+                    raise WorkflowBlockedError("failed rework ticket blob changed")
+            if not requeued:
+                raise WorkflowBlockedError(
+                    "failed rework has no proven deferral and requeue"
+                )
+            return review_commit, reviewed, failed
+        except (GitObservationError, GitAncestryError) as error:
+            raise WorkflowBlockedError("cannot prove failed rework history") from error
 
     def _latest_reviewed_rework_report(
         self, reports: tuple[ExecutionReport, ...]
@@ -9368,7 +9539,10 @@ class ServiceEngine:
         return tuple(evaluated)
 
     def _failure_superseded(
-        self, ticket_id: str, metadata: object, state: dict[str, object],
+        self,
+        ticket_id: str,
+        metadata: object,
+        state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
     ) -> bool:
@@ -9384,12 +9558,15 @@ class ServiceEngine:
             product_base = metadata.get("product_head")
             remote_base = metadata.get("remote_head")
             if (
-                code.detached or code.branch != self.remote_branch
-                or not code.working_tree_clean or not code.remote_head
+                code.detached
+                or code.branch != self.remote_branch
+                or not code.working_tree_clean
+                or not code.remote_head
                 or code.local_head != code.remote_head
                 or not isinstance(product_base, str)
                 or not _is_git_identity(product_base)
-                or not isinstance(remote_base, str) or not _is_git_identity(remote_base)
+                or not isinstance(remote_base, str)
+                or not _is_git_identity(remote_base)
             ):
                 return False
             try:
@@ -9401,14 +9578,23 @@ class ServiceEngine:
             except WorkflowBlockedError:
                 return False
         if (
-            control.detached or control.branch != self.control_branch
-            or not control.working_tree_clean or not control.remote_head
+            control.detached
+            or control.branch != self.control_branch
+            or not control.working_tree_clean
+            or not control.remote_head
             or control.local_head != control.remote_head
         ):
             return False
-        for key in ("reconciliation", "accepted_integration", "automatic_retry",
-                    "manual_retry_required", "resume_required", "operator_recovery",
-                    "force_retry_authorization", "execution_ref_retirement"):
+        for key in (
+            "reconciliation",
+            "accepted_integration",
+            "automatic_retry",
+            "manual_retry_required",
+            "resume_required",
+            "operator_recovery",
+            "force_retry_authorization",
+            "execution_ref_retirement",
+        ):
             marker = state.get(key)
             if (
                 isinstance(marker, dict)
@@ -9442,20 +9628,28 @@ class ServiceEngine:
         # retains it at the merge. Only transitions of the observed first-parent
         # history can supersede this failure.
         lineage = self._git_runtime(
-            self.control_worktree, "rev-list", "--first-parent", control.local_head,
+            self.control_worktree,
+            "rev-list",
+            "--first-parent",
+            control.local_head,
             check=False,
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
             return False
         commits = lineage.stdout.splitlines()
-        commits = list(reversed(commits[:commits.index(base) + 1]))
+        commits = list(reversed(commits[: commits.index(base) + 1]))
         original_blob = None
         previous_path = None
         transitioned = False
         todo_path = f"{self.todo_path}/{ticket_id}.md"
         for commit in commits:
             tree = self._git_runtime(
-                self.control_worktree, "ls-tree", "--full-tree", commit, "--", *paths,
+                self.control_worktree,
+                "ls-tree",
+                "--full-tree",
+                commit,
+                "--",
+                *paths,
                 check=False,
             )
             if tree.returncode != 0:
@@ -9686,7 +9880,10 @@ class ServiceEngine:
                     control=control,
                 ),
                 failed_executions=self._evaluate_failed_executions(
-                    state.get("failed_executions", {}), TicketStore(()), code, None,
+                    state.get("failed_executions", {}),
+                    TicketStore(()),
+                    code,
+                    None,
                     str(workflow_error or "workflow is invalid"),
                 ),
                 lifecycle_integration=lifecycle_integration,
@@ -9749,10 +9946,14 @@ class ServiceEngine:
         )
         if isinstance(failures, dict):
             failed_executions = tuple(
-                failure for failure in failed_executions
+                failure
+                for failure in failed_executions
                 if not self._failure_superseded(
-                    failure.ticket_id, failures.get(failure.ticket_id), state,
-                    control, code,
+                    failure.ticket_id,
+                    failures.get(failure.ticket_id),
+                    state,
+                    control,
+                    code,
                 )
             )
         live_evidence = self.live_execution_evidence()
@@ -9766,15 +9967,23 @@ class ServiceEngine:
         selected_failure = None
         if plan.action == "run-worker" and not plan.bound:
             selected_failure = next(
-                (failure for failure in failed_executions
-                 if failure.ticket_id == plan.ticket_id), None
+                (
+                    failure
+                    for failure in failed_executions
+                    if failure.ticket_id == plan.ticket_id
+                ),
+                None,
             )
             if selected_failure is not None:
                 reason = selected_failure.nonretryable_reason
                 plan = dataclasses.replace(
-                    plan, action="none",
-                    reason=("failed execution requires explicit retry" if reason is None
-                            else f"failed execution blocks admission: {reason}"),
+                    plan,
+                    action="none",
+                    reason=(
+                        "failed execution requires explicit retry"
+                        if reason is None
+                        else f"failed execution blocks admission: {reason}"
+                    ),
                 )
         next_ticket = (
             (
@@ -9823,8 +10032,13 @@ class ServiceEngine:
             else None
         )
         blocked_entries = blocked_tickets(
-            ticket_store.tickets, dependency_blocked, eligible, bound_ticket_id,
-            integration_ticket_id, global_block_reason, BlockedReason,
+            ticket_store.tickets,
+            dependency_blocked,
+            eligible,
+            bound_ticket_id,
+            integration_ticket_id,
+            global_block_reason,
+            BlockedReason,
         )
         return StatusSnapshot(
             phase=str(state["phase"]),
