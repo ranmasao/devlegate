@@ -150,9 +150,11 @@ def test_review_resolver_rejects_failed_generation(
         )
 
 
-@pytest.mark.parametrize("admitted_before_review", [False, True])
+@pytest.mark.parametrize(
+    "scenario", ["valid", "admitted_before_review", "deferred_before_failure"]
+)
 def test_real_git_failed_attempt_preserves_prior_review_on_restart(
-    tmp_path, admitted_before_review
+    tmp_path, scenario
 ):
     def git(*args):
         return subprocess.run(
@@ -201,20 +203,27 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(
     failed = build_execution_report(
         ticket_id="TASK-1", execution_id="b" * 32, code_base_head=control,
         workspace_head=publication,
-        control_head=control if admitted_before_review else publication,
+        control_head=control if scenario == "admitted_before_review" else publication,
         execution_branch="work/TASK-1", execution_path=str(tmp_path / "work"),
         run=WorkerRunResult(0, "oversized event", claim, None),
     )
     git("update-ref", "refs/heads/checkpoint-failed", failed.workspace_head)
+    if scenario == "deferred_before_failure":
+        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+        git("commit", "-qm", "premature defer")
+        deferred = git("rev-parse", "HEAD")
+        git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+        git("commit", "-qm", "premature requeue")
     failed_path = tmp_path / f"executions/TASK-1/{failed.execution_id}.json"
     failed_path.write_text(failed.to_json())
     git("add", ".")
     git("commit", "-qm", "publish failed execution")
-    git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
-    git("commit", "-qm", "defer")
-    deferred = git("rev-parse", "HEAD")
-    git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
-    git("commit", "-qm", "requeue")
+    if scenario != "deferred_before_failure":
+        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+        git("commit", "-qm", "defer")
+        deferred = git("rev-parse", "HEAD")
+        git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+        git("commit", "-qm", "requeue")
     head = git("rev-parse", "HEAD")
     refs = git("show-ref")
     evidence = {
@@ -234,7 +243,7 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(
         assert binding.content == feedback
         assert binding.path == str(artifact.relative_to(tmp_path))
         assert binding.publication == publication
-        assert binding.transition == (publication, deferred, head)
+        assert binding.transition[:2] == (publication, deferred)
         observer = SimpleNamespace(
             control_worktree=tmp_path, _git_runtime=run_git,
             todo_path="todo", review_path="review", backlog_path="backlog",
@@ -242,14 +251,19 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(
         observer._lifecycle_commit_is_exact = lambda commit, report: (
             runtime.ServiceEngine._lifecycle_commit_is_exact(observer, commit, report)
         )
-        if admitted_before_review:
-            with pytest.raises(runtime.WorkflowBlockedError, match="admitted before"):
+        if scenario != "valid":
+            reason = (
+                "admitted before" if scenario == "admitted_before_review"
+                else "deferral does not follow"
+            )
+            with pytest.raises(runtime.WorkflowBlockedError, match=reason):
                 runtime.ServiceEngine._observe_historical_repair_review(
                     observer, (reviewed, failed), control_head=head,
                     failed_execution_id=failed.execution_id,
                     reviewed_execution_id=reviewed.execution_id,
                 )
             return
+        assert binding.transition[-1] == head
         observed = runtime.ServiceEngine._observe_historical_repair_review(
             observer, (reviewed, failed), control_head=head,
             failed_execution_id=failed.execution_id,
