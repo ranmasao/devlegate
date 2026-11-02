@@ -345,13 +345,22 @@ class ExecutionWorkspaceManager:
         return prepared
 
     def _build_rework_candidate(
-        self, base_head: str, previous_checkpoint: str, delta: list[str]
+        self,
+        base_head: str,
+        previous_checkpoint: str,
+        delta: list[str],
+        candidate_ref: str | None = None,
     ) -> str:
         """Build and verify a port without changing the canonical worktree."""
         with tempfile.TemporaryDirectory(prefix="devlegate-rework-") as directory:
             path = Path(directory) / "candidate"
             added = self._runner(
-                self.repo, "worktree", "add", "--detach", str(path), base_head,
+                self.repo,
+                "worktree",
+                "add",
+                "--detach",
+                str(path),
+                base_head,
                 check=False,
             )
             if added.returncode:
@@ -372,12 +381,18 @@ class ExecutionWorkspaceManager:
                     raise ExecutionWorkspaceError("cannot observe rework candidate")
                 candidate = head.stdout.strip()
                 replay = self._runner(
-                    self.repo, "rev-list", "--reverse", f"{base_head}..{candidate}",
+                    self.repo,
+                    "rev-list",
+                    "--reverse",
+                    f"{base_head}..{candidate}",
                     check=False,
                 )
                 try:
                     equivalent = patch_equivalence(
-                        self.repo, previous_checkpoint, candidate, base_head,
+                        self.repo,
+                        previous_checkpoint,
+                        candidate,
+                        base_head,
                         runner=self._runner,
                     )
                 except GitObservationError as error:
@@ -397,13 +412,34 @@ class ExecutionWorkspaceManager:
                         "implementation"
                     )
                 self._verify_submodules(path)
+                if candidate_ref is not None:
+                    pinned = self._runner(
+                        self.repo,
+                        "update-ref",
+                        candidate_ref,
+                        candidate,
+                        "",
+                        check=False,
+                    )
+                    if (
+                        pinned.returncode
+                        or resolve_commit(self.repo, candidate_ref, runner=self._runner)
+                        != candidate
+                    ):
+                        raise ExecutionWorkspaceConflict(
+                            "cannot create exact rework candidate pin"
+                        )
                 return candidate
             finally:
                 primary_error = sys.exception()
                 cleanup_error = None
                 try:
                     removed = self._runner(
-                        self.repo, "worktree", "remove", "--force", str(path),
+                        self.repo,
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(path),
                         check=False,
                     )
                     if removed.returncode:
@@ -426,6 +462,84 @@ class ExecutionWorkspaceManager:
                         primary_error.add_note(cleanup_error)
                     else:
                         raise ExecutionWorkspaceError(cleanup_error)
+
+    def _pinned_rework_candidate(
+        self, base: str, old_base: str, checkpoint: str, candidate_ref: str
+    ) -> str:
+        """Create or verify the one candidate owned by a pending execution."""
+        for commit in (base, old_base, checkpoint):
+            self._validate_base(commit)
+        try:
+            if not is_ancestor(self.repo, old_base, checkpoint, runner=self._runner):
+                raise ExecutionWorkspaceConflict(
+                    "rework predecessor ancestry is invalid"
+                )
+            integrated = is_ancestor(self.repo, checkpoint, base, runner=self._runner)
+        except GitAncestryError as error:
+            raise ExecutionWorkspaceError(
+                f"cannot prove rework ancestry: {error}"
+            ) from error
+        commits = self._runner(
+            self.repo, "rev-list", "--reverse", f"{old_base}..{checkpoint}", check=False
+        )
+        merges = self._runner(
+            self.repo, "rev-list", "--merges", f"{old_base}..{checkpoint}", check=False
+        )
+        if commits.returncode or merges.returncode or merges.stdout.strip():
+            raise ExecutionWorkspaceConflict(
+                "rework predecessor is not a proven linear delta"
+            )
+        delta = commits.stdout.splitlines()
+        candidate = resolve_commit(self.repo, candidate_ref, runner=self._runner)
+        if candidate is None:
+            if not delta or integrated:
+                created = self._runner(
+                    self.repo, "update-ref", candidate_ref, base, "", check=False
+                )
+                if created.returncode:
+                    raise ExecutionWorkspaceConflict(
+                        "cannot create rework candidate pin"
+                    )
+                candidate = base
+            else:
+                candidate = self._build_rework_candidate(
+                    base, checkpoint, delta, candidate_ref
+                )
+        if not delta or integrated:
+            if candidate != base:
+                raise ExecutionWorkspaceConflict(
+                    "rework candidate pin conflicts with integrated base"
+                )
+        else:
+            replay = self._runner(
+                self.repo, "rev-list", "--reverse", f"{base}..{candidate}", check=False
+            )
+            merges = self._runner(
+                self.repo, "rev-list", "--merges", f"{base}..{candidate}", check=False
+            )
+            try:
+                valid = is_ancestor(self.repo, base, candidate, runner=self._runner)
+                equivalent = patch_equivalence(
+                    self.repo, checkpoint, candidate, base, runner=self._runner
+                )
+            except (GitAncestryError, GitObservationError) as error:
+                raise ExecutionWorkspaceError(
+                    f"cannot verify rework candidate: {error}"
+                ) from error
+            if (
+                not valid
+                or replay.returncode
+                or merges.returncode
+                or merges.stdout.strip()
+                or len(replay.stdout.splitlines()) != len(delta)
+                or equivalent != ("-",) * len(delta)
+            ):
+                raise ExecutionWorkspaceConflict(
+                    "rework candidate pin is not the exact transplant"
+                )
+        if resolve_commit(self.repo, candidate_ref, runner=self._runner) != candidate:
+            raise ExecutionWorkspaceConflict("rework candidate pin changed")
+        return candidate
 
     def inspect(
         self, base_head: str, expected_head: str | None = None
