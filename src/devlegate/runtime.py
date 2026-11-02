@@ -5975,6 +5975,11 @@ class ServiceEngine:
                 f"cannot bind historical repair curator feedback: {error}"
             ) from error
         try:
+            if len(binding.transition) != 3:
+                raise WorkflowBlockedError(
+                    "historical repair requires a failed execution followed by "
+                    "an exact todo to backlog to todo deferral"
+                )
             if not all(
                 is_ancestor(
                     self.control_worktree, commit, failed.control_head,
@@ -5985,6 +5990,26 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "failed execution was admitted before the historical review "
                     "and rework disposition"
+                )
+            if not is_ancestor(
+                self.control_worktree, failed_commit, binding.transition[1],
+                runner=self._git_runtime,
+            ):
+                raise WorkflowBlockedError(
+                    "historical repair deferral does not follow the failed execution"
+                )
+            ticket_path = f"{self.todo_path}/{ticket_id}.md"
+            admitted_ticket = path_object(
+                self.control_worktree, failed.control_head, ticket_path,
+                runner=self._git_runtime,
+            )
+            current_ticket = path_object(
+                self.control_worktree, control_head, ticket_path,
+                runner=self._git_runtime,
+            )
+            if admitted_ticket is None or admitted_ticket != current_ticket:
+                raise WorkflowBlockedError(
+                    "historical repair ticket differs from the failed admission"
                 )
         except (GitObservationError, GitAncestryError) as error:
             raise WorkflowBlockedError(
