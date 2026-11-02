@@ -3810,6 +3810,12 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
             "identity",
             "ticket",
         )
+    ]
+    + [
+        (True, "retired", "retired_foreign"),
+        (True, "moved", "moved_local"),
+        (True, "attached", "attached_remote"),
+        (True, "attached", "attached_submodule"),
     ],
 )
 def test_failed_rework_deferral_resumes_checkpoint_and_review(
@@ -3818,6 +3824,21 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
+    if corruption == "attached_submodule":
+        monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+        sub = tmp_path / "dependency"
+        git(tmp_path, "init", "-b", "main", sub)
+        git(sub, "config", "user.email", "test@example.com")
+        git(sub, "config", "user.name", "Test User")
+        (sub / "dependency.txt").write_text("original\n")
+        git(sub, "add", ".")
+        git(sub, "commit", "-m", "dependency")
+        git(
+            working, "-c", "protocol.file.allow=always", "submodule", "add",
+            str(sub), "dependency",
+        )
+        git(working, "commit", "-am", "add dependency")
+        git(working, "push", "origin", "HEAD")
     devlegate = Devlegate(config)
     prompts = []
 
@@ -3887,6 +3908,8 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 crash_point == "moved"
                 and args[:1] == ("update-ref",)
                 and len(args) == 4
+                and devlegate._state.get("rework_provenance", {})
+                .get("swap", {}).get("stage") == "moving"
             ):
                 crash()
             return result
@@ -3954,6 +3977,31 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         interrupt_swap()
         pending = devlegate._state["rework_provenance"]
         assert pending["code_predecessor"]["checkpoint"] == checkpoint
+        def inspect_without_git_mutation(engine):
+            commands = []
+            original_run = subprocess.run
+
+            def trace(command, *args, **kwargs):
+                if command and str(command[0]) == "git":
+                    commands.append(command[1:])
+                return original_run(command, *args, **kwargs)
+
+            with monkeypatch.context() as tracing:
+                tracing.setattr(subprocess, "run", trace)
+                inspection = engine._inspect_pending_rework(engine._state)
+            assert commands
+            assert not any(
+                any(op in command for op in ("update-ref", "push", "cherry-pick"))
+                or (
+                    "worktree" in command
+                    and any(op in command for op in ("add", "remove"))
+                )
+                for command in commands
+            )
+            return inspection
+
+        if crash_point == "ready":
+            assert inspect_without_git_mutation(devlegate).classification == "REUSABLE"
         if corruption:
             swap = pending["swap"]
             branch = devlegate._state["execution_branch"]
@@ -3993,11 +4041,23 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 git(control, "add", str(ticket.relative_to(control)))
                 git(control, "commit", "-m", "change ticket")
                 git(control, "push", "origin", "devlegate/control")
+            elif corruption == "retired_foreign":
+                workspace.mkdir()
+                (workspace / "foreign.txt").write_text("foreign\n")
+            elif corruption == "moved_local":
+                git(working, "update-ref", f"refs/heads/{branch}", "HEAD")
+            elif corruption == "attached_remote":
+                git(working, "push", "--force", "origin", f"HEAD:refs/heads/{branch}")
+            elif corruption == "attached_submodule":
+                (workspace / "dependency" / "dependency.txt").write_text("foreign\n")
         devlegate = Devlegate(config)
         if not corruption:
             assert devlegate._state["rework_provenance"] == pending
         monkeypatch.setattr(devlegate._workers, "run", worker)
         if corruption:
+            if crash_point == "ready" and corruption != "ticket":
+                inspection = inspect_without_git_mutation(devlegate)
+                assert inspection.classification == "UNSAFE"
             plan = devlegate.status_view().plan
             assert plan.action == "blocked", plan.reason
             expected = {
@@ -4009,6 +4069,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 "foreign": "foreign",
                 "identity": "identity",
                 "ticket": "ticket",
+                "retired_foreign": "foreign",
+                "moved_local": "topology",
+                "attached_remote": "remote",
+                "attached_submodule": "dirty",
             }
             assert expected[corruption] in plan.reason
             assert len(prompts) == 2
@@ -4017,6 +4081,53 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert report_path.read_bytes() == report_bytes
             assert reviewed_path.read_bytes() == reviewed_bytes
             assert artifact.read_bytes() == review_bytes
+            def refs():
+                return (
+                    subprocess.run(
+                        ["git", "rev-parse", "--verify", swap["candidate_ref"]],
+                        cwd=working, capture_output=True, text=True,
+                    ).stdout,
+                    git(working, "rev-parse", f"refs/heads/{branch}").stdout,
+                    git(working, "ls-remote", "origin", f"refs/heads/{branch}").stdout,
+                    git(working, "worktree", "list", "--porcelain").stdout,
+                    git(working, "rev-parse", evidence).stdout,
+                )
+
+            before_refs = refs()
+            before_reports = sorted(p.name for p in report_path.parent.glob("*.json"))
+            execution_id = devlegate._state["execution_id"]
+            worker_calls = len(prompts)
+            for poll in range(2):
+                if poll:
+                    devlegate = Devlegate(config)
+                    monkeypatch.setattr(devlegate._workers, "run", worker)
+                with pytest.raises(DevlegateError, match=expected[corruption]):
+                    run_test_iteration(devlegate)
+                assert len(prompts) == worker_calls
+                assert devlegate._state["execution_id"] == execution_id
+                assert refs() == before_refs
+                assert sorted(p.name for p in report_path.parent.glob("*.json")) == (
+                    before_reports
+                )
+                assert report_path.read_bytes() == report_bytes
+                assert reviewed_path.read_bytes() == reviewed_bytes
+                assert artifact.read_bytes() == review_bytes
+            if corruption == "pin":
+                with LiveService(working, config) as service:
+                    for cycle in range(2):
+                        if cycle:
+                            service.restart()
+                        service.wait_for(
+                            lambda: "candidate pin" in service.cli("status").stdout
+                        )
+                        status = service.cli("status")
+                        assert status.returncode == 1, status.stderr
+                        assert "candidate pin" in status.stdout
+                        assert refs() == before_refs
+                        assert sorted(
+                            p.name for p in report_path.parent.glob("*.json")
+                        ) == before_reports
+                        assert artifact.read_bytes() == review_bytes
             return
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3

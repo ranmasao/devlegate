@@ -1943,6 +1943,8 @@ def _render_status_text(
                     else "operator verification required"
                 )
             )
+    if snapshot.plan.action == "blocked" and snapshot.plan.bound:
+        lines.extend(["", f"Blocked: {snapshot.plan.reason}"])
     if snapshot.lifecycle_integration is not None:
         ticket_id, state = snapshot.lifecycle_integration
         lines.extend(

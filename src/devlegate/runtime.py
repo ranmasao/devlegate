@@ -3970,6 +3970,14 @@ class ServiceEngine:
                 execution_plan.control,
             )
         if execution_plan.action == "blocked":
+            if (
+                pending_agent_execution
+                and isinstance(self._state.get("rework_provenance"), dict)
+                and execution_plan.reason.startswith(
+                    "bound execution workspace is unsafe:"
+                )
+            ):
+                raise WorkspacePreparationBlockedError(execution_plan.reason)
             if pending_agent_execution and execution_plan.reason.startswith(
                 (
                     "control revision changed",
