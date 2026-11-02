@@ -17,6 +17,7 @@ from devlegate.git import (
     GitAncestryError,
     GitObservationError,
     commit_changes,
+    commit_parents,
     commit_range,
     file_history_commit,
     is_ancestor,
@@ -97,7 +98,7 @@ def restore_review_binding(
     publication = value["publication"]
     digest = value["sha256"]
     transition = value["transition"]
-    if not isinstance(transition, list) or not (1 <= len(transition) <= 2):
+    if not isinstance(transition, list) or not (1 <= len(transition) <= 3):
         raise ReviewProvenanceError("persisted curator review provenance is invalid")
     if not all(
         isinstance(item, str) and re.fullmatch(r"[0-9a-f]{40}", item)
@@ -160,7 +161,13 @@ def _transition(
         direct: tuple[str, ...] | None = None
         deferred: str | None = None
         artifact_commit: str | None = None
+        parent = lifecycle
         for commit in commits:
+            if commit_parents(repo, commit, runner=runner) != (parent,):
+                raise ReviewProvenanceError(
+                    "review disposition history is not a linear first-parent chain"
+                )
+            parent = commit
             changes = set(commit_changes(repo, commit, runner=runner))
             if f"A\t{artifact_path}" in changes:
                 if artifact_commit is not None:
@@ -198,8 +205,16 @@ def _transition(
                         "ticket specification changed during rework deferral"
                     )
                 deferred = commit
+            elif workflow == {f"D\t{todo}", f"A\t{backlog}"} and changes == workflow:
+                if direct is None or len(direct) != 1 or deferred is not None:
+                    raise ReviewProvenanceError("review deferral history is malformed")
+                if not _same_blob(repo, lifecycle, review, commit, backlog, runner):
+                    raise ReviewProvenanceError(
+                        "ticket specification changed during rework deferral"
+                    )
+                deferred = commit
             elif workflow == {f"D\t{backlog}", f"A\t{todo}"} and changes == workflow:
-                if deferred is None or direct is not None:
+                if deferred is None or (direct is not None and len(direct) != 1):
                     raise ReviewProvenanceError(
                         "review backlog disposition is malformed"
                     )
@@ -207,8 +222,11 @@ def _transition(
                     raise ReviewProvenanceError(
                         "ticket specification changed after rework deferral"
                     )
-                direct = (deferred, commit)
-        if direct is None:
+                direct = (*direct, deferred, commit) if direct else (deferred, commit)
+                deferred = None
+            elif workflow:
+                raise ReviewProvenanceError("review disposition history is conflicting")
+        if direct is None or deferred is not None:
             raise ReviewProvenanceError(
                 "reviewed execution has no proven rework transition"
             )
