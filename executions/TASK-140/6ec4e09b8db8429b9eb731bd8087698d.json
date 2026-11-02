@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "da3e72963b13213315ebf8c319f9fd3ebce62646",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-140",
+  "execution_id": "6ec4e09b8db8429b9eb731bd8087698d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-140",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the CLI command, exact-shape read-only IPC dispatch, and service-owner observation.",
+    "Observe and assess product and execution refs, checkpoint ancestry, managed worktree state, live workers, and conflicting intents; return structured identities and ownership assessment.",
+    "Add end-to-end disposable Git and IPC regressions for the remaining conflict and read-only cases."
+  ],
+  "report_artifact": "executions/TASK-140/6ec4e09b8db8429b9eb731bd8087698d.md",
+  "report_sha256": "2b44504e2607dbf4c55daa01b50be42e091e982d11293d62708edbfdd7796a14",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-140",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the CLI command, exact-shape read-only IPC dispatch, and service-owner observation.",
+      "Observe and assess product and execution refs, checkpoint ancestry, managed worktree state, live workers, and conflicting intents; return structured identities and ownership assessment.",
+      "Add end-to-end disposable Git and IPC regressions for the remaining conflict and read-only cases."
+    ],
+    "report": "The owner-facing observation and resource checks remain unimplemented; the current changes prove control history only and do not satisfy the full ticket.",
+    "summary": "Added a read-only control-history proof for reviewed and transport-failed execution lifecycles, including review attribution and ordered deferral. Added disposable Git regressions for valid history and damaged evidence."
+  },
+  "workspace_head": "007451681e60dd63faf0978851139ce66404cd9c"
+}
