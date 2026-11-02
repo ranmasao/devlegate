@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "51c14aeaf2bb80ba9e10cf63df3e1b6622db01c8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "65a6d6b284a94ef2a3f45c2290ba713c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete fail-closed status and ownership validation for all interrupted rework states, including candidate cleanup failures and recreated or foreign worktrees.",
+    "Add the remaining required real-Git and persisted owner-state/IPC regressions for candidate pin loss, CAS and lease races, dirty or locked worktrees, submodule mismatches, conflicts, and duplicate-worker prevention.",
+    "Run the full configured coverage CI in the initialized repository environment on the final implementation."
+  ],
+  "report_artifact": "executions/TASK-145/65a6d6b284a94ef2a3f45c2290ba713c.md",
+  "report_sha256": "e50338d974ea17cb5b2dfa2602a67c6ec6d95ae828d4fbfe41463412700b98fa",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete fail-closed status and ownership validation for all interrupted rework states, including candidate cleanup failures and recreated or foreign worktrees.",
+      "Add the remaining required real-Git and persisted owner-state/IPC regressions for candidate pin loss, CAS and lease races, dirty or locked worktrees, submodule mismatches, conflicts, and duplicate-worker prevention.",
+      "Run the full configured coverage CI in the initialized repository environment on the final implementation."
+    ],
+    "report": "The six restart-boundary scenarios pass, but the broader required safety and IPC coverage is not complete. The initial full coverage run had two failures because the repository virtual environment was missing; those two tests passed after setup, but the complete configured run has not been repeated in that environment.",
+    "summary": "Added execution-scoped candidate pins and an owner-persisted, staged rework swap that replays observed local Git states and preserves the separate review and code-predecessor bindings. Added restart fault injection across candidate creation, local installation, and remote publication."
+  },
+  "workspace_head": "406f6e31fe87ff446dd18c41e2490ab0346cc363"
+}
