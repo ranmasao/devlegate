@@ -14,6 +14,7 @@ from devlegate.git import run_git
 from devlegate.review_provenance import (
     ReviewProvenanceError,
     _transition,
+    resolve_rework_review,
     restore_review_binding,
 )
 
@@ -148,3 +149,57 @@ def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_pa
     engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
     with pytest.raises(runtime.WorkflowBlockedError, match="continuation ownership"):
         runtime.ServiceEngine._latest_reviewed_rework_report(engine, (failed, older))
+
+
+@pytest.mark.parametrize("damage", ["deleted", "modified", "ticket", "out_of_order"])
+def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for name in ("review", "todo", "backlog", "reviews/TASK-1"):
+        (tmp_path / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "review/TASK-1.md").write_text("original ticket\n")
+    git("add", ".")
+    git("commit", "-qm", "lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    report = SimpleNamespace(
+        ticket_id="TASK-1", execution_id="a" * 32,
+        workspace_head="b" * 40, control_head="c" * 40,
+    )
+    artifact = tmp_path / f"reviews/TASK-1/{report.execution_id}.md"
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        f"ticket: {report.ticket_id}\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n-->\nOriginal feedback.\n"
+    )
+    git("mv", "review/TASK-1.md", "todo/TASK-1.md")
+    git("add", ".")
+    git("commit", "-qm", "publish review")
+    if damage == "deleted":
+        git("rm", str(artifact.relative_to(tmp_path)))
+    elif damage == "modified":
+        artifact.write_text(artifact.read_text() + "Changed feedback.\n")
+        git("add", ".")
+    elif damage == "ticket":
+        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+        (tmp_path / "backlog/TASK-1.md").write_text("changed ticket\n")
+        git("add", ".")
+    else:
+        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+        git("commit", "-qm", "defer")
+        git("mv", "backlog/TASK-1.md", "review/TASK-1.md")
+    git("commit", "-qm", "damage evidence")
+    with pytest.raises(ReviewProvenanceError):
+        resolve_rework_review(
+            tmp_path, git("rev-parse", "HEAD"), lifecycle, report,
+            todo_path="todo", review_path="review", backlog_path="backlog",
+            runner=run_git,
+        )
