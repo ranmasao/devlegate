@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "9dd071a8ed5e2f778a3965a58c863c996d50de35",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "9c482600ec874747a5c7341bb4a6480d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Build and validate the exact incident-shaped fixture with multiple failed checkpoint commits, including matching-cache and missing-cache variants.",
+    "Complete negative ownership, lifecycle, feedback, ref drift and transplant-conflict coverage, including repeated polls and live IPC status parity.",
+    "Verify the admission proof against the actual incident's retained ownership evidence and complete exact-checkpoint full CI validation."
+  ],
+  "report_artifact": "executions/TASK-147/9c482600ec874747a5c7341bb4a6480d.md",
+  "report_sha256": "a48a91a817033d9d124c78e23c6828abad4997d9b151c3e88f427ed3ff65b7c7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Build and validate the exact incident-shaped fixture with multiple failed checkpoint commits, including matching-cache and missing-cache variants.",
+      "Complete negative ownership, lifecycle, feedback, ref drift and transplant-conflict coverage, including repeated polls and live IPC status parity.",
+      "Verify the admission proof against the actual incident's retained ownership evidence and complete exact-checkpoint full CI validation."
+    ],
+    "report": "The missing-cache fixture passes with three disposition cycles and an advanced product base, but its mocked failed worker produces only one checkpoint commit. A broad local test run exposed one status regression that was fixed; other failures were caused by the local test environment lacking the expected repository-local virtualenv and import path. Exact-checkpoint CI cannot be run from this uncommitted worker workspace.",
+    "summary": "Added a read-only failed-continuation admission path using Git lifecycle anchors when failure metadata is absent, with persisted workspace ownership checks and status diagnostics. Extended the disposable rework fixture to cover a restarted missing-cache case and conflicting metadata."
+  },
+  "workspace_head": "3dd6a40429e19df4e6362a9b668be9a021ab15b9"
+}
