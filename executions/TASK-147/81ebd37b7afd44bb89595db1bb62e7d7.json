@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "c994c2d5cd6e927cc48f302cb1e1cec8f1538624",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "81ebd37b7afd44bb89595db1bb62e7d7",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement independently proven admission when the persisted failure cache is absent, including precise conflict and ownership diagnostics without synthesizing metadata.",
+    "Make read-only status and plan reflect the same pre-worker admission checks.",
+    "Add the missing-cache restart and IPC scenario, malformed-history and ownership/ref negative regressions, and run exact-checkpoint full CI."
+  ],
+  "report_artifact": "executions/TASK-147/81ebd37b7afd44bb89595db1bb62e7d7.md",
+  "report_sha256": "13d56a85de101335df5f5ad1b9b64e1b03154ac5b6000bbd775269064217f9ba",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement independently proven admission when the persisted failure cache is absent, including precise conflict and ownership diagnostics without synthesizing metadata.",
+      "Make read-only status and plan reflect the same pre-worker admission checks.",
+      "Add the missing-cache restart and IPC scenario, malformed-history and ownership/ref negative regressions, and run exact-checkpoint full CI."
+    ],
+    "report": "The missing-cache trust boundary and status integration are not yet implemented; the exact TASK-134-shaped fixture has not been verified without a failure record.",
+    "summary": "Updated failed-rework and curator-review disposition parsing to support repeated defer/requeue cycles with unrelated changes, while checking ticket blob and location continuity. Extended the existing real-Git regression to cover three cycles with matching failure metadata."
+  },
+  "workspace_head": "97cc05b640af6f7227018cb77393c91a1bbc5177"
+}
