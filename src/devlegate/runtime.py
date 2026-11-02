@@ -6164,14 +6164,14 @@ class ServiceEngine:
                 elif (
                     workflow == {f"D\t{backlog}", f"A\t{todo}"}
                     and deferred
-                    and not requeued
                 ):
+                    deferred = False
                     requeued = True
                 elif workflow:
                     raise WorkflowBlockedError(
                         "failed rework ticket disposition is conflicting"
                     )
-                current = backlog if deferred and not requeued else todo
+                current = backlog if deferred else todo
                 if (
                     path_object(
                         self.control_worktree, commit, current, runner=self._git_runtime
@@ -6179,7 +6179,15 @@ class ServiceEngine:
                     != original
                 ):
                     raise WorkflowBlockedError("failed rework ticket blob changed")
-            if not requeued:
+                for location in self._workflow_paths().values():
+                    other = f"{location}/{ticket}.md"
+                    if other != current and path_object(
+                        self.control_worktree, commit, other, runner=self._git_runtime
+                    ) is not None:
+                        raise WorkflowBlockedError(
+                            "failed rework ticket has duplicate workflow locations"
+                        )
+            if not requeued or deferred:
                 raise WorkflowBlockedError(
                     "failed rework has no proven deferral and requeue"
                 )

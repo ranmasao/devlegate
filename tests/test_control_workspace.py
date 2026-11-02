@@ -3961,10 +3961,16 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     reviewed_bytes = reviewed_path.read_bytes()
     report_path = control / "executions" / "T-1" / f"{failed.execution_id}.json"
     report_bytes, review_bytes = report_path.read_bytes(), artifact.read_bytes()
-    git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
-    git(control, "commit", "-m", "defer failed rework")
-    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
-    git(control, "commit", "-m", "requeue failed rework")
+    cycles = 3 if advance_product and crash_point is None else 1
+    for cycle in range(cycles):
+        git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
+        (control / f"independent-defer-{cycle}.txt").write_text("independent\n")
+        git(control, "add", f"independent-defer-{cycle}.txt")
+        git(control, "commit", "-m", "defer failed rework")
+        git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+        (control / f"independent-requeue-{cycle}.txt").write_text("independent\n")
+        git(control, "add", f"independent-requeue-{cycle}.txt")
+        git(control, "commit", "-m", "requeue failed rework")
     git(control, "push", "origin", "devlegate/control")
 
     if advance_product:
