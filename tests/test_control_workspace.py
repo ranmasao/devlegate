@@ -139,9 +139,7 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     workspace = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
     ).prepare(checkpoint)
-    git(
-        working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}"
-    )
+    git(working, "push", "origin", f"{workspace.branch}:refs/heads/{workspace.branch}")
     _publish_done_execution(control, workspace, "T-1", checkpoint, "trace-cleanup")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     trace = []
@@ -158,9 +156,7 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     boundary = len(trace)
     result = engine.cleanup_workspaces(apply=True, limit=1)
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    starts = [
-        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
-    ]
+    starts = [e for e in events if e.get("event") == "start" and "/" not in e["sid"]]
     assert [tuple(e["argv"][3:]) for e in starts] == trace
     dry_counts = Counter(x[0] for x in trace[:boundary])
     applied = trace[boundary:]
@@ -169,8 +165,10 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     assert dry_counts["ls-remote"] == 3
     assert len(applied) == 104
     assert (
-        apply_counts["fetch"], apply_counts["ls-remote"],
-        apply_counts["update-ref"], apply_counts["push"],
+        apply_counts["fetch"],
+        apply_counts["ls-remote"],
+        apply_counts["update-ref"],
+        apply_counts["push"],
     ) == (5, 14, 1, 1)
     removal = next(
         i for i, args in enumerate(applied) if args[:2] == ("worktree", "remove")
@@ -178,8 +176,7 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     assert any(args[0] == "fetch" for args in applied[:removal])
     assert any(args[0] == "ls-remote" for args in applied[:removal])
     assert any(
-        e.get("event") == "child_start"
-        and "upload-pack" in " ".join(e.get("argv", []))
+        e.get("event") == "child_start" and "upload-pack" in " ".join(e.get("argv", []))
         for e in events
     )
     assert dry["decisions"][0]["status"] == "eligible"
@@ -205,9 +202,7 @@ def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candid
     monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
     result = engine.cleanup_workspaces(apply=False, limit=max(1, candidates))
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    starts = [
-        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
-    ]
+    starts = [e for e in events if e.get("event") == "start" and "/" not in e["sid"]]
     assert [tuple(e["argv"][3:]) for e in starts] == trace
     counts = Counter(x[0] for x in trace)
     assert len(trace) == 4 + 3 * candidates
@@ -216,8 +211,7 @@ def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candid
     assert len(result["decisions"]) == candidates
     assert all(item["status"] == "skipped" for item in result["decisions"])
     assert any(
-        e.get("event") == "child_start"
-        and "upload-pack" in " ".join(e.get("argv", []))
+        e.get("event") == "child_start" and "upload-pack" in " ".join(e.get("argv", []))
         for e in events
     )
 
@@ -2685,9 +2679,7 @@ def test_execution_publication_real_git_trace(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
     engine._publish_execution_branch(workspace, checkpoint, None)
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    starts = [
-        e for e in events if e.get("event") == "start" and "/" not in e["sid"]
-    ]
+    starts = [e for e in events if e.get("event") == "start" and "/" not in e["sid"]]
     assert [tuple(e["argv"][3:]) for e in starts] == trace
     assert any(
         e.get("event") == "child_start"
@@ -2698,13 +2690,16 @@ def test_execution_publication_real_git_trace(tmp_path, monkeypatch):
         ("rev-parse", "--verify", "HEAD^{commit}"),
         ("ls-remote", "origin", f"refs/heads/{manager.branch}"),
         (
-            "push", f"--force-with-lease=refs/heads/{manager.branch}:", "origin",
+            "push",
+            f"--force-with-lease=refs/heads/{manager.branch}:",
+            "origin",
             f"{checkpoint}:refs/heads/{manager.branch}",
         ),
     ]
     assert (
-        git(workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}")
-        .stdout.split()[0]
+        git(
+            workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+        ).stdout.split()[0]
         == checkpoint
     )
 
@@ -3789,9 +3784,15 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("advance_product", [False, True])
+@pytest.mark.parametrize(
+    "crash_point",
+    [None, "pinned", "ready", "retired", "moved", "attached", "published"],
+)
 def test_failed_rework_deferral_resumes_checkpoint_and_review(
-    tmp_path, monkeypatch, advance_product
+    tmp_path, monkeypatch, advance_product, crash_point
 ):
+    if crash_point is not None and not advance_product:
+        pytest.skip("swap interruption applies only to an advanced product base")
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -3817,6 +3818,72 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         return WorkerRunResult(1, "transport failed", None, "missing claim")
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
+
+    def interrupt_swap():
+        original_build = ExecutionWorkspaceManager._build_rework_candidate
+        original_retire = ExecutionWorkspaceManager.retire
+        original_prepare = ExecutionWorkspaceManager.prepare
+        original_save = devlegate._save_state
+        original_git = devlegate._git_runtime
+        original_stage = devlegate._set_rework_preparation_stage
+
+        def crash():
+            raise RuntimeError("simulated swap interruption")
+
+        def build(*args, **kwargs):
+            result = original_build(*args, **kwargs)
+            if crash_point == "pinned":
+                crash()
+            return result
+
+        def retire(*args, **kwargs):
+            result = original_retire(*args, **kwargs)
+            if crash_point == "retired":
+                crash()
+            return result
+
+        def prepare(*args, **kwargs):
+            result = original_prepare(*args, **kwargs)
+            if crash_point == "attached":
+                crash()
+            return result
+
+        def save(*args, **kwargs):
+            result = original_save(*args, **kwargs)
+            provenance = kwargs.get("rework_provenance")
+            if (
+                crash_point == "ready"
+                and isinstance(provenance, dict)
+                and provenance.get("swap", {}).get("stage") == "candidate_ready"
+            ):
+                crash()
+            return result
+
+        def git_runtime(cwd, *args, **kwargs):
+            result = original_git(cwd, *args, **kwargs)
+            if (
+                crash_point == "moved"
+                and args[:1] == ("update-ref",)
+                and len(args) == 4
+            ):
+                crash()
+            return result
+
+        def stage(value):
+            if crash_point == "published" and value == "remote_predecessor_installed":
+                crash()
+            return original_stage(value)
+
+        with monkeypatch.context() as faults:
+            faults.setattr(ExecutionWorkspaceManager, "_build_rework_candidate", build)
+            faults.setattr(ExecutionWorkspaceManager, "retire", retire)
+            faults.setattr(ExecutionWorkspaceManager, "prepare", prepare)
+            faults.setattr(devlegate, "_save_state", save)
+            faults.setattr(devlegate, "_git_runtime", git_runtime)
+            faults.setattr(devlegate, "_set_rework_preparation_stage", stage)
+            with pytest.raises(RuntimeError, match="simulated swap interruption"):
+                run_test_iteration(devlegate)
+
     assert run_test_iteration(devlegate) == 0
     control = next((state / "worktrees").glob("*/control"))
     reviewed = ExecutionReportStore(control).list("T-1")[0]
@@ -3861,6 +3928,13 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         git(working, "commit", "-m", "advance product")
         git(working, "push", "origin", "HEAD")
 
+    if crash_point is not None:
+        interrupt_swap()
+        pending = devlegate._state["rework_provenance"]
+        assert pending["code_predecessor"]["checkpoint"] == checkpoint
+        devlegate = Devlegate(config)
+        assert devlegate._state["rework_provenance"] == pending
+        monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3
     assert devlegate._state["execution_id"] not in {
