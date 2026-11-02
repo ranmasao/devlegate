@@ -3741,6 +3741,7 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 0, None, WorkerClaim("completed", "done", (), ()), None
             )
         if len(prompts) == 3:
+            assert (workspace.path / "initial.txt").read_text() == "initial\n"
             assert (workspace.path / "first.txt").read_text() == "first\n"
             assert (workspace.path / "second.txt").read_text() == "second\n"
             return WorkerRunResult(
@@ -3774,6 +3775,13 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     failed = next(report for report in reports if report.result.conclusion == "failed")
     workspace = Path(devlegate._state["execution_path"])
     checkpoint = failed.workspace_head
+    assert checkpoint is not None
+    ancestry = git(
+        workspace, "merge-base", "--is-ancestor", reviewed.workspace_head, checkpoint
+    )
+    assert ancestry.returncode == 0
+    reviewed_path = control / "executions" / "T-1" / f"{reviewed.execution_id}.json"
+    reviewed_bytes = reviewed_path.read_bytes()
     report_path = control / "executions" / "T-1" / f"{failed.execution_id}.json"
     report_bytes, review_bytes = report_path.read_bytes(), artifact.read_bytes()
     git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
@@ -3784,12 +3792,17 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
 
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3
+    assert devlegate._state["execution_id"] not in {
+        reviewed.execution_id,
+        failed.execution_id,
+    }
     assert "Preserve the implementation." in prompts[2]
     assert (
         git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
         == 0
     )
     assert report_path.read_bytes() == report_bytes
+    assert reviewed_path.read_bytes() == reviewed_bytes
     assert artifact.read_bytes() == review_bytes
 
 
