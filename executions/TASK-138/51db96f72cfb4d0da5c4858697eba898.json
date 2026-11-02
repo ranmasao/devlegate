@@ -1,0 +1,37 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "5b8b92c099f5aeb1794fa507f30eaae38c6788e1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "51db96f72cfb4d0da5c4858697eba898",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable owner-serialized, identity-bound authorization and continuation of failed checkpoints while preserving the original review binding and worker delta.",
+    "Add end-to-end continuation, fencing, remote drift, ownership, and crash/restart regression coverage.",
+    "Run the full configured test suite and obtain successful CI for the final implementation checkpoint."
+  ],
+  "report_artifact": "executions/TASK-138/51db96f72cfb4d0da5c4858697eba898.md",
+  "report_sha256": "f829c3d68d7bb16db94cc59d5a4700f9b0931f744fcb507b4a89ff1e14c38fdb",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable owner-serialized, identity-bound authorization and continuation of failed checkpoints while preserving the original review binding and worker delta.",
+      "Add end-to-end continuation, fencing, remote drift, ownership, and crash/restart regression coverage.",
+      "Run the full configured test suite and obtain successful CI for the final implementation checkpoint."
+    ],
+    "report": "The positive continuation protocol and its crash-safe fencing are not implemented; the existing fail-closed behavior remains. Exact-checkpoint CI requires a checkpoint created by Devlegate under the worker contract.",
+    "summary": "Improved failed-generation diagnostics, documented the missing historical ownership proof, and added real-Git regressions for damaged review and ticket evidence."
+  },
+  "workspace_head": "2f8409754a81b3a6bb02155e3046c45f3d0f2cc5"
+}
