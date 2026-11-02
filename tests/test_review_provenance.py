@@ -150,7 +150,10 @@ def test_review_resolver_rejects_failed_generation(
         )
 
 
-def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
+@pytest.mark.parametrize("admitted_before_review", [False, True])
+def test_real_git_failed_attempt_preserves_prior_review_on_restart(
+    tmp_path, admitted_before_review
+):
     def git(*args):
         return subprocess.run(
             ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
@@ -163,7 +166,7 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         "review", "todo", "backlog", "reviews/TASK-1", "executions/TASK-1"
     ):
         (tmp_path / directory).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "review/TASK-1.md").write_text("canonical ticket\n")
+    (tmp_path / "todo/TASK-1.md").write_text("canonical ticket\n")
     git("add", ".")
     git("commit", "-qm", "initial ticket")
     control = git("rev-parse", "HEAD")
@@ -177,6 +180,7 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
     )
     report_path = tmp_path / f"executions/TASK-1/{reviewed.execution_id}.json"
     report_path.write_text(reviewed.to_json())
+    git("mv", "todo/TASK-1.md", "review/TASK-1.md")
     git("add", ".")
     git("commit", "-qm", "publish reviewed execution")
     lifecycle = git("rev-parse", "HEAD")
@@ -196,7 +200,8 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
     publication = git("rev-parse", "HEAD")
     failed = build_execution_report(
         ticket_id="TASK-1", execution_id="b" * 32, code_base_head=control,
-        workspace_head=publication, control_head=publication,
+        workspace_head=publication,
+        control_head=control if admitted_before_review else publication,
         execution_branch="work/TASK-1", execution_path=str(tmp_path / "work"),
         run=WorkerRunResult(0, "oversized event", claim, None),
     )
@@ -233,9 +238,18 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         observer = SimpleNamespace(
             control_worktree=tmp_path, _git_runtime=run_git,
             todo_path="todo", review_path="review", backlog_path="backlog",
-            # This fixture publishes the reports without normal lifecycle moves.
-            _lifecycle_commit_is_exact=lambda commit, report: True,
         )
+        observer._lifecycle_commit_is_exact = lambda commit, report: (
+            runtime.ServiceEngine._lifecycle_commit_is_exact(observer, commit, report)
+        )
+        if admitted_before_review:
+            with pytest.raises(runtime.WorkflowBlockedError, match="admitted before"):
+                runtime.ServiceEngine._observe_historical_repair_review(
+                    observer, (reviewed, failed), control_head=head,
+                    failed_execution_id=failed.execution_id,
+                    reviewed_execution_id=reviewed.execution_id,
+                )
+            return
         observed = runtime.ServiceEngine._observe_historical_repair_review(
             observer, (reviewed, failed), control_head=head,
             failed_execution_id=failed.execution_id,

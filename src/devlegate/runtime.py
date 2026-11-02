@@ -5974,6 +5974,22 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 f"cannot bind historical repair curator feedback: {error}"
             ) from error
+        try:
+            if not all(
+                is_ancestor(
+                    self.control_worktree, commit, failed.control_head,
+                    runner=self._git_runtime,
+                )
+                for commit in (binding.publication, binding.transition[0])
+            ):
+                raise WorkflowBlockedError(
+                    "failed execution was admitted before the historical review "
+                    "and rework disposition"
+                )
+        except (GitObservationError, GitAncestryError) as error:
+            raise WorkflowBlockedError(
+                "cannot establish historical repair review admission order"
+            ) from error
         return failed_commit, failed, reviewed_commit, reviewed, binding
 
     def _prepare_rework_remote_predecessor(
