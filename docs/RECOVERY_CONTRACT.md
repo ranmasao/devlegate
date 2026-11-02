@@ -30,6 +30,23 @@ immutable admission revision. Unknown review fields, invalid review digests, or
 invalid attribution remain rejected. The two historical inert review fields
 `legacy: false` and `legacy_boundary: null` are accepted.
 
+### Failed execution after review
+
+A transport-failed execution is not a reviewed generation, even when it emitted
+a valid worker claim. Its report and checkpoint must remain distinct from the
+earlier immutable review binding. A report's branch name, path and checkpoint
+do not prove that a currently observed worktree or ref is still owned by that
+execution: a ref can be deleted and recreated at the same object ID. A clean
+worktree and matching remote SHA alone do not establish that missing ownership.
+
+The runtime currently refuses automatic continuation when a failed execution
+follows an earlier potentially reviewed generation. Preserve both reports,
+review artifacts, checkpoints, refs and worktrees for investigation. Resuming
+such a historical execution requires generation-bound ownership evidence or a
+durable, identity-bound operator authorization and fencing protocol; neither
+can be inferred from the old report alone. The existing ordinary rework
+preparation must not be used to replace the failed generation on that basis.
+
 ## Blocking And Isolation
 
 `blocked` and `UNSAFE` diagnostics name the missing proof and preserve the
