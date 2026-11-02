@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "a8a7ba8ece0f8f8e9cc43a5cd44a1f98c5223b85",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "c67c3e47b33a4a04a179edd66c4cc8ae",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement exact chronological review and failed-generation selection with independent workspace ownership proof and unchanged-ticket requeue validation.",
+    "Persist separate review and failed-checkpoint provenance, and connect safe, restart-consistent checkpoint pinning and single-transplant preparation to ordinary scheduling.",
+    "Add same-base and advanced-base successful continuation tests, ownership/ref/conflict/crash regressions, status diagnostics, and run full configured CI."
+  ],
+  "report_artifact": "executions/TASK-145/c67c3e47b33a4a04a179edd66c4cc8ae.md",
+  "report_sha256": "28aaa2ab1c885b7eca61078ad407f91c6d386681427d2cc57f530bc207c5f145",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement exact chronological review and failed-generation selection with independent workspace ownership proof and unchanged-ticket requeue validation.",
+      "Persist separate review and failed-checkpoint provenance, and connect safe, restart-consistent checkpoint pinning and single-transplant preparation to ordinary scheduling.",
+      "Add same-base and advanced-base successful continuation tests, ownership/ref/conflict/crash regressions, status diagnostics, and run full configured CI."
+    ],
+    "report": "The scheduler still deliberately rejects this continuation. The available work did not establish the required durable ownership and replay proofs, so enabling workspace mutation would be unsafe; the new positive regression is marked as an expected failure.",
+    "summary": "Added a disposable real-Git scheduler regression for reviewed rework followed by a transport failure and requeue. Corrected the failure diagnostic to retain the newest failed execution when multiple failures are present."
+  },
+  "workspace_head": "64cc038fbbfe17c19f4cdb969d5222932626a037"
+}
