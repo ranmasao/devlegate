@@ -130,6 +130,21 @@ def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "transport_error, egress_ok", [("oversized event", True), (None, False)]
+)
+def test_review_resolver_rejects_failed_generation(tmp_path, transport_error, egress_ok):
+    report = SimpleNamespace(
+        result=SimpleNamespace(transport_error=transport_error, egress_ok=egress_ok)
+    )
+    with pytest.raises(ReviewProvenanceError, match="failed worker execution"):
+        resolve_rework_review(
+            tmp_path, "head", "lifecycle", report,
+            todo_path="todo", review_path="review", backlog_path="backlog",
+            runner=run_git,
+        )
+
+
 def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_path):
     failed = SimpleNamespace(
         ticket_id="TASK-1", execution_id="a" * 32,
@@ -170,6 +185,7 @@ def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
     report = SimpleNamespace(
         ticket_id="TASK-1", execution_id="a" * 32,
         workspace_head="b" * 40, control_head="c" * 40,
+        result=SimpleNamespace(egress_ok=True, transport_error=None),
     )
     artifact = tmp_path / f"reviews/TASK-1/{report.execution_id}.md"
     artifact.write_text(
