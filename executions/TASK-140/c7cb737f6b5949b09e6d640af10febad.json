@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "4b23bbff7f70752f8d7e1f44fed00c346895caa0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-140",
+  "execution_id": "c7cb737f6b5949b09e6d640af10febad",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-140",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-serialized read-only historical inspection, including CLI, exact-shape IPC, structured evidence, and live resource observations.",
+    "Add end-to-end disposable Git and service regressions covering resource conflicts, uncertain observations, and absence of side effects.",
+    "Run Ruff and the full configured CI suite."
+  ],
+  "report_artifact": "executions/TASK-140/c7cb737f6b5949b09e6d640af10febad.md",
+  "report_sha256": "323b3723207fce76ad0cb76306dea320b1cbefb34052454334d41ffd72b631bd",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-140",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-serialized read-only historical inspection, including CLI, exact-shape IPC, structured evidence, and live resource observations.",
+      "Add end-to-end disposable Git and service regressions covering resource conflicts, uncertain observations, and absence of side effects.",
+      "Run Ruff and the full configured CI suite."
+    ],
+    "report": "The operator inspection and live-resource proof remain unimplemented; the focused history tests pass. Ruff is not installed in the current environment.",
+    "summary": "Strengthened historical control provenance to require that the reviewed disposition precede failed admission and that both admission ticket blobs match the current ticket. Added disposable Git regressions for premature failed admission and modified review evidence."
+  },
+  "workspace_head": "3c972d36de429b25bdf7bb46aa6a0e7423e97324"
+}
