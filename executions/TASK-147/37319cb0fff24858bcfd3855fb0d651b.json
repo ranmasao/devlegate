@@ -1,0 +1,35 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "94a18be1b541bf743fa6395630ca3a2e02fa2afa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "37319cb0fff24858bcfd3855fb0d651b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Establish an independently justified current ownership proof for cleared execution identity and implement safe ordinary continuation when that proof exists.",
+    "Complete the multi-commit TASK-134-shaped successful fixture, broader admission negative and live IPC coverage, and final exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-147/37319cb0fff24858bcfd3855fb0d651b.md",
+  "report_sha256": "886ad94c0d19574976ab8fa542f3af1624635287e0531e184b272992a0a600b2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Establish an independently justified current ownership proof for cleared execution identity and implement safe ordinary continuation when that proof exists.",
+      "Complete the multi-commit TASK-134-shaped successful fixture, broader admission negative and live IPC coverage, and final exact-checkpoint CI."
+    ],
+    "report": "The available Git report, branch, checkpoint, path, and worktree registration establish topology but do not establish current ownership after identity is cleared; admitting on those observations alone would violate the specified trust boundary. The actual incident's retained identity is unknown. The previous checkpoint CI run 41541523790 completed successfully, but it does not include these edits.",
+    "summary": "Clarified failed-continuation diagnostics for missing versus conflicting persisted workspace ownership, and added restarted owner/status regressions for both cases while preserving the existing retained-identity continuation."
+  },
+  "workspace_head": "bafd8d5c1c67b517dd992ab4dfeef8566c1c17cc"
+}
