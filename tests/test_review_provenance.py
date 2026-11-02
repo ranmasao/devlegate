@@ -4,12 +4,14 @@
 """Persisted curator-review binding compatibility."""
 
 import hashlib
+import json
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from devlegate import runtime
+from devlegate.execution_result import ExecutionReport, build_execution_report
 from devlegate.git import run_git
 from devlegate.review_provenance import (
     ReviewProvenanceError,
@@ -17,6 +19,7 @@ from devlegate.review_provenance import (
     resolve_rework_review,
     restore_review_binding,
 )
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
 def _binding():
@@ -133,7 +136,9 @@ def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     "transport_error, egress_ok", [("oversized event", True), (None, False)]
 )
-def test_review_resolver_rejects_failed_generation(tmp_path, transport_error, egress_ok):
+def test_review_resolver_rejects_failed_generation(
+    tmp_path, transport_error, egress_ok
+):
     report = SimpleNamespace(
         result=SimpleNamespace(transport_error=transport_error, egress_ok=egress_ok)
     )
@@ -143,6 +148,105 @@ def test_review_resolver_rejects_failed_generation(tmp_path, transport_error, eg
             todo_path="todo", review_path="review", backlog_path="backlog",
             runner=run_git,
         )
+
+
+def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for directory in (
+        "review", "todo", "backlog", "reviews/TASK-1", "executions/TASK-1"
+    ):
+        (tmp_path / directory).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "review/TASK-1.md").write_text("canonical ticket\n")
+    git("add", ".")
+    git("commit", "-qm", "initial ticket")
+    control = git("rev-parse", "HEAD")
+    git("update-ref", "refs/heads/checkpoint-reviewed", control)
+    claim = WorkerClaim("completed", "done", (), ())
+    reviewed = build_execution_report(
+        ticket_id="TASK-1", execution_id="a" * 32, code_base_head=control,
+        workspace_head=control, control_head=control, execution_branch="work/TASK-1",
+        execution_path=str(tmp_path / "work"),
+        run=WorkerRunResult(0, None, claim, None),
+    )
+    report_path = tmp_path / f"executions/TASK-1/{reviewed.execution_id}.json"
+    report_path.write_text(reviewed.to_json())
+    git("add", ".")
+    git("commit", "-qm", "publish reviewed execution")
+    lifecycle = git("rev-parse", "HEAD")
+    feedback = (
+        "<!-- devlegate-review-v1\n"
+        f"ticket: {reviewed.ticket_id}\n"
+        f"execution: {reviewed.execution_id}\n"
+        f"checkpoint: {reviewed.workspace_head}\n"
+        f"control: {reviewed.control_head}\n"
+        "disposition: rework\n-->\nExact historical feedback.\n"
+    )
+    artifact = tmp_path / f"reviews/TASK-1/{reviewed.execution_id}.md"
+    artifact.write_text(feedback)
+    git("mv", "review/TASK-1.md", "todo/TASK-1.md")
+    git("add", ".")
+    git("commit", "-qm", "publish review and rework")
+    publication = git("rev-parse", "HEAD")
+    failed = build_execution_report(
+        ticket_id="TASK-1", execution_id="b" * 32, code_base_head=control,
+        workspace_head=publication, control_head=publication,
+        execution_branch="work/TASK-1", execution_path=str(tmp_path / "work"),
+        run=WorkerRunResult(0, "oversized event", claim, None),
+    )
+    git("update-ref", "refs/heads/checkpoint-failed", failed.workspace_head)
+    failed_path = tmp_path / f"executions/TASK-1/{failed.execution_id}.json"
+    failed_path.write_text(failed.to_json())
+    git("add", ".")
+    git("commit", "-qm", "publish failed execution")
+    git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+    git("commit", "-qm", "defer")
+    deferred = git("rev-parse", "HEAD")
+    git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+    git("commit", "-qm", "requeue")
+    head = git("rev-parse", "HEAD")
+    refs = git("show-ref")
+    evidence = {
+        path: path.read_bytes() for path in (report_path, failed_path, artifact)
+    }
+
+    # Recreate the engine on the second evaluation, as after a restart.
+    for _ in range(2):
+        reviewed = ExecutionReport.from_dict(json.loads(report_path.read_text()))
+        failed = ExecutionReport.from_dict(json.loads(failed_path.read_text()))
+        assert failed.result.egress_ok and failed.result.transport_error is not None
+        binding = resolve_rework_review(
+            tmp_path, head, lifecycle, reviewed,
+            todo_path="todo", review_path="review", backlog_path="backlog",
+            runner=run_git,
+        )
+        assert binding.content == feedback
+        assert binding.path == str(artifact.relative_to(tmp_path))
+        assert binding.publication == publication
+        assert binding.transition == (publication, deferred, head)
+        with pytest.raises(ReviewProvenanceError, match="failed worker execution"):
+            resolve_rework_review(
+                tmp_path, head, lifecycle, failed,
+                todo_path="todo", review_path="review", backlog_path="backlog",
+                runner=run_git,
+            )
+        engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+        with pytest.raises(
+            runtime.WorkflowBlockedError, match="continuation ownership"
+        ):
+            runtime.ServiceEngine._latest_reviewed_rework_report(
+                engine, (reviewed, failed)
+            )
+        assert git("show-ref") == refs
+        assert git("status", "--porcelain") == ""
+        assert {path: path.read_bytes() for path in evidence} == evidence
+        assert (tmp_path / "todo/TASK-1.md").read_text() == "canonical ticket\n"
 
 
 def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_path):
