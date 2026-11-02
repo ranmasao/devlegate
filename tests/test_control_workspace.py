@@ -3719,13 +3719,9 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
     assert feedback in prompts[1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=WorkflowBlockedError,
-    reason="automatic continuation of a failed rework is not implemented",
-)
+@pytest.mark.parametrize("advance_product", [False, True])
 def test_failed_rework_deferral_resumes_checkpoint_and_review(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, advance_product
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3790,6 +3786,12 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     git(control, "commit", "-m", "requeue failed rework")
     git(control, "push", "origin", "devlegate/control")
 
+    if advance_product:
+        (working / "product-advance.txt").write_text("new product\n")
+        git(working, "add", "product-advance.txt")
+        git(working, "commit", "-m", "advance product")
+        git(working, "push", "origin", "HEAD")
+
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3
     assert devlegate._state["execution_id"] not in {
@@ -3797,10 +3799,13 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         failed.execution_id,
     }
     assert "Preserve the implementation." in prompts[2]
-    assert (
-        git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
-        == 0
-    )
+    if not advance_product:
+        assert (
+            git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
+            == 0
+        )
+    evidence = f"refs/devlegate/recovery/workspace/T-1/{failed.execution_id}"
+    assert git(working, "rev-parse", evidence).stdout.strip() == checkpoint
     assert report_path.read_bytes() == report_bytes
     assert reviewed_path.read_bytes() == reviewed_bytes
     assert artifact.read_bytes() == review_bytes
