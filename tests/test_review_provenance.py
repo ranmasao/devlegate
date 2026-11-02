@@ -4,10 +4,18 @@
 """Persisted curator-review binding compatibility."""
 
 import hashlib
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
-from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
+from devlegate import runtime
+from devlegate.git import run_git
+from devlegate.review_provenance import (
+    ReviewProvenanceError,
+    _transition,
+    restore_review_binding,
+)
 
 
 def _binding():
@@ -62,3 +70,59 @@ def test_restore_review_binding_rejects_non_inert_legacy_markers(key, value):
             checkpoint=checkpoint,
             control_head=control,
         )
+
+
+@pytest.mark.parametrize(
+    "route", [("todo",), ("backlog", "todo"), ("todo", "backlog", "todo")]
+)
+def test_real_git_rework_transitions(tmp_path, route):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for name in ("review", "todo", "backlog", "reviews/TASK-1"):
+        (tmp_path / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "review/TASK-1.md").write_text("ticket\n")
+    git("add", ".")
+    git("commit", "-qm", "lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    source = "review"
+    commits = []
+    for index, target in enumerate(route):
+        git("mv", f"{source}/TASK-1.md", f"{target}/TASK-1.md")
+        if index == 0:
+            (tmp_path / "reviews/TASK-1/review.md").write_text("feedback\n")
+            git("add", ".")
+        git("commit", "-qm", f"move to {target}")
+        commits.append(git("rev-parse", "HEAD"))
+        if index == 0 and len(route) == 3:
+            (tmp_path / "failed-report.json").write_text("failed\n")
+            git("add", ".")
+            git("commit", "-qm", "failed attempt")
+        source = target
+    transition, publication = _transition(
+        tmp_path, git("rev-parse", "HEAD"), lifecycle, "TASK-1",
+        todo_path="todo", review_path="review", backlog_path="backlog",
+        artifact_path="reviews/TASK-1/review.md", runner=run_git,
+    )
+    assert transition == tuple(commits)
+    assert publication == commits[0]
+
+
+def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
+    report = SimpleNamespace(
+        ticket_id="TASK-1",
+        execution_id="a" * 32,
+        result=SimpleNamespace(egress_ok=True, transport_error="oversized event"),
+    )
+    path = f"executions/{report.ticket_id}/{report.execution_id}.json"
+    monkeypatch.setattr(
+        runtime, "history_changes", lambda *a, **kw: (("b" * 40, (f"A\t{path}",)),)
+    )
+    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+    with pytest.raises(runtime.WorkflowBlockedError, match="newest execution failed"):
+        runtime.ServiceEngine._latest_reviewed_rework_report(engine, (report,))
