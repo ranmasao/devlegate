@@ -16,7 +16,9 @@ from devlegate.historical_provenance import (
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
 
-@pytest.mark.parametrize("damage", [None, "early_deferral", "report", "ticket"])
+@pytest.mark.parametrize(
+    "damage", [None, "early_deferral", "early_admission", "report", "review", "ticket"]
+)
 def test_historical_control_proof(tmp_path, damage):
     def git(*args):
         return subprocess.run(
@@ -57,7 +59,9 @@ def test_historical_control_proof(tmp_path, damage):
     publication = commit("rework")
     failed = build_execution_report(
         ticket_id="T-1", execution_id="b" * 32, code_base_head=initial,
-        workspace_head=initial, control_head=publication, execution_branch="work/T-1",
+        workspace_head=initial,
+        control_head=initial if damage == "early_admission" else publication,
+        execution_branch="work/T-1",
         execution_path=str(tmp_path / "work"),
         run=WorkerRunResult(0, "transport error", claim, None),
     )
@@ -77,6 +81,10 @@ def test_historical_control_proof(tmp_path, damage):
         path = tmp_path / f"executions/T-1/{failed.execution_id}.json"
         path.write_text(path.read_text() + " ")
         commit("modify report")
+    if damage == "review":
+        path = tmp_path / f"reviews/T-1/{reviewed.execution_id}.md"
+        path.write_text(path.read_text() + "changed\n")
+        commit("modify review")
     if damage == "ticket":
         (tmp_path / "todo/T-1.md").write_text("changed\n")
         commit("modify ticket")

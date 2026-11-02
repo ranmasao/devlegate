@@ -19,6 +19,7 @@ from devlegate.git import (
     commit_range,
     history_changes,
     history_commits,
+    is_ancestor,
     path_object,
 )
 from devlegate.review_provenance import (
@@ -120,11 +121,24 @@ def prove_historical_provenance(
             < commits.index(deferred) < commits.index(requeued)
         ):
             raise HistoricalProvenanceError("failure and deferral are out of order")
+        if not is_ancestor(repo, publication, failed.control_head, runner=runner):
+            raise HistoricalProvenanceError("failed admission predates review disposition")
         blob = path_object(repo, head, f"{todo_path}/{ticket}.md", runner=runner)
         admitted_blob = path_object(
             repo, reviewed_commit, f"{review_path}/{ticket}.md", runner=runner
         )
-        if blob is None or blob != admitted_blob:
+        reviewed_admitted_blob = path_object(
+            repo, reviewed.control_head, f"{todo_path}/{ticket}.md", runner=runner
+        )
+        failed_admitted_blob = path_object(
+            repo, failed.control_head, f"{todo_path}/{ticket}.md", runner=runner
+        )
+        if (
+            blob is None
+            or blob != admitted_blob
+            or blob != reviewed_admitted_blob
+            or blob != failed_admitted_blob
+        ):
             raise HistoricalProvenanceError("current ticket does not match admission")
         return HistoricalProvenance(reviewed_commit, failed_commit, binding, blob)
     except (GitObservationError, GitAncestryError, ReviewProvenanceError) as error:
