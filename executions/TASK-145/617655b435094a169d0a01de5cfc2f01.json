@@ -1,0 +1,35 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "cf17ac50afd03bbcf2a7fd3867b0be3e45af1438",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "617655b435094a169d0a01de5cfc2f01",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Add persisted owner-state regressions through the real service/IPC path that verify blockers and worker absence after unsafe swap observations.",
+    "Cover representative submodule mismatch and unsafe observations at retiring, moving, and attached stages, including preservation of foreign refs and repeated scheduler polls."
+  ],
+  "report_artifact": "executions/TASK-145/617655b435094a169d0a01de5cfc2f01.md",
+  "report_sha256": "50c70264ab36fea55906e676000c6f1b3aca67d814cf39c73494f2a4786d92bc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Add persisted owner-state regressions through the real service/IPC path that verify blockers and worker absence after unsafe swap observations.",
+      "Cover representative submodule mismatch and unsafe observations at retiring, moving, and attached stages, including preservation of foreign refs and repeated scheduler polls."
+    ],
+    "report": "The new negative regressions currently inspect status through a reconstructed engine rather than exercising the required real service/IPC path, and their corruptions are injected at candidate_ready only. The invocation is ending before those remaining cross-layer cases can be implemented and validated.",
+    "summary": "Added read-only, stage-specific inspection for pending rework swaps, including candidate pin, review binding, product generation, ref and workspace topology checks. Added disposable Git regressions for unsafe swap observations and preserved restart scenarios."
+  },
+  "workspace_head": "f5df22b28324ed24a5e186b20795d2319cc578d1"
+}
