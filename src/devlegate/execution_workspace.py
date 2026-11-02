@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -398,9 +399,33 @@ class ExecutionWorkspaceManager:
                 self._verify_submodules(path)
                 return candidate
             finally:
-                self._runner(
-                    self.repo, "worktree", "remove", "--force", str(path), check=False
-                )
+                primary_error = sys.exception()
+                cleanup_error = None
+                try:
+                    removed = self._runner(
+                        self.repo, "worktree", "remove", "--force", str(path),
+                        check=False,
+                    )
+                    if removed.returncode:
+                        cleanup_error = (
+                            "cannot remove rework candidate worktree: "
+                            f"{removed.stderr.strip() or 'unknown git error'}"
+                        )
+                    elif path.exists() or path.resolve() in self._registrations():
+                        cleanup_error = (
+                            "rework candidate worktree remains after removal"
+                        )
+                except (
+                    ExecutionWorkspaceError,
+                    OSError,
+                    subprocess.SubprocessError,
+                ) as error:
+                    cleanup_error = f"cannot verify rework candidate cleanup: {error}"
+                if cleanup_error is not None:
+                    if primary_error is not None:
+                        primary_error.add_note(cleanup_error)
+                    else:
+                        raise ExecutionWorkspaceError(cleanup_error)
 
     def inspect(
         self, base_head: str, expected_head: str | None = None

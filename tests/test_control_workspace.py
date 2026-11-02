@@ -3376,6 +3376,46 @@ def test_rework_conflict_preserves_original_worktree_and_branch(tmp_path):
     assert git(working, "rev-parse", workspace.branch).stdout.strip() == old_checkpoint
 
 
+@pytest.mark.parametrize("conflict", [False, True])
+def test_rework_candidate_cleanup_failure_preserves_source(
+    tmp_path, monkeypatch, conflict
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    key = next(state.glob("worktrees/*"))
+    (working / "shared.txt").write_text("original\n")
+    git(working, "add", "shared.txt")
+    git(working, "commit", "-m", "add shared file")
+    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(working, key, "T-1")
+    workspace = manager.prepare(old_base)
+    (workspace.path / "shared.txt").write_text("worker\n")
+    git(workspace.path, "add", "shared.txt")
+    git(workspace.path, "commit", "-m", "worker change")
+    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+    name = "shared.txt" if conflict else "new-product-change.txt"
+    (working / name).write_text("product\n")
+    git(working, "add", name)
+    git(working, "commit", "-m", "product change")
+    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    original_git = execution_workspace_module._git
+
+    def fail_cleanup(cwd, *args, **kwargs):
+        if args[:3] == ("worktree", "remove", "--force"):
+            return subprocess.CompletedProcess(args, 1, "", "cleanup failed")
+        return original_git(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(execution_workspace_module, "_git", fail_cleanup)
+    expected = "cannot be applied" if conflict else "cannot remove rework candidate"
+    with pytest.raises(ExecutionWorkspaceError, match=expected) as raised:
+        manager.prepare_rework(new_base, old_base, checkpoint)
+    if conflict:
+        assert any("cleanup failed" in note for note in raised.value.__notes__)
+    assert git(working, "rev-parse", workspace.branch).stdout.strip() == checkpoint
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == checkpoint
+    assert (workspace.path / "shared.txt").read_text() == "worker\n"
+
+
 def test_rework_failed_ancestry_does_not_retire_or_move_workspace(
     tmp_path, monkeypatch
 ):
