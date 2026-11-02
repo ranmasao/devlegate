@@ -1,0 +1,35 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "f9e999584b1ae5bdbd9a7ab670df96be51f4e71a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-145",
+  "execution_id": "650a1fe8684e4d8ca424b5b59b0fee1f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-145",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and persist a create-only candidate pin and owner-driven restartable local swap with exact state and ref validation.",
+    "Add persisted-owner crash/restart, remote lease race, and remaining ownership safety regressions; run the focused suite and full configured CI."
+  ],
+  "report_artifact": "executions/TASK-145/650a1fe8684e4d8ca424b5b59b0fee1f.md",
+  "report_sha256": "f7baac667e561d037740b9c91ecd7b1522c5c361dc7b279612bbb58e0245ffe1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-145",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement and persist a create-only candidate pin and owner-driven restartable local swap with exact state and ref validation.",
+      "Add persisted-owner crash/restart, remote lease race, and remaining ownership safety regressions; run the focused suite and full configured CI."
+    ],
+    "report": "The durable swap and recovery changes have not been implemented or validated in this invocation; the advanced-base crash windows remain.",
+    "summary": "Detect and surface temporary rework candidate cleanup failures while preserving the original worktree and primary cherry-pick conflict. Add disposable Git regression coverage for successful and conflicting candidate construction with failed cleanup."
+  },
+  "workspace_head": "83140fa8ecc585b093889f28e4568fd7f3a5b4b2"
+}
