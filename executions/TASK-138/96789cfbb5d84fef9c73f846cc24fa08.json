@@ -1,0 +1,37 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "7ade4ecb6bc7f205f0fdbcbf87c6d446c089e59b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "96789cfbb5d84fef9c73f846cc24fa08",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable operator authorization binding the reviewed and failed executions, exact observed resources, control lineage, and product base under exclusive ownership.",
+    "Implement restart-safe checkpoint preservation and CAS-fenced continuation of the failed worker delta while retaining the original review binding.",
+    "Add positive real-Git recovery and interruption tests, relevant resource-drift negatives, operator documentation, and run configured full CI and lint on the final implementation."
+  ],
+  "report_artifact": "executions/TASK-138/96789cfbb5d84fef9c73f846cc24fa08.md",
+  "report_sha256": "826743a501acb2aaad91f357e53563429f6d7976e7b7ab555f0cfe0b71f6e8a0",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable operator authorization binding the reviewed and failed executions, exact observed resources, control lineage, and product base under exclusive ownership.",
+      "Implement restart-safe checkpoint preservation and CAS-fenced continuation of the failed worker delta while retaining the original review binding.",
+      "Add positive real-Git recovery and interruption tests, relevant resource-drift negatives, operator documentation, and run configured full CI and lint on the final implementation."
+    ],
+    "report": "The existing forced-retry path requires a currently bound stranded worker and cannot safely authorize historical failed resources. I could not complete and verify the required new durable authorization and fencing protocol in this invocation; allowing ordinary rework preparation would risk retiring an unowned worktree.",
+    "summary": "Inspected the carried-forward review provenance and workspace recovery paths; the existing fail-closed gate remains intact."
+  },
+  "workspace_head": "6622b9358514b8c8bdd247ee19d2e353554b02a2"
+}
