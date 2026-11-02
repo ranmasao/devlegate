@@ -5456,7 +5456,7 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "persisted rework preparation stage is invalid"
                 )
-            if preparation_stage in {
+            if rework.get("swap") is None and preparation_stage in {
                 None,
                 "admitted",
                 "remote_evidence_published",
@@ -5467,7 +5467,10 @@ class ServiceEngine:
                     previous_base,
                     previous_checkpoint,
                 )
-            if preparation_stage != "remote_predecessor_installed":
+            swap = rework.get("swap")
+            if swap is not None and not isinstance(swap, dict):
+                raise ExecutionWorkspaceError("persisted rework swap is malformed")
+            if preparation_stage != "remote_predecessor_installed" and swap is None:
                 self._verify_rework_remote_predecessor(
                     manager.ticket_id, previous_base, previous_checkpoint
                 )
@@ -5486,9 +5489,14 @@ class ServiceEngine:
                     )
                 workspace = inspection.workspace
             else:
-                workspace = manager.prepare_rework(
-                    base_head, previous_base, previous_checkpoint
-                )
+                if base_head != previous_base:
+                    workspace = self._install_rework_candidate(
+                        manager, base_head, previous_base, previous_checkpoint
+                    )
+                else:
+                    workspace = manager.prepare_rework(
+                        base_head, previous_base, previous_checkpoint
+                    )
                 self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
@@ -5502,6 +5510,191 @@ class ServiceEngine:
                 plan.ticket_id,
                 str(bound_control or plan.control.local_head),
             )
+        return workspace
+
+    def _install_rework_candidate(
+        self,
+        manager: ExecutionWorkspaceManager,
+        base: str,
+        old_base: str,
+        checkpoint: str,
+    ) -> ExecutionWorkspace:
+        """Replay the owner-persisted candidate swap from observed Git state."""
+        rework = self._state.get("rework_provenance")
+        execution_id = self._state.get("execution_id")
+        if not isinstance(rework, dict) or not isinstance(execution_id, str):
+            raise ExecutionWorkspaceError("rework swap lacks execution identity")
+        if self._state.get("worker_identity") is not None:
+            raise ExecutionWorkspaceError("rework swap has a bound worker")
+        candidate_ref = (
+            f"refs/devlegate/recovery/rework-candidate/{manager.ticket_id}/"
+            f"{execution_id}"
+        )
+        swap = rework.get("swap")
+        if swap is None:
+            inspection = manager.inspect(old_base, checkpoint)
+            if inspection.classification != "REUSABLE":
+                raise ExecutionWorkspaceError(
+                    f"rework source is unsafe: {inspection.reason}"
+                )
+            remote = self._execution_remote_head(manager.branch)
+            if remote != checkpoint and not (remote is None and checkpoint == old_base):
+                raise ExecutionWorkspaceError("rework remote predecessor changed")
+            candidate = manager._pinned_rework_candidate(
+                base, old_base, checkpoint, candidate_ref
+            )
+            swap = {
+                "candidate_ref": candidate_ref,
+                "candidate_head": candidate,
+                "target_product_head": base,
+                "expected_old_local_head": checkpoint,
+                "expected_old_remote_head": remote,
+                "stage": "candidate_ready",
+            }
+            self._save_state(
+                "agent_pending", rework_provenance={**rework, "swap": swap}
+            )
+        if not isinstance(swap, dict) or any(
+            (
+                swap.get("candidate_ref") != candidate_ref,
+                swap.get("target_product_head") != base,
+                swap.get("expected_old_local_head") != checkpoint,
+                swap.get("stage")
+                not in {
+                    "candidate_ready",
+                    "retiring",
+                    "moving",
+                    "attaching",
+                    "attached",
+                },
+            )
+        ):
+            raise ExecutionWorkspaceError("persisted rework swap identity conflicts")
+        candidate = swap.get("candidate_head")
+        if (
+            not isinstance(candidate, str)
+            or resolve_ref_commit(self.repo, candidate_ref, runner=self._git_runtime)
+            != candidate
+        ):
+            raise ExecutionWorkspaceError("rework candidate pin is missing or changed")
+        if (
+            manager._pinned_rework_candidate(base, old_base, checkpoint, candidate_ref)
+            != candidate
+        ):
+            raise ExecutionWorkspaceError("rework candidate identity changed")
+
+        def stage(value: str) -> None:
+            nonlocal swap
+            swap = {**swap, "stage": value}
+            current = self._state.get("rework_provenance")
+            if not isinstance(current, dict):
+                raise ExecutionWorkspaceError("rework swap state disappeared")
+            self._save_state(
+                "agent_pending", rework_provenance={**current, "swap": swap}
+            )
+
+        def verify_generation() -> None:
+            product = self._observe_product_generation(base)
+            if not product.get("stable"):
+                raise ExecutionWorkspaceError(
+                    f"rework product generation changed: {product.get('reason')}"
+                )
+            control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+            admitted = self._state.get("execution_control_head")
+            if not isinstance(control, str) or not isinstance(admitted, str):
+                raise ExecutionWorkspaceError(
+                    "rework control generation is unobservable"
+                )
+            self._adopt_validated_control_descendant(
+                control, manager.ticket_id, admitted
+            )
+
+        verify_generation()
+        remote = self._execution_remote_head(manager.branch)
+        allowed_remote = {swap.get("expected_old_remote_head")}
+        if swap.get("stage") == "attached":
+            allowed_remote.add(candidate)
+        if remote not in allowed_remote:
+            raise ExecutionWorkspaceError(
+                "rework remote predecessor drifted during swap"
+            )
+        branch_ref = f"refs/heads/{manager.branch}"
+        head = resolve_ref_commit(self.repo, branch_ref, runner=self._git_runtime)
+        registrations = manager._registrations()
+        if (
+            manager.root.is_symlink()
+            or (manager.root / "work").is_symlink()
+            or manager.path.is_symlink()
+        ):
+            raise ExecutionWorkspaceError("rework worktree path is symlinked")
+        if any(
+            path != manager.path.resolve() and item.get("branch") == manager.branch
+            for path, item in registrations.items()
+        ):
+            raise ExecutionWorkspaceError(
+                "rework branch is attached to a foreign worktree"
+            )
+        registration = registrations.get(manager.path.resolve())
+        if registration is not None and (
+            "locked" in registration or not manager.path.is_dir()
+        ):
+            raise ExecutionWorkspaceError("rework worktree is locked or missing")
+        if registration is None and manager.path.exists():
+            raise ExecutionWorkspaceError("rework worktree path is foreign")
+        if head == checkpoint and registration is not None:
+            if swap.get("stage") not in {"candidate_ready", "retiring"}:
+                raise ExecutionWorkspaceError(
+                    "rework source reappeared after retirement"
+                )
+            inspection = manager.inspect(old_base, checkpoint)
+            if inspection.classification != "REUSABLE" or inspection.workspace is None:
+                raise ExecutionWorkspaceError(
+                    f"rework source is unsafe: {inspection.reason}"
+                )
+            stage("retiring")
+            verify_generation()
+            if self._execution_remote_head(manager.branch) != swap.get(
+                "expected_old_remote_head"
+            ):
+                raise ExecutionWorkspaceError("rework remote changed before retirement")
+            manager.retire(inspection.workspace, checkpoint)
+            registration = None
+        if head == checkpoint and registration is None:
+            if swap.get("stage") not in {"retiring", "moving"}:
+                raise ExecutionWorkspaceError(
+                    "rework worktree disappeared before retirement"
+                )
+            stage("moving")
+            verify_generation()
+            moved = self._git_runtime(
+                self.repo, "update-ref", branch_ref, candidate, checkpoint, check=False
+            )
+            if moved.returncode:
+                raise ExecutionWorkspaceError(
+                    "rework local branch changed during compare-and-swap"
+                )
+            head = candidate
+        if head != candidate:
+            raise ExecutionWorkspaceError(
+                f"rework local branch has unexpected identity: {head}; "
+                f"expected {checkpoint} or {candidate}"
+            )
+        if registration is None:
+            if swap.get("stage") not in {"moving", "attaching"}:
+                raise ExecutionWorkspaceError("rework candidate worktree disappeared")
+            stage("attaching")
+            verify_generation()
+            workspace = manager.prepare(base)
+        else:
+            inspection = manager.inspect(base, candidate)
+            if inspection.classification != "REUSABLE" or inspection.workspace is None:
+                raise ExecutionWorkspaceError(
+                    f"rework candidate workspace is unsafe: {inspection.reason}"
+                )
+            workspace = inspection.workspace
+        if workspace.head != candidate or workspace.dirty:
+            raise ExecutionWorkspaceError("rework candidate worktree identity changed")
+        stage("attached")
         return workspace
 
     def _adopt_unstarted_product_descendant(
@@ -6062,6 +6255,13 @@ class ServiceEngine:
             manager.ticket_id, previous_execution, previous_checkpoint
         )
         remote = self._execution_remote_head(manager.branch)
+        provenance = self._state.get("rework_provenance")
+        swap = provenance.get("swap") if isinstance(provenance, dict) else None
+        if isinstance(swap, dict) and remote not in {
+            swap.get("expected_old_remote_head"),
+            workspace.head,
+        }:
+            raise ExecutionWorkspaceError("rework remote changed before publication")
         if remote is not None and remote != previous_checkpoint:
             if remote != workspace.head:
                 raise ExecutionWorkspaceError(
@@ -6089,9 +6289,19 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "cannot install rework execution predecessor"
                 )
+        installed_remote = self._execution_remote_head(manager.branch)
+        expected_installed = (
+            None
+            if remote is None and previous_checkpoint == workspace.base_head
+            else workspace.head
+        )
+        if isinstance(swap, dict) and installed_remote != expected_installed:
+            raise ExecutionWorkspaceError(
+                "rework remote publication could not be proven"
+            )
         self._save_state(
             "agent_pending",
-            execution_remote_head=self._execution_remote_head(manager.branch),
+            execution_remote_head=installed_remote,
         )
         self._set_rework_preparation_stage("remote_predecessor_installed")
 
@@ -10224,8 +10434,16 @@ class ServiceEngine:
                             True,
                             **identity,
                         )
+                rework = state.get("rework_provenance")
+                preparing_rework = (
+                    isinstance(rework, dict)
+                    and rework.get("preparation_stage")
+                    != "remote_predecessor_installed"
+                    and state.get("execution_start_head") is None
+                    and state.get("worker_identity") is None
+                )
                 inspection = self._inspect_bound_execution_workspace(state)
-                if inspection.classification != "REUSABLE":
+                if not preparing_rework and inspection.classification != "REUSABLE":
                     return ExecutionPlan(
                         "blocked",
                         "bound execution workspace is "
