@@ -1,0 +1,37 @@
+{
+  "code_base_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89",
+  "conclusion": "incomplete",
+  "control_head": "62c0489f69b3f976a71f5feee202fc407902d2b2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-139",
+  "execution_id": "a53c0cf36fe04f198fcf659e3391ed87",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-139",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement explicit identity-bound historical repair CLI and IPC admission with resource ownership and drift checks.",
+    "Persist and replay the repair intent, reuse update-base reconciliation, and hand off the rebased checkpoint and original review to a new worker generation.",
+    "Add end-to-end and negative repair, crash, and concurrency coverage; document the operation and rerun CI and Ruff on the completed implementation."
+  ],
+  "report_artifact": "executions/TASK-139/a53c0cf36fe04f198fcf659e3391ed87.md",
+  "report_sha256": "348bbde7ba0d373fb2af470c6e45ac58d6385e16b766afb544704670b2cf6eb2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-139",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement explicit identity-bound historical repair CLI and IPC admission with resource ownership and drift checks.",
+      "Persist and replay the repair intent, reuse update-base reconciliation, and hand off the rebased checkpoint and original review to a new worker generation.",
+      "Add end-to-end and negative repair, crash, and concurrency coverage; document the operation and rerun CI and Ruff on the completed implementation."
+    ],
+    "report": "The required owner-serialized repair and successor admission are not implemented; the existing guard remains in place because bypassing it without the durable ownership and replay proofs would be unsafe.",
+    "summary": "Strengthened historical repair observation to require deferral after the failed report and preserve the ticket identity from failed admission. Added a real-Git regression for premature deferral."
+  },
+  "workspace_head": "440803c76f57ac560dbbe5bcae00f66ad3af601e"
+}
