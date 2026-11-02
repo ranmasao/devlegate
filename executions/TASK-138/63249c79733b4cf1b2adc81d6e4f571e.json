@@ -1,0 +1,39 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "incomplete",
+  "control_head": "1502564e00a1fa2f5a0c832ee2de5188a32874ee",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "63249c79733b4cf1b2adc81d6e4f571e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an identity-bound historical-failure operator authorization naming the reviewed and failed reports, review binding, checkpoint, control transitions, product lineage, worktree and refs.",
+    "Implement an exclusive-owner, restart-safe write-ahead transaction that pins the failed delta and reviewer feedback, verifies worker absence and expected resource identities at each effect, and ports the cumulative delta with local CAS and remote leases.",
+    "Add positive real-Git continuation and restart coverage plus drift, uncertain identity, dirty or foreign worktree, interrupted-write, remote-error and concurrent-worker regressions; document the operator contract.",
+    "Run the configured full CI and lint on the final checkpoint."
+  ],
+  "report_artifact": "executions/TASK-138/63249c79733b4cf1b2adc81d6e4f571e.md",
+  "report_sha256": "defc8d0d2261ac25e7f8ea8fe4fc3af796446a760c6572bb5764ef693edbabb2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an identity-bound historical-failure operator authorization naming the reviewed and failed reports, review binding, checkpoint, control transitions, product lineage, worktree and refs.",
+      "Implement an exclusive-owner, restart-safe write-ahead transaction that pins the failed delta and reviewer feedback, verifies worker absence and expected resource identities at each effect, and ports the cumulative delta with local CAS and remote leases.",
+      "Add positive real-Git continuation and restart coverage plus drift, uncertain identity, dirty or foreign worktree, interrupted-write, remote-error and concurrent-worker regressions; document the operator contract.",
+      "Run the configured full CI and lint on the final checkpoint."
+    ],
+    "report": "The current forced-retry path requires a live persisted execution binding, and prepare_rework retires the workspace of its reported predecessor. A safe historical continuation therefore needs a distinct durable authorization and staged transaction that binds the operator's explicit ownership assumption to both generations before any ref or worktree mutation; adapting forced retry or substituting the failed checkpoint into rework would bypass those invariants. That transaction has not been implemented or verified in this invocation. Focused review-provenance tests pass; ruff is unavailable in the environment. Exact-checkpoint CI requires a checkpoint created by Devlegate.",
+    "summary": "Hardened the review resolver to reject transport-failed or invalid-egress executions even when called independently of report selection. Added focused regression coverage for both failure modes."
+  },
+  "workspace_head": "cdbc6314a15fbae8397c5e2f17e96d9980863da0"
+}
