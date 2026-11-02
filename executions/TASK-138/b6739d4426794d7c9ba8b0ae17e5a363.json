@@ -1,0 +1,29 @@
+{
+  "code_base_head": "210aab448ca57b02a6a4337eb2dc81e6b7589b7e",
+  "conclusion": "completed",
+  "control_head": "9846fdfcc024b9d1a2dad50477df09ee4dbf3097",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-138",
+  "execution_id": "b6739d4426794d7c9ba8b0ae17e5a363",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-138",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-138",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Fixed the provenance test lint failure and added a disposable real-Git regression for immutable review attribution, failed transport, deferral, requeue, restart, and preservation of execution evidence."
+  },
+  "workspace_head": "d0572c6f7704b138ed9e7cabb33ba4c025001a89"
+}
