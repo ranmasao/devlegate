@@ -3719,6 +3719,80 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
     assert feedback in prompts[1]
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=WorkflowBlockedError,
+    reason="automatic continuation of a failed rework is not implemented",
+)
+def test_failed_rework_deferral_resumes_checkpoint_and_review(
+    tmp_path, monkeypatch
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    prompts = []
+
+    def worker(workspace, prompt, **_kwargs):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            (workspace.path / "initial.txt").write_text("initial\n")
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            )
+        if len(prompts) == 3:
+            assert (workspace.path / "first.txt").read_text() == "first\n"
+            assert (workspace.path / "second.txt").read_text() == "second\n"
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            )
+        for name in ("first", "second"):
+            (workspace.path / f"{name}.txt").write_text(f"{name}\n")
+        return WorkerRunResult(1, "transport failed", None, "missing claim")
+
+    monkeypatch.setattr(devlegate._workers, "run", worker)
+    assert run_test_iteration(devlegate) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    reviewed = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{reviewed.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {reviewed.execution_id}\n"
+        f"checkpoint: {reviewed.workspace_head}\n"
+        f"control: {reviewed.control_head}\n"
+        "disposition: rework\n"
+        "-->\nPreserve the implementation.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "return reviewed ticket")
+    git(control, "push", "origin", "devlegate/control")
+    assert run_test_iteration(devlegate) == 1
+    reports = ExecutionReportStore(control).list("T-1")
+    failed = next(report for report in reports if report.result.conclusion == "failed")
+    workspace = Path(devlegate._state["execution_path"])
+    checkpoint = failed.workspace_head
+    report_path = control / "executions" / "T-1" / f"{failed.execution_id}.json"
+    report_bytes, review_bytes = report_path.read_bytes(), artifact.read_bytes()
+    git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
+    git(control, "commit", "-m", "defer failed rework")
+    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "requeue failed rework")
+    git(control, "push", "origin", "devlegate/control")
+
+    assert run_test_iteration(devlegate) == 0
+    assert len(prompts) == 3
+    assert "Preserve the implementation." in prompts[2]
+    assert (
+        git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
+        == 0
+    )
+    assert report_path.read_bytes() == report_bytes
+    assert artifact.read_bytes() == review_bytes
+
+
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     tmp_path, monkeypatch
 ):
