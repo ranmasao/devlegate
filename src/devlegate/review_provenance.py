@@ -249,6 +249,10 @@ def resolve_rework_review(
     runner: Runner,
 ) -> ReviewBinding:
     """Resolve the immutable review bound to one rejected execution."""
+    if report.result.transport_error is not None or not report.result.egress_ok:
+        raise ReviewProvenanceError(
+            "failed worker execution cannot be attributed curator feedback"
+        )
     artifact = f"reviews/{report.ticket_id}/{report.execution_id}.md"
     transitions, transition_publication = _transition(
         repo,
