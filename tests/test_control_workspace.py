@@ -3979,6 +3979,25 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         git(working, "commit", "-m", "advance product")
         git(working, "push", "origin", "HEAD")
 
+    if advance_product and crash_point is None:
+        failures = dict(devlegate._state["failed_executions"])
+        original_failure = failures["T-1"]
+        failures["T-1"] = {**original_failure, "execution_id": "conflicting"}
+        devlegate._save_state("idle", failed_executions=failures)
+        assert "metadata conflicts" in devlegate.status_view().plan.reason
+        with pytest.raises(DevlegateError, match="metadata conflicts"):
+            run_test_iteration(devlegate)
+        assert len(prompts) == 2
+        assert report_path.read_bytes() == report_bytes
+        assert artifact.read_bytes() == review_bytes
+        # Recreate the incident's persisted idle state without a failure cache.
+        del failures["T-1"]
+        devlegate._save_state("idle", failed_executions=failures)
+        devlegate = Devlegate(config)
+        monkeypatch.setattr(devlegate._workers, "run", worker)
+        assert "T-1" not in devlegate._state["failed_executions"]
+        assert devlegate.status_view().plan.action == "run-worker"
+
     if crash_point is not None:
         interrupt_swap()
         pending = devlegate._state["rework_provenance"]

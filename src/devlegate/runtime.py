@@ -6052,7 +6052,9 @@ class ServiceEngine:
             )
 
     def _deferred_failed_rework(
-        self, reports: tuple[ExecutionReport, ...]
+        self, reports: tuple[ExecutionReport, ...], *,
+        state: dict[str, object] | None = None,
+        observations: dict | None = None,
     ) -> tuple[str, ExecutionReport, ExecutionReport] | None:
         """Bind a deferred failed checkpoint to its preceding genuine review."""
         if not reports:
@@ -6071,6 +6073,12 @@ class ServiceEngine:
             )
             generations = []
             for commit, changes in history:
+                if any(
+                    c[2:].endswith(".json") and c[2:] not in by_path for c in changes
+                ):
+                    raise WorkflowBlockedError(
+                        "execution lifecycle report is missing or cannot be attributed"
+                    )
                 touched = [by_path[c[2:]] for c in changes if c[2:] in by_path]
                 if len(touched) > 1:
                     raise WorkflowBlockedError(
@@ -6085,22 +6093,26 @@ class ServiceEngine:
                 return None
             if len(generations) < 2 and failed.workspace_head == failed.code_base_head:
                 return None
-            failures = self._state.get("failed_executions")
+            state = self._state if state is None else state
+            failures = state.get("failed_executions")
             metadata = failures.get(ticket) if isinstance(failures, dict) else None
-            observations = self._status_git_observation()
-            if (
+            if metadata is not None and (
                 not isinstance(metadata, dict)
                 or metadata.get("execution_id") != failed.execution_id
-                or not self._failure_superseded(
-                    ticket,
-                    metadata,
-                    self._state,
-                    observations["control"],
-                    observations["code"],
-                )
             ):
                 raise WorkflowBlockedError(
-                    "failed execution continuation lacks a safe current admission"
+                    "failed execution metadata conflicts with the latest "
+                    "lifecycle report"
+                )
+            observations = observations or self._status_git_observation()
+            if not self._failure_superseded(
+                ticket, metadata, state, observations["control"], observations["code"],
+                lifecycle_base=failed_commit if metadata is None else None,
+                product_base=failed.code_base_head if metadata is None else None,
+            ):
+                raise WorkflowBlockedError(
+                    "failed execution continuation cannot prove clean synchronized "
+                    "descendant history and absence of competing ownership or intents"
                 )
             if len(generations) < 2:
                 raise WorkflowBlockedError(
@@ -6131,6 +6143,16 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "failed checkpoint does not preserve the reviewed "
                     "checkpoint lineage"
+                )
+            if metadata is None and (
+                state.get("execution_id") != failed.execution_id
+                or state.get("execution_ticket_id") != ticket
+                or state.get("execution_branch") != failed.execution_branch
+                or state.get("execution_path") != failed.execution_path
+            ):
+                raise WorkflowBlockedError(
+                    "failed continuation lacks persisted ownership of the failed "
+                    "execution workspace"
                 )
             todo = f"{self.todo_path}/{ticket}.md"
             backlog = f"{self.backlog_path}/{ticket}.md"
@@ -6191,6 +6213,31 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "failed rework has no proven deferral and requeue"
                 )
+            try:
+                resolve_rework_review(
+                    self.control_worktree, observations["control"].local_head,
+                    review_commit, reviewed, todo_path=self.todo_path,
+                    review_path=self.review_path, backlog_path=self.backlog_path,
+                    runner=self._git_runtime,
+                )
+            except ReviewProvenanceError as error:
+                raise WorkflowBlockedError(
+                    f"cannot bind curator feedback for {ticket}: {error}"
+                ) from error
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, ticket,
+                runner=self._git_runtime,
+            )
+            inspection = manager.inspect(failed.code_base_head, failed.workspace_head)
+            if inspection.classification != "REUSABLE":
+                raise WorkflowBlockedError(
+                    f"rework source is unsafe: {inspection.reason}"
+                )
+            remote = self._execution_remote_head(manager.branch)
+            if remote != failed.workspace_head and not (
+                remote is None and failed.workspace_head == failed.code_base_head
+            ):
+                raise WorkflowBlockedError("rework remote predecessor changed")
             return review_commit, reviewed, failed
         except (GitObservationError, GitAncestryError) as error:
             raise WorkflowBlockedError("cannot prove failed rework history") from error
@@ -9775,6 +9822,9 @@ class ServiceEngine:
         state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
+        *,
+        lifecycle_base: str | None = None,
+        product_base: str | None = None,
     ) -> bool:
         """Require published descendant history proving a ticket left its state.
 
@@ -9782,11 +9832,15 @@ class ServiceEngine:
         unreadable, dirty, divergent, or unfetched observation cannot prove one.
         The retained failure and reports are never modified by this projection.
         """
-        if not isinstance(metadata, dict) or control is None:
+        if control is None or (
+            not isinstance(metadata, dict) and lifecycle_base is None
+        ):
             return False
         if code is not None:
-            product_base = metadata.get("product_head")
-            remote_base = metadata.get("remote_head")
+            remote_base = product_base
+            if isinstance(metadata, dict):
+                product_base = metadata.get("product_head")
+                remote_base = metadata.get("remote_head")
             if (
                 code.detached
                 or code.branch != self.remote_branch
@@ -9841,7 +9895,9 @@ class ServiceEngine:
             and state.get("selected_ticket_id") == ticket_id
         ):
             return False
-        base = metadata.get("control_head")
+        base = lifecycle_base
+        if isinstance(metadata, dict):
+            base = metadata.get("control_head")
         if not isinstance(base, str) or not _is_git_identity(base):
             return False
         if base == control.local_head:
@@ -10195,6 +10251,7 @@ class ServiceEngine:
                 if failure.ticket_id != active_ticket_id
             )
         selected_failure = None
+        continuation_refusal = False
         if plan.action == "run-worker" and not plan.bound:
             selected_failure = next(
                 (
@@ -10215,6 +10272,19 @@ class ServiceEngine:
                         else f"failed execution blocks admission: {reason}"
                     ),
                 )
+            elif plan.ticket_id is not None:
+                try:
+                    reports = ExecutionReportStore(self.control_worktree).list(
+                        plan.ticket_id
+                    )
+                    self._deferred_failed_rework(
+                        reports, state=state, observations=git_observation
+                    )
+                except (ExecutionReportError, WorkflowBlockedError) as error:
+                    continuation_refusal = True
+                    plan = dataclasses.replace(
+                        plan, action="blocked", reason=str(error)
+                    )
         next_ticket = (
             (
                 ticket_store.by_id[plan.ticket_id].id,
@@ -10240,6 +10310,10 @@ class ServiceEngine:
         elif selected_failure is not None:
             global_barrier = AdmissionBarrier(
                 "blocked", "failed-execution", plan.reason, selected_failure.ticket_id
+            )
+        elif continuation_refusal:
+            global_barrier = AdmissionBarrier(
+                "blocked", "failed-execution", plan.reason, plan.ticket_id
             )
         elif bound_ticket_id is not None:
             global_barrier = AdmissionBarrier(
