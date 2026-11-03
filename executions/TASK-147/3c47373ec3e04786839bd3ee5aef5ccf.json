@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "6c397547dbe64431d7711e2682fa7ae2390ce20f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "3c47373ec3e04786839bd3ee5aef5ccf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Integrate isolated intent admission into the serialized scheduler and validate all persisted source and target invariants on recovery.",
+    "Implement restart-safe source pinning, candidate transplant, isolated target CAS, worktree attachment and remote lease publication.",
+    "Propagate isolated generation identity through worker launch, reports, review, integration, retry, recovery and cleanup; align status with owner admission.",
+    "Complete the required positive end-to-end, conflict, crash, live IPC and exact-checkpoint CI regressions."
+  ],
+  "report_artifact": "executions/TASK-147/3c47373ec3e04786839bd3ee5aef5ccf.md",
+  "report_sha256": "518413fb416612fa7697e4e84f079876b0fd614b5e99c1f4eef817d493364ae5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Integrate isolated intent admission into the serialized scheduler and validate all persisted source and target invariants on recovery.",
+      "Implement restart-safe source pinning, candidate transplant, isolated target CAS, worktree attachment and remote lease publication.",
+      "Propagate isolated generation identity through worker launch, reports, review, integration, retry, recovery and cleanup; align status with owner admission.",
+      "Complete the required positive end-to-end, conflict, crash, live IPC and exact-checkpoint CI regressions."
+    ],
+    "report": "The isolated stage is intentionally not activated because target preparation and downstream lifecycle handling are not yet safe. The existing unrelated-identity positive fixture still first fails because status reports blocked rather than run-worker; the exact incident-shaped end-to-end continuation has not passed.",
+    "summary": "Added a non-activated isolated failed-rework intent that persists a fresh generation identity, source and review bindings before Git effects, with restart inspection and a fail-closed preparation guard. Added a disposable missing-cache, repeated-deferral crash/restart regression that preserves historical resources."
+  },
+  "workspace_head": "a5827f43948c19150e500166efd29cba8b7ea988"
+}
