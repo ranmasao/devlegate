@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "4c297d5599397778fbd32777dfe080b5bab806ad",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "e52b6a85c07a489d93cc448f1c41c6e5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an exact generation-bound capability for isolated pending and running recovery, stranded-worker normalization, and reconciliation.",
+    "Complete isolated post-worker reporting, accepted integration, and safely authorized or explicitly blocked cleanup with real-Git restart and crash-window coverage.",
+    "Connect isolated continuation to shared status and owner admission only after downstream lifecycle safety is proven; make the missing-cache unrelated-identity scheduler scenario pass without a synthetic SQLite record.",
+    "Run the required complete negative, live IPC, repeated-owner, and final exact-checkpoint CI coverage."
+  ],
+  "report_artifact": "executions/TASK-147/e52b6a85c07a489d93cc448f1c41c6e5.md",
+  "report_sha256": "0d706fdd414390b25f132184ad69c31c1ce4ddef21af5ff24e7d5a1783f8a6e8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an exact generation-bound capability for isolated pending and running recovery, stranded-worker normalization, and reconciliation.",
+      "Complete isolated post-worker reporting, accepted integration, and safely authorized or explicitly blocked cleanup with real-Git restart and crash-window coverage.",
+      "Connect isolated continuation to shared status and owner admission only after downstream lifecycle safety is proven; make the missing-cache unrelated-identity scheduler scenario pass without a synthetic SQLite record.",
+      "Run the required complete negative, live IPC, repeated-owner, and final exact-checkpoint CI coverage."
+    ],
+    "report": "The isolated downstream lifecycle remains unproven, so enabling scheduler admission would be unsafe. The TASK-134-shaped unrelated-identity scheduler fixture remains expected-failing; the focused isolated transaction and zero-delta legacy tests passed, as did Ruff.",
+    "summary": "Hardened zero-delta retirement against mismatched execution workspace identities and blocked isolated stranded-worker normalization before it can alter control state. Added real-Git coverage for both safeguards while preserving the isolated scheduler gate."
+  },
+  "workspace_head": "c0bbbd21ad86244ac5da17cae4f6f56de1d2fbde"
+}
