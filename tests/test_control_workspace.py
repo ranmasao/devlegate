@@ -3789,6 +3789,13 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (False, None, None),
         (True, None, "cleared_identity"),
         (True, None, "changed_identity"),
+        pytest.param(
+            True, None, "unrelated_identity",
+            marks=pytest.mark.xfail(
+                strict=True, raises=AssertionError,
+                reason="isolated failed-rework generation not implemented",
+            ),
+        ),
     ]
     + [
         (True, point, None)
@@ -4002,6 +4009,12 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         )
         if corruption == "changed_identity":
             devlegate._save_state("idle", execution_id="another-execution")
+        if corruption == "unrelated_identity":
+            devlegate._save_state(
+                "idle", execution_id="a" * 32, execution_ticket_id="T-2",
+                execution_branch="devlegate/work/T-2",
+                execution_path=str(workspace.parent / "T-2"),
+            )
         devlegate = Devlegate(config)
         monkeypatch.setattr(devlegate._workers, "run", worker)
         assert "T-1" not in devlegate._state["failed_executions"]
@@ -4201,6 +4214,18 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         failed.execution_id,
     }
     assert "Preserve the implementation." in prompts[2]
+    if corruption == "unrelated_identity":
+        assert devlegate._state["execution_branch"].startswith(
+            "devlegate/generation/T-1/"
+        )
+        assert (
+            git(working, "rev-parse", "refs/heads/devlegate/work/T-1").stdout.strip()
+            == checkpoint
+        )
+        assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+        assert git(
+            working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+        ).stdout.split()[0] == checkpoint
     if not advance_product:
         assert (
             git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
