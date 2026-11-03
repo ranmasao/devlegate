@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "d9f3672866d0945e5241ced3b036d5c184e724be",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "6dd0c03ae7874d79a4916aef3e51f23f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect isolated admission and target preparation to ordinary scheduler and read-only status with matching safe preflight checks.",
+    "Propagate generation identity through worker execution, prompts, reports, review, retry, reconciliation, integration and cleanup, then verify the complete TASK-134-shaped lifecycle without synthetic failure metadata.",
+    "Complete target collision, ownership, stale-state and effect-interruption regression coverage, including the temporary replay worktree crash seam and uncertain remote publication.",
+    "Run exact-checkpoint CI after the remaining implementation is complete."
+  ],
+  "report_artifact": "executions/TASK-147/6dd0c03ae7874d79a4916aef3e51f23f.md",
+  "report_sha256": "ccba9696dc3d7cf37e58e8e87d966c7dc324760e74df2f7728cf558d3758d24b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect isolated admission and target preparation to ordinary scheduler and read-only status with matching safe preflight checks.",
+      "Propagate generation identity through worker execution, prompts, reports, review, retry, reconciliation, integration and cleanup, then verify the complete TASK-134-shaped lifecycle without synthetic failure metadata.",
+      "Complete target collision, ownership, stale-state and effect-interruption regression coverage, including the temporary replay worktree crash seam and uncertain remote publication.",
+      "Run exact-checkpoint CI after the remaining implementation is complete."
+    ],
+    "report": "The transaction is intentionally not wired into scheduler admission because downstream execution still assumes ticket-scoped workspace identity; enabling it before those paths are converted would be unsafe. The positive transaction fixture passes without a failure-cache entry, but the ordinary scheduler fixture remains xfailed at its first run-worker status assertion. Local full coverage passed with that xfail; the earlier checkpoint's GitHub Actions run completed successfully.",
+    "summary": "Added a journaled isolated target transaction that creates a generation-specific branch, attaches its worktree, and publishes its remote ref with an expected-absent lease. Added a disposable real-Git test covering the transaction and restart at several journal boundaries while preserving historical evidence."
+  },
+  "workspace_head": "57d57a630b19a74bd19b31e806e7578084af1c19"
+}
