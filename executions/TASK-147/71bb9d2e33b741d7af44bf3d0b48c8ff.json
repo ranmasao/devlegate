@@ -1,0 +1,41 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "blocked",
+  "control_head": "228b1b7fc70b75f8c68748d9be16de3c38592ccf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "71bb9d2e33b741d7af44bf3d0b48c8ff",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "What durable owner-published evidence or explicitly authorized recovery mechanism should establish current ownership of a historical workspace when both the failure record and execution identity are absent? Historical Git reports and present topology alone do not prove uninterrupted ownership, and the current ticket prohibits synthesizing a binding or adding a repair workflow."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Establish an authorized, independently verifiable current ownership proof for a failed generation after its persisted execution identity and failure record have been cleared or superseded.",
+    "Implement and validate safe continuation using the approved proof, including the multi-commit historical fixture and outstanding lifecycle, topology, status, and IPC regressions.",
+    "Run focused validation, Ruff, and full exact-checkpoint CI for the resulting implementation."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "What durable owner-published evidence or explicitly authorized recovery mechanism should establish current ownership of a historical workspace when both the failure record and execution identity are absent? Historical Git reports and present topology alone do not prove uninterrupted ownership, and the current ticket prohibits synthesizing a binding or adding a repair workflow."
+    ],
+    "remaining": [
+      "Establish an authorized, independently verifiable current ownership proof for a failed generation after its persisted execution identity and failure record have been cleared or superseded.",
+      "Implement and validate safe continuation using the approved proof, including the multi-commit historical fixture and outstanding lifecycle, topology, status, and IPC regressions.",
+      "Run focused validation, Ruff, and full exact-checkpoint CI for the resulting implementation."
+    ],
+    "report": null,
+    "summary": "Traced failed-continuation ownership evidence and retained the existing fail-closed workspace guard. The existing deferred rework fixture remains unchanged."
+  },
+  "workspace_head": "bafd8d5c1c67b517dd992ab4dfeef8566c1c17cc"
+}
