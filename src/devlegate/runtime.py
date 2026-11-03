@@ -5376,8 +5376,10 @@ class ServiceEngine:
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            self._inspect_published_isolated_workspace(self._state)
             raise ExecutionWorkspaceError(
-                "isolated rework is admitted but candidate preparation is not available"
+                "isolated worker admission is blocked: downstream accepted integration "
+                "and reconciliation do not yet support generation workspaces"
             )
         if plan.ticket_id is None or plan.code is None or plan.control is None:
             raise ExecutionWorkspaceError(
@@ -11080,6 +11082,56 @@ class ServiceEngine:
             **identity,
         )
 
+    def _inspect_published_isolated_workspace(
+        self, state: dict[str, object]
+    ) -> ExecutionWorkspace:
+        """Verify a published generation without granting worker admission."""
+        self._inspect_isolated_failed_rework_intent(state)
+        rework = state["rework_provenance"]
+        if rework.get("preparation_stage") != "remote_published":
+            raise ExecutionWorkspaceError("isolated target is not remotely published")
+        ticket, execution = state["execution_ticket_id"], state["execution_id"]
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket,
+            generation=execution, runner=self._git_runtime,
+        )
+        prefix = f"refs/devlegate/isolated/{ticket}/{execution}"
+        source_ref, candidate_ref = f"{prefix}/source", f"{prefix}/candidate"
+        predecessor = rework["code_predecessor"]
+        if (rework.get("source_ref") != source_ref
+                or rework.get("candidate_ref") != candidate_ref):
+            raise ExecutionWorkspaceError("isolated evidence intent binding changed")
+        for ref in (source_ref, candidate_ref, rework["target"]["ref"]):
+            symbolic = self._git_runtime(
+                self.repo, "symbolic-ref", "-q", ref, check=False
+            )
+            if symbolic.returncode != 1:
+                raise ExecutionWorkspaceError("isolated ref is symbolic or unreadable")
+        if resolve_ref_commit(self.repo, source_ref, runner=self._git_runtime) != (
+            predecessor["checkpoint"]
+        ):
+            raise ExecutionWorkspaceError("isolated source pin is missing or changed")
+        candidate = manager._pinned_rework_candidate(
+            rework["admitted_base_head"], predecessor["base_head"],
+            predecessor["checkpoint"], candidate_ref, create=False,
+        )
+        if candidate != rework.get("candidate_head"):
+            raise ExecutionWorkspaceError("isolated candidate identity changed")
+        if (resolve_ref_commit(self.repo, rework["target"]["ref"],
+                               runner=self._git_runtime) != candidate
+                or self._execution_remote_head(manager.branch) != candidate):
+            raise ExecutionWorkspaceError("isolated target ref is missing or changed")
+        if manager._has_symlinked_path():
+            raise ExecutionWorkspaceError("isolated target path has a symlink")
+        inspection = manager.inspect(candidate, candidate)
+        if inspection.classification != "REUSABLE" or inspection.workspace is None:
+            raise ExecutionWorkspaceError(
+                f"isolated target worktree: {inspection.reason}"
+            )
+        return dataclasses.replace(
+            inspection.workspace, base_head=rework["admitted_base_head"]
+        )
+
     def _inspect_pending_rework(self, state: dict[str, object]) -> WorkspaceInspection:
         """Observe an unstarted rework swap without creating or changing Git state."""
         try:
@@ -11089,10 +11141,11 @@ class ServiceEngine:
                     "persisted rework provenance is malformed"
                 )
             if rework.get("mode") == "isolated":
-                self._inspect_isolated_failed_rework_intent(state)
+                self._inspect_published_isolated_workspace(state)
                 raise ExecutionWorkspaceError(
-                    "isolated rework is admitted but candidate preparation "
-                    "is not available"
+                    "isolated worker admission is blocked: downstream accepted "
+                    "integration and reconciliation do not yet support generation "
+                    "workspaces"
                 )
             validate_execution_binding(state, require_pre_worker=True)
             ticket = state.get("execution_ticket_id")
@@ -11268,6 +11321,7 @@ class ServiceEngine:
             return inspection
         except (
             ExecutionWorkspaceError,
+            WorkflowBlockedError,
             ReviewProvenanceError,
             GitObservationError,
             OSError,

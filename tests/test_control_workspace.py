@@ -4206,6 +4206,30 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             devlegate = Devlegate(config)
             assert devlegate._publish_isolated_failed_rework_target() == candidate
             assert devlegate._state["execution_id"] == execution
+            refs = git(working, "show-ref").stdout
+            registrations = git(working, "worktree", "list", "--porcelain").stdout
+            published = devlegate._inspect_published_isolated_workspace(
+                devlegate._state
+            )
+            assert published.path == Path(target["path"])
+            assert published.branch == target["branch"]
+            assert published.head == candidate
+            assert published.base_head == devlegate._state["execution_base_head"]
+            inspection = devlegate._inspect_pending_rework(devlegate._state)
+            assert inspection.classification == "UNSAFE"
+            assert "downstream accepted integration" in inspection.reason
+            dirty = Path(target["path"]) / "untracked.txt"
+            dirty.write_text("untracked\n")
+            with pytest.raises(
+                ExecutionWorkspaceError, match="isolated target worktree"
+            ):
+                devlegate._inspect_published_isolated_workspace(devlegate._state)
+            dirty.unlink()
+            assert git(working, "show-ref").stdout == refs
+            assert (
+                git(working, "worktree", "list", "--porcelain").stdout
+                == registrations
+            )
             assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
             assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
             assert git(
