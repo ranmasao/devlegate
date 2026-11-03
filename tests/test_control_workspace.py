@@ -4117,6 +4117,65 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert reviewed_path.read_bytes() == reviewed_bytes
             assert artifact.read_bytes() == review_bytes
             assert len(prompts) == 2
+            source_ref = f"refs/devlegate/isolated/T-1/{execution}/source"
+            git(working, "update-ref", source_ref, reviewed.workspace_head)
+            with pytest.raises(DevlegateError, match="evidence ref already exists"):
+                devlegate._pin_isolated_failed_rework_candidate()
+            assert git(working, "rev-parse", source_ref).stdout.strip() == (
+                reviewed.workspace_head
+            )
+            git(working, "update-ref", "-d", source_ref)
+            git(working, "update-ref", intent["target"]["ref"], checkpoint)
+            with pytest.raises(DevlegateError, match="target is not absent"):
+                devlegate._pin_isolated_failed_rework_candidate()
+            git(working, "update-ref", "-d", intent["target"]["ref"])
+            (workspace / "unowned-dirty.txt").write_text("unowned\n")
+            for stop_stage in (
+                "source_pinning", "candidate_pinning", "candidate_pinned"
+            ):
+                save = devlegate._save_state
+
+                def crash_at_stage(*args, **kwargs):
+                    provenance = kwargs.get("rework_provenance", {})
+                    if provenance.get("preparation_stage") == stop_stage:
+                        if stop_stage != "candidate_pinned":
+                            save(*args, **kwargs)
+                        raise RuntimeError("simulated pin journal crash")
+                    return save(*args, **kwargs)
+
+                with monkeypatch.context() as fault:
+                    fault.setattr(devlegate, "_save_state", crash_at_stage)
+                    with pytest.raises(
+                        RuntimeError, match="simulated pin journal crash"
+                    ):
+                        devlegate._pin_isolated_failed_rework_candidate()
+                devlegate = Devlegate(config)
+            candidate = devlegate._pin_isolated_failed_rework_candidate()
+            prepared = devlegate._state["rework_provenance"]
+            assert prepared["preparation_stage"] == "candidate_pinned"
+            assert (
+                git(working, "rev-parse", prepared["source_ref"]).stdout.strip()
+                == checkpoint
+            )
+            assert (
+                git(working, "rev-parse", prepared["candidate_ref"]).stdout.strip()
+                == candidate
+            )
+            assert git(
+                working, "merge-base", "--is-ancestor", "HEAD", candidate
+            ).returncode == 0
+            assert len(
+                git(working, "rev-list", f"HEAD..{candidate}").stdout.splitlines()
+            ) >= 2
+            devlegate = Devlegate(config)
+            assert devlegate._pin_isolated_failed_rework_candidate() == candidate
+            assert devlegate._state["execution_id"] == execution
+            assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+            assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+            assert git(working, "ls-remote", "origin").stdout == before_remote
+            assert report_path.read_bytes() == report_bytes
+            assert reviewed_path.read_bytes() == reviewed_bytes
+            assert artifact.read_bytes() == review_bytes
             return
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (

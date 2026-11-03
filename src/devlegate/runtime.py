@@ -6198,7 +6198,10 @@ class ServiceEngine:
         target = {"branch": identity.branch, "path": str(identity.path),
                   "ref": f"refs/heads/{identity.branch}", "expected_old_head": None}
         if (rework.get("mode") != "isolated"
-                or rework.get("preparation_stage") != "admitted"
+                or rework.get("preparation_stage") not in {
+                    "admitted", "source_pinning", "candidate_pinning",
+                    "candidate_pinned",
+                }
                 or rework.get("target") != target
                 or state.get("execution_branch") != identity.branch
                 or state.get("execution_path") != str(identity.path)
@@ -6276,6 +6279,96 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "isolated intent curator feedback binding changed"
             )
+
+    def _pin_isolated_failed_rework_candidate(self) -> str:
+        """Advance a serialized isolated intent through its immutable Git pins.
+
+        This does not authorize worker admission or touch the historical workspace.
+        Each effect is preceded by a durable generation-specific intent.
+        """
+        self._inspect_isolated_failed_rework_intent(self._state)
+        rework = self._state["rework_provenance"]
+        ticket = self._state["execution_ticket_id"]
+        execution = self._state["execution_id"]
+        predecessor = rework["code_predecessor"]
+        identity = ExecutionWorkspaceIdentity.for_ticket(
+            self.execution_worktree_root, ticket, generation=execution
+        )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket,
+            generation=execution, runner=self._git_runtime,
+        )
+        target_ref = f"refs/heads/{identity.branch}"
+        if (manager._has_symlinked_path() or identity.path.exists()
+                or identity.path.resolve() in manager._registrations()
+                or resolve_ref_commit(self.repo, target_ref, runner=self._git_runtime)
+                is not None
+                or self._execution_remote_head(identity.branch) is not None):
+            raise WorkflowBlockedError("isolated target is not absent")
+
+        prefix = f"refs/devlegate/isolated/{ticket}/{execution}"
+        source_ref, candidate_ref = f"{prefix}/source", f"{prefix}/candidate"
+        checkpoint, old_base = predecessor["checkpoint"], predecessor["base_head"]
+        base = rework["admitted_base_head"]
+        stage = rework["preparation_stage"]
+
+        def observe(ref: str) -> str | None:
+            symbolic = self._git_runtime(
+                self.repo, "symbolic-ref", "-q", ref, check=False
+            )
+            if symbolic.returncode == 0:
+                raise WorkflowBlockedError("isolated evidence ref is symbolic")
+            if symbolic.returncode != 1:
+                raise WorkflowBlockedError("cannot inspect isolated evidence ref")
+            return resolve_ref_commit(self.repo, ref, runner=self._git_runtime)
+
+        if stage == "admitted":
+            if observe(source_ref) is not None or observe(candidate_ref) is not None:
+                raise WorkflowBlockedError("isolated evidence ref already exists")
+            self._save_state("agent_pending", rework_provenance={
+                **rework, "preparation_stage": "source_pinning",
+                "source_ref": source_ref, "candidate_ref": candidate_ref,
+            })
+            rework = self._state["rework_provenance"]
+            stage = "source_pinning"
+        if (rework.get("source_ref") != source_ref
+                or rework.get("candidate_ref") != candidate_ref):
+            raise WorkflowBlockedError("isolated evidence intent binding changed")
+        source = observe(source_ref)
+        if source is None and stage == "source_pinning":
+            if create_ref_if_absent(
+                self.repo, source_ref, checkpoint, runner=self._git_runtime
+            ).returncode:
+                raise WorkflowBlockedError("cannot create isolated source pin")
+            source = observe(source_ref)
+        if source != checkpoint:
+            raise WorkflowBlockedError("isolated source pin is missing or changed")
+        if stage == "source_pinning":
+            if observe(candidate_ref) is not None:
+                raise WorkflowBlockedError("isolated candidate ref already exists")
+            self._save_state("agent_pending", rework_provenance={
+                **rework, "preparation_stage": "candidate_pinning",
+            })
+            rework = self._state["rework_provenance"]
+            stage = "candidate_pinning"
+        # Recheck the immutable source and admission immediately before replay.
+        self._inspect_isolated_failed_rework_intent(self._state)
+        if observe(source_ref) != checkpoint:
+            raise WorkflowBlockedError("isolated source pin changed before replay")
+        observe(candidate_ref)  # Reject symbolic or malformed refs before use.
+        candidate = manager._pinned_rework_candidate(
+            base, old_base, checkpoint, candidate_ref,
+            create=stage == "candidate_pinning",
+        )
+        if stage == "candidate_pinned":
+            if rework.get("candidate_head") != candidate:
+                raise WorkflowBlockedError("isolated candidate identity changed")
+        else:
+            self._save_state("agent_pending", rework_provenance={
+                **rework, "preparation_stage": "candidate_pinned",
+                "candidate_head": candidate,
+            })
+        return candidate
 
     def _prove_deferred_failed_rework(
         self, reports: tuple[ExecutionReport, ...], *,

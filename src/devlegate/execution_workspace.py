@@ -543,7 +543,16 @@ class ExecutionWorkspaceManager:
                 raise ExecutionWorkspaceConflict(
                     "rework candidate pin is missing or changed"
                 )
-            if not delta or integrated:
+            if base == old_base and delta:
+                created = self._runner(
+                    self.repo, "update-ref", candidate_ref, checkpoint, "", check=False
+                )
+                if created.returncode:
+                    raise ExecutionWorkspaceConflict(
+                        "cannot create rework candidate pin"
+                    )
+                candidate = checkpoint
+            elif not delta or integrated:
                 created = self._runner(
                     self.repo, "update-ref", candidate_ref, base, "", check=False
                 )
