@@ -7,6 +7,7 @@ import pytest
 
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
+    ExecutionWorkspaceIdentity,
     ExecutionWorkspaceManager,
 )
 
@@ -15,6 +16,23 @@ def git(cwd, *args):
     return subprocess.run(
         ["git", *map(str, args)], cwd=cwd, text=True, capture_output=True, check=True
     )
+
+
+def test_generation_workspace_identity_is_separate_and_validated(tmp_path):
+    root = tmp_path / "execution-state"
+    legacy = ExecutionWorkspaceIdentity.for_ticket(root, "T-1")
+    generation = "0123456789abcdef" * 2
+    isolated = ExecutionWorkspaceIdentity.for_ticket(root, "T-1", generation=generation)
+    assert legacy.branch == "devlegate/work/T-1"
+    assert legacy.path == root / "work" / "T-1"
+    assert isolated.branch == f"devlegate/generation/T-1/{generation}"
+    assert isolated.path == root / "generations" / "T-1" / generation
+    assert not isolated.branch.startswith(legacy.branch + "/")
+    for invalid in ("../other", "A" * 32, "a" * 31, "a" * 33):
+        with pytest.raises(ExecutionWorkspaceError, match="generation ID"):
+            ExecutionWorkspaceIdentity.for_ticket(root, "T-1", generation=invalid)
+    with pytest.raises(ExecutionWorkspaceError, match="ticket ID"):
+        ExecutionWorkspaceIdentity.for_ticket(root, "../T-1", generation=generation)
 
 
 @pytest.fixture(params=["dependency", "vendor/dependency"])

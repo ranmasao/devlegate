@@ -6144,25 +6144,6 @@ class ServiceEngine:
                     "failed checkpoint does not preserve the reviewed "
                     "checkpoint lineage"
                 )
-            if metadata is None:
-                identity = {
-                    "execution_id": failed.execution_id,
-                    "execution_ticket_id": ticket,
-                    "execution_branch": failed.execution_branch,
-                    "execution_path": failed.execution_path,
-                }
-                if any(state.get(key) != value for key, value in identity.items()):
-                    present = any(state.get(key) is not None for key in identity)
-                    detail = (
-                        "refers to a different generation than"
-                        if present else "is missing for"
-                    )
-                    raise WorkflowBlockedError(
-                        f"failed continuation persisted workspace ownership {detail} "
-                        "the failed execution; Git report and worktree topology alone "
-                        "cannot prove current ownership or authorize replacement of "
-                        "the historical worktree and execution ref"
-                    )
             todo = f"{self.todo_path}/{ticket}.md"
             backlog = f"{self.backlog_path}/{ticket}.md"
             original = path_object(
@@ -6233,6 +6214,9 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     f"cannot bind curator feedback for {ticket}: {error}"
                 ) from error
+            self._verify_failed_rework_workspace_ownership(
+                ticket, failed, state, metadata
+            )
             manager = ExecutionWorkspaceManager(
                 self.repo, self.execution_worktree_root, ticket,
                 runner=self._git_runtime,
@@ -6250,6 +6234,31 @@ class ServiceEngine:
             return review_commit, reviewed, failed
         except (GitObservationError, GitAncestryError) as error:
             raise WorkflowBlockedError("cannot prove failed rework history") from error
+
+    def _verify_failed_rework_workspace_ownership(
+        self, ticket: str, failed: ExecutionReport, state: dict[str, object],
+        metadata: object,
+    ) -> None:
+        """Require current ownership separately from immutable source evidence."""
+        if metadata is not None:
+            return
+        identity = {
+            "execution_id": failed.execution_id,
+            "execution_ticket_id": ticket,
+            "execution_branch": failed.execution_branch,
+            "execution_path": failed.execution_path,
+        }
+        if any(state.get(key) != value for key, value in identity.items()):
+            present = any(state.get(key) is not None for key in identity)
+            detail = (
+                "refers to a different generation than" if present else "is missing for"
+            )
+            raise WorkflowBlockedError(
+                f"failed continuation persisted workspace ownership {detail} "
+                "the failed execution; Git report and worktree topology alone "
+                "cannot prove current ownership or authorize replacement of "
+                "the historical worktree and execution ref"
+            )
 
     def _latest_reviewed_rework_report(
         self, reports: tuple[ExecutionReport, ...]

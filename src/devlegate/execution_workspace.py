@@ -35,6 +35,36 @@ class ExecutionWorkspaceConflict(ExecutionWorkspaceError):
 
 
 @dataclasses.dataclass(frozen=True)
+class ExecutionWorkspaceIdentity:
+    """Canonical resource names; this identity alone does not grant ownership."""
+
+    ticket_id: str
+    branch: str
+    path: Path
+
+    @classmethod
+    def for_ticket(
+        cls, root: Path, ticket_id: str, *, generation: str | None = None
+    ) -> ExecutionWorkspaceIdentity:
+        if not is_canonical_ticket_name(f"{ticket_id}.md"):
+            raise ExecutionWorkspaceError(
+                f"invalid ticket ID for execution workspace: {ticket_id}"
+            )
+        root = root.absolute()
+        if generation is None:
+            return cls(
+                ticket_id, f"devlegate/work/{ticket_id}", root / "work" / ticket_id
+            )
+        if re.fullmatch(r"[0-9a-f]{32}", generation) is None:
+            raise ExecutionWorkspaceError("invalid execution generation ID")
+        return cls(
+            ticket_id,
+            f"devlegate/generation/{ticket_id}/{generation}",
+            root / "generations" / ticket_id / generation,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class ExecutionWorkspace:
     ticket_id: str
     branch: str
@@ -79,16 +109,13 @@ class ExecutionWorkspaceManager:
     def __init__(
         self, repo: Path, root: Path, ticket_id: str, *, runner: GitRunner | None = None
     ) -> None:
-        if not is_canonical_ticket_name(f"{ticket_id}.md"):
-            raise ExecutionWorkspaceError(
-                f"invalid ticket ID for execution workspace: {ticket_id}"
-            )
+        identity = ExecutionWorkspaceIdentity.for_ticket(root, ticket_id)
         self.repo = repo.resolve()
-        self.ticket_id = ticket_id
-        self.branch = f"devlegate/work/{ticket_id}"
+        self.ticket_id = identity.ticket_id
+        self.branch = identity.branch
         # Keep managed components lexical so symlink substitution is observable.
         self.root = root.absolute()
-        self.path = self.root / "work" / ticket_id
+        self.path = identity.path
         # Standalone inspection remains available, while service callers inject
         # their owner- and shutdown-aware Git capability.
         self._runner = _default_git_runner if runner is None else runner
