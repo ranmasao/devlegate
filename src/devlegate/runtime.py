@@ -54,6 +54,7 @@ from devlegate.execution_result import (
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
     ExecutionWorkspaceError,
+    ExecutionWorkspaceIdentity,
     ExecutionWorkspaceManager,
     WorkspaceInspection,
 )
@@ -5373,6 +5374,11 @@ class ServiceEngine:
         self._refresh_published_status()
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            raise ExecutionWorkspaceError(
+                "isolated rework is admitted but candidate preparation is not available"
+            )
         if plan.ticket_id is None or plan.code is None or plan.control is None:
             raise ExecutionWorkspaceError(
                 "execution plan has no complete revision binding"
@@ -6089,6 +6095,118 @@ class ServiceEngine:
         ):
             raise WorkflowBlockedError("rework remote predecessor changed")
         return source
+
+    def _admit_isolated_failed_rework(
+        self, reports: tuple[ExecutionReport, ...]
+    ) -> dict[str, object]:
+        """Persist an isolated intent, without creating any Git resources.
+
+        This stage is deliberately not wired into scheduler admission until the
+        isolated candidate and downstream execution paths can safely replay it.
+        The owner must serialize calls, as it does for other state transitions.
+        """
+        existing = self._state.get("rework_provenance")
+        if self._state.get("phase") == "agent_pending":
+            if isinstance(existing, dict) and existing.get("mode") == "isolated":
+                self._inspect_isolated_failed_rework_intent(self._state)
+                return existing
+            raise WorkflowBlockedError("another execution is already pending")
+        if self._state.get("phase") != "idle":
+            raise WorkflowBlockedError("isolated admission requires an idle owner")
+        observations = self._status_git_observation()
+        source = self._prove_deferred_failed_rework(
+            reports, observations=observations
+        )
+        if source is None:
+            raise WorkflowBlockedError("no eligible failed rework source")
+        review_commit, reviewed, failed = source
+        control = observations["control"].local_head
+        base = observations["code"].local_head
+        binding = resolve_rework_review(
+            self.control_worktree, control, review_commit, reviewed,
+            todo_path=self.todo_path, review_path=self.review_path,
+            backlog_path=self.backlog_path, runner=self._git_runtime,
+        )
+        history = history_changes(
+            self.control_worktree, control, f"executions/{failed.ticket_id}",
+            runner=self._git_runtime,
+        )
+        report_path = f"executions/{failed.ticket_id}/{failed.execution_id}.json"
+        publications = [
+            commit for commit, changes in history if f"A\t{report_path}" in changes
+        ]
+        if len(publications) != 1:
+            raise WorkflowBlockedError("failed report publication is ambiguous")
+        execution = new_execution_id()
+        identity = ExecutionWorkspaceIdentity.for_ticket(
+            self.execution_worktree_root, failed.ticket_id, generation=execution
+        )
+        target_ref = f"refs/heads/{identity.branch}"
+        if resolve_ref_commit(
+            self.repo, target_ref, runner=self._git_runtime
+        ) is not None:
+            raise WorkflowBlockedError("isolated target ref already exists")
+        if self._execution_remote_head(identity.branch) is not None:
+            raise WorkflowBlockedError("isolated remote target ref already exists")
+        provenance = {
+            "mode": "isolated", "preparation_stage": "admitted",
+            "previous_execution_id": reviewed.execution_id,
+            "previous_report_checkpoint": reviewed.workspace_head,
+            "previous_base_head": reviewed.code_base_head,
+            "previous_control_head": reviewed.control_head,
+            "admitted_base_head": base, "admitted_control_head": control,
+            "review": binding.as_dict(),
+            "code_predecessor": {
+                "execution_id": failed.execution_id,
+                "checkpoint": failed.workspace_head,
+                "base_head": failed.code_base_head, "report_commit": publications[0],
+                "report_path": report_path,
+            },
+            "target": {"branch": identity.branch, "path": str(identity.path),
+                       "ref": target_ref, "expected_old_head": None},
+        }
+        ticket = self._ticket_store().by_id[failed.ticket_id]
+        self._save_state(
+            "agent_pending", clear_execution=True, clear_pre_worker_generation=True,
+            selected_ticket_id=failed.ticket_id, execution_ticket_id=failed.ticket_id,
+            selected_ticket_body=ticket.body, selected_ticket_title=ticket.title,
+            selected_ticket_dependencies=list(ticket.depends_on),
+            execution_id=execution, execution_branch=identity.branch,
+            execution_path=str(identity.path), execution_base_head=base,
+            execution_admitted_base_head=base, execution_validated_product_head=base,
+            execution_control_head=control, execution_validated_control_head=control,
+            execution_remote_head=None, worker_identity=None,
+            rework_provenance=provenance,
+        )
+        return provenance
+
+    def _inspect_isolated_failed_rework_intent(
+        self, state: dict[str, object]
+    ) -> None:
+        """Validate the durable pre-effect stage; never authorize legacy preparation."""
+        rework = state.get("rework_provenance")
+        ticket, execution = state.get("execution_ticket_id"), state.get("execution_id")
+        if not (
+            isinstance(rework, dict)
+            and isinstance(ticket, str)
+            and isinstance(execution, str)
+        ):
+            raise WorkflowBlockedError("isolated intent identity is incomplete")
+        identity = ExecutionWorkspaceIdentity.for_ticket(
+            self.execution_worktree_root, ticket, generation=execution
+        )
+        target = {"branch": identity.branch, "path": str(identity.path),
+                  "ref": f"refs/heads/{identity.branch}", "expected_old_head": None}
+        if (rework.get("mode") != "isolated"
+                or rework.get("preparation_stage") != "admitted"
+                or rework.get("target") != target
+                or state.get("execution_branch") != identity.branch
+                or state.get("execution_path") != str(identity.path)
+                or state.get("execution_base_head") != rework.get("admitted_base_head")
+                or state.get("execution_control_head")
+                != rework.get("admitted_control_head")
+                or state.get("worker_identity") is not None):
+            raise WorkflowBlockedError("isolated intent binding is invalid")
 
     def _prove_deferred_failed_rework(
         self, reports: tuple[ExecutionReport, ...], *,
@@ -10663,6 +10781,12 @@ class ServiceEngine:
             if not isinstance(rework, dict):
                 raise ExecutionWorkspaceError(
                     "persisted rework provenance is malformed"
+                )
+            if rework.get("mode") == "isolated":
+                self._inspect_isolated_failed_rework_intent(state)
+                raise ExecutionWorkspaceError(
+                    "isolated rework is admitted but candidate preparation "
+                    "is not available"
                 )
             validate_execution_binding(state, require_pre_worker=True)
             ticket = state.get("execution_ticket_id")

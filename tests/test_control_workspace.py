@@ -3790,6 +3790,7 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (True, None, "cleared_identity"),
         (True, None, "changed_identity"),
         (True, None, "merged_source"),
+        (True, None, "isolated_intent"),
         pytest.param(
             True, None, "unrelated_identity",
             marks=pytest.mark.xfail(
@@ -4010,7 +4011,7 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         )
         if corruption == "changed_identity":
             devlegate._save_state("idle", execution_id="another-execution")
-        if corruption == "unrelated_identity":
+        if corruption in {"unrelated_identity", "isolated_intent"}:
             devlegate._save_state(
                 "idle", execution_id="a" * 32, execution_ticket_id="T-2",
                 execution_branch="devlegate/work/T-2",
@@ -4058,6 +4059,50 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             ) == source
         finally:
             (workspace / "unowned-dirty.txt").unlink()
+        if corruption == "isolated_intent":
+            before_refs = git(working, "show-ref").stdout
+            before_worktrees = git(working, "worktree", "list", "--porcelain").stdout
+            before_remote = git(working, "ls-remote", "origin").stdout
+            save = devlegate._save_state
+
+            def crash_after_save(*args, **kwargs):
+                save(*args, **kwargs)
+                raise RuntimeError("crash after isolated intent")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(devlegate, "_save_state", crash_after_save)
+                with pytest.raises(RuntimeError, match="crash after isolated intent"):
+                    devlegate._admit_isolated_failed_rework(
+                        ExecutionReportStore(control).list("T-1")
+                    )
+            intent = devlegate._state["rework_provenance"]
+            execution = devlegate._state["execution_id"]
+            assert intent["mode"] == "isolated"
+            assert intent["preparation_stage"] == "admitted"
+            assert intent["previous_execution_id"] == reviewed.execution_id
+            assert intent["code_predecessor"]["execution_id"] == failed.execution_id
+            assert intent["code_predecessor"]["checkpoint"] == checkpoint
+            assert intent["target"]["ref"] == (
+                f"refs/heads/devlegate/generation/T-1/{execution}"
+            )
+            assert intent["target"]["path"].endswith(f"/generations/T-1/{execution}")
+            assert intent["target"]["expected_old_head"] is None
+            devlegate = Devlegate(config)
+            assert devlegate._admit_isolated_failed_rework(()) == intent
+            assert devlegate._state["execution_id"] == execution
+            inspection = devlegate._inspect_pending_rework(devlegate._state)
+            assert inspection.classification == "UNSAFE"
+            assert git(working, "show-ref").stdout == before_refs
+            assert (
+                git(working, "worktree", "list", "--porcelain").stdout
+                == before_worktrees
+            )
+            assert git(working, "ls-remote", "origin").stdout == before_remote
+            assert report_path.read_bytes() == report_bytes
+            assert reviewed_path.read_bytes() == reviewed_bytes
+            assert artifact.read_bytes() == review_bytes
+            assert len(prompts) == 2
+            return
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (
                 "ownership is missing" if corruption == "cleared_identity"
