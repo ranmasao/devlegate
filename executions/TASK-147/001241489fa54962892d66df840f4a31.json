@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "blocked",
+  "control_head": "1836d4f75a21ade43f8cc6811fb4ccd518e12cd3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "001241489fa54962892d66df840f4a31",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Which architecture is authorized: isolated generation-specific resources for ordinary automatic continuation, or an explicitly approved one-shot operator recovery? Alternatively, provide independently verifiable durable owner-published proof of the historical TASK-134 resource ownership."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and validate the authorized continuation architecture, including the missing-cache incident fixture, ownership protections, status parity, restart behavior, and required regression checks."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Which architecture is authorized: isolated generation-specific resources for ordinary automatic continuation, or an explicitly approved one-shot operator recovery? Alternatively, provide independently verifiable durable owner-published proof of the historical TASK-134 resource ownership."
+    ],
+    "remaining": [
+      "Implement and validate the authorized continuation architecture, including the missing-cache incident fixture, ownership protections, status parity, restart behavior, and required regression checks."
+    ],
+    "report": null,
+    "summary": "Inspected the carried-forward continuation and review-provenance implementation against the current review. The existing admission correctly refuses to replace a historical worktree when persisted ownership belongs to a different generation."
+  },
+  "workspace_head": "cffad20cb6730aa6a86fd73fb22309be27ec35c1"
+}
