@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "blocked",
+  "control_head": "1e2b55f3391b483071ff08b3f6c1cfaecc6bfed0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "0c7e8703bc1c4458b77303b0cc5c705d",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Provide the approved docs/decisions/TASK-147-isolated-generation-2026-11-03.md and the referenced earlier review constraints; the ADR is absent from the current checkout, and its durable ownership and recovery contract is required to implement the requested architecture safely."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable isolated-generation admission, preparation, and full execution lifecycle propagation according to the approved decision.",
+    "Replace the isolated continuation XFAIL with the required real-Git lifecycle and safety regressions, then run focused validation, Ruff, and exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-147/0c7e8703bc1c4458b77303b0cc5c705d.md",
+  "report_sha256": "7ec081a3c371e6beb496f1f73c5145be84fee0072d099f6aa6f0968200acf3b6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Provide the approved docs/decisions/TASK-147-isolated-generation-2026-11-03.md and the referenced earlier review constraints; the ADR is absent from the current checkout, and its durable ownership and recovery contract is required to implement the requested architecture safely."
+    ],
+    "remaining": [
+      "Implement durable isolated-generation admission, preparation, and full execution lifecycle propagation according to the approved decision.",
+      "Replace the isolated continuation XFAIL with the required real-Git lifecycle and safety regressions, then run focused validation, Ruff, and exact-checkpoint CI."
+    ],
+    "report": "The first positive assertion fails at tests/test_control_workspace.py:4072: status returns blocked instead of run-worker for unrelated_identity. No isolated admission stages were implemented. The existing source proof is present, but owner admission, pending inspection, and later lifecycle paths still assume ticket-scoped workspaces.",
+    "summary": "Inspected the existing source-proof, scheduler admission, workspace preparation, and recovery paths; no implementation changes were made."
+  },
+  "workspace_head": "fa6dc1a81586dddf890c4f3888148cd094eb806e"
+}
