@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "1fd566ec206d0f622ea6a83260eaaf30c6fb2e5c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "510dbb3e84c4441f8aaed12588a98adb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement restart-safe source pinning, candidate replay, generation-specific target creation, worktree attachment and remote lease publication with independently revalidated authority before each effect.",
+    "Propagate generation identity through scheduler admission, worker execution, reports, recovery, review, integration and cleanup while maintaining status parity.",
+    "Complete the missing-cache unrelated-execution positive scenario and crash, lease, ownership and lifecycle regressions, then run full exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-147/510dbb3e84c4441f8aaed12588a98adb.md",
+  "report_sha256": "5b690aed5276981575d07f041ebaadf1c7d1907b87b8fc3ccf2a4bbb478f1a6f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement restart-safe source pinning, candidate replay, generation-specific target creation, worktree attachment and remote lease publication with independently revalidated authority before each effect.",
+      "Propagate generation identity through scheduler admission, worker execution, reports, recovery, review, integration and cleanup while maintaining status parity.",
+      "Complete the missing-cache unrelated-execution positive scenario and crash, lease, ownership and lifecycle regressions, then run full exact-checkpoint CI."
+    ],
+    "report": "The candidate and target transaction and downstream generation lifecycle are not yet implemented, so activating the existing isolated intent would be unsafe. The first positive fixture assertion still fails at the ordinary owner iteration; its unrelated-identity variant remains strict XFAIL. The previously reported exact-checkpoint CI failed the symlink diagnostic test; the fixed test and focused workspace suite now pass locally, but full CI was not run on these uncommitted changes.",
+    "summary": "Restored the leaf-symlink diagnostic while retaining symlink safety checks. Hardened persisted isolated-intent inspection to revalidate the Git generation, canonical ticket, failed lifecycle publication, and curator review binding against current evidence."
+  },
+  "workspace_head": "497f2c0059413adadd5029c133d6be6ffd88a527"
+}
