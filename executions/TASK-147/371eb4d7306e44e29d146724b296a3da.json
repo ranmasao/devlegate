@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "d05c2b6c0a84c1af026b950d5ea1dac8e3dc325c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "371eb4d7306e44e29d146724b296a3da",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable isolated admission intent, expected-absent target creation, pinned candidate replay and restart-safe remote publication without touching historical resources.",
+    "Propagate isolated workspace identity through worker launch, status, retry, reporting, integration, reconciliation and cleanup; retain fail-closed ownership checks.",
+    "Replace the expected-failure fixture with the representative real intervening execution and multi-commit failed lineage, and add required fault, safety, IPC and integration coverage.",
+    "Run the complete required validation and exact-checkpoint CI after implementation."
+  ],
+  "report_artifact": "executions/TASK-147/371eb4d7306e44e29d146724b296a3da.md",
+  "report_sha256": "d0e7ebdf4a4f258c320fbeefbce7575b7c8b9b6c6aa35f62a1d3a040e9667de0",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable isolated admission intent, expected-absent target creation, pinned candidate replay and restart-safe remote publication without touching historical resources.",
+      "Propagate isolated workspace identity through worker launch, status, retry, reporting, integration, reconciliation and cleanup; retain fail-closed ownership checks.",
+      "Replace the expected-failure fixture with the representative real intervening execution and multi-commit failed lineage, and add required fault, safety, IPC and integration coverage.",
+      "Run the complete required validation and exact-checkpoint CI after implementation."
+    ],
+    "report": "The isolated scheduler path remains unimplemented; admitting it before durable ownership and downstream lifecycle propagation would be unsafe. With xfail disabled, the first positive assertion still fails because status returns blocked instead of run-worker. Exact-checkpoint CI was not run; this worker cannot create the required checkpoint under the Git lifecycle contract.",
+    "summary": "Separated immutable failed-rework source proof from historical workspace ownership and added generation-aware workspace managers with symlink checks for all managed path components. Extended disposable tests to exercise source proof with an unrelated execution identity and a dirty historical workspace."
+  },
+  "workspace_head": "fa6dc1a81586dddf890c4f3888148cd094eb806e"
+}
