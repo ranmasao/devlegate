@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "e800fbbf5aecdc6c090b3490f37a6635701005d5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "d37e473982234b5f905f97532062d646",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and persist the isolated-generation intent and restart-safe source pin, candidate replay, target ref/worktree creation, and remote lease state machine.",
+    "Propagate persisted isolated identities through worker execution, reporting, status, review, integration, recovery, and cleanup without touching historical resources.",
+    "Add the positive missing-cache, unrelated-execution, three-cycle real-Git and IPC regressions and the required conflict and restart coverage; run full CI."
+  ],
+  "report_artifact": "executions/TASK-147/d37e473982234b5f905f97532062d646.md",
+  "report_sha256": "faebd873f52b4068a7ed5ddfc866fed8d26b0892c9d09ff13831417c6745cc12",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement and persist the isolated-generation intent and restart-safe source pin, candidate replay, target ref/worktree creation, and remote lease state machine.",
+      "Propagate persisted isolated identities through worker execution, reporting, status, review, integration, recovery, and cleanup without touching historical resources.",
+      "Add the positive missing-cache, unrelated-execution, three-cycle real-Git and IPC regressions and the required conflict and restart coverage; run full CI."
+    ],
+    "report": "The available execution time did not permit completing and validating the cross-lifecycle crash-safe implementation. The missing-ownership scenario remains blocked; no isolated generation is admitted yet.",
+    "summary": "Introduced validated canonical identities for ticket-scoped and isolated generation workspaces. Separated the existing failed-workspace ownership check from source history and review validation while retaining fail-closed admission."
+  },
+  "workspace_head": "08ada98de98ac45793a67c6a6e5be8cfd19fdd82"
+}
