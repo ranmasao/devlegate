@@ -121,6 +121,8 @@ def recover_stranded_execution(
     An operator abort remains an interruption mechanism.  It is recorded and
     never converted here into continuation intent or an automatic retry.
     """
+    if state.get("phase") != "agent_running":
+        return None
     try:
         kind = interruption_kind(state)
     except ValueError as error:

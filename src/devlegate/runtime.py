@@ -6216,7 +6216,7 @@ class ServiceEngine:
         return provenance
 
     def _inspect_isolated_failed_rework_intent(
-        self, state: dict[str, object]
+        self, state: dict[str, object], *, interrupted: bool = False
     ) -> None:
         """Validate the durable pre-effect stage; never authorize legacy preparation."""
         rework = state.get("rework_provenance")
@@ -6227,6 +6227,8 @@ class ServiceEngine:
             and isinstance(execution, str)
         ):
             raise WorkflowBlockedError("isolated intent identity is incomplete")
+        if interrupted:
+            self._prove_interrupted_isolated_worker_absent(state)
         identity = ExecutionWorkspaceIdentity.for_ticket(
             self.execution_worktree_root, ticket, generation=execution
         )
@@ -6245,13 +6247,14 @@ class ServiceEngine:
                 or state.get("execution_base_head") != rework.get("admitted_base_head")
                 or state.get("execution_control_head")
                 != rework.get("admitted_control_head")
-                or state.get("worker_identity") is not None):
+                or (not interrupted and state.get("worker_identity") is not None)):
             raise WorkflowBlockedError("isolated intent binding is invalid")
 
-        if (state.get("phase") != "agent_pending"
+        if (state.get("phase") != ("agent_running" if interrupted else "agent_pending")
                 or state.get("selected_ticket_id") != ticket):
             raise WorkflowBlockedError(
-                "isolated intent is not the selected pending ticket"
+                "isolated intent is not the selected "
+                f"{'running' if interrupted else 'pending'} ticket"
             )
         observations = self._status_git_observation()
         control, code = observations.get("control"), observations.get("code")
@@ -6267,10 +6270,13 @@ class ServiceEngine:
                 or list(current.depends_on)
                 != state.get("selected_ticket_dependencies")):
             raise WorkflowBlockedError("isolated intent canonical ticket changed")
-        # The persisted pending intent is the only exception to the idle check
-        # in source proof. All competing markers and live worker evidence remain
-        # subject to the same checks as admission.
+        # The persisted intent (pending, or running with independent absence
+        # proof) permits rechecking immutable source eligibility. This local
+        # projection never proves resource ownership or authorizes preparation;
+        # competing markers and live worker evidence retain admission checks.
         admission_state = {**state, "phase": "idle"}
+        if interrupted:
+            admission_state["worker_identity"] = None
         reports = ExecutionReportStore(self.control_worktree).list(ticket)
         source = self._prove_deferred_failed_rework(
             reports, state=admission_state, observations=observations
@@ -9388,10 +9394,17 @@ class ServiceEngine:
         state = self._state
         rework = state.get("rework_provenance")
         if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            raise WorkflowBlockedError(
-                "isolated running workspace recovery requires a generation-bound "
-                "capability"
-            )
+            if base_head is not None and base_head != state.get("execution_base_head"):
+                raise WorkflowBlockedError("isolated recovery base binding changed")
+            try:
+                self.recovery_workspace_manager(str(state.get("execution_ticket_id")))
+                return self._inspect_published_isolated_workspace(
+                    state, interrupted=True
+                )
+            except (ExecutionWorkspaceError, OSError) as error:
+                raise WorkflowBlockedError(
+                    f"cannot validate isolated execution recovery: {error}"
+                ) from error
         ticket_id = state.get("execution_ticket_id")
         if base_head is None:
             base_head = state.get("execution_base_head")
@@ -11122,10 +11135,10 @@ class ServiceEngine:
         )
 
     def _inspect_published_isolated_workspace(
-        self, state: dict[str, object]
+        self, state: dict[str, object], *, interrupted: bool = False
     ) -> ExecutionWorkspace:
         """Verify a published generation without granting worker admission."""
-        self._inspect_isolated_failed_rework_intent(state)
+        self._inspect_isolated_failed_rework_intent(state, interrupted=interrupted)
         rework = state["rework_provenance"]
         if rework.get("preparation_stage") != "remote_published":
             raise ExecutionWorkspaceError("isolated target is not remotely published")
@@ -11162,6 +11175,18 @@ class ServiceEngine:
             raise ExecutionWorkspaceError("isolated target ref is missing or changed")
         if manager._has_symlinked_path():
             raise ExecutionWorkspaceError("isolated target path has a symlink")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if registration is not None and "locked" in registration:
+            raise ExecutionWorkspaceError("isolated target worktree is locked")
+        attached = [
+            path for path, item in registrations.items()
+            if item.get("branch") == manager.branch
+        ]
+        if attached != [manager.path.resolve()]:
+            raise ExecutionWorkspaceError(
+                "isolated target registration is missing or attached elsewhere"
+            )
         inspection = manager.inspect(candidate, candidate)
         if inspection.classification != "REUSABLE" or inspection.workspace is None:
             raise ExecutionWorkspaceError(
@@ -11781,12 +11806,67 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
 
+    def _prove_interrupted_isolated_worker_absent(
+        self, state: dict[str, object]
+    ) -> None:
+        """Use persisted terminal handoff or observe the exact lost worker."""
+        if (state.get("phase") != "agent_running"
+                or state.get("execution_stage") not in {"worker-running", "post-worker"}
+                or state.get("pending_execution_report") is not None
+                or state.get("execution_interruption_kind") not in {
+                    "process_loss", "service_shutdown",
+                }):
+            raise ExecutionWorkspaceError(
+                "isolated recovery requires an interrupted running "
+                "generation-bound execution before checkpointing"
+            )
+        if (state.get("execution_stage") == "post-worker"
+                and "worker_identity" in state and state["worker_identity"] is None):
+            return
+        worker = _worker_identity_from_value(
+            state.get("worker_identity"), state.get("execution_id")
+        )
+        if (state.get("execution_stage") != "worker-running" or worker is None
+                or self._workers.observe(worker) != "absent"):
+            raise ExecutionWorkspaceError(
+                "isolated interrupted worker ownership cannot be proven absent"
+            )
+
     def recovery_workspace_manager(self, ticket_id: str):
         """Provide the workspace capability without exposing the coordinator."""
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            raise ExecutionWorkspaceError(
-                "isolated workspace recovery requires a generation-bound capability"
+            state = self._state
+            self._prove_interrupted_isolated_worker_absent(state)
+            if state.get("execution_ticket_id") != ticket_id:
+                raise ExecutionWorkspaceError(
+                    "isolated recovery ticket binding changed"
+                )
+            if (state.get("local_head") != state.get("execution_base_head")
+                    or state.get("remote_head") != state.get("execution_base_head")):
+                raise ExecutionWorkspaceError(
+                    "isolated recovery persisted product generation changed"
+                )
+            # Remote observations do not fetch or advance either checkout.
+            for branch, expected in (
+                (self.remote_branch, state.get("execution_base_head")),
+                (self.control_branch, state.get("execution_control_head")),
+            ):
+                if self._execution_remote_head(branch) != expected:
+                    raise ExecutionWorkspaceError(
+                        "isolated recovery product or control remote generation changed"
+                    )
+            workspace = self._inspect_published_isolated_workspace(
+                state, interrupted=True
+            )
+            if (state.get("execution_start_head") != workspace.head
+                    or state.get("execution_remote_head") != workspace.head):
+                raise ExecutionWorkspaceError(
+                    "isolated recovery start or remote binding changed"
+                )
+            return ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root, ticket_id,
+                generation=str(state["execution_id"]), runner=self._git_runtime,
             )
         return ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
@@ -12135,11 +12215,21 @@ class ServiceEngine:
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
         rework = state.get("rework_provenance")
+        isolated_manager = None
         if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            raise DevlegateError(
-                "isolated interrupted execution recovery requires a generation-bound "
-                "workspace capability"
-            )
+            # Resolve before any fetch or control fast-forward. This capability
+            # is scoped to the persisted running generation, not its historical
+            # ticket-scoped source, and authorizes no cleanup or new worker.
+            try:
+                if interruption_kind != state.get("execution_interruption_kind"):
+                    raise ExecutionWorkspaceError(
+                        "isolated recovery interruption binding changed"
+                    )
+                isolated_manager = self.recovery_workspace_manager(
+                    str(state.get("execution_ticket_id"))
+                )
+            except (ExecutionWorkspaceError, WorkflowBlockedError, OSError) as error:
+                raise DevlegateError(str(error)) from error
         required = (
             "local_head",
             "remote_head",
@@ -12192,6 +12282,11 @@ class ServiceEngine:
         )
         if control_fetch.returncode or control_head is None:
             raise DevlegateError("cannot freshly observe control remote")
+        if (isolated_manager is not None
+                and control_head != state["execution_control_head"]):
+            raise DevlegateError(
+                "isolated recovery control generation changed before normalization"
+            )
         local_control = resolve_commit(
             self.control_worktree, "HEAD", runner=self._git_runtime
         )
@@ -12232,7 +12327,7 @@ class ServiceEngine:
         ):
             raise DevlegateError("persisted execution ticket is not safely recoverable")
         base_head = str(state["execution_base_head"])
-        manager = ExecutionWorkspaceManager(
+        manager = isolated_manager or ExecutionWorkspaceManager(
             self.repo,
             self.execution_worktree_root,
             str(state["execution_ticket_id"]),
@@ -12262,6 +12357,13 @@ class ServiceEngine:
             raise DevlegateError(
                 f"cannot safely normalize interrupted execution: {error}"
             ) from error
+        if isolated_manager is not None:
+            # Recheck the complete capability at the idle journal boundary;
+            # fetches above never grant authority over a changed generation.
+            try:
+                self.recovery_workspace_manager(str(state["execution_ticket_id"]))
+            except (ExecutionWorkspaceError, OSError) as error:
+                raise DevlegateError(str(error)) from error
         failures = state.get("failed_executions", {})
         if not isinstance(failures, dict):
             failures = {}

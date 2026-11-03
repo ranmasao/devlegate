@@ -3791,6 +3791,9 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (True, None, "changed_identity"),
         (True, None, "merged_source"),
         (True, None, "isolated_intent"),
+        (True, None, "isolated_recovery"),
+        (True, None, "isolated_recovery_before_save"),
+        (True, None, "isolated_recovery_after_save"),
         pytest.param(
             True, None, "unrelated_identity",
             marks=pytest.mark.xfail(
@@ -4005,13 +4008,17 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         assert artifact.read_bytes() == review_bytes
         # Recreate the incident's persisted idle state without a failure cache.
         del failures["T-1"]
+        failures["T-88"] = {**original_failure, "execution_id": "unrelated-failure"}
         devlegate._save_state(
             "idle", failed_executions=failures,
             clear_execution=corruption == "cleared_identity",
         )
         if corruption == "changed_identity":
             devlegate._save_state("idle", execution_id="another-execution")
-        if corruption in {"unrelated_identity", "isolated_intent"}:
+        if corruption in {
+            "unrelated_identity", "isolated_intent", "isolated_recovery",
+            "isolated_recovery_before_save", "isolated_recovery_after_save",
+        }:
             devlegate._save_state(
                 "idle", execution_id="a" * 32, execution_ticket_id="T-2",
                 execution_branch="devlegate/work/T-2",
@@ -4059,7 +4066,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             ) == source
         finally:
             (workspace / "unowned-dirty.txt").unlink()
-        if corruption == "isolated_intent":
+        if corruption in {
+            "isolated_intent", "isolated_recovery",
+            "isolated_recovery_before_save", "isolated_recovery_after_save",
+        }:
             before_refs = git(working, "show-ref").stdout
             before_worktrees = git(working, "worktree", "list", "--porcelain").stdout
             before_remote = git(working, "ls-remote", "origin").stdout
@@ -4232,7 +4242,7 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             )
             with pytest.raises(WorkflowBlockedError, match="generation workspace"):
                 devlegate._retire_zero_delta_execution(isolated_zero_delta)
-            with pytest.raises(DevlegateError, match="generation-bound"):
+            with pytest.raises(DevlegateError, match="interruption binding"):
                 devlegate._normalize_stranded_execution("worker_lost")
             with pytest.raises(ExecutionWorkspaceError, match="workspace binding"):
                 devlegate._post_worker_workspace_manager(published, "0" * 32)
@@ -4276,6 +4286,165 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert report_path.read_bytes() == report_bytes
             assert reviewed_path.read_bytes() == reviewed_bytes
             assert artifact.read_bytes() == review_bytes
+            if corruption != "isolated_intent":
+                devlegate._save_state(
+                    "agent_running", execution_stage=(
+                        "post-worker" if corruption == "isolated_recovery_after_save"
+                        else "worker-running"
+                    ),
+                    local_head=devlegate._state["execution_base_head"],
+                    remote_head=devlegate._state["execution_base_head"],
+                    execution_interruption_kind="process_loss",
+                    execution_start_head=candidate, execution_remote_head=candidate,
+                    worker_identity=None if corruption.endswith("after_save") else {
+                        "execution_id": execution, "pid": 99999999,
+                        "pgid": 99999999, "sid": 99999999,
+                        "boot_id": "disposable-worker", "start_time": 1,
+                    },
+                )
+                devlegate = Devlegate(config)
+
+                def protect_historical_workspace(engine):
+                    original_git = engine._git_runtime
+
+                    def isolated_git(cwd, *args, **kwargs):
+                        assert Path(cwd) != workspace, "historical workspace inspected"
+                        return original_git(cwd, *args, **kwargs)
+
+                    monkeypatch.setattr(engine, "_git_runtime", isolated_git)
+
+                protect_historical_workspace(devlegate)
+                runtime_git = devlegate._git_runtime
+
+                def refuse_effects(cwd, *args, **kwargs):
+                    assert Path(cwd) != workspace, "historical workspace was inspected"
+                    assert args[:1] not in {
+                        ("fetch",), ("push",), ("update-ref",), ("reset",),
+                        ("merge",), ("checkout",),
+                    }, f"unauthorized recovery effect: {args}"
+                    return runtime_git(cwd, *args, **kwargs)
+
+                def refuse(reason):
+                    with monkeypatch.context() as guarded:
+                        guarded.setattr(devlegate, "_git_runtime", refuse_effects)
+                        with pytest.raises(DevlegateError, match=reason):
+                            devlegate._reconcile_stranded_execution()
+
+                # All evidence failures must precede fetch/checkout effects.
+                for field, value, reason in (
+                    ("execution_id", "0" * 32, "identity|binding"),
+                    ("execution_path", str(workspace), "binding"),
+                    ("execution_branch", "devlegate/work/T-1", "binding"),
+                    ("execution_start_head", checkpoint, "start or remote"),
+                    ("execution_interruption_kind", "operator_abort", "interrupted"),
+                ):
+                    with monkeypatch.context() as altered:
+                        altered.setitem(devlegate._state, field, value)
+                        refuse(reason)
+                    assert git(working, "show-ref").stdout == refs
+                    assert git(working, "worktree", "list", "--porcelain").stdout == (
+                        registrations
+                    )
+                for observation in ("matching-live", "indeterminate"):
+                    if corruption.endswith("after_save"):
+                        continue  # post-worker already durably records terminal handoff
+                    with monkeypatch.context() as altered:
+                        altered.setattr(
+                            devlegate._workers, "observe", lambda _: observation
+                        )
+                        with pytest.raises(
+                            DevlegateError, match="blocked|alive|ownership"
+                        ):
+                            devlegate._reconcile_stranded_execution()
+                if corruption == "isolated_recovery":
+                    provenance = devlegate._state["rework_provenance"]
+                    for key, value, reason in (
+                        ("code_predecessor", {
+                            **provenance["code_predecessor"],
+                            "checkpoint": reviewed.workspace_head,
+                        }, "lifecycle binding"),
+                        ("review", {**provenance["review"], "sha256": "0" * 64},
+                         "feedback binding"),
+                        ("preparation_stage", "remote_publishing", "not remotely"),
+                    ):
+                        with monkeypatch.context() as altered:
+                            altered.setitem(provenance, key, value)
+                            refuse(reason)
+                    target_path = Path(target["path"])
+                    dirty = target_path / "foreign.txt"
+                    dirty.write_text("foreign\n")
+                    refuse("dirty")
+                    dirty.unlink()
+                    git(working, "worktree", "lock", str(target_path))
+                    refuse("locked")
+                    git(working, "worktree", "unlock", str(target_path))
+                    moved = tmp_path / "foreign-generation"
+                    git(working, "worktree", "move", str(target_path), str(moved))
+                    refuse("unexpected|missing|elsewhere")
+                    git(working, "worktree", "move", str(moved), str(target_path))
+                    git(target_path, "reset", "--hard", checkpoint)
+                    refuse("target ref")
+                    git(target_path, "reset", "--hard", candidate)
+                    git(working, "push", "--force", "origin",
+                        f"{checkpoint}:{target['ref']}")
+                    refuse("target ref")
+                    git(working, "push", "--force", "origin",
+                        f"{candidate}:{target['ref']}")
+                    with monkeypatch.context() as altered:
+                        altered.setitem(
+                            devlegate._state, "execution_control_head",
+                            reviewed.control_head,
+                        )
+                        refuse("remote generation changed")
+                assert devlegate.recovery_workspace_manager("T-1").path == Path(
+                    target["path"]
+                )
+                recovered = devlegate._execution_workspace_for_recovery()
+                assert recovered.path == Path(target["path"])
+                assert recovered.head == candidate
+                if corruption.endswith("save"):
+                    save = devlegate._save_state
+
+                    def interrupt_normalization(phase, **kwargs):
+                        if phase == "idle":
+                            if corruption.endswith("after_save"):
+                                save(phase, **kwargs)
+                            raise RuntimeError("interrupted normalization journal")
+                        return save(phase, **kwargs)
+
+                    with monkeypatch.context() as fault:
+                        fault.setattr(devlegate, "_save_state", interrupt_normalization)
+                        with pytest.raises(RuntimeError, match="normalization journal"):
+                            devlegate._reconcile_stranded_execution()
+                    devlegate = Devlegate(config)
+                    protect_historical_workspace(devlegate)
+                if devlegate._state["phase"] == "agent_running":
+                    assert devlegate._reconcile_stranded_execution() == "T-1"
+                assert devlegate._state["phase"] == "idle"
+                assert devlegate._state["execution_id"] == execution
+                assert devlegate._state["execution_branch"] == target["branch"]
+                assert devlegate._state["execution_path"] == target["path"]
+                assert devlegate._state["worker_identity"] is None
+                failure = devlegate._state["failed_executions"]["T-1"]
+                assert failure["execution_id"] == execution
+                assert failure["interruption_kind"] == "process_loss"
+                assert devlegate._state["failed_executions"]["T-88"] == (
+                    failures["T-88"]
+                )
+                assert devlegate._state["interrupted_execution_id"] == execution
+                for _ in range(2):
+                    devlegate = Devlegate(config)
+                    protect_historical_workspace(devlegate)
+                    assert devlegate._reconcile_stranded_execution() is None
+                assert git(working, "show-ref").stdout == refs
+                assert git(working, "worktree", "list", "--porcelain").stdout == (
+                    registrations
+                )
+                assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+                assert report_path.read_bytes() == report_bytes
+                assert reviewed_path.read_bytes() == reviewed_bytes
+                assert artifact.read_bytes() == review_bytes
+                assert len(prompts) == 2
             return
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (
