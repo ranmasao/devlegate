@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "171c0d362689640d0279b11f5d6574dc0ae6a1ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "c7c37de2a11a4de4a8df528e13c28a10",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement durable isolated-generation admission, source and candidate pinning, create-if-absent target creation, remote lease publication, and restart-safe replay without modifying historical resources.",
+    "Propagate persisted generation identity through worker preparation, reporting, recovery, review, integration, and cleanup.",
+    "Complete the positive missing-cache unrelated-execution scenario and required status, IPC, conflict, crash, and lifecycle regressions; run exact-checkpoint full CI."
+  ],
+  "report_artifact": "executions/TASK-147/c7c37de2a11a4de4a8df528e13c28a10.md",
+  "report_sha256": "c3cc527599a7c52586c8372a0bc5329e8baceac7edc9a56daf154e1dd350a22c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement durable isolated-generation admission, source and candidate pinning, create-if-absent target creation, remote lease publication, and restart-safe replay without modifying historical resources.",
+      "Propagate persisted generation identity through worker preparation, reporting, recovery, review, integration, and cleanup.",
+      "Complete the positive missing-cache unrelated-execution scenario and required status, IPC, conflict, crash, and lifecycle regressions; run exact-checkpoint full CI."
+    ],
+    "report": "The isolated-generation lifecycle remains unimplemented and cannot be safely enabled as a partial admission change. The positive unrelated-identity fixture still fails at the status assertion: blocked instead of run-worker. This invocation ends with only the independently safe source-proof hardening completed.",
+    "summary": "Hardened deferred failure source proof to reject non-descendant or non-linear checkpoint histories before workspace ownership is considered. Added a disposable Git regression for a merged source checkpoint."
+  },
+  "workspace_head": "05a3ce5092ca739ac59d64cccd54e56fbb6914be"
+}
