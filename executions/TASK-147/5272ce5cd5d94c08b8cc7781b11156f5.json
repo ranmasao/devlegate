@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "898a2827d667f3b1335d98d4c2229fe459be8187",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "5272ce5cd5d94c08b8cc7781b11156f5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Extend the generation-bound capability beyond worker-running/post-worker normalization into checkpoint/report publication, running reconciliation, accepted integration, interrupted retry and generation-specific retirement/cleanup.",
+    "Connect shared read-only continuation eligibility to status and ordinary scheduler admission, preserving historical resources when persisted execution identity belongs to an unrelated generation.",
+    "Make the strict-XFAIL unrelated_identity ordinary scheduler scenario genuinely pass without a synthetic historical failure record, including complete worker -> review -> accepted -> done behavior and live IPC/status parity.",
+    "Complete the required end-to-end race, lease and fault matrix and obtain clean exact-final-source full CI; coverage runs encountered timing-sensitive IPC/daemon failures and the final non-coverage full run timed out."
+  ],
+  "report_artifact": "executions/TASK-147/5272ce5cd5d94c08b8cc7781b11156f5.md",
+  "report_sha256": "2feeab275ea4646a3130d82eb28d816c07d6a557c94a8a868786b9daa04ca7ad",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Extend the generation-bound capability beyond worker-running/post-worker normalization into checkpoint/report publication, running reconciliation, accepted integration, interrupted retry and generation-specific retirement/cleanup.",
+      "Connect shared read-only continuation eligibility to status and ordinary scheduler admission, preserving historical resources when persisted execution identity belongs to an unrelated generation.",
+      "Make the strict-XFAIL unrelated_identity ordinary scheduler scenario genuinely pass without a synthetic historical failure record, including complete worker -> review -> accepted -> done behavior and live IPC/status parity.",
+      "Complete the required end-to-end race, lease and fault matrix and obtain clean exact-final-source full CI; coverage runs encountered timing-sensitive IPC/daemon failures and the final non-coverage full run timed out."
+    ],
+    "report": "The available execution budget was consumed implementing and exercising the requested positive interrupted-generation recovery milestone; the canonical ticket is still incomplete. Supported consumers now include recovery_workspace_manager, _execution_workspace_for_recovery, and _normalize_stranded_execution through _reconcile_stranded_execution. Real-Git tests restart from persisted isolated worker-running and post-worker state, normalize the same execution ID/branch/path, preserve the original dirty unowned workspace, and survive interruptions immediately before and after the idle journal write. Admission began with no failed_executions[T-1] record; normalization records a real interruption of the new generation, not a fabricated historical record. The full TASK-134-shaped ordinary isolated scheduler assertion remains strict XFAIL. Focused failed-rework tests: 27 passed, 1 xfailed; recovery-boundary tests: 15 passed; Ruff and git diff --check passed. Two completed full coverage runs each had 1691 passed, 2 skipped, 1 xfailed and two timing-sensitive failures in different IPC/daemon tests; those failing tests passed individually. The subsequent full non-coverage run exceeded its timeout near completion. No Git lifecycle operations or real ticket resources were modified.",
+    "summary": "Added generation-bound workspace resolution for isolated interrupted executions and wired it into stranded-worker normalization and recovery inspection. Recovery verifies persisted identity, immutable source/review/candidate bindings, exact registered worktree and remote state, and worker absence before normalization. Added disposable-Git positive restart and journal-interruption coverage while preserving the isolated scheduler gate."
+  },
+  "workspace_head": "a90760fd0d72879ed1e1c39208f2f09664b633e3"
+}
