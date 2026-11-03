@@ -3789,6 +3789,7 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (False, None, None),
         (True, None, "cleared_identity"),
         (True, None, "changed_identity"),
+        (True, None, "merged_source"),
         pytest.param(
             True, None, "unrelated_identity",
             marks=pytest.mark.xfail(
@@ -4018,6 +4019,25 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         devlegate = Devlegate(config)
         monkeypatch.setattr(devlegate._workers, "run", worker)
         assert "T-1" not in devlegate._state["failed_executions"]
+        if corruption == "merged_source":
+            tree = git(working, "rev-parse", f"{checkpoint}^{{tree}}").stdout.strip()
+            merged = git(
+                working, "commit-tree", tree, "-p", checkpoint,
+                "-p", reviewed.workspace_head, "-m", "merged source",
+            ).stdout.strip()
+            forged = dataclasses.replace(failed, workspace_head=merged)
+            reports = tuple(forged if r == failed else r for r in reports)
+            # Isolate source ancestry from lifecycle authentication: this
+            # disposable merge is not a genuine published report.
+            monkeypatch.setattr(
+                devlegate, "_lifecycle_commit_is_exact", lambda *_: True
+            )
+            with pytest.raises(DevlegateError, match="source history is not linear"):
+                devlegate._prove_deferred_failed_rework(reports)
+            assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+            assert report_path.read_bytes() == report_bytes
+            assert artifact.read_bytes() == review_bytes
+            return
         source = devlegate._prove_deferred_failed_rework(
             ExecutionReportStore(control).list("T-1")
         )

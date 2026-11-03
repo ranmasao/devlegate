@@ -6183,6 +6183,32 @@ class ServiceEngine:
                     "failed checkpoint does not preserve the reviewed "
                     "checkpoint lineage"
                 )
+            # Source proof must be independent of the old worktree. In
+            # particular, an ancestor check alone accepts merge histories that
+            # cannot be replayed as the exact ordered worker delta.
+            if not is_ancestor(
+                self.repo, failed.code_base_head, failed.workspace_head,
+                runner=self._git_runtime,
+            ):
+                raise WorkflowBlockedError(
+                    "failed checkpoint is not descended from its reported base"
+                )
+            parent = failed.code_base_head
+            for commit in commit_range(
+                self.repo, f"{parent}..{failed.workspace_head}", reverse=True,
+                runner=self._git_runtime,
+            ):
+                if commit_parents(self.repo, commit, runner=self._git_runtime) != (
+                    parent,
+                ):
+                    raise WorkflowBlockedError(
+                        "failed checkpoint source history is not linear"
+                    )
+                parent = commit
+            if parent != failed.workspace_head:
+                raise WorkflowBlockedError(
+                    "failed checkpoint source history is incomplete"
+                )
             todo = f"{self.todo_path}/{ticket}.md"
             backlog = f"{self.backlog_path}/{ticket}.md"
             original = path_object(
