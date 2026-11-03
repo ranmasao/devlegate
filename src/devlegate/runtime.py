@@ -5129,6 +5129,14 @@ class ServiceEngine:
             report.ticket_id,
             runner=self._git_runtime,
         )
+        if (
+            report.execution_branch != manager.branch
+            or Path(report.execution_path).absolute() != manager.path
+        ):
+            raise WorkflowBlockedError(
+                "zero-delta retirement requires an exact ticket-scoped workspace "
+                "binding; generation workspace cleanup is not yet authorized"
+            )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is not None:
@@ -12126,6 +12134,12 @@ class ServiceEngine:
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
+        rework = state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            raise DevlegateError(
+                "isolated interrupted execution recovery requires a generation-bound "
+                "workspace capability"
+            )
         required = (
             "local_head",
             "remote_head",

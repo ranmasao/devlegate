@@ -4218,6 +4218,22 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             manager = devlegate._post_worker_workspace_manager(published, execution)
             assert manager.branch == target["branch"]
             assert manager.path == Path(target["path"])
+            isolated_zero_delta = build_execution_report(
+                execution_id=execution,
+                ticket_id="T-1",
+                code_base_head=candidate,
+                control_head=devlegate._state["execution_control_head"],
+                execution_branch=target["branch"],
+                execution_path=target["path"],
+                workspace_head=candidate,
+                run=WorkerRunResult(
+                    0, None, WorkerClaim("completed", "done", (), ()), None
+                ),
+            )
+            with pytest.raises(WorkflowBlockedError, match="generation workspace"):
+                devlegate._retire_zero_delta_execution(isolated_zero_delta)
+            with pytest.raises(DevlegateError, match="generation-bound"):
+                devlegate._normalize_stranded_execution("worker_lost")
             with pytest.raises(ExecutionWorkspaceError, match="workspace binding"):
                 devlegate._post_worker_workspace_manager(published, "0" * 32)
             with monkeypatch.context() as altered:
