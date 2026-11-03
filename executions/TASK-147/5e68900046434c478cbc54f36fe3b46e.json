@@ -1,0 +1,37 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "06b97b3e53101374303154b3c0aa6929a2a77f6a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "5e68900046434c478cbc54f36fe3b46e",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect one read-only isolated admission decision to status and the ordinary scheduler, and persist and recover the isolated target transaction across restarts.",
+    "Implement generation-aware worker preparation, recovery, retry, review, accepted integration, reconciliation and cleanup before enabling isolated worker admission.",
+    "Complete the positive missing-cache ordinary-worker scenario and the remaining concurrency, fault-injection and ownership regressions; run full exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-147/5e68900046434c478cbc54f36fe3b46e.md",
+  "report_sha256": "df584db17357b9e90e433f9a8a5906d9ece48bdaa956cea4ccd446f0b287f811",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect one read-only isolated admission decision to status and the ordinary scheduler, and persist and recover the isolated target transaction across restarts.",
+      "Implement generation-aware worker preparation, recovery, retry, review, accepted integration, reconciliation and cleanup before enabling isolated worker admission.",
+      "Complete the positive missing-cache ordinary-worker scenario and the remaining concurrency, fault-injection and ownership regressions; run full exact-checkpoint CI."
+    ],
+    "report": "The first transition after remote_published remains intentionally gated: accepted integration and restart recovery still assume ticket-scoped workspaces. Enabling worker admission before those paths are converted would risk acting on historical resources, so the complete lifecycle cannot safely be claimed in this invocation.",
+    "summary": "Bound post-worker checkpoint manager selection to the persisted execution workspace identity, including the generation-specific isolated target. Added real-Git coverage for isolated identity selection and mismatched bindings."
+  },
+  "workspace_head": "31ae50bdae257bbb5b8053687ba9613a6e780824"
+}
