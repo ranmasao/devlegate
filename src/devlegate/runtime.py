@@ -9378,6 +9378,12 @@ class ServiceEngine:
         self, *, base_head: str | None = None
     ) -> ExecutionWorkspace:
         state = self._state
+        rework = state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            raise WorkflowBlockedError(
+                "isolated running workspace recovery requires a generation-bound "
+                "capability"
+            )
         ticket_id = state.get("execution_ticket_id")
         if base_head is None:
             base_head = state.get("execution_base_head")
@@ -11359,6 +11365,12 @@ class ServiceEngine:
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
         rework = state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            return WorkspaceInspection(
+                "UNSAFE",
+                "isolated bound workspace recovery is blocked until generation-aware "
+                "running and reconciliation recovery is available",
+            )
         if (
             isinstance(rework, dict)
             and rework.get("preparation_stage") == "remote_predecessor_installed"
@@ -11763,6 +11775,11 @@ class ServiceEngine:
 
     def recovery_workspace_manager(self, ticket_id: str):
         """Provide the workspace capability without exposing the coordinator."""
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            raise ExecutionWorkspaceError(
+                "isolated workspace recovery requires a generation-bound capability"
+            )
         return ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -11848,6 +11865,9 @@ class ServiceEngine:
     def reconciliation_workspace_binding(
         self, ticket_id: str, value: dict[str, object]
     ) -> bool:
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            return False
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -11860,6 +11880,11 @@ class ServiceEngine:
         return self._lock()
 
     def reconciliation_workspace_manager(self, ticket_id: str):
+        rework = self._state.get("rework_provenance")
+        if isinstance(rework, dict) and rework.get("mode") == "isolated":
+            raise ExecutionWorkspaceError(
+                "isolated reconciliation requires a generation-bound capability"
+            )
         return ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )

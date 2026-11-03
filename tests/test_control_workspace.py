@@ -4227,6 +4227,19 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             inspection = devlegate._inspect_pending_rework(devlegate._state)
             assert inspection.classification == "UNSAFE"
             assert "downstream accepted integration" in inspection.reason
+            inspection = devlegate._inspect_bound_execution_workspace(devlegate._state)
+            assert inspection.classification == "UNSAFE"
+            assert "generation-aware" in inspection.reason
+            with pytest.raises(ExecutionWorkspaceError, match="generation-bound"):
+                devlegate.recovery_workspace_manager("T-1")
+            with pytest.raises(WorkflowBlockedError, match="generation-bound"):
+                devlegate._execution_workspace_for_recovery()
+            assert not devlegate.reconciliation_workspace_binding(
+                "T-1", {"execution_branch": "devlegate/work/T-1",
+                        "execution_path": str(workspace)}
+            )
+            with pytest.raises(ExecutionWorkspaceError, match="generation-bound"):
+                devlegate.reconciliation_workspace_manager("T-1")
             dirty = Path(target["path"]) / "untracked.txt"
             dirty.write_text("untracked\n")
             with pytest.raises(
