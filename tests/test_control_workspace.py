@@ -4090,6 +4090,21 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             devlegate = Devlegate(config)
             assert devlegate._admit_isolated_failed_rework(()) == intent
             assert devlegate._state["execution_id"] == execution
+            forged = {
+                **devlegate._state,
+                "rework_provenance": {
+                    **intent,
+                    "code_predecessor": {
+                        **intent["code_predecessor"],
+                        "checkpoint": reviewed.workspace_head,
+                    },
+                },
+            }
+            with pytest.raises(DevlegateError, match="lifecycle binding changed"):
+                devlegate._inspect_isolated_failed_rework_intent(forged)
+            forged = {**devlegate._state, "selected_ticket_body": "forged"}
+            with pytest.raises(DevlegateError, match="canonical ticket changed"):
+                devlegate._inspect_isolated_failed_rework_intent(forged)
             inspection = devlegate._inspect_pending_rework(devlegate._state)
             assert inspection.classification == "UNSAFE"
             assert git(working, "show-ref").stdout == before_refs

@@ -134,6 +134,8 @@ class ExecutionWorkspaceManager:
 
     def prepare(self, base_head: str) -> ExecutionWorkspace:
         self._validate_base(base_head)
+        if self.path.is_symlink():
+            raise self._path_conflict("is a symlink")
         if self._has_symlinked_path():
             raise self._path_conflict("has a symlinked workspace root")
         self._ensure_branch(base_head)

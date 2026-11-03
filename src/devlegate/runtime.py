@@ -6208,6 +6208,75 @@ class ServiceEngine:
                 or state.get("worker_identity") is not None):
             raise WorkflowBlockedError("isolated intent binding is invalid")
 
+        if (state.get("phase") != "agent_pending"
+                or state.get("selected_ticket_id") != ticket):
+            raise WorkflowBlockedError(
+                "isolated intent is not the selected pending ticket"
+            )
+        observations = self._status_git_observation()
+        control, code = observations.get("control"), observations.get("code")
+        if (control is None or code is None
+                or control.local_head != rework.get("admitted_control_head")
+                or code.local_head != rework.get("admitted_base_head")):
+            raise WorkflowBlockedError(
+                "isolated intent admitted Git generation changed"
+            )
+        current = self._ticket_store().by_id.get(ticket)
+        if (current is None or current.body != state.get("selected_ticket_body")
+                or current.title != state.get("selected_ticket_title")
+                or list(current.depends_on)
+                != state.get("selected_ticket_dependencies")):
+            raise WorkflowBlockedError("isolated intent canonical ticket changed")
+        # The persisted pending intent is the only exception to the idle check
+        # in source proof. All competing markers and live worker evidence remain
+        # subject to the same checks as admission.
+        admission_state = {**state, "phase": "idle"}
+        reports = ExecutionReportStore(self.control_worktree).list(ticket)
+        source = self._prove_deferred_failed_rework(
+            reports, state=admission_state, observations=observations
+        )
+        if source is None:
+            raise WorkflowBlockedError(
+                "isolated intent failed source is no longer eligible"
+            )
+        review_commit, reviewed, failed = source
+        predecessor = rework.get("code_predecessor")
+        report_path = f"executions/{ticket}/{failed.execution_id}.json"
+        try:
+            publications = [
+                commit for commit, changes in history_changes(
+                    self.control_worktree, control.local_head, f"executions/{ticket}",
+                    runner=self._git_runtime,
+                ) if f"A\t{report_path}" in changes
+            ]
+        except GitObservationError as error:
+            raise WorkflowBlockedError(
+                "cannot inspect isolated intent report publication"
+            ) from error
+        if (len(publications) != 1 or predecessor != {
+            "execution_id": failed.execution_id, "checkpoint": failed.workspace_head,
+            "base_head": failed.code_base_head, "report_commit": publications[0],
+            "report_path": report_path,
+        } or rework.get("previous_execution_id") != reviewed.execution_id
+                or rework.get("previous_report_checkpoint") != reviewed.workspace_head
+                or rework.get("previous_base_head") != reviewed.code_base_head
+                or rework.get("previous_control_head") != reviewed.control_head):
+            raise WorkflowBlockedError("isolated intent lifecycle binding changed")
+        try:
+            binding = resolve_rework_review(
+                self.control_worktree, control.local_head, review_commit, reviewed,
+                todo_path=self.todo_path, review_path=self.review_path,
+                backlog_path=self.backlog_path, runner=self._git_runtime,
+            )
+        except ReviewProvenanceError as error:
+            raise WorkflowBlockedError(
+                f"cannot bind isolated intent curator feedback: {error}"
+            ) from error
+        if rework.get("review") != binding.as_dict():
+            raise WorkflowBlockedError(
+                "isolated intent curator feedback binding changed"
+            )
+
     def _prove_deferred_failed_rework(
         self, reports: tuple[ExecutionReport, ...], *,
         state: dict[str, object] | None = None,
