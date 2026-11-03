@@ -6056,7 +6056,46 @@ class ServiceEngine:
         state: dict[str, object] | None = None,
         observations: dict | None = None,
     ) -> tuple[str, ExecutionReport, ExecutionReport] | None:
-        """Bind a deferred failed checkpoint to its preceding genuine review."""
+        """Prove the source and separately authorize reuse of its workspace."""
+        source = self._prove_deferred_failed_rework(
+            reports, state=state, observations=observations
+        )
+        if source is None:
+            return None
+        _, _, failed = source
+        state = self._state if state is None else state
+        failures = state.get("failed_executions")
+        metadata = (
+            failures.get(failed.ticket_id) if isinstance(failures, dict) else None
+        )
+        self._verify_failed_rework_workspace_ownership(
+            failed.ticket_id, failed, state, metadata
+        )
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, failed.ticket_id,
+            runner=self._git_runtime,
+        )
+        try:
+            inspection = manager.inspect(failed.code_base_head, failed.workspace_head)
+            if inspection.classification != "REUSABLE":
+                raise WorkflowBlockedError(
+                    f"rework source is unsafe: {inspection.reason}"
+                )
+            remote = self._execution_remote_head(manager.branch)
+        except (GitObservationError, GitAncestryError) as error:
+            raise WorkflowBlockedError("cannot prove failed rework history") from error
+        if remote != failed.workspace_head and not (
+            remote is None and failed.workspace_head == failed.code_base_head
+        ):
+            raise WorkflowBlockedError("rework remote predecessor changed")
+        return source
+
+    def _prove_deferred_failed_rework(
+        self, reports: tuple[ExecutionReport, ...], *,
+        state: dict[str, object] | None = None,
+        observations: dict | None = None,
+    ) -> tuple[str, ExecutionReport, ExecutionReport] | None:
+        """Prove immutable source history without assuming workspace ownership."""
         if not reports:
             return None
         ticket = reports[0].ticket_id
@@ -6214,23 +6253,6 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     f"cannot bind curator feedback for {ticket}: {error}"
                 ) from error
-            self._verify_failed_rework_workspace_ownership(
-                ticket, failed, state, metadata
-            )
-            manager = ExecutionWorkspaceManager(
-                self.repo, self.execution_worktree_root, ticket,
-                runner=self._git_runtime,
-            )
-            inspection = manager.inspect(failed.code_base_head, failed.workspace_head)
-            if inspection.classification != "REUSABLE":
-                raise WorkflowBlockedError(
-                    f"rework source is unsafe: {inspection.reason}"
-                )
-            remote = self._execution_remote_head(manager.branch)
-            if remote != failed.workspace_head and not (
-                remote is None and failed.workspace_head == failed.code_base_head
-            ):
-                raise WorkflowBlockedError("rework remote predecessor changed")
             return review_commit, reviewed, failed
         except (GitObservationError, GitAncestryError) as error:
             raise WorkflowBlockedError("cannot prove failed rework history") from error

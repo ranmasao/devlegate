@@ -107,9 +107,12 @@ class ExecutionWorkspaceManager:
     """Materialize one deterministic worktree without owning worker changes."""
 
     def __init__(
-        self, repo: Path, root: Path, ticket_id: str, *, runner: GitRunner | None = None
+        self, repo: Path, root: Path, ticket_id: str, *,
+        generation: str | None = None, runner: GitRunner | None = None,
     ) -> None:
-        identity = ExecutionWorkspaceIdentity.for_ticket(root, ticket_id)
+        identity = ExecutionWorkspaceIdentity.for_ticket(
+            root, ticket_id, generation=generation
+        )
         self.repo = repo.resolve()
         self.ticket_id = identity.ticket_id
         self.branch = identity.branch
@@ -120,9 +123,18 @@ class ExecutionWorkspaceManager:
         # their owner- and shutdown-aware Git capability.
         self._runner = _default_git_runner if runner is None else runner
 
+    def _has_symlinked_path(self) -> bool:
+        """Check every managed component, including generation directories."""
+        path = self.path
+        while path != self.root:
+            if path.is_symlink():
+                return True
+            path = path.parent
+        return self.root.is_symlink()
+
     def prepare(self, base_head: str) -> ExecutionWorkspace:
         self._validate_base(base_head)
-        if self.root.is_symlink() or (self.root / "work").is_symlink():
+        if self._has_symlinked_path():
             raise self._path_conflict("has a symlinked workspace root")
         self._ensure_branch(base_head)
         self._validate_branch(base_head)
@@ -283,7 +295,7 @@ class ExecutionWorkspaceManager:
             if base_head == previous_base:
                 # The checkpoint already contains the complete worker lineage on
                 # the admitted base. Keep its identity and commit IDs intact.
-                if self.root.is_symlink() or (self.root / "work").is_symlink():
+                if self._has_symlinked_path():
                     raise self._path_conflict("has a symlinked workspace root")
                 if self.path.is_symlink():
                     raise self._path_conflict("is a symlink")
@@ -644,7 +656,7 @@ class ExecutionWorkspaceManager:
             raise ExecutionWorkspaceError("execution workspace checkpoint is invalid")
         if workspace.dirty:
             raise ExecutionWorkspaceError("execution worktree is dirty")
-        if self.root.is_symlink() or (self.root / "work").is_symlink():
+        if self._has_symlinked_path():
             raise self._path_conflict("has a symlinked workspace root")
         if self.path.is_symlink():
             raise self._path_conflict("is a symlink")
@@ -887,11 +899,7 @@ class ExecutionWorkspaceManager:
             or workspace.path != self.path
         ):
             raise ExecutionWorkspaceError("execution workspace binding is invalid")
-        if (
-            self.root.is_symlink()
-            or (self.root / "work").is_symlink()
-            or self.path.is_symlink()
-        ):
+        if self._has_symlinked_path():
             raise self._path_conflict("is a symlink")
         registrations = self._registrations()
         registration = registrations.get(self.path.resolve())

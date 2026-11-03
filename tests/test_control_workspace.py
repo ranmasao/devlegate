@@ -4018,6 +4018,26 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         devlegate = Devlegate(config)
         monkeypatch.setattr(devlegate._workers, "run", worker)
         assert "T-1" not in devlegate._state["failed_executions"]
+        source = devlegate._prove_deferred_failed_rework(
+            ExecutionReportStore(control).list("T-1")
+        )
+        assert source is not None
+        assert source[1].execution_id == reviewed.execution_id
+        assert source[2].execution_id == failed.execution_id
+        unrelated = {
+            **devlegate._state,
+            "execution_id": "a" * 32,
+            "execution_ticket_id": "T-2",
+            "execution_branch": "devlegate/work/T-2",
+            "execution_path": str(workspace.parent / "T-2"),
+        }
+        (workspace / "unowned-dirty.txt").write_text("unowned\n")
+        try:
+            assert devlegate._prove_deferred_failed_rework(
+                ExecutionReportStore(control).list("T-1"), state=unrelated
+            ) == source
+        finally:
+            (workspace / "unowned-dirty.txt").unlink()
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (
                 "ownership is missing" if corruption == "cleared_identity"
