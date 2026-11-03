@@ -6153,11 +6153,15 @@ class ServiceEngine:
                 }
                 if any(state.get(key) != value for key, value in identity.items()):
                     present = any(state.get(key) is not None for key in identity)
-                    detail = "conflicts with" if present else "is missing for"
+                    detail = (
+                        "refers to a different generation than"
+                        if present else "is missing for"
+                    )
                     raise WorkflowBlockedError(
                         f"failed continuation persisted workspace ownership {detail} "
                         "the failed execution; Git report and worktree topology alone "
-                        "cannot prove current ownership"
+                        "cannot prove current ownership or authorize replacement of "
+                        "the historical worktree and execution ref"
                     )
             todo = f"{self.todo_path}/{ticket}.md"
             backlog = f"{self.backlog_path}/{ticket}.md"

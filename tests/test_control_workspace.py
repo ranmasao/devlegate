@@ -4008,7 +4008,7 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (
                 "ownership is missing" if corruption == "cleared_identity"
-                else "ownership conflicts"
+                else "ownership refers to a different generation"
             )
             before = git(working, "worktree", "list", "--porcelain").stdout
             branch = git(working, "rev-parse", "refs/heads/devlegate/work/T-1").stdout
