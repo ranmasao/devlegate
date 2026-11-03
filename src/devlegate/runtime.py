@@ -6200,7 +6200,9 @@ class ServiceEngine:
         if (rework.get("mode") != "isolated"
                 or rework.get("preparation_stage") not in {
                     "admitted", "source_pinning", "candidate_pinning",
-                    "candidate_pinned",
+                    "candidate_pinned", "target_creating", "target_created",
+                    "worktree_attaching", "worktree_attached",
+                    "remote_publishing", "remote_published",
                 }
                 or rework.get("target") != target
                 or state.get("execution_branch") != identity.branch
@@ -6368,6 +6370,148 @@ class ServiceEngine:
                 **rework, "preparation_stage": "candidate_pinned",
                 "candidate_head": candidate,
             })
+        return candidate
+
+    def _publish_isolated_failed_rework_target(self) -> str:
+        """Materialize only the target authorized by a pinned isolated intent."""
+        self._assert_repository_owner()
+        self._inspect_isolated_failed_rework_intent(self._state)
+        rework = self._state["rework_provenance"]
+        stage = rework["preparation_stage"]
+        stages = ("candidate_pinned", "target_creating", "target_created",
+                  "worktree_attaching", "worktree_attached", "remote_publishing",
+                  "remote_published")
+        if stage not in stages:
+            raise WorkflowBlockedError("isolated target requires a pinned candidate")
+        ticket = self._state["execution_ticket_id"]
+        execution = self._state["execution_id"]
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, ticket,
+            generation=execution, runner=self._git_runtime,
+        )
+        target = rework["target"]
+        predecessor = rework["code_predecessor"]
+        prefix = f"refs/devlegate/isolated/{ticket}/{execution}"
+        if (rework.get("source_ref") != f"{prefix}/source"
+                or rework.get("candidate_ref") != f"{prefix}/candidate"
+                or resolve_ref_commit(self.repo, rework["source_ref"],
+                                      runner=self._git_runtime)
+                != predecessor["checkpoint"]):
+            raise WorkflowBlockedError("isolated source pin is missing or changed")
+        for ref in (rework["source_ref"], rework["candidate_ref"]):
+            symbolic = self._git_runtime(
+                self.repo, "symbolic-ref", "-q", ref, check=False
+            )
+            if symbolic.returncode != 1:
+                raise WorkflowBlockedError(
+                    "isolated evidence ref is symbolic or unreadable"
+                )
+        candidate = manager._pinned_rework_candidate(
+            rework["admitted_base_head"], predecessor["base_head"],
+            predecessor["checkpoint"], rework["candidate_ref"], create=False,
+        )
+        if candidate != rework.get("candidate_head"):
+            raise WorkflowBlockedError("isolated candidate identity changed")
+
+        def save_stage(value: str) -> None:
+            nonlocal rework, stage
+            self._save_state("agent_pending", rework_provenance={
+                **rework, "preparation_stage": value,
+            })
+            rework = self._state["rework_provenance"]
+            stage = value
+
+        def observe() -> tuple[str | None, str | None]:
+            symbolic = self._git_runtime(
+                self.repo, "symbolic-ref", "-q", target["ref"], check=False
+            )
+            if symbolic.returncode != 1:
+                raise WorkflowBlockedError(
+                    "isolated target ref is symbolic or unreadable"
+                )
+            return (
+                resolve_ref_commit(self.repo, target["ref"], runner=self._git_runtime),
+                self._execution_remote_head(manager.branch),
+            )
+
+        local, remote = observe()
+        if manager._has_symlinked_path():
+            raise WorkflowBlockedError("isolated target path has a symlink")
+        registrations = manager._registrations()
+        registration = registrations.get(manager.path.resolve())
+        if any(item.get("branch") == manager.branch and path != manager.path.resolve()
+               for path, item in registrations.items()):
+            raise WorkflowBlockedError("isolated target branch is attached elsewhere")
+        if stage == "candidate_pinned":
+            if (local is not None or remote is not None or registration
+                    or manager.path.exists()):
+                raise WorkflowBlockedError("isolated target is not absent")
+            save_stage("target_creating")
+        if stage == "target_creating":
+            if remote is not None or registration or manager.path.exists():
+                raise WorkflowBlockedError("isolated target creation topology changed")
+            if local is None:
+                self._inspect_isolated_failed_rework_intent(self._state)
+                if create_ref_if_absent(self.repo, target["ref"], candidate,
+                                        runner=self._git_runtime).returncode:
+                    raise WorkflowBlockedError("cannot create isolated target ref")
+                local, remote = observe()
+            if local != candidate or remote is not None:
+                raise WorkflowBlockedError("isolated target ref creation conflicts")
+            save_stage("target_created")
+        if local != candidate:
+            raise WorkflowBlockedError("isolated target ref is missing or changed")
+        if stage == "target_created":
+            if remote is not None or registration or manager.path.exists():
+                raise WorkflowBlockedError("isolated target worktree is not absent")
+            save_stage("worktree_attaching")
+        if stage == "worktree_attaching":
+            if remote is not None:
+                raise WorkflowBlockedError(
+                    "isolated remote target appeared before publication"
+                )
+            if registration is None:
+                if manager.path.exists():
+                    raise WorkflowBlockedError("isolated target path is foreign")
+                self._inspect_isolated_failed_rework_intent(self._state)
+                manager.prepare(candidate)
+            inspection = manager.inspect(candidate, candidate)
+            if inspection.classification != "REUSABLE":
+                raise WorkflowBlockedError(
+                    f"isolated target worktree: {inspection.reason}"
+                )
+            save_stage("worktree_attached")
+        inspection = manager.inspect(candidate, candidate)
+        if inspection.classification != "REUSABLE":
+            raise WorkflowBlockedError(f"isolated target worktree: {inspection.reason}")
+        if stage == "worktree_attached":
+            if remote is not None:
+                raise WorkflowBlockedError("isolated remote target already exists")
+            save_stage("remote_publishing")
+            self._inspect_isolated_failed_rework_intent(self._state)
+            local, remote = observe()
+            current_workspace = manager.inspect(candidate, candidate)
+            if (local != candidate or remote is not None
+                    or manager._has_symlinked_path()
+                    or current_workspace.classification != "REUSABLE"):
+                raise WorkflowBlockedError(
+                    "isolated target changed before remote publication"
+                )
+            pushed = self._git_runtime(
+                self.repo, "push", f"--force-with-lease={target['ref']}:",
+                self.remote_name, f"{target['ref']}:{target['ref']}", check=False,
+            )
+            if pushed.returncode:
+                raise WorkflowBlockedError("isolated remote publication is uncertain")
+            local, remote = observe()
+        if stage == "remote_publishing":
+            if remote != candidate or local != candidate:
+                raise WorkflowBlockedError(
+                    "isolated remote publication is uncertain or changed"
+                )
+            save_stage("remote_published")
+        if remote != candidate:
+            raise WorkflowBlockedError("isolated remote target is missing or changed")
         return candidate
 
     def _prove_deferred_failed_rework(

@@ -4170,9 +4170,47 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             devlegate = Devlegate(config)
             assert devlegate._pin_isolated_failed_rework_candidate() == candidate
             assert devlegate._state["execution_id"] == execution
+            for stop_stage in (
+                "target_creating", "target_created", "worktree_attaching",
+                "worktree_attached", "remote_published",
+            ):
+                save = devlegate._save_state
+
+                def crash_before_stage(*args, **kwargs):
+                    provenance = kwargs.get("rework_provenance", {})
+                    if provenance.get("preparation_stage") == stop_stage:
+                        if stop_stage in {"target_creating", "worktree_attaching"}:
+                            save(*args, **kwargs)
+                        raise RuntimeError("simulated target journal crash")
+                    return save(*args, **kwargs)
+
+                with monkeypatch.context() as fault:
+                    fault.setattr(devlegate, "_save_state", crash_before_stage)
+                    with pytest.raises(RuntimeError, match="target journal crash"):
+                        devlegate._publish_isolated_failed_rework_target()
+                devlegate = Devlegate(config)
+            assert devlegate._publish_isolated_failed_rework_target() == candidate
+            target = devlegate._state["rework_provenance"]["target"]
+            assert devlegate._state["rework_provenance"]["preparation_stage"] == (
+                "remote_published"
+            )
+            assert git(working, "rev-parse", target["ref"]).stdout.strip() == candidate
+            assert (
+                git(Path(target["path"]), "rev-parse", "HEAD").stdout.strip()
+                == candidate
+            )
+            assert (
+                git(working, "ls-remote", "origin", target["ref"]).stdout.split()[0]
+                == candidate
+            )
+            devlegate = Devlegate(config)
+            assert devlegate._publish_isolated_failed_rework_target() == candidate
+            assert devlegate._state["execution_id"] == execution
             assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
             assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
-            assert git(working, "ls-remote", "origin").stdout == before_remote
+            assert git(
+                working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
+            ).stdout in before_remote
             assert report_path.read_bytes() == report_bytes
             assert reviewed_path.read_bytes() == reviewed_bytes
             assert artifact.read_bytes() == review_bytes
