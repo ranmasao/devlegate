@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "blocked",
+  "control_head": "522c42842f9d44699a82b65451576a5110916a22",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "71f3b09db98f4a109d546213a9c49515",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Architect decision: authorize an isolated, generation-specific worktree and execution ref for this missing-ownership case, leaving the historical ticket-scoped worktree and local/remote refs untouched, with durable admission, restart-safe transplant, and lease/CAS checks for the new resources? This narrowly amends the requirement to use the existing ticket-scoped TASK-145 swap: the supplied state has no matching failure record or retained generation binding, while the existing swap must retire and retarget those historical resources, and immutable reports or matching topology do not prove their current ownership."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement and validate safe continuation for the different-last-execution, missing-cache scenario, including a real-Git fixture with a genuinely later unrelated execution, live IPC, restart, and negative ownership cases.",
+    "Run the required focused suite, Ruff, and exact final checkpoint CI after the continuation design is authorized and implemented."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Architect decision: authorize an isolated, generation-specific worktree and execution ref for this missing-ownership case, leaving the historical ticket-scoped worktree and local/remote refs untouched, with durable admission, restart-safe transplant, and lease/CAS checks for the new resources? This narrowly amends the requirement to use the existing ticket-scoped TASK-145 swap: the supplied state has no matching failure record or retained generation binding, while the existing swap must retire and retarget those historical resources, and immutable reports or matching topology do not prove their current ownership."
+    ],
+    "remaining": [
+      "Implement and validate safe continuation for the different-last-execution, missing-cache scenario, including a real-Git fixture with a genuinely later unrelated execution, live IPC, restart, and negative ownership cases.",
+      "Run the required focused suite, Ruff, and exact final checkpoint CI after the continuation design is authorized and implemented."
+    ],
+    "report": null,
+    "summary": "Clarified the failed-continuation diagnostic when persisted workspace identity belongs to a different execution generation, and updated the focused regression expectation."
+  },
+  "workspace_head": "cffad20cb6730aa6a86fd73fb22309be27ec35c1"
+}
