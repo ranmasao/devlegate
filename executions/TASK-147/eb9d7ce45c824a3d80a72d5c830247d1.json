@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "3b0388a8e62a1a34cdaad7ce45f2b95e9207c394",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "eb9d7ce45c824a3d80a72d5c830247d1",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement independently owned generation-specific target ref and worktree creation, remote publication with exact lease, and crash recovery.",
+    "Connect isolated continuation to scheduler/status and all generation-aware worker, report, review, retry, reconciliation, integration, and cleanup paths.",
+    "Expand real-Git negative, fault-injection, IPC, and end-to-end coverage; verify the no-cache TASK-134-shaped fixture through ordinary worker launch.",
+    "Run required full exact-checkpoint CI and address any failures."
+  ],
+  "report_artifact": "executions/TASK-147/eb9d7ce45c824a3d80a72d5c830247d1.md",
+  "report_sha256": "9bd0ed68eb62303f3b31b101eb1e2f4820d70415feb34513b7e428d8ca15dc0d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement independently owned generation-specific target ref and worktree creation, remote publication with exact lease, and crash recovery.",
+      "Connect isolated continuation to scheduler/status and all generation-aware worker, report, review, retry, reconciliation, integration, and cleanup paths.",
+      "Expand real-Git negative, fault-injection, IPC, and end-to-end coverage; verify the no-cache TASK-134-shaped fixture through ordinary worker launch.",
+      "Run required full exact-checkpoint CI and address any failures."
+    ],
+    "report": "The candidate stage is implemented but is not wired into ordinary scheduler admission. The first positive unrelated-identity scheduler assertion remains blocked and its test remains a strict XFAIL; enabling it before target ownership and downstream lifecycle handling are implemented would be unsafe. Focused deferral tests passed (24 passed, 1 xfailed); Ruff passed for src and tests. A repository-wide Ruff invocation also reported existing issues in vendored packaging files. Full exact-checkpoint CI was not run.",
+    "summary": "Added generation-scoped source and candidate pinning for persisted isolated failed-rework intents, reusing the existing verified transplant machinery. Added disposable Git coverage for absent failure metadata, dirty unowned source workspaces, ref collisions, and restart recovery across journal stages."
+  },
+  "workspace_head": "6ce6eb1cdf93b572eb13eace29e6ca94af84a724"
+}
