@@ -1,0 +1,39 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "incomplete",
+  "control_head": "13c0a0efcf7e11d2d9a6e86ad1811daa70b2f312",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "264c98a9814a419eb82ea87e5beafea8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Build the representative fixture with an actual unrelated completed execution and at least two failed-generation commits, and add live IPC and restart observations.",
+    "Implement durable isolated-generation admission, source and candidate pinning, expected-absent target creation, lease-protected publication, and restart reconciliation without mutating historical resources.",
+    "Carry generation identity through worker execution, reports, retries, review, integration, and cleanup; add the specified safety and crash-stage regressions.",
+    "Remove the expected-failure marker once the positive path passes, and run focused tests, Ruff, and exact-checkpoint full CI."
+  ],
+  "report_artifact": "executions/TASK-147/264c98a9814a419eb82ea87e5beafea8.md",
+  "report_sha256": "219fb28b4846c48db3a82e07aca019c95e60408b4f8e79646a5e800252b0da41",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Build the representative fixture with an actual unrelated completed execution and at least two failed-generation commits, and add live IPC and restart observations.",
+      "Implement durable isolated-generation admission, source and candidate pinning, expected-absent target creation, lease-protected publication, and restart reconciliation without mutating historical resources.",
+      "Carry generation identity through worker execution, reports, retries, review, integration, and cleanup; add the specified safety and crash-stage regressions.",
+      "Remove the expected-failure marker once the positive path passes, and run focused tests, Ruff, and exact-checkpoint full CI."
+    ],
+    "report": "The invocation ended before the approved lifecycle implementation could be completed. The new reduced fixture is expected-failing at status admission; it does not yet reproduce two failed-generation commits or an actual unrelated completed execution. Focused pytest reported one expected failure; Ruff passed before the final removal of the attempted worker commits. No exact-checkpoint CI was run. The observed TASK-134-shaped case is not yet admitted.",
+    "summary": "Added an expected-failure regression for deferred failed rework with an absent failure cache and an unrelated persisted execution identity. The fixture checks the intended isolated branch and preservation of the historical workspace and remote ref."
+  },
+  "workspace_head": "7cf8fb6c888514e189509e5398a84bb08762713f"
+}
