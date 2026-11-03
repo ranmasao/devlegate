@@ -4649,12 +4649,7 @@ class ServiceEngine:
                 "execution cgroup remains populated; worker retirement is unproven"
             )
         try:
-            manager = ExecutionWorkspaceManager(
-                self.repo,
-                self.execution_worktree_root,
-                selected_ticket.id,
-                runner=self._git_runtime,
-            )
+            manager = self._post_worker_workspace_manager(workspace, execution_id)
             manager.verify_submodules(workspace)
         except (ExecutionWorkspaceError, OSError) as error:
             self._record_post_worker_failure(
@@ -5372,6 +5367,36 @@ class ServiceEngine:
         )
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
+
+    def _post_worker_workspace_manager(
+        self, workspace: ExecutionWorkspace, execution_id: str
+    ) -> ExecutionWorkspaceManager:
+        """Bind checkpoint operations to the persisted worker workspace identity."""
+        state = self._state
+        rework = state.get("rework_provenance")
+        isolated = isinstance(rework, dict) and rework.get("mode") == "isolated"
+        if isolated and rework.get("preparation_stage") != "remote_published":
+            raise ExecutionWorkspaceError("isolated checkpoint target is not published")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, workspace.ticket_id,
+            generation=execution_id if isolated else None, runner=self._git_runtime,
+        )
+        if (
+            state.get("execution_id") != execution_id
+            or state.get("execution_ticket_id") != workspace.ticket_id
+            or state.get("execution_branch") != manager.branch
+            or state.get("execution_path") != str(manager.path)
+            or workspace.branch != manager.branch
+            or workspace.path != manager.path
+            or state.get("execution_base_head") != workspace.base_head
+        ):
+            raise ExecutionWorkspaceError("post-worker workspace binding changed")
+        if isolated and rework.get("target") != {
+            "branch": manager.branch, "path": str(manager.path),
+            "ref": f"refs/heads/{manager.branch}", "expected_old_head": None,
+        }:
+            raise ExecutionWorkspaceError("isolated checkpoint target binding changed")
+        return manager
 
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         rework = self._state.get("rework_provenance")

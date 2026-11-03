@@ -4215,6 +4215,15 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert published.branch == target["branch"]
             assert published.head == candidate
             assert published.base_head == devlegate._state["execution_base_head"]
+            manager = devlegate._post_worker_workspace_manager(published, execution)
+            assert manager.branch == target["branch"]
+            assert manager.path == Path(target["path"])
+            with pytest.raises(ExecutionWorkspaceError, match="workspace binding"):
+                devlegate._post_worker_workspace_manager(published, "0" * 32)
+            with monkeypatch.context() as altered:
+                altered.setitem(devlegate._state, "execution_path", str(workspace))
+                with pytest.raises(ExecutionWorkspaceError, match="workspace binding"):
+                    devlegate._post_worker_workspace_manager(published, execution)
             inspection = devlegate._inspect_pending_rework(devlegate._state)
             assert inspection.classification == "UNSAFE"
             assert "downstream accepted integration" in inspection.reason
