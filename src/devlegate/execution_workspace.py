@@ -579,8 +579,17 @@ class ExecutionWorkspaceManager:
             )
             try:
                 valid = is_ancestor(self.repo, base, candidate, runner=self._runner)
-                equivalent = patch_equivalence(
-                    self.repo, checkpoint, candidate, base, runner=self._runner
+                exact_source = (
+                    base == old_base and candidate == checkpoint
+                    and replay.stdout.splitlines() == delta
+                )
+                # git cherry suppresses commits shared with its upstream. On
+                # the identical base, exact ordered commit identity is stronger
+                # evidence and correctly handles the intentionally reused tip.
+                equivalent = (
+                    ("-",) * len(delta) if exact_source else patch_equivalence(
+                        self.repo, checkpoint, candidate, base, runner=self._runner
+                    )
                 )
             except (GitAncestryError, GitObservationError) as error:
                 raise ExecutionWorkspaceError(

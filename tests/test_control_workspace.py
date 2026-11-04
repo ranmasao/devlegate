@@ -3783,8 +3783,7 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
     assert feedback in prompts[1]
 
 
-@pytest.mark.parametrize(
-    ("advance_product", "crash_point", "corruption"),
+DEFERRED_CONTINUATION_CASES = (
     [
         (False, None, None),
         (True, None, "cleared_identity"),
@@ -3842,9 +3841,9 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (True, "moved", "moved_local"),
         (True, "attached", "attached_remote"),
         (True, "attached", "attached_submodule"),
-    ],
+    ]
 )
-def test_failed_rework_deferral_resumes_checkpoint_and_review(
+def _seed_direct_continuation(
     tmp_path, monkeypatch, advance_product, crash_point, corruption
 ):
     unrelated_completion = bool(corruption and corruption.startswith("unrelated_"))
@@ -4043,6 +4042,348 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         git(working, "commit", "-m", "advance product")
         git(working, "push", "origin", "HEAD")
 
+    return SimpleNamespace(
+        working=working, config=config, state=state, devlegate=devlegate,
+        worker=worker, prompts=prompts, control=control, reviewed=reviewed,
+        failed=failed, workspace=workspace, checkpoint=checkpoint,
+        reviewed_path=reviewed_path, reviewed_bytes=reviewed_bytes,
+        report_path=report_path, report_bytes=report_bytes,
+        artifact=artifact, review_bytes=review_bytes, reports=reports,
+        interrupt_swap=interrupt_swap,
+    )
+
+
+def _exercise_isolated_lifecycle(
+    fixture, devlegate, published, candidate, target, execution,
+    corruption, tmp_path, monkeypatch,
+):
+    """Checkpoint/report/accepted integration boundary, after target preparation."""
+    working, config, control = fixture.working, fixture.config, fixture.control
+    workspace, checkpoint = fixture.workspace, fixture.checkpoint
+    report_path, report_bytes = fixture.report_path, fixture.report_bytes
+    reviewed_path, reviewed_bytes = fixture.reviewed_path, fixture.reviewed_bytes
+    artifact, review_bytes = fixture.artifact, fixture.review_bytes
+    prompts = fixture.prompts
+    expected_prompts = len(prompts) + 1
+    devlegate._save_state(
+        "agent_running", execution_stage="post-worker",
+        execution_start_head=candidate, execution_remote_head=candidate,
+        worker_identity=None,
+    )
+    devlegate._owned_execution_id = execution
+
+    def isolated_worker(workspace, prompt, **kwargs):
+        assert kwargs["execution_id"] == execution
+        assert workspace.path == published.path
+        prompts.append(prompt)
+        if corruption != "isolated_lifecycle_zero":
+            (workspace.path / "new-generation.txt").write_text("worker change\n")
+            git(workspace.path, "add", "new-generation.txt")
+            git(workspace.path, "commit", "-m", "isolated worker change")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "isolated result", (), ()), None,
+        )
+
+    monkeypatch.setattr(devlegate._workers, "run", isolated_worker)
+    worker_result = devlegate._workers.run(
+        published, "Controlled isolated post-worker lifecycle", execution_id=execution,
+    )
+    new_checkpoint = git(published.path, "rev-parse", "HEAD").stdout.strip()
+
+    def complete_worker():
+        return devlegate._complete_worker_checkpoint(
+            published, execution, devlegate._ticket_store().by_id["T-1"],
+            worker_result, published.base_head, published.base_head,
+        )
+
+    stop_stage = corruption.removeprefix("isolated_lifecycle_")
+    if stop_stage in {"ref_conflict", "foreign_worktree", "control_conflict"}:
+        if stop_stage == "ref_conflict":
+            git(working, "push", "--force", "origin", f"{checkpoint}:{target['ref']}")
+            reason = "remote binding changed"
+        elif stop_stage == "foreign_worktree":
+            git(working, "worktree", "move", str(published.path),
+                str(tmp_path / "foreign-worker-target"))
+            reason = "worktree|workspace|directory"
+        else:
+            (control / "competing-control.txt").write_text("competing\n")
+            git(control, "add", "competing-control.txt")
+            git(control, "commit", "-m", "competing control publication")
+            git(control, "push", "origin", "devlegate/control")
+            reason = "Git generation changed"
+        refs_before = git(working, "show-ref").stdout
+        remote_before = git(working, "ls-remote", "origin").stdout
+        trees_before = git(working, "worktree", "list", "--porcelain").stdout
+        with pytest.raises(DevlegateError, match=reason):
+            complete_worker()
+        assert git(working, "show-ref").stdout == refs_before
+        assert git(working, "ls-remote", "origin").stdout == remote_before
+        assert git(working, "worktree", "list", "--porcelain").stdout == trees_before
+        assert len(ExecutionReportStore(control).list("T-1")) == 2
+        assert report_path.read_bytes() == report_bytes
+        assert reviewed_path.read_bytes() == reviewed_bytes
+        assert artifact.read_bytes() == review_bytes
+        assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+        return
+    if stop_stage in {
+        "checkpointing", "post-checkpoint", "publishing",
+        "post-publication", "lifecycle",
+    }:
+        save = devlegate._save_state
+
+        def crash_at_checkpoint(phase, **kwargs):
+            result = save(phase, **kwargs)
+            if kwargs.get("execution_stage") == stop_stage:
+                raise RuntimeError("crash at checkpoint journal")
+            return result
+
+        with monkeypatch.context() as fault:
+            fault.setattr(devlegate, "_save_state", crash_at_checkpoint)
+            with pytest.raises(RuntimeError, match="checkpoint journal"):
+                complete_worker()
+        devlegate = Devlegate(config)
+        assert run_test_iteration(devlegate) == 0
+    elif corruption.endswith("report_restart"):
+        with monkeypatch.context() as fault:
+            def crash_after_report(*_args, **_kwargs):
+                raise RuntimeError("crash after report publication")
+
+            fault.setattr(
+                devlegate, "_finalize_execution_lifecycle", crash_after_report
+            )
+            with pytest.raises(RuntimeError, match="after report"):
+                complete_worker()
+        devlegate = Devlegate(config)
+        assert run_test_iteration(devlegate) == 0
+    else:
+        assert complete_worker() == 0
+    new_report = next(
+        report for report in ExecutionReportStore(control).list("T-1")
+        if report.execution_id == execution
+    )
+    assert new_report.execution_branch == target["branch"]
+    assert new_report.execution_path == target["path"]
+    assert new_report.workspace_head == new_checkpoint
+    assert new_report.code_base_head == published.base_head
+    assert (control / "kanban/review/T-1.md").is_file()
+    new_report_bytes = (control / f"executions/T-1/{execution}.json").read_bytes()
+    devlegate = Devlegate(config)
+    assert devlegate._reconcile_stranded_execution() is None
+    git(control, "mv", "kanban/review/T-1.md", "kanban/accepted/T-1.md")
+    git(control, "commit", "-m", "accept isolated generation")
+    git(control, "push", "origin", "devlegate/control")
+    if stop_stage == "product_advance":
+        (working / "later-product.txt").write_text("later product\n")
+        git(working, "add", "later-product.txt")
+        git(working, "commit", "-m", "advance product before integration")
+        git(working, "push", "origin", "HEAD")
+    if corruption.endswith("integration_restart"):
+        complete = devlegate._complete_accepted
+
+        def crash_after_done(*args, **kwargs):
+            complete(*args, **kwargs)
+            raise RuntimeError("crash after accepted mutation")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(devlegate, "_complete_accepted", crash_after_done)
+            with pytest.raises(RuntimeError, match="accepted mutation"):
+                run_test_iteration(devlegate)
+        devlegate = Devlegate(config)
+    assert run_test_iteration(devlegate) == 0
+    assert (control / "kanban/done/T-1.md").is_file()
+    if stop_stage == "product_advance":
+        assert git(working, "merge-base", "--is-ancestor", new_checkpoint, "HEAD"
+                   ).returncode == 0
+        assert (working / "later-product.txt").read_text() == "later product\n"
+        assert (working / "new-generation.txt").read_text() == "worker change\n"
+    else:
+        assert git(working, "rev-parse", "HEAD").stdout.strip() == new_checkpoint
+    assert devlegate._state["workspace_cleanup_event"]["status"] == "blocked"
+    assert "generation workspace retained" in devlegate._state[
+        "workspace_cleanup_event"
+    ]["reason"]
+    assert git(published.path, "rev-parse", "HEAD").stdout.strip() == new_checkpoint
+    assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+    assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+    assert report_path.read_bytes() == report_bytes
+    assert reviewed_path.read_bytes() == reviewed_bytes
+    assert artifact.read_bytes() == review_bytes
+    assert (control / f"executions/T-1/{execution}.json").read_bytes() == (
+        new_report_bytes
+    )
+    assert len(ExecutionReportStore(control).list("T-1")) == 3
+    assert len(prompts) == expected_prompts
+
+
+def _exercise_isolated_recovery(
+    fixture, devlegate, candidate, target, execution, refs, registrations,
+    failures, corruption, tmp_path, monkeypatch,
+):
+    """Refuse uncertain ownership, then normalize one proven absent generation."""
+    working, config = fixture.working, fixture.config
+    workspace, checkpoint = fixture.workspace, fixture.checkpoint
+    reviewed = fixture.reviewed
+    expected_prompts = len(fixture.prompts)
+    devlegate._save_state(
+        "agent_running", execution_stage=(
+            "post-worker" if corruption == "isolated_recovery_after_save"
+            else "worker-running"
+        ),
+        local_head=devlegate._state["execution_base_head"],
+        remote_head=devlegate._state["execution_base_head"],
+        execution_interruption_kind="process_loss",
+        execution_start_head=candidate, execution_remote_head=candidate,
+        worker_identity=None if corruption.endswith("after_save") else {
+            "execution_id": execution, "pid": 99999999,
+            "pgid": 99999999, "sid": 99999999,
+            "boot_id": "disposable-worker", "start_time": 1,
+        },
+    )
+    devlegate = Devlegate(config)
+
+    def protect_historical_workspace(engine):
+        original_git = engine._git_runtime
+
+        def isolated_git(cwd, *args, **kwargs):
+            assert Path(cwd) != workspace, "historical workspace inspected"
+            return original_git(cwd, *args, **kwargs)
+
+        monkeypatch.setattr(engine, "_git_runtime", isolated_git)
+
+    protect_historical_workspace(devlegate)
+    runtime_git = devlegate._git_runtime
+
+    def refuse_effects(cwd, *args, **kwargs):
+        assert Path(cwd) != workspace, "historical workspace was inspected"
+        assert args[:1] not in {
+            ("fetch",), ("push",), ("update-ref",), ("reset",),
+            ("merge",), ("checkout",),
+        }, f"unauthorized recovery effect: {args}"
+        return runtime_git(cwd, *args, **kwargs)
+
+    def refuse(reason):
+        with monkeypatch.context() as guarded:
+            guarded.setattr(devlegate, "_git_runtime", refuse_effects)
+            with pytest.raises(DevlegateError, match=reason):
+                devlegate._reconcile_stranded_execution()
+
+    for field, value, reason in (
+        ("execution_id", "0" * 32, "identity|binding"),
+        ("execution_path", str(workspace), "binding"),
+        ("execution_branch", "devlegate/work/T-1", "binding"),
+        ("execution_start_head", checkpoint, "start or remote"),
+        ("execution_interruption_kind", "operator_abort", "interrupted"),
+    ):
+        with monkeypatch.context() as altered:
+            altered.setitem(devlegate._state, field, value)
+            refuse(reason)
+        assert git(working, "show-ref").stdout == refs
+        assert git(working, "worktree", "list", "--porcelain").stdout == registrations
+    for observation in ("matching-live", "indeterminate"):
+        if corruption.endswith("after_save"):
+            continue  # post-worker durably records terminal handoff
+        with monkeypatch.context() as altered:
+            altered.setattr(devlegate._workers, "observe", lambda _: observation)
+            with pytest.raises(DevlegateError, match="blocked|alive|ownership"):
+                devlegate._reconcile_stranded_execution()
+    if corruption == "isolated_recovery":
+        provenance = devlegate._state["rework_provenance"]
+        for key, value, reason in (
+            ("code_predecessor", {
+                **provenance["code_predecessor"], "checkpoint": reviewed.workspace_head,
+            }, "lifecycle binding"),
+            ("review", {**provenance["review"], "sha256": "0" * 64},
+             "feedback binding"),
+            ("preparation_stage", "remote_publishing", "not remotely"),
+        ):
+            with monkeypatch.context() as altered:
+                altered.setitem(provenance, key, value)
+                refuse(reason)
+        target_path = Path(target["path"])
+        dirty = target_path / "foreign.txt"
+        dirty.write_text("foreign\n")
+        refuse("dirty")
+        dirty.unlink()
+        git(working, "worktree", "lock", str(target_path))
+        refuse("locked")
+        git(working, "worktree", "unlock", str(target_path))
+        moved = tmp_path / "foreign-generation"
+        git(working, "worktree", "move", str(target_path), str(moved))
+        refuse("unexpected|missing|elsewhere")
+        git(working, "worktree", "move", str(moved), str(target_path))
+        git(target_path, "reset", "--hard", checkpoint)
+        refuse("target ref")
+        git(target_path, "reset", "--hard", candidate)
+        git(working, "push", "--force", "origin", f"{checkpoint}:{target['ref']}")
+        refuse("target ref")
+        git(working, "push", "--force", "origin", f"{candidate}:{target['ref']}")
+        with monkeypatch.context() as altered:
+            altered.setitem(
+                devlegate._state, "execution_control_head", reviewed.control_head
+            )
+            refuse("remote generation changed")
+    assert devlegate.recovery_workspace_manager("T-1").path == Path(target["path"])
+    recovered = devlegate._execution_workspace_for_recovery()
+    assert recovered.path == Path(target["path"])
+    assert recovered.head == candidate
+    if corruption.endswith("save"):
+        save = devlegate._save_state
+
+        def interrupt_normalization(phase, **kwargs):
+            if phase == "idle":
+                if corruption.endswith("after_save"):
+                    save(phase, **kwargs)
+                raise RuntimeError("interrupted normalization journal")
+            return save(phase, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(devlegate, "_save_state", interrupt_normalization)
+            with pytest.raises(RuntimeError, match="normalization journal"):
+                devlegate._reconcile_stranded_execution()
+        devlegate = Devlegate(config)
+        protect_historical_workspace(devlegate)
+    if devlegate._state["phase"] == "agent_running":
+        assert devlegate._reconcile_stranded_execution() == "T-1"
+    assert devlegate._state["phase"] == "idle"
+    assert devlegate._state["execution_id"] == execution
+    assert devlegate._state["execution_branch"] == target["branch"]
+    assert devlegate._state["execution_path"] == target["path"]
+    assert devlegate._state["worker_identity"] is None
+    failure = devlegate._state["failed_executions"]["T-1"]
+    assert failure["execution_id"] == execution
+    assert failure["interruption_kind"] == "process_loss"
+    if "T-88" in failures:
+        assert devlegate._state["failed_executions"]["T-88"] == failures["T-88"]
+    assert devlegate._state["interrupted_execution_id"] == execution
+    for _ in range(2):
+        devlegate = Devlegate(config)
+        protect_historical_workspace(devlegate)
+        assert devlegate._reconcile_stranded_execution() is None
+    assert git(working, "show-ref").stdout == refs
+    assert git(working, "worktree", "list", "--porcelain").stdout == registrations
+    assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+    assert fixture.report_path.read_bytes() == fixture.report_bytes
+    assert fixture.reviewed_path.read_bytes() == fixture.reviewed_bytes
+    assert fixture.artifact.read_bytes() == fixture.review_bytes
+    assert len(fixture.prompts) == expected_prompts
+
+
+def _exercise_deferred_continuation_case(
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
+):
+    fixture = _seed_direct_continuation(
+        tmp_path, monkeypatch, advance_product, crash_point, corruption
+    )
+    working, config, state = fixture.working, fixture.config, fixture.state
+    devlegate, worker, prompts = fixture.devlegate, fixture.worker, fixture.prompts
+    control, reviewed, failed = fixture.control, fixture.reviewed, fixture.failed
+    workspace, checkpoint = fixture.workspace, fixture.checkpoint
+    reviewed_path, reviewed_bytes = fixture.reviewed_path, fixture.reviewed_bytes
+    report_path, report_bytes = fixture.report_path, fixture.report_bytes
+    artifact, review_bytes = fixture.artifact, fixture.review_bytes
+    reports, interrupt_swap = fixture.reports, fixture.interrupt_swap
+    unrelated_completion = bool(corruption and corruption.startswith("unrelated_"))
+
     if advance_product and crash_point is None:
         failures = dict(devlegate._state["failed_executions"])
         original_failure = failures["T-1"]
@@ -4106,8 +4447,9 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             ExecutionReportStore(control).list("T-1")
         )
         assert source is not None
-        assert source[1].execution_id == reviewed.execution_id
-        assert source[2].execution_id == failed.execution_id
+        assert source.sources.reviewed.execution_id == reviewed.execution_id
+        assert source.sources.failed.execution_id == failed.execution_id
+        assert source.history.mode == "direct-ancestry"
         unrelated = {
             **devlegate._state,
             "execution_id": "a" * 32,
@@ -4295,180 +4637,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert manager.branch == target["branch"]
             assert manager.path == Path(target["path"])
             if corruption.startswith("isolated_lifecycle"):
-                devlegate._save_state(
-                    "agent_running", execution_stage="post-worker",
-                    execution_start_head=candidate, execution_remote_head=candidate,
-                    worker_identity=None,
+                _exercise_isolated_lifecycle(
+                    fixture, devlegate, published, candidate, target, execution,
+                    corruption, tmp_path, monkeypatch,
                 )
-                devlegate._owned_execution_id = execution
-
-                def isolated_worker(workspace, prompt, **kwargs):
-                    assert kwargs["execution_id"] == execution
-                    assert workspace.path == published.path
-                    prompts.append(prompt)
-                    if corruption != "isolated_lifecycle_zero":
-                        (workspace.path / "new-generation.txt").write_text(
-                            "worker change\n"
-                        )
-                        git(workspace.path, "add", "new-generation.txt")
-                        git(workspace.path, "commit", "-m", "isolated worker change")
-                    return WorkerRunResult(
-                        0, None, WorkerClaim("completed", "isolated result", (), ()),
-                        None,
-                    )
-
-                monkeypatch.setattr(devlegate._workers, "run", isolated_worker)
-                worker_result = devlegate._workers.run(
-                    published, "Controlled isolated post-worker lifecycle",
-                    execution_id=execution,
-                )
-                new_checkpoint = git(published.path, "rev-parse", "HEAD").stdout.strip()
-                def complete_worker():
-                    return devlegate._complete_worker_checkpoint(
-                        published, execution, devlegate._ticket_store().by_id["T-1"],
-                        worker_result, published.base_head, published.base_head,
-                    )
-
-                stop_stage = corruption.removeprefix("isolated_lifecycle_")
-                if stop_stage in {
-                    "ref_conflict", "foreign_worktree", "control_conflict",
-                }:
-                    if stop_stage == "ref_conflict":
-                        git(working, "push", "--force", "origin",
-                            f"{checkpoint}:{target['ref']}")
-                        reason = "remote binding changed"
-                    elif stop_stage == "foreign_worktree":
-                        git(working, "worktree", "move", str(published.path),
-                            str(tmp_path / "foreign-worker-target"))
-                        reason = "worktree|workspace|directory"
-                    else:
-                        (control / "competing-control.txt").write_text("competing\n")
-                        git(control, "add", "competing-control.txt")
-                        git(control, "commit", "-m", "competing control publication")
-                        git(control, "push", "origin", "devlegate/control")
-                        reason = "Git generation changed"
-                    refs_before = git(working, "show-ref").stdout
-                    remote_before = git(working, "ls-remote", "origin").stdout
-                    trees_before = git(
-                        working, "worktree", "list", "--porcelain"
-                    ).stdout
-                    with pytest.raises(DevlegateError, match=reason):
-                        complete_worker()
-                    assert git(working, "show-ref").stdout == refs_before
-                    assert git(working, "ls-remote", "origin").stdout == remote_before
-                    assert git(working, "worktree", "list", "--porcelain").stdout == (
-                        trees_before
-                    )
-                    assert len(ExecutionReportStore(control).list("T-1")) == 2
-                    assert report_path.read_bytes() == report_bytes
-                    assert reviewed_path.read_bytes() == reviewed_bytes
-                    assert artifact.read_bytes() == review_bytes
-                    assert git(workspace, "rev-parse", "HEAD").stdout.strip() == (
-                        checkpoint
-                    )
-                    return
-                if stop_stage in {
-                    "checkpointing", "post-checkpoint", "publishing",
-                    "post-publication", "lifecycle",
-                }:
-                    save = devlegate._save_state
-
-                    def crash_at_checkpoint(phase, **kwargs):
-                        result = save(phase, **kwargs)
-                        if kwargs.get("execution_stage") == stop_stage:
-                            raise RuntimeError("crash at checkpoint journal")
-                        return result
-
-                    with monkeypatch.context() as fault:
-                        fault.setattr(devlegate, "_save_state", crash_at_checkpoint)
-                        with pytest.raises(RuntimeError, match="checkpoint journal"):
-                            complete_worker()
-                    devlegate = Devlegate(config)
-                    assert run_test_iteration(devlegate) == 0
-                elif corruption.endswith("report_restart"):
-                    with monkeypatch.context() as fault:
-                        def crash_after_report(*_args, **_kwargs):
-                            raise RuntimeError("crash after report publication")
-
-                        fault.setattr(
-                            devlegate, "_finalize_execution_lifecycle",
-                            crash_after_report,
-                        )
-                        with pytest.raises(RuntimeError, match="after report"):
-                            complete_worker()
-                    devlegate = Devlegate(config)
-                    assert run_test_iteration(devlegate) == 0
-                else:
-                    assert complete_worker() == 0
-                new_report = next(
-                    report for report in ExecutionReportStore(control).list("T-1")
-                    if report.execution_id == execution
-                )
-                assert new_report.execution_branch == target["branch"]
-                assert new_report.execution_path == target["path"]
-                assert new_report.workspace_head == new_checkpoint
-                assert new_report.code_base_head == published.base_head
-                assert (control / "kanban/review/T-1.md").is_file()
-                new_report_bytes = (
-                    control / f"executions/T-1/{execution}.json"
-                ).read_bytes()
-                devlegate = Devlegate(config)
-                assert devlegate._reconcile_stranded_execution() is None
-                git(control, "mv", "kanban/review/T-1.md", "kanban/accepted/T-1.md")
-                git(control, "commit", "-m", "accept isolated generation")
-                git(control, "push", "origin", "devlegate/control")
-                if stop_stage == "product_advance":
-                    (working / "later-product.txt").write_text("later product\n")
-                    git(working, "add", "later-product.txt")
-                    git(working, "commit", "-m", "advance product before integration")
-                    git(working, "push", "origin", "HEAD")
-                if corruption.endswith("integration_restart"):
-                    complete = devlegate._complete_accepted
-
-                    def crash_after_done(*args, **kwargs):
-                        complete(*args, **kwargs)
-                        raise RuntimeError("crash after accepted mutation")
-
-                    with monkeypatch.context() as fault:
-                        fault.setattr(devlegate, "_complete_accepted", crash_after_done)
-                        with pytest.raises(RuntimeError, match="accepted mutation"):
-                            run_test_iteration(devlegate)
-                    devlegate = Devlegate(config)
-                assert run_test_iteration(devlegate) == 0
-                assert (control / "kanban/done/T-1.md").is_file()
-                if stop_stage == "product_advance":
-                    assert git(
-                        working, "merge-base", "--is-ancestor", new_checkpoint, "HEAD"
-                    ).returncode == 0
-                    assert (working / "later-product.txt").read_text() == (
-                        "later product\n"
-                    )
-                    assert (working / "new-generation.txt").read_text() == (
-                        "worker change\n"
-                    )
-                else:
-                    assert git(working, "rev-parse", "HEAD").stdout.strip() == (
-                        new_checkpoint
-                    )
-                assert devlegate._state["workspace_cleanup_event"]["status"] == (
-                    "blocked"
-                )
-                assert "generation workspace retained" in devlegate._state[
-                    "workspace_cleanup_event"
-                ]["reason"]
-                assert git(published.path, "rev-parse", "HEAD").stdout.strip() == (
-                    new_checkpoint
-                )
-                assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
-                assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
-                assert report_path.read_bytes() == report_bytes
-                assert reviewed_path.read_bytes() == reviewed_bytes
-                assert artifact.read_bytes() == review_bytes
-                assert (control / f"executions/T-1/{execution}.json").read_bytes() == (
-                    new_report_bytes
-                )
-                assert len(ExecutionReportStore(control).list("T-1")) == 3
-                assert len(prompts) == 3
                 return
             isolated_zero_delta = build_execution_report(
                 execution_id=execution,
@@ -4529,164 +4701,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert reviewed_path.read_bytes() == reviewed_bytes
             assert artifact.read_bytes() == review_bytes
             if corruption != "isolated_intent":
-                devlegate._save_state(
-                    "agent_running", execution_stage=(
-                        "post-worker" if corruption == "isolated_recovery_after_save"
-                        else "worker-running"
-                    ),
-                    local_head=devlegate._state["execution_base_head"],
-                    remote_head=devlegate._state["execution_base_head"],
-                    execution_interruption_kind="process_loss",
-                    execution_start_head=candidate, execution_remote_head=candidate,
-                    worker_identity=None if corruption.endswith("after_save") else {
-                        "execution_id": execution, "pid": 99999999,
-                        "pgid": 99999999, "sid": 99999999,
-                        "boot_id": "disposable-worker", "start_time": 1,
-                    },
+                _exercise_isolated_recovery(
+                    fixture, devlegate, candidate, target, execution, refs,
+                    registrations, failures, corruption, tmp_path, monkeypatch,
                 )
-                devlegate = Devlegate(config)
-
-                def protect_historical_workspace(engine):
-                    original_git = engine._git_runtime
-
-                    def isolated_git(cwd, *args, **kwargs):
-                        assert Path(cwd) != workspace, "historical workspace inspected"
-                        return original_git(cwd, *args, **kwargs)
-
-                    monkeypatch.setattr(engine, "_git_runtime", isolated_git)
-
-                protect_historical_workspace(devlegate)
-                runtime_git = devlegate._git_runtime
-
-                def refuse_effects(cwd, *args, **kwargs):
-                    assert Path(cwd) != workspace, "historical workspace was inspected"
-                    assert args[:1] not in {
-                        ("fetch",), ("push",), ("update-ref",), ("reset",),
-                        ("merge",), ("checkout",),
-                    }, f"unauthorized recovery effect: {args}"
-                    return runtime_git(cwd, *args, **kwargs)
-
-                def refuse(reason):
-                    with monkeypatch.context() as guarded:
-                        guarded.setattr(devlegate, "_git_runtime", refuse_effects)
-                        with pytest.raises(DevlegateError, match=reason):
-                            devlegate._reconcile_stranded_execution()
-
-                # All evidence failures must precede fetch/checkout effects.
-                for field, value, reason in (
-                    ("execution_id", "0" * 32, "identity|binding"),
-                    ("execution_path", str(workspace), "binding"),
-                    ("execution_branch", "devlegate/work/T-1", "binding"),
-                    ("execution_start_head", checkpoint, "start or remote"),
-                    ("execution_interruption_kind", "operator_abort", "interrupted"),
-                ):
-                    with monkeypatch.context() as altered:
-                        altered.setitem(devlegate._state, field, value)
-                        refuse(reason)
-                    assert git(working, "show-ref").stdout == refs
-                    assert git(working, "worktree", "list", "--porcelain").stdout == (
-                        registrations
-                    )
-                for observation in ("matching-live", "indeterminate"):
-                    if corruption.endswith("after_save"):
-                        continue  # post-worker already durably records terminal handoff
-                    with monkeypatch.context() as altered:
-                        altered.setattr(
-                            devlegate._workers, "observe", lambda _: observation
-                        )
-                        with pytest.raises(
-                            DevlegateError, match="blocked|alive|ownership"
-                        ):
-                            devlegate._reconcile_stranded_execution()
-                if corruption == "isolated_recovery":
-                    provenance = devlegate._state["rework_provenance"]
-                    for key, value, reason in (
-                        ("code_predecessor", {
-                            **provenance["code_predecessor"],
-                            "checkpoint": reviewed.workspace_head,
-                        }, "lifecycle binding"),
-                        ("review", {**provenance["review"], "sha256": "0" * 64},
-                         "feedback binding"),
-                        ("preparation_stage", "remote_publishing", "not remotely"),
-                    ):
-                        with monkeypatch.context() as altered:
-                            altered.setitem(provenance, key, value)
-                            refuse(reason)
-                    target_path = Path(target["path"])
-                    dirty = target_path / "foreign.txt"
-                    dirty.write_text("foreign\n")
-                    refuse("dirty")
-                    dirty.unlink()
-                    git(working, "worktree", "lock", str(target_path))
-                    refuse("locked")
-                    git(working, "worktree", "unlock", str(target_path))
-                    moved = tmp_path / "foreign-generation"
-                    git(working, "worktree", "move", str(target_path), str(moved))
-                    refuse("unexpected|missing|elsewhere")
-                    git(working, "worktree", "move", str(moved), str(target_path))
-                    git(target_path, "reset", "--hard", checkpoint)
-                    refuse("target ref")
-                    git(target_path, "reset", "--hard", candidate)
-                    git(working, "push", "--force", "origin",
-                        f"{checkpoint}:{target['ref']}")
-                    refuse("target ref")
-                    git(working, "push", "--force", "origin",
-                        f"{candidate}:{target['ref']}")
-                    with monkeypatch.context() as altered:
-                        altered.setitem(
-                            devlegate._state, "execution_control_head",
-                            reviewed.control_head,
-                        )
-                        refuse("remote generation changed")
-                assert devlegate.recovery_workspace_manager("T-1").path == Path(
-                    target["path"]
-                )
-                recovered = devlegate._execution_workspace_for_recovery()
-                assert recovered.path == Path(target["path"])
-                assert recovered.head == candidate
-                if corruption.endswith("save"):
-                    save = devlegate._save_state
-
-                    def interrupt_normalization(phase, **kwargs):
-                        if phase == "idle":
-                            if corruption.endswith("after_save"):
-                                save(phase, **kwargs)
-                            raise RuntimeError("interrupted normalization journal")
-                        return save(phase, **kwargs)
-
-                    with monkeypatch.context() as fault:
-                        fault.setattr(devlegate, "_save_state", interrupt_normalization)
-                        with pytest.raises(RuntimeError, match="normalization journal"):
-                            devlegate._reconcile_stranded_execution()
-                    devlegate = Devlegate(config)
-                    protect_historical_workspace(devlegate)
-                if devlegate._state["phase"] == "agent_running":
-                    assert devlegate._reconcile_stranded_execution() == "T-1"
-                assert devlegate._state["phase"] == "idle"
-                assert devlegate._state["execution_id"] == execution
-                assert devlegate._state["execution_branch"] == target["branch"]
-                assert devlegate._state["execution_path"] == target["path"]
-                assert devlegate._state["worker_identity"] is None
-                failure = devlegate._state["failed_executions"]["T-1"]
-                assert failure["execution_id"] == execution
-                assert failure["interruption_kind"] == "process_loss"
-                assert devlegate._state["failed_executions"]["T-88"] == (
-                    failures["T-88"]
-                )
-                assert devlegate._state["interrupted_execution_id"] == execution
-                for _ in range(2):
-                    devlegate = Devlegate(config)
-                    protect_historical_workspace(devlegate)
-                    assert devlegate._reconcile_stranded_execution() is None
-                assert git(working, "show-ref").stdout == refs
-                assert git(working, "worktree", "list", "--porcelain").stdout == (
-                    registrations
-                )
-                assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
-                assert report_path.read_bytes() == report_bytes
-                assert reviewed_path.read_bytes() == reviewed_bytes
-                assert artifact.read_bytes() == review_bytes
-                assert len(prompts) == 2
             return
         if corruption in {"cleared_identity", "changed_identity"}:
             reason = (
@@ -5041,6 +5059,69 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         assert artifact.read_bytes() == review_bytes
         assert report_path.read_bytes() == report_bytes
         ipc_observation(devlegate, "none")
+
+
+def _continuation_case_group(case):
+    corruption = case[2] or ""
+    if corruption.startswith("isolated_lifecycle"):
+        return "lifecycle"
+    if corruption.startswith("isolated_"):
+        return "recovery"
+    if corruption.startswith("unrelated_"):
+        return "scheduler"
+    return "legacy"
+
+
+@pytest.mark.parametrize(
+    ("advance_product", "crash_point", "corruption"),
+    [case for case in DEFERRED_CONTINUATION_CASES
+     if _continuation_case_group(case) == "legacy"],
+)
+def test_direct_continuation_legacy_swap_and_ownership(
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
+):
+    _exercise_deferred_continuation_case(
+        tmp_path, monkeypatch, advance_product, crash_point, corruption
+    )
+
+
+@pytest.mark.parametrize(
+    ("advance_product", "crash_point", "corruption"),
+    [case for case in DEFERRED_CONTINUATION_CASES
+     if _continuation_case_group(case) == "lifecycle"],
+)
+def test_direct_continuation_isolated_report_and_accepted_integration(
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
+):
+    _exercise_deferred_continuation_case(
+        tmp_path, monkeypatch, advance_product, crash_point, corruption
+    )
+
+
+@pytest.mark.parametrize(
+    ("advance_product", "crash_point", "corruption"),
+    [case for case in DEFERRED_CONTINUATION_CASES
+     if _continuation_case_group(case) == "recovery"],
+)
+def test_direct_continuation_isolated_preparation_and_recovery_authority(
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
+):
+    _exercise_deferred_continuation_case(
+        tmp_path, monkeypatch, advance_product, crash_point, corruption
+    )
+
+
+@pytest.mark.parametrize(
+    ("advance_product", "crash_point", "corruption"),
+    [case for case in DEFERRED_CONTINUATION_CASES
+     if _continuation_case_group(case) == "scheduler"],
+)
+def test_direct_continuation_ordinary_scheduler_and_ipc(
+    tmp_path, monkeypatch, advance_product, crash_point, corruption
+):
+    _exercise_deferred_continuation_case(
+        tmp_path, monkeypatch, advance_product, crash_point, corruption
+    )
 
 
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(

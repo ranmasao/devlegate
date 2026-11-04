@@ -1842,6 +1842,8 @@ def _active_execution_grid(execution: dict[str, object]) -> str:
 def _blocked_reason_text(
     reason: BlockedReason,
 ) -> str:
+    if reason.detail is not None:
+        return reason.detail
     if reason.kind == "dependencies":
         return ", ".join(
             (
