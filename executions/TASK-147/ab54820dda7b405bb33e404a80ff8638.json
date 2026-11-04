@@ -1,0 +1,29 @@
+{
+  "code_base_head": "f9783aa04e4025bfdccd068d7807bf74629c14d7",
+  "conclusion": "completed",
+  "control_head": "ad9eeb2f4a6dbabecf2bd352cb4ee33eae4a0c5c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-147",
+  "execution_id": "ab54820dda7b405bb33e404a80ff8638",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-147",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-147/ab54820dda7b405bb33e404a80ff8638.md",
+  "report_sha256": "61ff3e2048f64ff7408d3ac52ecdf286c8ce6b2cb3651c04ab26374ae5aaebc6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-147",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The TASK-134-shaped disposable scenario now passes through the ordinary scheduler without a synthetic historical SQLite ownership or failure record: persisted ownership belongs to a genuinely completed unrelated ticket, the historical workspace is dirty/unowned, repeated unchanged-ticket dispositions include independent changes, and the product base has advanced. The fresh isolated worker commits a change, publishes its exact generation report, and integrates through accepted to done while preserving historical reports, review bytes, checkpoint and refs. Matching-cache, conflicting-cache, restart journal, publication/integration interruption, remote ambiguity and negative resource-evidence cases are covered. Final local CI-equivalent validation: ./dev coverage -n 4 --dist=worksteal passed with 1711 passed and 2 skipped; ./dev lint and git diff --check passed. No commit, push, remote CI run, deployment, real historical-resource operation or ticket-state change was performed.",
+    "summary": "Completed generation-aware deferred failed-execution continuation through ordinary scheduler admission, worker checkpoint/report publication, restart recovery, and accepted integration. Historical feedback and failed-code identities remain separate, historical resources remain intact, and generation cleanup is safely retained with explicit diagnostics when retirement authority is unavailable."
+  },
+  "workspace_head": "3a9d338b1348c6ac3acf3df2b66725e78f84d1ce"
+}
