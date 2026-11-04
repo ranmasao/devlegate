@@ -86,6 +86,10 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
     owner.recovery_report_matches_binding(report)
     workspace = owner.recovery_workspace()
     start_head = state.get("execution_start_head")
+    if stage == "checkpointing" and state.get("execution_checkpoint_start_head"):
+        # An owner-verified committed worker descendant is journaled before
+        # checkpoint staging. Recovery can create at most its one checkpoint.
+        start_head = state["execution_checkpoint_start_head"]
     if not isinstance(start_head, str) or not start_head:
         raise WorkflowRecoveryError("execution start HEAD is unavailable")
     if stage == "checkpointing":

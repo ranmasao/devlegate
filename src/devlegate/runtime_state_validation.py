@@ -480,6 +480,13 @@ def validate_state_invariant(state: dict[str, object]) -> None:
         "execution_path",
         "execution_id",
     )
+    checkpoint_start = state.get("execution_checkpoint_start_head")
+    if checkpoint_start is not None and (
+        not isinstance(checkpoint_start, str)
+        or len(checkpoint_start) != 40
+        or any(c not in "0123456789abcdef" for c in checkpoint_start)
+    ):
+        raise DevlegateError("execution checkpoint start identity is invalid")
     if phase in {"agent_pending", "agent_running"} and (
         not all(
             field in state for field in (*execution_fields, "execution_remote_head")
@@ -539,4 +546,3 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             )
         except ReviewProvenanceError as error:
             raise DevlegateError(f"invalid state: {error}") from error
-

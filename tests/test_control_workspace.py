@@ -1790,7 +1790,7 @@ def test_cleanup_logs_immediate_success_and_refusal(tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine,
         "_cleanup_resource_status",
-        lambda *_: {
+        lambda *_, **_kwargs: {
             "worktree": "absent",
             "local_ref": "present",
             "upstream_ref": "unknown",
@@ -3791,16 +3791,26 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         (True, None, "changed_identity"),
         (True, None, "merged_source"),
         (True, None, "isolated_intent"),
+        (True, None, "isolated_lifecycle"),
+        (True, None, "isolated_lifecycle_report_restart"),
+        (True, None, "isolated_lifecycle_integration_restart"),
         (True, None, "isolated_recovery"),
         (True, None, "isolated_recovery_before_save"),
         (True, None, "isolated_recovery_after_save"),
-        pytest.param(
-            True, None, "unrelated_identity",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError,
-                reason="isolated failed-rework generation not implemented",
-            ),
-        ),
+        (True, None, "unrelated_identity"),
+        (True, None, "unrelated_matching"),
+        (True, None, "unrelated_restart"),
+        (True, None, "unrelated_ambiguous_push"),
+        (True, None, "unrelated_transplant_conflict"),
+    ]
+    + [
+        (True, None, f"isolated_lifecycle_{stage}")
+        for stage in (
+            "checkpointing", "post-checkpoint", "publishing", "post-publication",
+            "lifecycle", "ref_conflict", "foreign_worktree", "control_conflict",
+            "zero",
+            "product_advance",
+        )
     ]
     + [
         (True, point, None)
@@ -3837,6 +3847,7 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
 def test_failed_rework_deferral_resumes_checkpoint_and_review(
     tmp_path, monkeypatch, advance_product, crash_point, corruption
 ):
+    unrelated_completion = bool(corruption and corruption.startswith("unrelated_"))
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -3861,7 +3872,8 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     def worker(workspace, prompt, **_kwargs):
         prompts.append(prompt)
         if len(prompts) == 1:
-            (workspace.path / "initial.txt").write_text("initial\n")
+            if corruption != "isolated_lifecycle_zero":
+                (workspace.path / "initial.txt").write_text("initial\n")
             return WorkerRunResult(
                 0, None, WorkerClaim("completed", "done", (), ()), None
             )
@@ -3869,11 +3881,16 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert (workspace.path / "initial.txt").read_text() == "initial\n"
             assert (workspace.path / "first.txt").read_text() == "first\n"
             assert (workspace.path / "second.txt").read_text() == "second\n"
+            if unrelated_completion:
+                (workspace.path / "continued.txt").write_text("fresh worker delta\n")
+                git(workspace.path, "add", "continued.txt")
+                git(workspace.path, "commit", "-m", "continue failed implementation")
             return WorkerRunResult(
                 0, None, WorkerClaim("completed", "done", (), ()), None
             )
         for name in ("first", "second"):
-            (workspace.path / f"{name}.txt").write_text(f"{name}\n")
+            if corruption != "isolated_lifecycle_zero":
+                (workspace.path / f"{name}.txt").write_text(f"{name}\n")
         return WorkerRunResult(1, "transport failed", None, "missing claim")
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
@@ -3977,11 +3994,39 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     reviewed_bytes = reviewed_path.read_bytes()
     report_path = control / "executions" / "T-1" / f"{failed.execution_id}.json"
     report_bytes, review_bytes = report_path.read_bytes(), artifact.read_bytes()
+    if unrelated_completion:
+        canonical = (control / "kanban/todo/T-1.md").read_text()
+        git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
+        (control / "kanban/todo/T-2.md").write_text(canonical.replace("T-1", "T-2"))
+        git(control, "add", "kanban/todo/T-2.md")
+        git(control, "commit", "-m", "defer source and schedule unrelated ticket")
+        git(control, "push", "origin", "devlegate/control")
+        with monkeypatch.context() as unrelated_worker:
+            unrelated_worker.setattr(devlegate._workers, "run", lambda *_a, **_k: (
+                WorkerRunResult(
+                    0, None, WorkerClaim("completed", "unrelated complete", (), ()),
+                    None,
+                )
+            ))
+            assert run_test_iteration(devlegate) == 0
+        git(control, "mv", "kanban/review/T-2.md", "kanban/accepted/T-2.md")
+        git(control, "commit", "-m", "accept unrelated ticket")
+        git(control, "push", "origin", "devlegate/control")
+        assert run_test_iteration(devlegate) == 0
+        assert (control / "kanban/done/T-2.md").exists()
+        assert devlegate._state["execution_ticket_id"] == "T-2"
+        git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+        git(control, "commit", "-m", "requeue source after unrelated completion")
     cycles = 3 if advance_product and crash_point is None else 1
     for cycle in range(cycles):
         git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
         (control / f"independent-defer-{cycle}.txt").write_text("independent\n")
         git(control, "add", f"independent-defer-{cycle}.txt")
+        if unrelated_completion:
+            other = f"T-{cycle + 10}"
+            independent_ticket = control / f"kanban/backlog/{other}.md"
+            independent_ticket.write_text(canonical.replace("T-1", other))
+            git(control, "add", str(independent_ticket.relative_to(control)))
         git(control, "commit", "-m", "defer failed rework")
         git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
         (control / f"independent-requeue-{cycle}.txt").write_text("independent\n")
@@ -3992,6 +4037,9 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
     if advance_product:
         (working / "product-advance.txt").write_text("new product\n")
         git(working, "add", "product-advance.txt")
+        if corruption == "unrelated_transplant_conflict":
+            (working / "first.txt").write_text("conflicting product\n")
+            git(working, "add", "first.txt")
         git(working, "commit", "-m", "advance product")
         git(working, "push", "origin", "HEAD")
 
@@ -4007,7 +4055,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         assert report_path.read_bytes() == report_bytes
         assert artifact.read_bytes() == review_bytes
         # Recreate the incident's persisted idle state without a failure cache.
-        del failures["T-1"]
+        if corruption == "unrelated_matching":
+            failures["T-1"] = original_failure
+        else:
+            del failures["T-1"]
         failures["T-88"] = {**original_failure, "execution_id": "unrelated-failure"}
         devlegate._save_state(
             "idle", failed_executions=failures,
@@ -4015,10 +4066,12 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
         )
         if corruption == "changed_identity":
             devlegate._save_state("idle", execution_id="another-execution")
-        if corruption in {
-            "unrelated_identity", "isolated_intent", "isolated_recovery",
+        if corruption and (
+            corruption.startswith("isolated_lifecycle") or corruption in {
+            "isolated_intent", "isolated_recovery",
             "isolated_recovery_before_save", "isolated_recovery_after_save",
-        }:
+            }
+        ):
             devlegate._save_state(
                 "idle", execution_id="a" * 32, execution_ticket_id="T-2",
                 execution_branch="devlegate/work/T-2",
@@ -4026,7 +4079,10 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             )
         devlegate = Devlegate(config)
         monkeypatch.setattr(devlegate._workers, "run", worker)
-        assert "T-1" not in devlegate._state["failed_executions"]
+        if corruption == "unrelated_matching":
+            assert devlegate._state["failed_executions"]["T-1"] == original_failure
+        else:
+            assert "T-1" not in devlegate._state["failed_executions"]
         if corruption == "merged_source":
             tree = git(working, "rev-parse", f"{checkpoint}^{{tree}}").stdout.strip()
             merged = git(
@@ -4066,13 +4122,19 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             ) == source
         finally:
             (workspace / "unowned-dirty.txt").unlink()
-        if corruption in {
+        if corruption and (
+            corruption.startswith("isolated_lifecycle") or corruption in {
             "isolated_intent", "isolated_recovery",
             "isolated_recovery_before_save", "isolated_recovery_after_save",
-        }:
+            }
+        ):
             before_refs = git(working, "show-ref").stdout
             before_worktrees = git(working, "worktree", "list", "--porcelain").stdout
             before_remote = git(working, "ls-remote", "origin").stdout
+            wrong_checkpoint = (
+                git(working, "rev-parse", "HEAD").stdout.strip()
+                if corruption == "isolated_lifecycle_zero" else reviewed.workspace_head
+            )
             save = devlegate._save_state
 
             def crash_after_save(*args, **kwargs):
@@ -4106,7 +4168,7 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                     **intent,
                     "code_predecessor": {
                         **intent["code_predecessor"],
-                        "checkpoint": reviewed.workspace_head,
+                        "checkpoint": wrong_checkpoint,
                     },
                 },
             }
@@ -4128,11 +4190,11 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert artifact.read_bytes() == review_bytes
             assert len(prompts) == 2
             source_ref = f"refs/devlegate/isolated/T-1/{execution}/source"
-            git(working, "update-ref", source_ref, reviewed.workspace_head)
+            git(working, "update-ref", source_ref, wrong_checkpoint)
             with pytest.raises(DevlegateError, match="evidence ref already exists"):
                 devlegate._pin_isolated_failed_rework_candidate()
             assert git(working, "rev-parse", source_ref).stdout.strip() == (
-                reviewed.workspace_head
+                wrong_checkpoint
             )
             git(working, "update-ref", "-d", source_ref)
             git(working, "update-ref", intent["target"]["ref"], checkpoint)
@@ -4174,9 +4236,13 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             assert git(
                 working, "merge-base", "--is-ancestor", "HEAD", candidate
             ).returncode == 0
-            assert len(
+            commit_count = len(
                 git(working, "rev-list", f"HEAD..{candidate}").stdout.splitlines()
-            ) >= 2
+            )
+            if corruption == "isolated_lifecycle_zero":
+                assert commit_count == 0
+            else:
+                assert commit_count >= 2
             devlegate = Devlegate(config)
             assert devlegate._pin_isolated_failed_rework_candidate() == candidate
             assert devlegate._state["execution_id"] == execution
@@ -4228,6 +4294,182 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             manager = devlegate._post_worker_workspace_manager(published, execution)
             assert manager.branch == target["branch"]
             assert manager.path == Path(target["path"])
+            if corruption.startswith("isolated_lifecycle"):
+                devlegate._save_state(
+                    "agent_running", execution_stage="post-worker",
+                    execution_start_head=candidate, execution_remote_head=candidate,
+                    worker_identity=None,
+                )
+                devlegate._owned_execution_id = execution
+
+                def isolated_worker(workspace, prompt, **kwargs):
+                    assert kwargs["execution_id"] == execution
+                    assert workspace.path == published.path
+                    prompts.append(prompt)
+                    if corruption != "isolated_lifecycle_zero":
+                        (workspace.path / "new-generation.txt").write_text(
+                            "worker change\n"
+                        )
+                        git(workspace.path, "add", "new-generation.txt")
+                        git(workspace.path, "commit", "-m", "isolated worker change")
+                    return WorkerRunResult(
+                        0, None, WorkerClaim("completed", "isolated result", (), ()),
+                        None,
+                    )
+
+                monkeypatch.setattr(devlegate._workers, "run", isolated_worker)
+                worker_result = devlegate._workers.run(
+                    published, "Controlled isolated post-worker lifecycle",
+                    execution_id=execution,
+                )
+                new_checkpoint = git(published.path, "rev-parse", "HEAD").stdout.strip()
+                def complete_worker():
+                    return devlegate._complete_worker_checkpoint(
+                        published, execution, devlegate._ticket_store().by_id["T-1"],
+                        worker_result, published.base_head, published.base_head,
+                    )
+
+                stop_stage = corruption.removeprefix("isolated_lifecycle_")
+                if stop_stage in {
+                    "ref_conflict", "foreign_worktree", "control_conflict",
+                }:
+                    if stop_stage == "ref_conflict":
+                        git(working, "push", "--force", "origin",
+                            f"{checkpoint}:{target['ref']}")
+                        reason = "remote binding changed"
+                    elif stop_stage == "foreign_worktree":
+                        git(working, "worktree", "move", str(published.path),
+                            str(tmp_path / "foreign-worker-target"))
+                        reason = "worktree|workspace|directory"
+                    else:
+                        (control / "competing-control.txt").write_text("competing\n")
+                        git(control, "add", "competing-control.txt")
+                        git(control, "commit", "-m", "competing control publication")
+                        git(control, "push", "origin", "devlegate/control")
+                        reason = "Git generation changed"
+                    refs_before = git(working, "show-ref").stdout
+                    remote_before = git(working, "ls-remote", "origin").stdout
+                    trees_before = git(
+                        working, "worktree", "list", "--porcelain"
+                    ).stdout
+                    with pytest.raises(DevlegateError, match=reason):
+                        complete_worker()
+                    assert git(working, "show-ref").stdout == refs_before
+                    assert git(working, "ls-remote", "origin").stdout == remote_before
+                    assert git(working, "worktree", "list", "--porcelain").stdout == (
+                        trees_before
+                    )
+                    assert len(ExecutionReportStore(control).list("T-1")) == 2
+                    assert report_path.read_bytes() == report_bytes
+                    assert reviewed_path.read_bytes() == reviewed_bytes
+                    assert artifact.read_bytes() == review_bytes
+                    assert git(workspace, "rev-parse", "HEAD").stdout.strip() == (
+                        checkpoint
+                    )
+                    return
+                if stop_stage in {
+                    "checkpointing", "post-checkpoint", "publishing",
+                    "post-publication", "lifecycle",
+                }:
+                    save = devlegate._save_state
+
+                    def crash_at_checkpoint(phase, **kwargs):
+                        result = save(phase, **kwargs)
+                        if kwargs.get("execution_stage") == stop_stage:
+                            raise RuntimeError("crash at checkpoint journal")
+                        return result
+
+                    with monkeypatch.context() as fault:
+                        fault.setattr(devlegate, "_save_state", crash_at_checkpoint)
+                        with pytest.raises(RuntimeError, match="checkpoint journal"):
+                            complete_worker()
+                    devlegate = Devlegate(config)
+                    assert run_test_iteration(devlegate) == 0
+                elif corruption.endswith("report_restart"):
+                    with monkeypatch.context() as fault:
+                        def crash_after_report(*_args, **_kwargs):
+                            raise RuntimeError("crash after report publication")
+
+                        fault.setattr(
+                            devlegate, "_finalize_execution_lifecycle",
+                            crash_after_report,
+                        )
+                        with pytest.raises(RuntimeError, match="after report"):
+                            complete_worker()
+                    devlegate = Devlegate(config)
+                    assert run_test_iteration(devlegate) == 0
+                else:
+                    assert complete_worker() == 0
+                new_report = next(
+                    report for report in ExecutionReportStore(control).list("T-1")
+                    if report.execution_id == execution
+                )
+                assert new_report.execution_branch == target["branch"]
+                assert new_report.execution_path == target["path"]
+                assert new_report.workspace_head == new_checkpoint
+                assert new_report.code_base_head == published.base_head
+                assert (control / "kanban/review/T-1.md").is_file()
+                new_report_bytes = (
+                    control / f"executions/T-1/{execution}.json"
+                ).read_bytes()
+                devlegate = Devlegate(config)
+                assert devlegate._reconcile_stranded_execution() is None
+                git(control, "mv", "kanban/review/T-1.md", "kanban/accepted/T-1.md")
+                git(control, "commit", "-m", "accept isolated generation")
+                git(control, "push", "origin", "devlegate/control")
+                if stop_stage == "product_advance":
+                    (working / "later-product.txt").write_text("later product\n")
+                    git(working, "add", "later-product.txt")
+                    git(working, "commit", "-m", "advance product before integration")
+                    git(working, "push", "origin", "HEAD")
+                if corruption.endswith("integration_restart"):
+                    complete = devlegate._complete_accepted
+
+                    def crash_after_done(*args, **kwargs):
+                        complete(*args, **kwargs)
+                        raise RuntimeError("crash after accepted mutation")
+
+                    with monkeypatch.context() as fault:
+                        fault.setattr(devlegate, "_complete_accepted", crash_after_done)
+                        with pytest.raises(RuntimeError, match="accepted mutation"):
+                            run_test_iteration(devlegate)
+                    devlegate = Devlegate(config)
+                assert run_test_iteration(devlegate) == 0
+                assert (control / "kanban/done/T-1.md").is_file()
+                if stop_stage == "product_advance":
+                    assert git(
+                        working, "merge-base", "--is-ancestor", new_checkpoint, "HEAD"
+                    ).returncode == 0
+                    assert (working / "later-product.txt").read_text() == (
+                        "later product\n"
+                    )
+                    assert (working / "new-generation.txt").read_text() == (
+                        "worker change\n"
+                    )
+                else:
+                    assert git(working, "rev-parse", "HEAD").stdout.strip() == (
+                        new_checkpoint
+                    )
+                assert devlegate._state["workspace_cleanup_event"]["status"] == (
+                    "blocked"
+                )
+                assert "generation workspace retained" in devlegate._state[
+                    "workspace_cleanup_event"
+                ]["reason"]
+                assert git(published.path, "rev-parse", "HEAD").stdout.strip() == (
+                    new_checkpoint
+                )
+                assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+                assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+                assert report_path.read_bytes() == report_bytes
+                assert reviewed_path.read_bytes() == reviewed_bytes
+                assert artifact.read_bytes() == review_bytes
+                assert (control / f"executions/T-1/{execution}.json").read_bytes() == (
+                    new_report_bytes
+                )
+                assert len(ExecutionReportStore(control).list("T-1")) == 3
+                assert len(prompts) == 3
+                return
             isolated_zero_delta = build_execution_report(
                 execution_id=execution,
                 ticket_id="T-1",
@@ -4251,8 +4493,8 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 with pytest.raises(ExecutionWorkspaceError, match="workspace binding"):
                     devlegate._post_worker_workspace_manager(published, execution)
             inspection = devlegate._inspect_pending_rework(devlegate._state)
-            assert inspection.classification == "UNSAFE"
-            assert "downstream accepted integration" in inspection.reason
+            assert inspection.classification == "REUSABLE"
+            assert inspection.workspace.path == published.path
             inspection = devlegate._inspect_bound_execution_workspace(devlegate._state)
             assert inspection.classification == "UNSAFE"
             assert "generation-aware" in inspection.reason
@@ -4478,6 +4720,69 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                 assert artifact.read_bytes() == review_bytes
             return
         assert devlegate.status_view().plan.action == "run-worker"
+        if unrelated_completion:
+            (workspace / "unowned-dirty.txt").write_text("unowned\n")
+
+            def ipc_observation(engine, action):
+                from tempfile import TemporaryDirectory
+
+                from devlegate.ipc_client import request
+                from devlegate.ipc_server import UnixIPCServer
+
+                engine.ensure_hosted_views()
+                before_state = engine._state_file.read_bytes()
+                before_refs = git(working, "show-ref").stdout
+                before_remote = git(working, "ls-remote", "origin").stdout
+                with TemporaryDirectory(prefix="dg-continuation-ipc-") as directory:
+                    socket = Path(directory) / "service.sock"
+                    server = UnixIPCServer(engine, socket)
+                    server.start()
+                    try:
+                        for _ in range(2):
+                            assert request(socket, "status")["plan"]["action"] == action
+                            assert request(socket, "plan")["action"] == action
+                    finally:
+                        server.stop()
+                assert engine._state_file.read_bytes() == before_state
+                assert git(working, "show-ref").stdout == before_refs
+                assert git(working, "ls-remote", "origin").stdout == before_remote
+
+            ipc_observation(devlegate, "run-worker")
+
+            if corruption == "unrelated_restart":
+                admitted_execution = None
+                for stage in (
+                    "admitted", "source_pinning", "candidate_pinning",
+                    "candidate_pinned", "target_creating", "target_created",
+                    "worktree_attaching", "worktree_attached", "remote_publishing",
+                    "remote_published",
+                ):
+                    save = devlegate._save_state
+
+                    def interrupt_ordinary_journal(*args, **kwargs):
+                        result = save(*args, **kwargs)
+                        provenance = kwargs.get("rework_provenance", {})
+                        if provenance.get("preparation_stage") == stage:
+                            raise RuntimeError("ordinary isolated journal interruption")
+                        return result
+
+                    with monkeypatch.context() as fault:
+                        fault.setattr(
+                            devlegate, "_save_state", interrupt_ordinary_journal
+                        )
+                        with pytest.raises(RuntimeError, match="isolated journal"):
+                            run_test_iteration(devlegate)
+                    devlegate = Devlegate(config)
+                    monkeypatch.setattr(devlegate._workers, "run", worker)
+                    if admitted_execution is None:
+                        admitted_execution = devlegate._state["execution_id"]
+                    assert devlegate._state["execution_id"] == admitted_execution
+                    assert len(prompts) == 2
+                    assert artifact.read_bytes() == review_bytes
+                    assert report_path.read_bytes() == report_bytes
+                    assert git(workspace, "rev-parse", "HEAD").stdout.strip() == (
+                        checkpoint
+                    )
 
     if crash_point is not None:
         interrupt_swap()
@@ -4635,14 +4940,50 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
                         ) == before_reports
                         assert artifact.read_bytes() == review_bytes
             return
-    assert run_test_iteration(devlegate) == 0
+    if corruption == "unrelated_transplant_conflict":
+        for _ in range(2):
+            with pytest.raises(DevlegateError, match="cannot be applied"):
+                run_test_iteration(devlegate)
+            plan = devlegate.status_view().plan
+            assert plan.action == "blocked"
+            assert "candidate_pinning" in plan.reason
+            assert len(prompts) == 2
+            assert len(ExecutionReportStore(control).list("T-1")) == 2
+            assert report_path.read_bytes() == report_bytes
+            assert artifact.read_bytes() == review_bytes
+            assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+            devlegate = Devlegate(config)
+            monkeypatch.setattr(devlegate._workers, "run", worker)
+        return
+    if corruption == "unrelated_ambiguous_push":
+        original_git = devlegate._git_runtime
+        ambiguous_pushes = []
+
+        def uncertain_generation_push(cwd, *args, **kwargs):
+            result = original_git(cwd, *args, **kwargs)
+            if args[:1] == ("push",) and any(
+                "refs/heads/devlegate/generation/T-1/" in arg for arg in args
+            ) and not ambiguous_pushes:
+                assert result.returncode == 0
+                ambiguous_pushes.append(args)
+                return subprocess.CompletedProcess(
+                    result.args, 1, result.stdout, "lost successful push response"
+                )
+            return result
+
+        with monkeypatch.context() as fault:
+            fault.setattr(devlegate, "_git_runtime", uncertain_generation_push)
+            assert run_test_iteration(devlegate) == 0
+        assert len(ambiguous_pushes) == 1
+    else:
+        assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 3
     assert devlegate._state["execution_id"] not in {
         reviewed.execution_id,
         failed.execution_id,
     }
     assert "Preserve the implementation." in prompts[2]
-    if corruption == "unrelated_identity":
+    if unrelated_completion:
         assert devlegate._state["execution_branch"].startswith(
             "devlegate/generation/T-1/"
         )
@@ -4659,11 +5000,47 @@ def test_failed_rework_deferral_resumes_checkpoint_and_review(
             git(workspace, "merge-base", "--is-ancestor", checkpoint, "HEAD").returncode
             == 0
         )
-    evidence = f"refs/devlegate/recovery/workspace/T-1/{failed.execution_id}"
+    evidence = (
+        f"refs/devlegate/isolated/T-1/{devlegate._state['execution_id']}/source"
+        if unrelated_completion
+        else f"refs/devlegate/recovery/workspace/T-1/{failed.execution_id}"
+    )
     assert git(working, "rev-parse", evidence).stdout.strip() == checkpoint
     assert report_path.read_bytes() == report_bytes
     assert reviewed_path.read_bytes() == reviewed_bytes
     assert artifact.read_bytes() == review_bytes
+    if unrelated_completion:
+        fresh_execution = devlegate._state["execution_id"]
+        fresh_path = Path(devlegate._state["execution_path"])
+        prompt_record = json.loads(
+            (state / "prompts" / f"{fresh_execution}.json").read_text()
+        )
+        assert prompt_record["directive"] == "rework"
+        assert (workspace / "unowned-dirty.txt").read_text() == "unowned\n"
+        git(control, "mv", "kanban/review/T-1.md", "kanban/accepted/T-1.md")
+        git(control, "commit", "-m", "accept ordinary isolated continuation")
+        git(control, "push", "origin", "devlegate/control")
+        devlegate = Devlegate(config)
+        monkeypatch.setattr(devlegate._workers, "run", worker)
+        assert run_test_iteration(devlegate) == 0
+        assert (control / "kanban/done/T-1.md").exists()
+        assert (working / "initial.txt").read_text() == "initial\n"
+        assert (working / "first.txt").read_text() == "first\n"
+        assert (working / "second.txt").read_text() == "second\n"
+        assert (working / "product-advance.txt").read_text() == "new product\n"
+        assert (working / "continued.txt").read_text() == "fresh worker delta\n"
+        for _ in range(2):
+            devlegate = Devlegate(config)
+            monkeypatch.setattr(devlegate._workers, "run", worker)
+            assert run_test_iteration(devlegate) == 0
+            assert devlegate._state["execution_id"] == fresh_execution
+        assert len(prompts) == 3
+        assert len(ExecutionReportStore(control).list("T-1")) == 3
+        assert fresh_path.exists()
+        assert git(workspace, "rev-parse", "HEAD").stdout.strip() == checkpoint
+        assert artifact.read_bytes() == review_bytes
+        assert report_path.read_bytes() == report_bytes
+        ipc_observation(devlegate, "none")
 
 
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(
