@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Read-only operator reset inventory and identity-bound preview"
-"depends_on": ["TASK-125"]
+"depends_on": ["TASK-125", "TASK-150"]
 ---
 
 ## Goal
