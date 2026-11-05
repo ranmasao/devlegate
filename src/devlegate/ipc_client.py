@@ -410,7 +410,6 @@ def _blocked(value: object) -> tuple[tuple[str, str, BlockedReason], ...]:
                 ticket_id=_optional_text(
                     reason_mapping.get("ticket_id"), "blocked reason ticket"
                 ),
-                detail=_optional_text(reason_mapping.get("detail"), "blocked detail"),
             )
         entries.append(
             (

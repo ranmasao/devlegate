@@ -1842,8 +1842,6 @@ def _active_execution_grid(execution: dict[str, object]) -> str:
 def _blocked_reason_text(
     reason: BlockedReason,
 ) -> str:
-    if reason.detail is not None:
-        return reason.detail
     if reason.kind == "dependencies":
         return ", ".join(
             (
@@ -1945,8 +1943,6 @@ def _render_status_text(
                     else "operator verification required"
                 )
             )
-    if snapshot.plan.action == "blocked" and snapshot.plan.bound:
-        lines.extend(["", f"Blocked: {snapshot.plan.reason}"])
     if snapshot.lifecycle_integration is not None:
         ticket_id, state = snapshot.lifecycle_integration
         lines.extend(

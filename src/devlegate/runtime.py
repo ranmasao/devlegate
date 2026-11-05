@@ -33,16 +33,6 @@ from devlegate.cleanup_dependency import (
     snapshot_integration,
 )
 from devlegate.commit_messages import integration_message, lifecycle_message
-from devlegate.continuation_evidence import (
-    ContinuationEvidence,
-    ContinuationEvidenceError,
-    prove_dispositions,
-    select_sources,
-)
-from devlegate.continuation_history import (
-    ContinuationHistoryError,
-    prove_continuation_history,
-)
 from devlegate.control_git_workflow import (
     ControlGitWorkflowError,
     attach_existing_control,
@@ -58,14 +48,12 @@ from devlegate.execution_result import (
     ExecutionReport,
     ExecutionReportError,
     ExecutionReportStore,
-    WorkerRunResult,
     build_execution_report,
     new_execution_id,
 )
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
     ExecutionWorkspaceError,
-    ExecutionWorkspaceIdentity,
     ExecutionWorkspaceManager,
     WorkspaceInspection,
 )
@@ -118,13 +106,6 @@ from devlegate.git import (
 from devlegate.git import (
     merge_base as git_merge_base,
 )
-from devlegate.isolated_generation import (
-    PINNING_STAGES,
-    PUBLICATION_STAGES,
-    bound_generation,
-    target_binding,
-    validate_transition,
-)
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
 from devlegate.project_context import ProjectContextError, load_project_context
@@ -137,11 +118,7 @@ from devlegate.reconciliation_transactions import (
     ReconciliationTransactionError,
     run_update_base,
 )
-from devlegate.recovery import (
-    classify_stage,
-    has_pre_worker_absence_proof,
-    validate_execution_binding,
-)
+from devlegate.recovery import classify_stage, has_pre_worker_absence_proof
 from devlegate.recovery_transactions import (
     reconcile_control_lineage,
     recover_stranded_execution,
@@ -309,7 +286,6 @@ class BlockedReason:
     kind: str
     ticket_id: str | None = None
     tickets: tuple[tuple[str, str], ...] = ()
-    detail: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         if self.kind == "dependencies":
@@ -323,7 +299,6 @@ class BlockedReason:
         return {
             "kind": self.kind,
             **({"ticket_id": self.ticket_id} if self.ticket_id is not None else {}),
-            **({"detail": self.detail} if self.detail is not None else {}),
         }
 
 
@@ -2584,8 +2559,7 @@ class ServiceEngine:
         except (GitObservationError, GitAncestryError) as error:
             command.admission_error = DevlegateError(
                 "service admission outcome is unknown; retry with the same request id"
-                if recording
-                else "service busy; mutable request was not admitted"
+                if recording else "service busy; mutable request was not admitted"
             )
             raise command.admission_error from error
         except Exception:
@@ -3390,7 +3364,6 @@ class ServiceEngine:
                 "execution_id",
                 "execution_remote_head",
                 "execution_start_head",
-                "execution_checkpoint_start_head",
                 "resume_required",
                 "worker_prompt_sha256",
                 "worker_prompt_directive",
@@ -3405,7 +3378,6 @@ class ServiceEngine:
             for field in (
                 "execution_stage",
                 "execution_start_head",
-                "execution_checkpoint_start_head",
                 "execution_interruption_kind",
                 "resume_required",
             ):
@@ -3415,10 +3387,9 @@ class ServiceEngine:
         # A completion prepared before the abort must not turn an accepted
         # forced interruption into a normal completion. Recovery after restart
         # can resolve the persisted interruption using its usual evidence.
-        if (
-            self._lifecycle_force
-            and self._state.get("execution_interruption_kind") == "operator_abort"
-        ):
+        if self._lifecycle_force and self._state.get(
+            "execution_interruption_kind"
+        ) == "operator_abort":
             failures = state.get("failed_executions")
             failure = (
                 failures.get(self._state.get("execution_ticket_id"))
@@ -3885,17 +3856,6 @@ class ServiceEngine:
             raise WorkflowBlockedError(str(error)) from error
         self._discard_ineligible_zero_delta_retry(ticket_store)
         bound_execution = pending_agent_execution
-        rework = self._state.get("rework_provenance")
-        if pending_agent_execution and isinstance(rework, dict) and (
-            rework.get("mode") == "isolated"
-        ):
-            try:
-                if rework.get("preparation_stage") in PINNING_STAGES:
-                    self._pin_isolated_failed_rework_candidate()
-                candidate = self._publish_isolated_failed_rework_target()
-            except ExecutionWorkspaceError as error:
-                raise WorkspacePreparationBlockedError(str(error)) from error
-            self._save_state("agent_pending", execution_remote_head=candidate)
         execution_plan = self._make_execution_plan(
             self._state,
             ticket_store,
@@ -4004,14 +3964,6 @@ class ServiceEngine:
                 execution_plan.control,
             )
         if execution_plan.action == "blocked":
-            if (
-                pending_agent_execution
-                and isinstance(self._state.get("rework_provenance"), dict)
-                and execution_plan.reason.startswith(
-                    "bound execution workspace is unsafe:"
-                )
-            ):
-                raise WorkspacePreparationBlockedError(execution_plan.reason)
             if pending_agent_execution and execution_plan.reason.startswith(
                 (
                     "control revision changed",
@@ -4169,11 +4121,8 @@ class ServiceEngine:
             if authorization is None and isinstance(failed_for_ticket, dict):
                 observations = self._status_git_observation()
                 if self._failure_superseded(
-                    selected_ticket.id,
-                    failed_for_ticket,
-                    self._state,
-                    observations["control"],
-                    observations["code"],
+                    selected_ticket.id, failed_for_ticket, self._state,
+                    observations["control"], observations["code"],
                 ):
                     failed_for_ticket = None
             manual_retry = self._state.get("manual_retry_required")
@@ -4392,25 +4341,9 @@ class ServiceEngine:
                         "cannot read previous execution evidence for "
                         f"{selected_ticket.id}"
                     ) from error
-                continuation = (
-                    self._deferred_failed_rework(reports)
-                    if authorization is None
-                    else None
-                )
-                if continuation is not None and continuation.requires_isolation:
-                    self._admit_isolated_failed_rework(reports)
-                    return self._run_iteration_body(authorization)
-                previous_generation = (
-                    (continuation.sources.reviewed_publication,
-                     continuation.sources.reviewed)
-                    if continuation is not None
-                    else self._latest_reviewed_rework_report(reports)
-                )
+                previous_generation = self._latest_reviewed_rework_report(reports)
                 if previous_generation is not None:
                     lifecycle_commit, previous = previous_generation
-                    code_previous = (
-                        continuation.sources.failed if continuation else previous
-                    )
                     if (
                         previous.workspace_head is None
                         or previous.execution_branch
@@ -4427,23 +4360,20 @@ class ServiceEngine:
                         f"refs/heads/devlegate/work/{selected_ticket.id}",
                         runner=self._git_runtime,
                     )
-                    if branch_head not in {None, code_previous.workspace_head}:
+                    if branch_head not in {None, previous.workspace_head}:
                         raise WorkflowBlockedError(
                             "cannot prove the exact previous rework generation"
                         )
                     try:
-                        review_binding = (
-                            continuation.review if continuation else
-                            resolve_rework_review(
-                                self.control_worktree,
-                                control_head,
-                                lifecycle_commit,
-                                previous,
-                                todo_path=self.todo_path,
-                                review_path=self.review_path,
-                                backlog_path=self.backlog_path,
-                                runner=self._git_runtime,
-                            )
+                        review_binding = resolve_rework_review(
+                            self.control_worktree,
+                            control_head,
+                            lifecycle_commit,
+                            previous,
+                            todo_path=self.todo_path,
+                            review_path=self.review_path,
+                            backlog_path=self.backlog_path,
+                            runner=self._git_runtime,
                         )
                     except ReviewProvenanceError as error:
                         raise WorkflowBlockedError(
@@ -4460,12 +4390,6 @@ class ServiceEngine:
                         "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
                     }
-                    if continuation is not None:
-                        rework_provenance["code_predecessor"] = {
-                            "execution_id": code_previous.execution_id,
-                            "checkpoint": code_previous.workspace_head,
-                            "base_head": code_previous.code_base_head,
-                        }
             self._save_state(
                 "agent_pending",
                 clear_execution=not pending_agent_execution,
@@ -4491,17 +4415,9 @@ class ServiceEngine:
                 # This is a mutable observation.  The execution_control_head
                 # remains the immutable admission provenance for this attempt.
                 execution_validated_control_head=control_head,
-                execution_branch=(
-                    rework_provenance["target"]["branch"]
-                    if isinstance(rework_provenance, dict)
-                    and rework_provenance.get("mode") == "isolated"
-                    else f"devlegate/work/{selected_ticket.id}"
-                ),
+                execution_branch=f"devlegate/work/{selected_ticket.id}",
                 execution_path=str(
-                    rework_provenance["target"]["path"]
-                    if isinstance(rework_provenance, dict)
-                    and rework_provenance.get("mode") == "isolated"
-                    else self.execution_worktree_root / "work" / selected_ticket.id
+                    self.execution_worktree_root / "work" / selected_ticket.id
                 ),
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
@@ -4551,11 +4467,7 @@ class ServiceEngine:
                 isinstance(failure, dict) and failure.get("interrupted") is True
             )
         if (
-            (bound_execution and not (
-                isinstance(self._state.get("rework_provenance"), dict)
-                and self._state["rework_provenance"].get("mode") == "isolated"
-                and self._state.get("execution_start_head") is None
-            ))
+            bound_execution
             or resume_required
             or (authorization is not None and authorization.is_automatic_resume)
             or (
@@ -4702,54 +4614,14 @@ class ServiceEngine:
             raise DevlegateError(
                 "execution cgroup remains populated; worker retirement is unproven"
             )
-        return self._complete_worker_checkpoint(
-            workspace, execution_id, selected_ticket, worker_run, local_head,
-            remote_head,
-        )
-
-    def _complete_worker_checkpoint(
-        self, workspace: ExecutionWorkspace, execution_id: str,
-        selected_ticket: Ticket, worker_run: WorkerRunResult,
-        local_head: str, remote_head: str,
-    ) -> int:
-        """Publish the owner-bound worker result using its exact workspace identity."""
-        if (
-            self._state.get("phase") != "agent_running"
-            or self._state.get("execution_stage") != "post-worker"
-            or self._state.get("worker_identity") is not None
-            or not worker_run.worker_group_retired
-        ):
-            raise DevlegateError("checkpoint requires a retired owner-bound worker")
         try:
-            manager = self._post_worker_workspace_manager(workspace, execution_id)
+            manager = ExecutionWorkspaceManager(
+                self.repo,
+                self.execution_worktree_root,
+                selected_ticket.id,
+                runner=self._git_runtime,
+            )
             manager.verify_submodules(workspace)
-            rework = self._state.get("rework_provenance")
-            if isinstance(rework, dict) and rework.get("mode") == "isolated":
-                self._inspect_isolated_failed_rework_intent(
-                    {**self._state, "phase": "agent_pending"},
-                    retired_execution_id=execution_id,
-                )
-                candidate = self._inspect_isolated_pins(self._state, manager)
-                if (
-                    candidate != workspace.head
-                    or self._state.get("execution_start_head") != candidate
-                    or self._state.get("execution_remote_head") != candidate
-                    or self._execution_remote_head(workspace.branch) != candidate
-                ):
-                    raise ExecutionWorkspaceError(
-                        "isolated post-worker candidate or remote binding changed"
-                    )
-                head = self._resolve_commit_runtime(workspace.path, "HEAD")
-                if head is None or not is_ancestor(
-                    self.repo, workspace.head, head, runner=self._git_runtime
-                ):
-                    raise ExecutionWorkspaceError(
-                        "isolated worker checkpoint is not a descendant of its start"
-                    )
-                # Workers may commit their own changes. The checkpoint manager
-                # still re-observes registration, branch, HEAD and dependencies
-                # before staging anything, using this proven descendant.
-                workspace = dataclasses.replace(workspace, head=head)
         except (ExecutionWorkspaceError, OSError) as error:
             self._record_post_worker_failure(
                 selected_ticket.id,
@@ -4788,7 +4660,6 @@ class ServiceEngine:
         self._save_state(
             "agent_running",
             execution_stage="checkpointing",
-            execution_checkpoint_start_head=workspace.head,
             pending_execution_report=execution_result.as_dict(),
         )
         self._refresh_published_status()
@@ -4869,8 +4740,7 @@ class ServiceEngine:
                 )
             else:
                 reconciliation_product = self._persist_product_reconciliation(
-                    report, product, self._state.get("execution_remote_head"),
-                    allow_base_fallback=True,
+                    report, product, execution_remote_head, allow_base_fallback=True
                 )
                 self._refresh_published_status()
                 reason = (
@@ -5034,8 +4904,9 @@ class ServiceEngine:
                 isinstance(decision, dict)
                 and decision.get("status") in ("blocked", "skipped")
                 and decision.get("reason") != "ticket is not durably done"
-                and decision
-                not in (self._state.get("workspace_cleanup") or {}).get("last_pass", [])
+                and decision not in (self._state.get("workspace_cleanup") or {}).get(
+                    "last_pass", []
+                )
             ):
                 _log_cleanup_decision("historical", decision)
         self._publish_workspace_cleanup_inventory(decisions)
@@ -5230,14 +5101,6 @@ class ServiceEngine:
             report.ticket_id,
             runner=self._git_runtime,
         )
-        if (
-            report.execution_branch != manager.branch
-            or Path(report.execution_path).absolute() != manager.path
-        ):
-            raise WorkflowBlockedError(
-                "zero-delta retirement requires an exact ticket-scoped workspace "
-                "binding; generation workspace cleanup is not yet authorized"
-            )
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is not None:
@@ -5477,93 +5340,7 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
 
-    def _post_worker_workspace_manager(
-        self, workspace: ExecutionWorkspace, execution_id: str
-    ) -> ExecutionWorkspaceManager:
-        """Bind checkpoint operations to the persisted worker workspace identity."""
-        state = self._state
-        rework = state.get("rework_provenance")
-        isolated = isinstance(rework, dict) and rework.get("mode") == "isolated"
-        if isolated and rework.get("preparation_stage") != "remote_published":
-            raise ExecutionWorkspaceError("isolated checkpoint target is not published")
-        try:
-            manager = (
-                self._isolated_workspace_manager(state) if isolated else
-                ExecutionWorkspaceManager(
-                    self.repo, self.execution_worktree_root, workspace.ticket_id,
-                    runner=self._git_runtime,
-                )
-            )
-        except ExecutionWorkspaceError as error:
-            raise ExecutionWorkspaceError(
-                f"post-worker workspace binding changed: {error}"
-            ) from error
-        if (
-            state.get("execution_id") != execution_id
-            or state.get("execution_ticket_id") != workspace.ticket_id
-            or state.get("execution_branch") != manager.branch
-            or state.get("execution_path") != str(manager.path)
-            or workspace.branch != manager.branch
-            or workspace.path != manager.path
-            or state.get("execution_base_head") != workspace.base_head
-        ):
-            raise ExecutionWorkspaceError("post-worker workspace binding changed")
-        return manager
-
-    def _isolated_workspace_manager(
-        self, state: dict[str, object]
-    ) -> ExecutionWorkspaceManager:
-        identity = bound_generation(self.execution_worktree_root, state)
-        return ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, identity.ticket_id,
-            generation=state["execution_id"], runner=self._git_runtime,
-        )
-
-    def _save_isolated_preparation(self, stage: str, **facts: object) -> None:
-        """Journal one legal before/after-effect step without guessing on restart."""
-        bound_generation(self.execution_worktree_root, self._state)
-        rework = self._state["rework_provenance"]
-        validate_transition(rework["preparation_stage"], stage)
-        self._save_state("agent_pending", rework_provenance={
-            **rework, **facts, "preparation_stage": stage,
-        })
-
-    def _inspect_isolated_pins(
-        self, state: dict[str, object], manager: ExecutionWorkspaceManager
-    ) -> str:
-        """One read-only source/candidate pin invariant for every post-pin phase."""
-        identity = bound_generation(self.execution_worktree_root, state)
-        rework = state["rework_provenance"]
-        predecessor = rework["code_predecessor"]
-        prefix = f"refs/devlegate/isolated/{identity.ticket_id}/{state['execution_id']}"
-        for field in ("source", "candidate"):
-            ref = f"{prefix}/{field}"
-            if rework.get(f"{field}_ref") != ref:
-                raise ExecutionWorkspaceError(
-                    "isolated evidence intent binding changed"
-                )
-            if self._git_runtime(
-                self.repo, "symbolic-ref", "-q", ref, check=False
-            ).returncode != 1:
-                raise ExecutionWorkspaceError(
-                    "isolated evidence ref is symbolic or unreadable"
-                )
-        if resolve_ref_commit(
-            self.repo, rework["source_ref"], runner=self._git_runtime
-        ) != predecessor["checkpoint"]:
-            raise ExecutionWorkspaceError("isolated source pin is missing or changed")
-        candidate = manager._pinned_rework_candidate(
-            rework["admitted_base_head"], predecessor["base_head"],
-            predecessor["checkpoint"], rework["candidate_ref"], create=False,
-        )
-        if candidate != rework.get("candidate_head"):
-            raise ExecutionWorkspaceError("isolated candidate identity changed")
-        return candidate
-
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
-        rework = self._state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            return self._inspect_published_isolated_workspace(self._state)
         if plan.ticket_id is None or plan.code is None or plan.control is None:
             raise ExecutionWorkspaceError(
                 "execution plan has no complete revision binding"
@@ -5618,24 +5395,9 @@ class ServiceEngine:
             )
         rework = self._state.get("rework_provenance")
         if isinstance(rework, dict):
-            code_predecessor = rework.get("code_predecessor")
-            if code_predecessor is not None and not isinstance(code_predecessor, dict):
-                raise ExecutionWorkspaceError("persisted code predecessor is malformed")
-            previous_base = (
-                code_predecessor.get("base_head")
-                if code_predecessor is not None
-                else rework.get("previous_base_head")
-            )
-            previous_checkpoint = (
-                code_predecessor.get("checkpoint")
-                if code_predecessor is not None
-                else rework.get("previous_report_checkpoint")
-            )
-            previous_execution = (
-                code_predecessor.get("execution_id")
-                if code_predecessor is not None
-                else rework.get("previous_execution_id")
-            )
+            previous_base = rework.get("previous_base_head")
+            previous_checkpoint = rework.get("previous_report_checkpoint")
+            previous_execution = rework.get("previous_execution_id")
             if not all(
                 isinstance(value, str) and value
                 for value in (previous_base, previous_checkpoint, previous_execution)
@@ -5659,7 +5421,7 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "persisted rework preparation stage is invalid"
                 )
-            if rework.get("swap") is None and preparation_stage in {
+            if preparation_stage in {
                 None,
                 "admitted",
                 "remote_evidence_published",
@@ -5670,10 +5432,7 @@ class ServiceEngine:
                     previous_base,
                     previous_checkpoint,
                 )
-            swap = rework.get("swap")
-            if swap is not None and not isinstance(swap, dict):
-                raise ExecutionWorkspaceError("persisted rework swap is malformed")
-            if preparation_stage != "remote_predecessor_installed" and swap is None:
+            if preparation_stage != "remote_predecessor_installed":
                 self._verify_rework_remote_predecessor(
                     manager.ticket_id, previous_base, previous_checkpoint
                 )
@@ -5692,14 +5451,9 @@ class ServiceEngine:
                     )
                 workspace = inspection.workspace
             else:
-                if base_head != previous_base:
-                    workspace = self._install_rework_candidate(
-                        manager, base_head, previous_base, previous_checkpoint
-                    )
-                else:
-                    workspace = manager.prepare_rework(
-                        base_head, previous_base, previous_checkpoint
-                    )
+                workspace = manager.prepare_rework(
+                    base_head, previous_base, previous_checkpoint
+                )
                 self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
@@ -5713,191 +5467,6 @@ class ServiceEngine:
                 plan.ticket_id,
                 str(bound_control or plan.control.local_head),
             )
-        return workspace
-
-    def _install_rework_candidate(
-        self,
-        manager: ExecutionWorkspaceManager,
-        base: str,
-        old_base: str,
-        checkpoint: str,
-    ) -> ExecutionWorkspace:
-        """Replay the owner-persisted candidate swap from observed Git state."""
-        rework = self._state.get("rework_provenance")
-        execution_id = self._state.get("execution_id")
-        if not isinstance(rework, dict) or not isinstance(execution_id, str):
-            raise ExecutionWorkspaceError("rework swap lacks execution identity")
-        if self._state.get("worker_identity") is not None:
-            raise ExecutionWorkspaceError("rework swap has a bound worker")
-        candidate_ref = (
-            f"refs/devlegate/recovery/rework-candidate/{manager.ticket_id}/"
-            f"{execution_id}"
-        )
-        swap = rework.get("swap")
-        if swap is None:
-            inspection = manager.inspect(old_base, checkpoint)
-            if inspection.classification != "REUSABLE":
-                raise ExecutionWorkspaceError(
-                    f"rework source is unsafe: {inspection.reason}"
-                )
-            remote = self._execution_remote_head(manager.branch)
-            if remote != checkpoint and not (remote is None and checkpoint == old_base):
-                raise ExecutionWorkspaceError("rework remote predecessor changed")
-            candidate = manager._pinned_rework_candidate(
-                base, old_base, checkpoint, candidate_ref
-            )
-            swap = {
-                "candidate_ref": candidate_ref,
-                "candidate_head": candidate,
-                "target_product_head": base,
-                "expected_old_local_head": checkpoint,
-                "expected_old_remote_head": remote,
-                "stage": "candidate_ready",
-            }
-            self._save_state(
-                "agent_pending", rework_provenance={**rework, "swap": swap}
-            )
-        if not isinstance(swap, dict) or any(
-            (
-                swap.get("candidate_ref") != candidate_ref,
-                swap.get("target_product_head") != base,
-                swap.get("expected_old_local_head") != checkpoint,
-                swap.get("stage")
-                not in {
-                    "candidate_ready",
-                    "retiring",
-                    "moving",
-                    "attaching",
-                    "attached",
-                },
-            )
-        ):
-            raise ExecutionWorkspaceError("persisted rework swap identity conflicts")
-        candidate = swap.get("candidate_head")
-        if (
-            not isinstance(candidate, str)
-            or resolve_ref_commit(self.repo, candidate_ref, runner=self._git_runtime)
-            != candidate
-        ):
-            raise ExecutionWorkspaceError("rework candidate pin is missing or changed")
-        if (
-            manager._pinned_rework_candidate(base, old_base, checkpoint, candidate_ref)
-            != candidate
-        ):
-            raise ExecutionWorkspaceError("rework candidate identity changed")
-
-        def stage(value: str) -> None:
-            nonlocal swap
-            swap = {**swap, "stage": value}
-            current = self._state.get("rework_provenance")
-            if not isinstance(current, dict):
-                raise ExecutionWorkspaceError("rework swap state disappeared")
-            self._save_state(
-                "agent_pending", rework_provenance={**current, "swap": swap}
-            )
-
-        def verify_generation() -> None:
-            product = self._observe_product_generation(base)
-            if not product.get("stable"):
-                raise ExecutionWorkspaceError(
-                    f"rework product generation changed: {product.get('reason')}"
-                )
-            control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
-            admitted = self._state.get("execution_control_head")
-            if not isinstance(control, str) or not isinstance(admitted, str):
-                raise ExecutionWorkspaceError(
-                    "rework control generation is unobservable"
-                )
-            self._adopt_validated_control_descendant(
-                control, manager.ticket_id, admitted
-            )
-
-        verify_generation()
-        remote = self._execution_remote_head(manager.branch)
-        allowed_remote = {swap.get("expected_old_remote_head")}
-        if swap.get("stage") == "attached":
-            allowed_remote.add(candidate)
-        if remote not in allowed_remote:
-            raise ExecutionWorkspaceError(
-                "rework remote predecessor drifted during swap"
-            )
-        branch_ref = f"refs/heads/{manager.branch}"
-        head = resolve_ref_commit(self.repo, branch_ref, runner=self._git_runtime)
-        registrations = manager._registrations()
-        if (
-            manager.root.is_symlink()
-            or (manager.root / "work").is_symlink()
-            or manager.path.is_symlink()
-        ):
-            raise ExecutionWorkspaceError("rework worktree path is symlinked")
-        if any(
-            path != manager.path.resolve() and item.get("branch") == manager.branch
-            for path, item in registrations.items()
-        ):
-            raise ExecutionWorkspaceError(
-                "rework branch is attached to a foreign worktree"
-            )
-        registration = registrations.get(manager.path.resolve())
-        if registration is not None and (
-            "locked" in registration or not manager.path.is_dir()
-        ):
-            raise ExecutionWorkspaceError("rework worktree is locked or missing")
-        if registration is None and manager.path.exists():
-            raise ExecutionWorkspaceError("rework worktree path is foreign")
-        if head == checkpoint and registration is not None:
-            if swap.get("stage") not in {"candidate_ready", "retiring"}:
-                raise ExecutionWorkspaceError(
-                    "rework source reappeared after retirement"
-                )
-            inspection = manager.inspect(old_base, checkpoint)
-            if inspection.classification != "REUSABLE" or inspection.workspace is None:
-                raise ExecutionWorkspaceError(
-                    f"rework source is unsafe: {inspection.reason}"
-                )
-            stage("retiring")
-            verify_generation()
-            if self._execution_remote_head(manager.branch) != swap.get(
-                "expected_old_remote_head"
-            ):
-                raise ExecutionWorkspaceError("rework remote changed before retirement")
-            manager.retire(inspection.workspace, checkpoint)
-            registration = None
-        if head == checkpoint and registration is None:
-            if swap.get("stage") not in {"retiring", "moving"}:
-                raise ExecutionWorkspaceError(
-                    "rework worktree disappeared before retirement"
-                )
-            stage("moving")
-            verify_generation()
-            moved = self._git_runtime(
-                self.repo, "update-ref", branch_ref, candidate, checkpoint, check=False
-            )
-            if moved.returncode:
-                raise ExecutionWorkspaceError(
-                    "rework local branch changed during compare-and-swap"
-                )
-            head = candidate
-        if head != candidate:
-            raise ExecutionWorkspaceError(
-                f"rework local branch has unexpected identity: {head}; "
-                f"expected {checkpoint} or {candidate}"
-            )
-        if registration is None:
-            if swap.get("stage") not in {"moving", "attaching"}:
-                raise ExecutionWorkspaceError("rework candidate worktree disappeared")
-            stage("attaching")
-            verify_generation()
-            workspace = manager.prepare(base)
-        else:
-            inspection = manager.inspect(base, candidate)
-            if inspection.classification != "REUSABLE" or inspection.workspace is None:
-                raise ExecutionWorkspaceError(
-                    f"rework candidate workspace is unsafe: {inspection.reason}"
-                )
-            workspace = inspection.workspace
-        if workspace.head != candidate or workspace.dirty:
-            raise ExecutionWorkspaceError("rework candidate worktree identity changed")
-        stage("attached")
         return workspace
 
     def _adopt_unstarted_product_descendant(
@@ -6242,566 +5811,6 @@ class ServiceEngine:
                 "after evidence publication"
             )
 
-    def _deferred_failed_rework(
-        self, reports: tuple[ExecutionReport, ...], *,
-        state: dict[str, object] | None = None,
-        observations: dict | None = None,
-    ) -> ContinuationEvidence | None:
-        """Prove the source and separately authorize reuse of its workspace."""
-        source = self._prove_deferred_failed_rework(
-            reports, state=state, observations=observations
-        )
-        if source is None:
-            return None
-        failed = source.sources.failed
-        state = self._state if state is None else state
-        if self._failed_rework_uses_isolation(failed, state):
-            return dataclasses.replace(source, requires_isolation=True)
-        failures = state.get("failed_executions")
-        metadata = (
-            failures.get(failed.ticket_id) if isinstance(failures, dict) else None
-        )
-        self._verify_failed_rework_workspace_ownership(
-            failed.ticket_id, failed, state, metadata
-        )
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, failed.ticket_id,
-            runner=self._git_runtime,
-        )
-        try:
-            inspection = manager.inspect(failed.code_base_head, failed.workspace_head)
-            if inspection.classification != "REUSABLE":
-                raise WorkflowBlockedError(
-                    f"rework source is unsafe: {inspection.reason}"
-                )
-            remote = self._execution_remote_head(manager.branch)
-        except (GitObservationError, GitAncestryError) as error:
-            raise WorkflowBlockedError("cannot prove failed rework history") from error
-        if remote != failed.workspace_head and not (
-            remote is None and failed.workspace_head == failed.code_base_head
-        ):
-            raise WorkflowBlockedError("rework remote predecessor changed")
-        return source
-
-    def _failed_rework_uses_isolation(
-        self, failed: ExecutionReport, state: dict[str, object]
-    ) -> bool:
-        try:
-            return self._completed_unrelated_owner_proven(failed, state)
-        except (GitObservationError, GitAncestryError) as error:
-            raise WorkflowBlockedError(
-                "isolated continuation cannot observe completed-owner Git evidence"
-            ) from error
-
-    def _completed_unrelated_owner_proven(
-        self, failed: ExecutionReport, state: dict[str, object]
-    ) -> bool:
-        """Permit fresh ownership only after proving an unrelated terminal owner.
-
-        This decision grants no authority over the historical workspace. Its
-        report remains immutable input to an independently persisted target.
-        """
-        other = state.get("execution_ticket_id")
-        execution = state.get("execution_id")
-        if not isinstance(other, str) or other == failed.ticket_id:
-            return False
-        if state.get("phase") != "idle" or state.get("worker_identity") is not None:
-            return False
-        ticket = self._ticket_store().by_id.get(other)
-        if ticket is None or ticket.state != "done":
-            return False
-        reports = ExecutionReportStore(self.control_worktree).list(other)
-        matches = [report for report in reports if report.execution_id == execution]
-        if len(matches) != 1:
-            return False
-        completed = matches[0]
-        if (
-            completed.result.conclusion == "failed"
-            or completed.execution_branch != state.get("execution_branch")
-            or completed.execution_path != state.get("execution_path")
-            or completed.workspace_head is None
-        ):
-            return False
-        publication = file_history_commit(
-            self.control_worktree, "HEAD",
-            f"executions/{other}/{execution}.json", runner=self._git_runtime,
-        )
-        integration = self._find_accepted_integration_commit(other)
-        failed_publication = file_history_commit(
-            self.control_worktree, "HEAD",
-            f"executions/{failed.ticket_id}/{failed.execution_id}.json",
-            runner=self._git_runtime,
-        )
-        if (
-            publication is None
-            or failed_publication is None
-            or not is_ancestor(
-                self.control_worktree, failed_publication, publication,
-                runner=self._git_runtime,
-            )
-            or not self._lifecycle_commit_is_exact(publication, completed)
-            or integration is None
-            or not self._accepted_integration_commit_matches_report(
-                integration, other, completed
-            )
-            or not is_ancestor(
-                self.repo, completed.workspace_head, "HEAD", runner=self._git_runtime
-            )
-        ):
-            return False
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, failed.ticket_id,
-            generation="0" * 32, runner=self._git_runtime,
-        )
-        if manager._has_symlinked_path():
-            raise WorkflowBlockedError("isolated continuation root contains a symlink")
-        return True
-
-    def _admit_isolated_failed_rework(
-        self, reports: tuple[ExecutionReport, ...]
-    ) -> dict[str, object]:
-        """Persist an isolated intent, without creating any Git resources.
-
-        The owner must serialize calls, as it does for other state transitions.
-        """
-        existing = self._state.get("rework_provenance")
-        if self._state.get("phase") == "agent_pending":
-            if isinstance(existing, dict) and existing.get("mode") == "isolated":
-                self._inspect_isolated_failed_rework_intent(self._state)
-                return existing
-            raise WorkflowBlockedError("another execution is already pending")
-        if self._state.get("phase") != "idle":
-            raise WorkflowBlockedError("isolated admission requires an idle owner")
-        observations = self._status_git_observation()
-        source = self._prove_deferred_failed_rework(
-            reports, observations=observations
-        )
-        if source is None:
-            raise WorkflowBlockedError("no eligible failed rework source")
-        reviewed, failed = source.sources.reviewed, source.sources.failed
-        control = observations["control"].local_head
-        base = observations["code"].local_head
-        execution = new_execution_id()
-        identity = ExecutionWorkspaceIdentity.for_ticket(
-            self.execution_worktree_root, failed.ticket_id, generation=execution
-        )
-        target_ref = f"refs/heads/{identity.branch}"
-        if resolve_ref_commit(
-            self.repo, target_ref, runner=self._git_runtime
-        ) is not None:
-            raise WorkflowBlockedError("isolated target ref already exists")
-        if self._execution_remote_head(identity.branch) is not None:
-            raise WorkflowBlockedError("isolated remote target ref already exists")
-        provenance = {
-            "mode": "isolated", "preparation_stage": "admitted",
-            "previous_execution_id": reviewed.execution_id,
-            "previous_report_checkpoint": reviewed.workspace_head,
-            "previous_base_head": reviewed.code_base_head,
-            "previous_control_head": reviewed.control_head,
-            "admitted_base_head": base, "admitted_control_head": control,
-            "review": source.review.as_dict(),
-            "code_predecessor": source.sources.code_predecessor,
-            "target": target_binding(identity),
-        }
-        ticket = self._ticket_store().by_id[failed.ticket_id]
-        self._save_state(
-            "agent_pending", clear_execution=True, clear_pre_worker_generation=True,
-            local_head=base, remote_head=base, control_head=control,
-            selected_ticket_id=failed.ticket_id, execution_ticket_id=failed.ticket_id,
-            selected_ticket_body=ticket.body, selected_ticket_title=ticket.title,
-            selected_ticket_dependencies=list(ticket.depends_on),
-            execution_id=execution, execution_branch=identity.branch,
-            execution_path=str(identity.path), execution_base_head=base,
-            execution_admitted_base_head=base, execution_validated_product_head=base,
-            execution_control_head=control, execution_validated_control_head=control,
-            execution_remote_head=None, worker_identity=None,
-            rework_provenance=provenance,
-        )
-        return provenance
-
-    def _inspect_isolated_failed_rework_intent(
-        self, state: dict[str, object], *, interrupted: bool = False,
-        retired_execution_id: str | None = None,
-    ) -> None:
-        """Validate the durable pre-effect stage; never authorize legacy preparation."""
-        rework = state.get("rework_provenance")
-        ticket, execution = state.get("execution_ticket_id"), state.get("execution_id")
-        if not (
-            isinstance(rework, dict)
-            and isinstance(ticket, str)
-            and isinstance(execution, str)
-        ):
-            raise WorkflowBlockedError("isolated intent identity is incomplete")
-        if interrupted:
-            self._prove_interrupted_isolated_worker_absent(state)
-        try:
-            bound_generation(self.execution_worktree_root, state)
-        except ExecutionWorkspaceError as error:
-            raise WorkflowBlockedError(str(error)) from error
-        if (state.get("execution_base_head") != rework.get("admitted_base_head")
-                or state.get("execution_control_head")
-                != rework.get("admitted_control_head")
-                or (not interrupted and state.get("worker_identity") is not None)):
-            raise WorkflowBlockedError("isolated intent binding is invalid")
-
-        if (state.get("phase") != ("agent_running" if interrupted else "agent_pending")
-                or state.get("selected_ticket_id") != ticket):
-            raise WorkflowBlockedError(
-                "isolated intent is not the selected "
-                f"{'running' if interrupted else 'pending'} ticket"
-            )
-        observations = self._status_git_observation()
-        control, code = observations.get("control"), observations.get("code")
-        if (control is None or code is None
-                or control.local_head != rework.get("admitted_control_head")
-                or code.local_head != rework.get("admitted_base_head")):
-            raise WorkflowBlockedError(
-                "isolated intent admitted Git generation changed"
-            )
-        current = self._ticket_store().by_id.get(ticket)
-        if (current is None or current.body != state.get("selected_ticket_body")
-                or current.title != state.get("selected_ticket_title")
-                or list(current.depends_on)
-                != state.get("selected_ticket_dependencies")):
-            raise WorkflowBlockedError("isolated intent canonical ticket changed")
-        # The persisted intent (pending, or running with independent absence
-        # proof) permits rechecking immutable source eligibility. This local
-        # projection never proves resource ownership or authorizes preparation;
-        # competing markers and live worker evidence retain admission checks.
-        admission_state = {**state, "phase": "idle"}
-        if interrupted:
-            admission_state["worker_identity"] = None
-        reports = ExecutionReportStore(self.control_worktree).list(ticket)
-        source = self._prove_deferred_failed_rework(
-            reports, state=admission_state, observations=observations,
-            retired_execution_id=(
-                state.get("execution_id")
-                if state.get("phase") == "agent_pending"
-                else retired_execution_id
-            ),
-        )
-        if source is None:
-            raise WorkflowBlockedError(
-                "isolated intent failed source is no longer eligible"
-            )
-        reviewed = source.sources.reviewed
-        predecessor = rework.get("code_predecessor")
-        if (predecessor != source.sources.code_predecessor
-                or rework.get("previous_execution_id") != reviewed.execution_id
-                or rework.get("previous_report_checkpoint") != reviewed.workspace_head
-                or rework.get("previous_base_head") != reviewed.code_base_head
-                or rework.get("previous_control_head") != reviewed.control_head):
-            raise WorkflowBlockedError("isolated intent lifecycle binding changed")
-        if rework.get("review") != source.review.as_dict():
-            raise WorkflowBlockedError(
-                "isolated intent curator feedback binding changed"
-            )
-
-    def _pin_isolated_failed_rework_candidate(self) -> str:
-        """Advance a serialized isolated intent through its immutable Git pins.
-
-        This does not authorize worker admission or touch the historical workspace.
-        Each effect is preceded by a durable generation-specific intent.
-        """
-        self._inspect_isolated_failed_rework_intent(self._state)
-        rework = self._state["rework_provenance"]
-        ticket = self._state["execution_ticket_id"]
-        execution = self._state["execution_id"]
-        predecessor = rework["code_predecessor"]
-        manager = self._isolated_workspace_manager(self._state)
-        identity = bound_generation(self.execution_worktree_root, self._state)
-        target_ref = f"refs/heads/{identity.branch}"
-        if (manager._has_symlinked_path() or identity.path.exists()
-                or identity.path.resolve() in manager._registrations()
-                or resolve_ref_commit(self.repo, target_ref, runner=self._git_runtime)
-                is not None
-                or self._execution_remote_head(identity.branch) is not None):
-            raise WorkflowBlockedError("isolated target is not absent")
-
-        prefix = f"refs/devlegate/isolated/{ticket}/{execution}"
-        source_ref, candidate_ref = f"{prefix}/source", f"{prefix}/candidate"
-        checkpoint, old_base = predecessor["checkpoint"], predecessor["base_head"]
-        base = rework["admitted_base_head"]
-        stage = rework["preparation_stage"]
-
-        def observe(ref: str) -> str | None:
-            symbolic = self._git_runtime(
-                self.repo, "symbolic-ref", "-q", ref, check=False
-            )
-            if symbolic.returncode == 0:
-                raise WorkflowBlockedError("isolated evidence ref is symbolic")
-            if symbolic.returncode != 1:
-                raise WorkflowBlockedError("cannot inspect isolated evidence ref")
-            return resolve_ref_commit(self.repo, ref, runner=self._git_runtime)
-
-        if stage == "admitted":
-            if observe(source_ref) is not None or observe(candidate_ref) is not None:
-                raise WorkflowBlockedError("isolated evidence ref already exists")
-            self._save_isolated_preparation(
-                "source_pinning", source_ref=source_ref, candidate_ref=candidate_ref
-            )
-            rework = self._state["rework_provenance"]
-            stage = "source_pinning"
-        if (rework.get("source_ref") != source_ref
-                or rework.get("candidate_ref") != candidate_ref):
-            raise WorkflowBlockedError("isolated evidence intent binding changed")
-        source = observe(source_ref)
-        if source is None and stage == "source_pinning":
-            if create_ref_if_absent(
-                self.repo, source_ref, checkpoint, runner=self._git_runtime
-            ).returncode:
-                raise WorkflowBlockedError("cannot create isolated source pin")
-            source = observe(source_ref)
-        if source != checkpoint:
-            raise WorkflowBlockedError("isolated source pin is missing or changed")
-        if stage == "source_pinning":
-            if observe(candidate_ref) is not None:
-                raise WorkflowBlockedError("isolated candidate ref already exists")
-            self._save_isolated_preparation("candidate_pinning")
-            rework = self._state["rework_provenance"]
-            stage = "candidate_pinning"
-        # Recheck the immutable source and admission immediately before replay.
-        self._inspect_isolated_failed_rework_intent(self._state)
-        if observe(source_ref) != checkpoint:
-            raise WorkflowBlockedError("isolated source pin changed before replay")
-        observe(candidate_ref)  # Reject symbolic or malformed refs before use.
-        candidate = manager._pinned_rework_candidate(
-            base, old_base, checkpoint, candidate_ref,
-            create=stage == "candidate_pinning",
-        )
-        if stage == "candidate_pinned":
-            if rework.get("candidate_head") != candidate:
-                raise WorkflowBlockedError("isolated candidate identity changed")
-        else:
-            self._save_isolated_preparation(
-                "candidate_pinned", candidate_head=candidate
-            )
-        return candidate
-
-    def _publish_isolated_failed_rework_target(self) -> str:
-        """Materialize only the target authorized by a pinned isolated intent."""
-        self._assert_repository_owner()
-        self._inspect_isolated_failed_rework_intent(self._state)
-        rework = self._state["rework_provenance"]
-        stage = rework["preparation_stage"]
-        if stage not in PUBLICATION_STAGES:
-            raise WorkflowBlockedError("isolated target requires a pinned candidate")
-        manager = self._isolated_workspace_manager(self._state)
-        target = rework["target"]
-        try:
-            candidate = self._inspect_isolated_pins(self._state, manager)
-        except ExecutionWorkspaceError as error:
-            raise WorkflowBlockedError(str(error)) from error
-
-        def save_stage(value: str) -> None:
-            nonlocal rework, stage
-            self._save_isolated_preparation(value)
-            rework = self._state["rework_provenance"]
-            stage = value
-
-        def observe() -> tuple[str | None, str | None]:
-            symbolic = self._git_runtime(
-                self.repo, "symbolic-ref", "-q", target["ref"], check=False
-            )
-            if symbolic.returncode != 1:
-                raise WorkflowBlockedError(
-                    "isolated target ref is symbolic or unreadable"
-                )
-            return (
-                resolve_ref_commit(self.repo, target["ref"], runner=self._git_runtime),
-                self._execution_remote_head(manager.branch),
-            )
-
-        local, remote = observe()
-        if manager._has_symlinked_path():
-            raise WorkflowBlockedError("isolated target path has a symlink")
-        registrations = manager._registrations()
-        registration = registrations.get(manager.path.resolve())
-        if any(item.get("branch") == manager.branch and path != manager.path.resolve()
-               for path, item in registrations.items()):
-            raise WorkflowBlockedError("isolated target branch is attached elsewhere")
-        if stage == "candidate_pinned":
-            if (local is not None or remote is not None or registration
-                    or manager.path.exists()):
-                raise WorkflowBlockedError("isolated target is not absent")
-            save_stage("target_creating")
-        if stage == "target_creating":
-            if remote is not None or registration or manager.path.exists():
-                raise WorkflowBlockedError("isolated target creation topology changed")
-            if local is None:
-                self._inspect_isolated_failed_rework_intent(self._state)
-                if create_ref_if_absent(self.repo, target["ref"], candidate,
-                                        runner=self._git_runtime).returncode:
-                    raise WorkflowBlockedError("cannot create isolated target ref")
-                local, remote = observe()
-            if local != candidate or remote is not None:
-                raise WorkflowBlockedError("isolated target ref creation conflicts")
-            save_stage("target_created")
-        if local != candidate:
-            raise WorkflowBlockedError("isolated target ref is missing or changed")
-        if stage == "target_created":
-            if remote is not None or registration or manager.path.exists():
-                raise WorkflowBlockedError("isolated target worktree is not absent")
-            save_stage("worktree_attaching")
-        if stage == "worktree_attaching":
-            if remote is not None:
-                raise WorkflowBlockedError(
-                    "isolated remote target appeared before publication"
-                )
-            if registration is None:
-                if manager.path.exists():
-                    raise WorkflowBlockedError("isolated target path is foreign")
-                self._inspect_isolated_failed_rework_intent(self._state)
-                manager.prepare(candidate)
-            inspection = manager.inspect(candidate, candidate)
-            if inspection.classification != "REUSABLE":
-                raise WorkflowBlockedError(
-                    f"isolated target worktree: {inspection.reason}"
-                )
-            save_stage("worktree_attached")
-        inspection = manager.inspect(candidate, candidate)
-        if inspection.classification != "REUSABLE":
-            raise WorkflowBlockedError(f"isolated target worktree: {inspection.reason}")
-        if stage == "worktree_attached":
-            if remote is not None:
-                raise WorkflowBlockedError("isolated remote target already exists")
-            save_stage("remote_publishing")
-        if stage == "remote_publishing" and remote is None:
-            self._inspect_isolated_failed_rework_intent(self._state)
-            local, remote = observe()
-            current_workspace = manager.inspect(candidate, candidate)
-            if (local != candidate or remote is not None
-                    or manager._has_symlinked_path()
-                    or current_workspace.classification != "REUSABLE"):
-                raise WorkflowBlockedError(
-                    "isolated target changed before remote publication"
-                )
-            pushed = self._git_runtime(
-                self.repo, "push", f"--force-with-lease={target['ref']}:",
-                self.remote_name, f"{target['ref']}:{target['ref']}", check=False,
-            )
-            local, remote = observe()
-            if pushed.returncode and remote != candidate:
-                raise WorkflowBlockedError("isolated remote publication is uncertain")
-        if stage == "remote_publishing":
-            if remote != candidate or local != candidate:
-                raise WorkflowBlockedError(
-                    "isolated remote publication is uncertain or changed"
-                )
-            save_stage("remote_published")
-        if remote != candidate:
-            raise WorkflowBlockedError("isolated remote target is missing or changed")
-        return candidate
-
-    def _prove_deferred_failed_rework(
-        self, reports: tuple[ExecutionReport, ...], *,
-        state: dict[str, object] | None = None,
-        observations: dict | None = None,
-        retired_execution_id: str | None = None,
-    ) -> ContinuationEvidence | None:
-        """Prove immutable source history without assuming workspace ownership."""
-        try:
-            sources = select_sources(
-                self.control_worktree, reports, runner=self._git_runtime
-            )
-            if sources is None:
-                return None
-            failed_commit, failed = sources.failed_publication, sources.failed
-            review_commit, reviewed = sources.reviewed_publication, sources.reviewed
-            ticket = failed.ticket_id
-            state = self._state if state is None else state
-            failures = state.get("failed_executions")
-            metadata = failures.get(ticket) if isinstance(failures, dict) else None
-            if metadata is not None and (
-                not isinstance(metadata, dict)
-                or metadata.get("execution_id") != failed.execution_id
-            ):
-                raise WorkflowBlockedError(
-                    "failed execution metadata conflicts with the latest "
-                    "lifecycle report"
-                )
-            observations = observations or self._status_git_observation()
-            if not self._failure_superseded(
-                ticket, metadata, state, observations["control"], observations["code"],
-                lifecycle_base=failed_commit if metadata is None else None,
-                product_base=failed.code_base_head if metadata is None else None,
-                retired_execution_id=retired_execution_id,
-            ):
-                raise WorkflowBlockedError(
-                    "failed execution continuation cannot prove clean synchronized "
-                    "descendant history and absence of competing ownership or intents"
-                )
-            if (
-                not reviewed.result.egress_ok
-                or reviewed.result.transport_error is not None
-                or not self._lifecycle_commit_is_exact(failed_commit, failed)
-                or not self._lifecycle_commit_is_exact(review_commit, reviewed)
-                or not failed.workspace_head
-                or not failed.code_base_head
-                or failed.execution_branch != f"devlegate/work/{ticket}"
-                or Path(failed.execution_path)
-                != self.execution_worktree_root / "work" / ticket
-                or not reviewed.workspace_head
-            ):
-                raise WorkflowBlockedError(
-                    "failed rework lifecycle provenance is invalid"
-                )
-            try:
-                lineage = prove_continuation_history(
-                    self.repo, reviewed.code_base_head, reviewed.workspace_head,
-                    failed.code_base_head, failed.workspace_head,
-                    runner=self._git_runtime,
-                )
-            except ContinuationHistoryError as error:
-                raise WorkflowBlockedError(str(error)) from error
-            ticket_blob = prove_dispositions(
-                self.control_worktree, observations["control"].local_head, sources,
-                todo_path=self.todo_path, backlog_path=self.backlog_path,
-                workflow_paths=tuple(self._workflow_paths().values()),
-                runner=self._git_runtime,
-            )
-            try:
-                binding = resolve_rework_review(
-                    self.control_worktree, observations["control"].local_head,
-                    review_commit, reviewed, todo_path=self.todo_path,
-                    review_path=self.review_path, backlog_path=self.backlog_path,
-                    runner=self._git_runtime,
-                )
-            except ReviewProvenanceError as error:
-                raise WorkflowBlockedError(
-                    f"cannot bind curator feedback for {ticket}: {error}"
-                ) from error
-            return ContinuationEvidence(sources, lineage, binding, ticket_blob)
-        except ContinuationEvidenceError as error:
-            raise WorkflowBlockedError(str(error)) from error
-        except (GitObservationError, GitAncestryError) as error:
-            raise WorkflowBlockedError("cannot prove failed rework history") from error
-
-    def _verify_failed_rework_workspace_ownership(
-        self, ticket: str, failed: ExecutionReport, state: dict[str, object],
-        metadata: object,
-    ) -> None:
-        """Require current ownership separately from immutable source evidence."""
-        if metadata is not None:
-            return
-        identity = {
-            "execution_id": failed.execution_id,
-            "execution_ticket_id": ticket,
-            "execution_branch": failed.execution_branch,
-            "execution_path": failed.execution_path,
-        }
-        if any(state.get(key) != value for key, value in identity.items()):
-            present = any(state.get(key) is not None for key in identity)
-            detail = (
-                "refers to a different generation than" if present else "is missing for"
-            )
-            raise WorkflowBlockedError(
-                f"failed continuation persisted workspace ownership {detail} "
-                "the failed execution; Git report and worktree topology alone "
-                "cannot prove current ownership or authorize replacement of "
-                "the historical worktree and execution ref"
-            )
-
     def _latest_reviewed_rework_report(
         self, reports: tuple[ExecutionReport, ...]
     ) -> tuple[str, ExecutionReport] | None:
@@ -6847,11 +5856,7 @@ class ServiceEngine:
                     not report.result.egress_ok
                     or report.result.transport_error is not None
                 ):
-                    # History is traversed newest first.  Keep the most recent
-                    # failed generation in the diagnostic even when several
-                    # failures precede the reviewed generation.
-                    if failed_execution is None:
-                        failed_execution = report
+                    failed_execution = report
                     continue
                 if failed_execution is not None:
                     raise WorkflowBlockedError(
@@ -6882,13 +5887,6 @@ class ServiceEngine:
             manager.ticket_id, previous_execution, previous_checkpoint
         )
         remote = self._execution_remote_head(manager.branch)
-        provenance = self._state.get("rework_provenance")
-        swap = provenance.get("swap") if isinstance(provenance, dict) else None
-        if isinstance(swap, dict) and remote not in {
-            swap.get("expected_old_remote_head"),
-            workspace.head,
-        }:
-            raise ExecutionWorkspaceError("rework remote changed before publication")
         if remote is not None and remote != previous_checkpoint:
             if remote != workspace.head:
                 raise ExecutionWorkspaceError(
@@ -6916,19 +5914,9 @@ class ServiceEngine:
                 raise ExecutionWorkspaceError(
                     "cannot install rework execution predecessor"
                 )
-        installed_remote = self._execution_remote_head(manager.branch)
-        expected_installed = (
-            None
-            if remote is None and previous_checkpoint == workspace.base_head
-            else workspace.head
-        )
-        if isinstance(swap, dict) and installed_remote != expected_installed:
-            raise ExecutionWorkspaceError(
-                "rework remote publication could not be proven"
-            )
         self._save_state(
             "agent_pending",
-            execution_remote_head=installed_remote,
+            execution_remote_head=self._execution_remote_head(manager.branch),
         )
         self._set_rework_preparation_stage("remote_predecessor_installed")
 
@@ -7052,35 +6040,12 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted ticket transition parent is unavailable"
             )
-        def execution_head(report: ExecutionReport) -> str | None:
-            legacy = ExecutionWorkspaceIdentity.for_ticket(
-                self.execution_worktree_root, ticket_id
-            )
-            identities = [legacy]
-            if report.execution_branch != legacy.branch:
-                try:
-                    identities.append(ExecutionWorkspaceIdentity.for_ticket(
-                        self.execution_worktree_root, ticket_id,
-                        generation=report.execution_id,
-                    ))
-                except ExecutionWorkspaceError as error:
-                    raise ExecutionProvenanceError(
-                        "accepted execution generation identity is invalid"
-                    ) from error
-            if not any(
-                report.execution_branch == identity.branch
-                and report.execution_path == str(identity.path)
-                for identity in identities
-            ):
-                raise ExecutionProvenanceError(
-                    "accepted execution resource identity is not exact"
-                )
-            # Select only after immutable lifecycle attribution. An older ticket
-            # ref is never evidence for a newly isolated execution.
-            head = self._execution_remote_head(report.execution_branch)
-            if head is None:
-                head = self._resolve_commit_runtime(self.repo, report.execution_branch)
-            return head
+        expected_branch = f"devlegate/work/{ticket_id}"
+        remote_head = self._execution_remote_head(expected_branch)
+        if remote_head is None:
+            # A local-only interrupted removal is still provable from its exact
+            # branch SHA; absence of the upstream ref is not absence of evidence.
+            remote_head = self._resolve_commit_runtime(self.repo, expected_branch)
         try:
             report = resolve_accepted_execution_report(
                 self.control_worktree,
@@ -7090,10 +6055,9 @@ class ServiceEngine:
                 todo_path=self.todo_path,
                 review_path=self.review_path,
                 accepted_path=self.accepted_path,
-                expected_branch=None,
-                remote_head=None,
+                expected_branch=expected_branch,
+                remote_head=remote_head,
                 runner=self._git_runtime,
-                execution_head=execution_head,
             )
         except ExecutionProvenanceError as error:
             raise WorkflowBlockedError(str(error)) from error
@@ -7368,8 +6332,7 @@ class ServiceEngine:
                 "status": "blocked",
                 "reason": str(error) or error.__class__.__name__,
                 "resources": self._cleanup_resource_status(
-                    report.ticket_id, report.execution_branch,
-                    execution_id=report.execution_id,
+                    report.ticket_id, report.execution_branch
                 ),
             }
         except ShutdownInterrupted as error:
@@ -7421,11 +6384,6 @@ class ServiceEngine:
         ticket = self._ticket_store().by_id.get(ticket_id)
         if ticket is None or ticket.state != "done":
             raise WorkflowBlockedError("ticket is not durably done")
-        if report.execution_branch != f"devlegate/work/{ticket_id}":
-            raise WorkflowBlockedError(
-                "generation workspace retained: exact generation retirement "
-                "capability is not established; historical resources are not targets"
-            )
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -7460,9 +6418,7 @@ class ServiceEngine:
             report.execution_branch, report.workspace_head, report=report
         )
 
-    def _cleanup_resource_status(
-        self, ticket_id: str, branch: str, *, execution_id: str | None = None
-    ) -> dict[str, str]:
+    def _cleanup_resource_status(self, ticket_id: str, branch: str) -> dict[str, str]:
         """Best-effort observations after a failed retirement; never infer deletion."""
         resources = {
             "worktree": "unknown",
@@ -7474,12 +6430,6 @@ class ServiceEngine:
                 self.repo,
                 self.execution_worktree_root,
                 ticket_id,
-                generation=(
-                    execution_id
-                    if execution_id is not None
-                    and branch == f"devlegate/generation/{ticket_id}/{execution_id}"
-                    else None
-                ),
                 runner=self._git_runtime,
             )
             registrations = manager._registrations()
@@ -9459,19 +8409,6 @@ class ServiceEngine:
         self, *, base_head: str | None = None
     ) -> ExecutionWorkspace:
         state = self._state
-        rework = state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            if base_head is not None and base_head != state.get("execution_base_head"):
-                raise WorkflowBlockedError("isolated recovery base binding changed")
-            try:
-                self.recovery_workspace_manager(str(state.get("execution_ticket_id")))
-                return self._inspect_published_isolated_workspace(
-                    state, interrupted=True
-                )
-            except (ExecutionWorkspaceError, OSError) as error:
-                raise WorkflowBlockedError(
-                    f"cannot validate isolated execution recovery: {error}"
-                ) from error
         ticket_id = state.get("execution_ticket_id")
         if base_head is None:
             base_head = state.get("execution_base_head")
@@ -10427,16 +9364,9 @@ class ServiceEngine:
         return tuple(evaluated)
 
     def _failure_superseded(
-        self,
-        ticket_id: str,
-        metadata: object,
-        state: dict[str, object],
+        self, ticket_id: str, metadata: object, state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
-        *,
-        lifecycle_base: str | None = None,
-        product_base: str | None = None,
-        retired_execution_id: str | None = None,
     ) -> bool:
         """Require published descendant history proving a ticket left its state.
 
@@ -10444,25 +9374,18 @@ class ServiceEngine:
         unreadable, dirty, divergent, or unfetched observation cannot prove one.
         The retained failure and reports are never modified by this projection.
         """
-        if control is None or (
-            not isinstance(metadata, dict) and lifecycle_base is None
-        ):
+        if not isinstance(metadata, dict) or control is None:
             return False
         if code is not None:
-            remote_base = product_base
-            if isinstance(metadata, dict):
-                product_base = metadata.get("product_head")
-                remote_base = metadata.get("remote_head")
+            product_base = metadata.get("product_head")
+            remote_base = metadata.get("remote_head")
             if (
-                code.detached
-                or code.branch != self.remote_branch
-                or not code.working_tree_clean
-                or not code.remote_head
+                code.detached or code.branch != self.remote_branch
+                or not code.working_tree_clean or not code.remote_head
                 or code.local_head != code.remote_head
                 or not isinstance(product_base, str)
                 or not _is_git_identity(product_base)
-                or not isinstance(remote_base, str)
-                or not _is_git_identity(remote_base)
+                or not isinstance(remote_base, str) or not _is_git_identity(remote_base)
             ):
                 return False
             try:
@@ -10474,23 +9397,14 @@ class ServiceEngine:
             except WorkflowBlockedError:
                 return False
         if (
-            control.detached
-            or control.branch != self.control_branch
-            or not control.working_tree_clean
-            or not control.remote_head
+            control.detached or control.branch != self.control_branch
+            or not control.working_tree_clean or not control.remote_head
             or control.local_head != control.remote_head
         ):
             return False
-        for key in (
-            "reconciliation",
-            "accepted_integration",
-            "automatic_retry",
-            "manual_retry_required",
-            "resume_required",
-            "operator_recovery",
-            "force_retry_authorization",
-            "execution_ref_retirement",
-        ):
+        for key in ("reconciliation", "accepted_integration", "automatic_retry",
+                    "manual_retry_required", "resume_required", "operator_recovery",
+                    "force_retry_authorization", "execution_ref_retirement"):
             marker = state.get(key)
             if (
                 isinstance(marker, dict)
@@ -10501,26 +9415,13 @@ class ServiceEngine:
             return False
         live = self.live_execution_evidence()
         if isinstance(live, dict) and live.get("ticket_id") == ticket_id:
-            if not (
-                retired_execution_id is not None
-                and retired_execution_id == self._owned_execution_id
-                and retired_execution_id == self._state.get("execution_id")
-                and (
-                    self._state.get("execution_stage") == "post-worker"
-                    or (self._state.get("phase") == "agent_pending"
-                        and self._state.get("execution_stage") is None)
-                )
-                and self._state.get("worker_identity") is None
-            ):
-                return False
+            return False
         if (
             state.get("phase") != "idle"
             and state.get("selected_ticket_id") == ticket_id
         ):
             return False
-        base = lifecycle_base
-        if isinstance(metadata, dict):
-            base = metadata.get("control_head")
+        base = metadata.get("control_head")
         if not isinstance(base, str) or not _is_git_identity(base):
             return False
         if base == control.local_head:
@@ -10537,28 +9438,20 @@ class ServiceEngine:
         # retains it at the merge. Only transitions of the observed first-parent
         # history can supersede this failure.
         lineage = self._git_runtime(
-            self.control_worktree,
-            "rev-list",
-            "--first-parent",
-            control.local_head,
+            self.control_worktree, "rev-list", "--first-parent", control.local_head,
             check=False,
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
             return False
         commits = lineage.stdout.splitlines()
-        commits = list(reversed(commits[: commits.index(base) + 1]))
+        commits = list(reversed(commits[:commits.index(base) + 1]))
         original_blob = None
         previous_path = None
         transitioned = False
         todo_path = f"{self.todo_path}/{ticket_id}.md"
         for commit in commits:
             tree = self._git_runtime(
-                self.control_worktree,
-                "ls-tree",
-                "--full-tree",
-                commit,
-                "--",
-                *paths,
+                self.control_worktree, "ls-tree", "--full-tree", commit, "--", *paths,
                 check=False,
             )
             if tree.returncode != 0:
@@ -10789,10 +9682,7 @@ class ServiceEngine:
                     control=control,
                 ),
                 failed_executions=self._evaluate_failed_executions(
-                    state.get("failed_executions", {}),
-                    TicketStore(()),
-                    code,
-                    None,
+                    state.get("failed_executions", {}), TicketStore(()), code, None,
                     str(workflow_error or "workflow is invalid"),
                 ),
                 lifecycle_integration=lifecycle_integration,
@@ -10855,14 +9745,10 @@ class ServiceEngine:
         )
         if isinstance(failures, dict):
             failed_executions = tuple(
-                failure
-                for failure in failed_executions
+                failure for failure in failed_executions
                 if not self._failure_superseded(
-                    failure.ticket_id,
-                    failures.get(failure.ticket_id),
-                    state,
-                    control,
-                    code,
+                    failure.ticket_id, failures.get(failure.ticket_id), state,
+                    control, code,
                 )
             )
         live_evidence = self.live_execution_evidence()
@@ -10874,40 +9760,18 @@ class ServiceEngine:
                 if failure.ticket_id != active_ticket_id
             )
         selected_failure = None
-        continuation_refusal = False
         if plan.action == "run-worker" and not plan.bound:
             selected_failure = next(
-                (
-                    failure
-                    for failure in failed_executions
-                    if failure.ticket_id == plan.ticket_id
-                ),
-                None,
+                (failure for failure in failed_executions
+                 if failure.ticket_id == plan.ticket_id), None
             )
             if selected_failure is not None:
                 reason = selected_failure.nonretryable_reason
                 plan = dataclasses.replace(
-                    plan,
-                    action="none",
-                    reason=(
-                        "failed execution requires explicit retry"
-                        if reason is None
-                        else f"failed execution blocks admission: {reason}"
-                    ),
+                    plan, action="none",
+                    reason=("failed execution requires explicit retry" if reason is None
+                            else f"failed execution blocks admission: {reason}"),
                 )
-            elif plan.ticket_id is not None:
-                try:
-                    reports = ExecutionReportStore(self.control_worktree).list(
-                        plan.ticket_id
-                    )
-                    self._deferred_failed_rework(
-                        reports, state=state, observations=git_observation
-                    )
-                except (ExecutionReportError, WorkflowBlockedError) as error:
-                    continuation_refusal = True
-                    plan = dataclasses.replace(
-                        plan, action="blocked", reason=str(error)
-                    )
         next_ticket = (
             (
                 ticket_store.by_id[plan.ticket_id].id,
@@ -10934,10 +9798,6 @@ class ServiceEngine:
             global_barrier = AdmissionBarrier(
                 "blocked", "failed-execution", plan.reason, selected_failure.ticket_id
             )
-        elif continuation_refusal:
-            global_barrier = AdmissionBarrier(
-                "blocked", "failed-execution", plan.reason, plan.ticket_id
-            )
         elif bound_ticket_id is not None:
             global_barrier = AdmissionBarrier(
                 "blocked",
@@ -10954,21 +9814,13 @@ class ServiceEngine:
         else:
             global_barrier = self._serial_admission_barrier(ticket_store)
         global_block_reason = (
-            BlockedReason(
-                global_barrier.kind, ticket_id=global_barrier.ticket_id,
-                detail=global_barrier.reason if continuation_refusal else None,
-            )
+            BlockedReason(global_barrier.kind, ticket_id=global_barrier.ticket_id)
             if global_barrier is not None
             else None
         )
         blocked_entries = blocked_tickets(
-            ticket_store.tickets,
-            dependency_blocked,
-            eligible,
-            bound_ticket_id,
-            integration_ticket_id,
-            global_block_reason,
-            BlockedReason,
+            ticket_store.tickets, dependency_blocked, eligible, bound_ticket_id,
+            integration_ticket_id, global_block_reason, BlockedReason,
         )
         return StatusSnapshot(
             phase=str(state["phase"]),
@@ -11154,19 +10006,7 @@ class ServiceEngine:
                             True,
                             **identity,
                         )
-                rework = state.get("rework_provenance")
-                preparing_rework = (
-                    isinstance(rework, dict)
-                    and rework.get("preparation_stage")
-                    != "remote_predecessor_installed"
-                    and state.get("execution_start_head") is None
-                    and state.get("worker_identity") is None
-                )
-                inspection = (
-                    self._inspect_pending_rework(state)
-                    if preparing_rework
-                    else self._inspect_bound_execution_workspace(state)
-                )
+                inspection = self._inspect_bound_execution_workspace(state)
                 if inspection.classification != "REUSABLE":
                     return ExecutionPlan(
                         "blocked",
@@ -11216,306 +10056,10 @@ class ServiceEngine:
             **identity,
         )
 
-    def _inspect_published_isolated_workspace(
-        self, state: dict[str, object], *, interrupted: bool = False
-    ) -> ExecutionWorkspace:
-        """Verify a published generation without granting worker admission."""
-        self._inspect_isolated_failed_rework_intent(state, interrupted=interrupted)
-        rework = state["rework_provenance"]
-        if rework.get("preparation_stage") != "remote_published":
-            raise ExecutionWorkspaceError("isolated target is not remotely published")
-        ticket = state["execution_ticket_id"]
-        manager = self._isolated_workspace_manager(state)
-        candidate = self._inspect_isolated_pins(state, manager)
-        if self._git_runtime(
-            self.repo, "symbolic-ref", "-q", rework["target"]["ref"], check=False
-        ).returncode != 1:
-            raise ExecutionWorkspaceError("isolated ref is symbolic or unreadable")
-        expected_head = candidate
-        allowed_remote = {candidate}
-        checkpointing = False
-        if interrupted and isinstance(state.get("pending_execution_report"), dict):
-            report = ExecutionReport.from_dict(state["pending_execution_report"])
-            self._report_matches_execution_binding(report)
-            expected_head = (
-                state.get("execution_checkpoint_start_head")
-                if state.get("execution_stage") == "checkpointing"
-                else report.workspace_head
-            )
-            if not isinstance(expected_head, str) or not is_ancestor(
-                self.repo, candidate, expected_head, runner=self._git_runtime
-            ):
-                raise ExecutionWorkspaceError(
-                    "isolated pending checkpoint lineage changed"
-                )
-            checkpointing = state.get("execution_stage") == "checkpointing"
-            local = resolve_ref_commit(
-                self.repo, rework["target"]["ref"], runner=self._git_runtime
-            )
-            if checkpointing and local != expected_head:
-                probe = ExecutionWorkspace(
-                    ticket, manager.branch, manager.path, str(local),
-                    rework["admitted_base_head"], False,
-                )
-                if local is None or not self._checkpoint_commit_is_exact(
-                    probe, local, expected_head
-                ):
-                    raise ExecutionWorkspaceError(
-                        "isolated checkpoint journal is ambiguous"
-                    )
-                expected_head = local
-            if state.get("execution_stage") in {
-                "publishing", "post-publication", "lifecycle"
-            }:
-                allowed_remote.add(expected_head)
-        if (resolve_ref_commit(self.repo, rework["target"]["ref"],
-                               runner=self._git_runtime) != expected_head
-                or self._execution_remote_head(manager.branch) not in allowed_remote):
-            raise ExecutionWorkspaceError("isolated target ref is missing or changed")
-        if manager._has_symlinked_path():
-            raise ExecutionWorkspaceError("isolated target path has a symlink")
-        registrations = manager._registrations()
-        registration = registrations.get(manager.path.resolve())
-        if registration is not None and "locked" in registration:
-            raise ExecutionWorkspaceError("isolated target worktree is locked")
-        attached = [
-            path for path, item in registrations.items()
-            if item.get("branch") == manager.branch
-        ]
-        if attached != [manager.path.resolve()]:
-            raise ExecutionWorkspaceError(
-                "isolated target registration is missing or attached elsewhere"
-            )
-        if checkpointing:
-            workspace = manager._validate_existing(
-                registration, rework["admitted_base_head"], verify_status=False
-            )
-            if workspace.head != expected_head:
-                raise ExecutionWorkspaceError("isolated checkpoint worktree changed")
-            manager.verify_submodules(workspace)
-            return workspace
-        inspection = manager.inspect(rework["admitted_base_head"], expected_head)
-        if inspection.classification != "REUSABLE" or inspection.workspace is None:
-            raise ExecutionWorkspaceError(
-                f"isolated target worktree: {inspection.reason}"
-            )
-        return dataclasses.replace(
-            inspection.workspace, base_head=rework["admitted_base_head"]
-        )
-
-    def _inspect_pending_rework(self, state: dict[str, object]) -> WorkspaceInspection:
-        """Observe an unstarted rework swap without creating or changing Git state."""
-        try:
-            rework = state["rework_provenance"]
-            if not isinstance(rework, dict):
-                raise ExecutionWorkspaceError(
-                    "persisted rework provenance is malformed"
-                )
-            if rework.get("mode") == "isolated":
-                if rework.get("preparation_stage") != "remote_published":
-                    self._inspect_isolated_failed_rework_intent(state)
-                    raise ExecutionWorkspaceError(
-                        "isolated preparation stage "
-                        f"{rework.get('preparation_stage')} awaits owner replay; "
-                        "worker workspace admission is not yet proven"
-                    )
-                workspace = self._inspect_published_isolated_workspace(state)
-                return WorkspaceInspection(
-                    "REUSABLE", "isolated generation is remotely published", workspace
-                )
-            validate_execution_binding(state, require_pre_worker=True)
-            ticket = state.get("execution_ticket_id")
-            execution = state.get("execution_id")
-            base = state.get("execution_base_head")
-            if not all(isinstance(v, str) and v for v in (ticket, execution, base)):
-                raise ExecutionWorkspaceError("rework execution binding is incomplete")
-            manager = self.recovery_workspace_manager(ticket)
-            if state.get("execution_branch") != manager.branch or state.get(
-                "execution_path"
-            ) != str(manager.path):
-                raise ExecutionWorkspaceError(
-                    "persisted execution workspace binding is invalid"
-                )
-            restore_review_binding(
-                rework.get("review"),
-                ticket_id=ticket,
-                execution_id=rework.get("previous_execution_id"),
-                checkpoint=rework.get("previous_report_checkpoint"),
-                control_head=rework.get("previous_control_head"),
-            )
-            predecessor = rework.get("code_predecessor", rework)
-            if not isinstance(predecessor, dict):
-                raise ExecutionWorkspaceError("persisted code predecessor is malformed")
-            old_base = predecessor.get(
-                "base_head", predecessor.get("previous_base_head")
-            )
-            checkpoint = predecessor.get(
-                "checkpoint", predecessor.get("previous_report_checkpoint")
-            )
-            if not all(isinstance(v, str) and v for v in (old_base, checkpoint)):
-                raise ExecutionWorkspaceError(
-                    "persisted rework predecessor is incomplete"
-                )
-            preparation = rework.get("preparation_stage")
-            if preparation not in {
-                None,
-                "admitted",
-                "remote_evidence_published",
-                "workspace_prepared",
-            }:
-                raise ExecutionWorkspaceError(
-                    "persisted rework preparation stage is invalid"
-                )
-            product = self._observe_product_generation(base)
-            if not product.get("stable"):
-                raise ExecutionWorkspaceError(
-                    f"rework product generation changed: {product.get('reason')}"
-                )
-            swap = rework.get("swap")
-            if swap is None:
-                if preparation == "workspace_prepared" and base != old_base:
-                    raise ExecutionWorkspaceError("prepared rework swap is missing")
-                inspection = manager.inspect(old_base, checkpoint)
-                if inspection.classification != "REUSABLE":
-                    raise ExecutionWorkspaceError(
-                        f"rework source is unsafe: {inspection.reason}"
-                    )
-                remote = self._execution_remote_head(manager.branch)
-                if remote != checkpoint and not (
-                    remote is None and checkpoint == old_base
-                ):
-                    raise ExecutionWorkspaceError("rework remote predecessor changed")
-                return inspection
-            candidate_ref = (
-                f"refs/devlegate/recovery/rework-candidate/{ticket}/{execution}"
-            )
-            if not isinstance(swap, dict) or (
-                swap.get("candidate_ref") != candidate_ref
-                or swap.get("target_product_head") != base
-                or swap.get("expected_old_local_head") != checkpoint
-                or swap.get("stage")
-                not in {
-                    "candidate_ready",
-                    "retiring",
-                    "moving",
-                    "attaching",
-                    "attached",
-                }
-                or swap.get("expected_old_remote_head")
-                not in (checkpoint, None if checkpoint == old_base else checkpoint)
-            ):
-                raise ExecutionWorkspaceError(
-                    "persisted rework swap identity conflicts"
-                )
-            candidate = swap.get("candidate_head")
-            if (
-                not isinstance(candidate, str)
-                or resolve_ref_commit(
-                    self.repo, candidate_ref, runner=self._git_runtime
-                )
-                != candidate
-            ):
-                raise ExecutionWorkspaceError(
-                    "rework candidate pin is missing or changed"
-                )
-            if (
-                manager._pinned_rework_candidate(
-                    base, old_base, checkpoint, candidate_ref, create=False
-                )
-                != candidate
-            ):
-                raise ExecutionWorkspaceError("rework candidate identity changed")
-            remote = self._execution_remote_head(manager.branch)
-            allowed_remote = {swap.get("expected_old_remote_head")}
-            if swap["stage"] == "attached":
-                allowed_remote.add(candidate)
-            if remote not in allowed_remote:
-                raise ExecutionWorkspaceError(
-                    "rework remote predecessor drifted during swap"
-                )
-            head = resolve_ref_commit(
-                self.repo, f"refs/heads/{manager.branch}", runner=self._git_runtime
-            )
-            registrations = manager._registrations()
-            if (
-                manager.root.is_symlink()
-                or (manager.root / "work").is_symlink()
-                or manager.path.is_symlink()
-            ):
-                raise ExecutionWorkspaceError("rework worktree path is symlinked")
-            if any(
-                path != manager.path.resolve() and item.get("branch") == manager.branch
-                for path, item in registrations.items()
-            ):
-                raise ExecutionWorkspaceError(
-                    "rework branch is attached to a foreign worktree"
-                )
-            registration = registrations.get(manager.path.resolve())
-            if registration is not None and (
-                "locked" in registration or not manager.path.is_dir()
-            ):
-                raise ExecutionWorkspaceError("rework worktree is locked or missing")
-            if registration is None and manager.path.exists():
-                raise ExecutionWorkspaceError("rework worktree path is foreign")
-            stage = swap["stage"]
-            if (
-                head == checkpoint
-                and registration is not None
-                and stage in {"candidate_ready", "retiring"}
-            ):
-                inspection = manager.inspect(old_base, checkpoint)
-            elif (
-                head == checkpoint
-                and registration is None
-                and stage in {"retiring", "moving"}
-            ):
-                return WorkspaceInspection(
-                    "REUSABLE", "retired rework workspace is ready to move"
-                )
-            elif (
-                head == candidate
-                and registration is None
-                and stage in {"moving", "attaching"}
-            ):
-                return WorkspaceInspection(
-                    "REUSABLE", "rework candidate is ready to attach"
-                )
-            elif (
-                head == candidate
-                and registration is not None
-                and stage in {"attaching", "attached"}
-            ):
-                inspection = manager.inspect(base, candidate)
-            else:
-                raise ExecutionWorkspaceError(
-                    "rework local branch or worktree topology conflicts with swap stage"
-                )
-            if inspection.classification != "REUSABLE":
-                raise ExecutionWorkspaceError(
-                    f"rework workspace is unsafe: {inspection.reason}"
-                )
-            return inspection
-        except (
-            ExecutionWorkspaceError,
-            WorkflowBlockedError,
-            ReviewProvenanceError,
-            GitObservationError,
-            OSError,
-            subprocess.SubprocessError,
-            ValueError,
-        ) as error:
-            return WorkspaceInspection("UNSAFE", str(error))
-
     def _inspect_bound_execution_workspace(
         self, state: dict[str, object]
     ) -> WorkspaceInspection:
         rework = state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            return WorkspaceInspection(
-                "UNSAFE",
-                "isolated bound workspace recovery is blocked until generation-aware "
-                "running and reconciliation recovery is available",
-            )
         if (
             isinstance(rework, dict)
             and rework.get("preparation_stage") == "remote_predecessor_installed"
@@ -11918,78 +10462,8 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
 
-    def _prove_interrupted_isolated_worker_absent(
-        self, state: dict[str, object]
-    ) -> None:
-        """Use persisted terminal handoff or observe the exact lost worker."""
-        if (
-            state.get("phase") == "agent_running"
-            and state.get("execution_stage") in {
-                "checkpointing", "post-checkpoint", "publishing",
-                "post-publication", "lifecycle",
-            }
-            and isinstance(state.get("pending_execution_report"), dict)
-            and "worker_identity" in state and state["worker_identity"] is None
-        ):
-            report = ExecutionReport.from_dict(state["pending_execution_report"])
-            self._report_matches_execution_binding(report)
-            return
-        if (state.get("phase") != "agent_running"
-                or state.get("execution_stage") not in {"worker-running", "post-worker"}
-                or state.get("pending_execution_report") is not None
-                or state.get("execution_interruption_kind") not in {
-                    "process_loss", "service_shutdown",
-                }):
-            raise ExecutionWorkspaceError(
-                "isolated recovery requires an interrupted running "
-                "generation-bound execution before checkpointing"
-            )
-        if (state.get("execution_stage") == "post-worker"
-                and "worker_identity" in state and state["worker_identity"] is None):
-            return
-        worker = _worker_identity_from_value(
-            state.get("worker_identity"), state.get("execution_id")
-        )
-        if (state.get("execution_stage") != "worker-running" or worker is None
-                or self._workers.observe(worker) != "absent"):
-            raise ExecutionWorkspaceError(
-                "isolated interrupted worker ownership cannot be proven absent"
-            )
-
     def recovery_workspace_manager(self, ticket_id: str):
         """Provide the workspace capability without exposing the coordinator."""
-        rework = self._state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            state = self._state
-            self._prove_interrupted_isolated_worker_absent(state)
-            if state.get("execution_ticket_id") != ticket_id:
-                raise ExecutionWorkspaceError(
-                    "isolated recovery ticket binding changed"
-                )
-            if (state.get("local_head") != state.get("execution_base_head")
-                    or state.get("remote_head") != state.get("execution_base_head")):
-                raise ExecutionWorkspaceError(
-                    "isolated recovery persisted product generation changed"
-                )
-            # Remote observations do not fetch or advance either checkout.
-            for branch, expected in (
-                (self.remote_branch, state.get("execution_base_head")),
-                (self.control_branch, state.get("execution_control_head")),
-            ):
-                if self._execution_remote_head(branch) != expected:
-                    raise ExecutionWorkspaceError(
-                        "isolated recovery product or control remote generation changed"
-                    )
-            self._inspect_published_isolated_workspace(
-                state, interrupted=True
-            )
-            candidate = rework.get("candidate_head")
-            if (state.get("execution_start_head") != candidate
-                    or state.get("execution_remote_head") != candidate):
-                raise ExecutionWorkspaceError(
-                    "isolated recovery start or remote binding changed"
-                )
-            return self._isolated_workspace_manager(state)
         return ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -12075,9 +10549,6 @@ class ServiceEngine:
     def reconciliation_workspace_binding(
         self, ticket_id: str, value: dict[str, object]
     ) -> bool:
-        rework = self._state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            return False
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -12090,11 +10561,6 @@ class ServiceEngine:
         return self._lock()
 
     def reconciliation_workspace_manager(self, ticket_id: str):
-        rework = self._state.get("rework_provenance")
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            raise ExecutionWorkspaceError(
-                "isolated reconciliation requires a generation-bound capability"
-            )
         return ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -12336,22 +10802,6 @@ class ServiceEngine:
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
-        rework = state.get("rework_provenance")
-        isolated_manager = None
-        if isinstance(rework, dict) and rework.get("mode") == "isolated":
-            # Resolve before any fetch or control fast-forward. This capability
-            # is scoped to the persisted running generation, not its historical
-            # ticket-scoped source, and authorizes no cleanup or new worker.
-            try:
-                if interruption_kind != state.get("execution_interruption_kind"):
-                    raise ExecutionWorkspaceError(
-                        "isolated recovery interruption binding changed"
-                    )
-                isolated_manager = self.recovery_workspace_manager(
-                    str(state.get("execution_ticket_id"))
-                )
-            except (ExecutionWorkspaceError, WorkflowBlockedError, OSError) as error:
-                raise DevlegateError(str(error)) from error
         required = (
             "local_head",
             "remote_head",
@@ -12404,11 +10854,6 @@ class ServiceEngine:
         )
         if control_fetch.returncode or control_head is None:
             raise DevlegateError("cannot freshly observe control remote")
-        if (isolated_manager is not None
-                and control_head != state["execution_control_head"]):
-            raise DevlegateError(
-                "isolated recovery control generation changed before normalization"
-            )
         local_control = resolve_commit(
             self.control_worktree, "HEAD", runner=self._git_runtime
         )
@@ -12449,7 +10894,7 @@ class ServiceEngine:
         ):
             raise DevlegateError("persisted execution ticket is not safely recoverable")
         base_head = str(state["execution_base_head"])
-        manager = isolated_manager or ExecutionWorkspaceManager(
+        manager = ExecutionWorkspaceManager(
             self.repo,
             self.execution_worktree_root,
             str(state["execution_ticket_id"]),
@@ -12479,13 +10924,6 @@ class ServiceEngine:
             raise DevlegateError(
                 f"cannot safely normalize interrupted execution: {error}"
             ) from error
-        if isolated_manager is not None:
-            # Recheck the complete capability at the idle journal boundary;
-            # fetches above never grant authority over a changed generation.
-            try:
-                self.recovery_workspace_manager(str(state["execution_ticket_id"]))
-            except (ExecutionWorkspaceError, OSError) as error:
-                raise DevlegateError(str(error)) from error
         failures = state.get("failed_executions", {})
         if not isinstance(failures, dict):
             failures = {}

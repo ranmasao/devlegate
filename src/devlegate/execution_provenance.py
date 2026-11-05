@@ -128,10 +128,9 @@ def resolve_accepted_execution_report(
     todo_path: str,
     review_path: str,
     accepted_path: str,
-    expected_branch: str | None,
+    expected_branch: str,
     remote_head: str | None,
     runner: Runner,
-    execution_head: Callable[[ExecutionReport], str | None] | None = None,
 ) -> ExecutionReport:
     """Resolve the accepted worker despite the 2026-10-16 TASK-071 failure mode.
 
@@ -231,14 +230,8 @@ def resolve_accepted_execution_report(
             "review content changed after admission; specification changes are "
             "not trusted"
         )
-    if execution_head is not None:
-        remote_head = execution_head(report)
-    elif expected_branch is None:
-        raise ExecutionProvenanceError(
-            "accepted execution resource validator is missing"
-        )
     if not (
-        (expected_branch is None or report.execution_branch == expected_branch)
+        report.execution_branch == expected_branch
         and isinstance(report.workspace_head, str)
         and (
             report.workspace_head == remote_head

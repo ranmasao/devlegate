@@ -8,8 +8,6 @@ from __future__ import annotations
 import dataclasses
 import re
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
@@ -32,36 +30,6 @@ class ExecutionWorkspaceError(Exception):
 
 class ExecutionWorkspaceConflict(ExecutionWorkspaceError):
     """Raised when operator action is required to resolve workspace topology."""
-
-
-@dataclasses.dataclass(frozen=True)
-class ExecutionWorkspaceIdentity:
-    """Canonical resource names; this identity alone does not grant ownership."""
-
-    ticket_id: str
-    branch: str
-    path: Path
-
-    @classmethod
-    def for_ticket(
-        cls, root: Path, ticket_id: str, *, generation: str | None = None
-    ) -> ExecutionWorkspaceIdentity:
-        if not is_canonical_ticket_name(f"{ticket_id}.md"):
-            raise ExecutionWorkspaceError(
-                f"invalid ticket ID for execution workspace: {ticket_id}"
-            )
-        root = root.absolute()
-        if generation is None:
-            return cls(
-                ticket_id, f"devlegate/work/{ticket_id}", root / "work" / ticket_id
-            )
-        if re.fullmatch(r"[0-9a-f]{32}", generation) is None:
-            raise ExecutionWorkspaceError("invalid execution generation ID")
-        return cls(
-            ticket_id,
-            f"devlegate/generation/{ticket_id}/{generation}",
-            root / "generations" / ticket_id / generation,
-        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -107,36 +75,25 @@ class ExecutionWorkspaceManager:
     """Materialize one deterministic worktree without owning worker changes."""
 
     def __init__(
-        self, repo: Path, root: Path, ticket_id: str, *,
-        generation: str | None = None, runner: GitRunner | None = None,
+        self, repo: Path, root: Path, ticket_id: str, *, runner: GitRunner | None = None
     ) -> None:
-        identity = ExecutionWorkspaceIdentity.for_ticket(
-            root, ticket_id, generation=generation
-        )
+        if not is_canonical_ticket_name(f"{ticket_id}.md"):
+            raise ExecutionWorkspaceError(
+                f"invalid ticket ID for execution workspace: {ticket_id}"
+            )
         self.repo = repo.resolve()
-        self.ticket_id = identity.ticket_id
-        self.branch = identity.branch
+        self.ticket_id = ticket_id
+        self.branch = f"devlegate/work/{ticket_id}"
         # Keep managed components lexical so symlink substitution is observable.
         self.root = root.absolute()
-        self.path = identity.path
+        self.path = self.root / "work" / ticket_id
         # Standalone inspection remains available, while service callers inject
         # their owner- and shutdown-aware Git capability.
         self._runner = _default_git_runner if runner is None else runner
 
-    def _has_symlinked_path(self) -> bool:
-        """Check every managed component, including generation directories."""
-        path = self.path
-        while path != self.root:
-            if path.is_symlink():
-                return True
-            path = path.parent
-        return self.root.is_symlink()
-
     def prepare(self, base_head: str) -> ExecutionWorkspace:
         self._validate_base(base_head)
-        if self.path.is_symlink():
-            raise self._path_conflict("is a symlink")
-        if self._has_symlinked_path():
+        if self.root.is_symlink() or (self.root / "work").is_symlink():
             raise self._path_conflict("has a symlinked workspace root")
         self._ensure_branch(base_head)
         self._validate_branch(base_head)
@@ -283,38 +240,18 @@ class ExecutionWorkspaceManager:
                 raise ExecutionWorkspaceConflict(
                     "previous execution worktree is missing"
                 )
-            if "locked" in registration:
-                raise ExecutionWorkspaceConflict(
-                    "previous execution worktree is locked"
-                )
             workspace = self._validate_existing(registration, previous_base)
             if workspace.head != previous_checkpoint or workspace.dirty:
                 raise ExecutionWorkspaceConflict(
                     "previous execution worktree is not clean at its reported "
                     "checkpoint"
                 )
-            self.verify_submodules(workspace)
-            if base_head == previous_base:
-                # The checkpoint already contains the complete worker lineage on
-                # the admitted base. Keep its identity and commit IDs intact.
-                if self._has_symlinked_path():
-                    raise self._path_conflict("has a symlinked workspace root")
-                if self.path.is_symlink():
-                    raise self._path_conflict("is a symlink")
-                return workspace
-            candidate = base_head
-            if delta and not already_integrated:
-                candidate = self._build_rework_candidate(
-                    base_head, previous_checkpoint, delta
-                )
-            # Revalidate the source after the potentially lengthy transplant.
-            # retire() checks its identity and cleanliness again before removal.
             self.retire(workspace, previous_checkpoint)
             moved = self._runner(
                 self.repo,
                 "update-ref",
                 branch_ref,
-                candidate,
+                base_head,
                 previous_checkpoint,
                 check=False,
             )
@@ -385,231 +322,6 @@ class ExecutionWorkspaceManager:
             )
         return prepared
 
-    def _build_rework_candidate(
-        self,
-        base_head: str,
-        previous_checkpoint: str,
-        delta: list[str],
-        candidate_ref: str | None = None,
-    ) -> str:
-        """Build and verify a port without changing the canonical worktree."""
-        with tempfile.TemporaryDirectory(prefix="devlegate-rework-") as directory:
-            path = Path(directory) / "candidate"
-            added = self._runner(
-                self.repo,
-                "worktree",
-                "add",
-                "--detach",
-                str(path),
-                base_head,
-                check=False,
-            )
-            if added.returncode:
-                raise ExecutionWorkspaceError("cannot create rework candidate worktree")
-            try:
-                self._prepare_submodules(path)
-                transplanted = self._runner(
-                    path, "cherry-pick", "--no-edit", *delta, check=False
-                )
-                if transplanted.returncode:
-                    self._runner(path, "cherry-pick", "--abort", check=False)
-                    raise ExecutionWorkspaceConflict(
-                        "rework preparation conflict: previous checkpoint cannot be "
-                        "applied to the new product base"
-                    )
-                head = self._runner(path, "rev-parse", "HEAD", check=False)
-                if head.returncode or not head.stdout.strip():
-                    raise ExecutionWorkspaceError("cannot observe rework candidate")
-                candidate = head.stdout.strip()
-                replay = self._runner(
-                    self.repo,
-                    "rev-list",
-                    "--reverse",
-                    f"{base_head}..{candidate}",
-                    check=False,
-                )
-                try:
-                    equivalent = patch_equivalence(
-                        self.repo,
-                        previous_checkpoint,
-                        candidate,
-                        base_head,
-                        runner=self._runner,
-                    )
-                except GitObservationError as error:
-                    raise ExecutionWorkspaceError(
-                        f"cannot prove candidate patch equivalence: {error}"
-                    ) from error
-                status = self._runner(path, "status", "--porcelain", check=False)
-                if (
-                    replay.returncode
-                    or len(replay.stdout.splitlines()) != len(delta)
-                    or equivalent != ("-",) * len(delta)
-                    or status.returncode
-                    or status.stdout.strip()
-                ):
-                    raise ExecutionWorkspaceConflict(
-                        "rework candidate is not the exact clean transplanted "
-                        "implementation"
-                    )
-                self._verify_submodules(path)
-                if candidate_ref is not None:
-                    pinned = self._runner(
-                        self.repo,
-                        "update-ref",
-                        candidate_ref,
-                        candidate,
-                        "",
-                        check=False,
-                    )
-                    if (
-                        pinned.returncode
-                        or resolve_commit(self.repo, candidate_ref, runner=self._runner)
-                        != candidate
-                    ):
-                        raise ExecutionWorkspaceConflict(
-                            "cannot create exact rework candidate pin"
-                        )
-                return candidate
-            finally:
-                primary_error = sys.exception()
-                cleanup_error = None
-                try:
-                    removed = self._runner(
-                        self.repo,
-                        "worktree",
-                        "remove",
-                        "--force",
-                        str(path),
-                        check=False,
-                    )
-                    if removed.returncode:
-                        cleanup_error = (
-                            "cannot remove rework candidate worktree: "
-                            f"{removed.stderr.strip() or 'unknown git error'}"
-                        )
-                    elif path.exists() or path.resolve() in self._registrations():
-                        cleanup_error = (
-                            "rework candidate worktree remains after removal"
-                        )
-                except (
-                    ExecutionWorkspaceError,
-                    OSError,
-                    subprocess.SubprocessError,
-                ) as error:
-                    cleanup_error = f"cannot verify rework candidate cleanup: {error}"
-                if cleanup_error is not None:
-                    if primary_error is not None:
-                        primary_error.add_note(cleanup_error)
-                    else:
-                        raise ExecutionWorkspaceError(cleanup_error)
-
-    def _pinned_rework_candidate(
-        self,
-        base: str,
-        old_base: str,
-        checkpoint: str,
-        candidate_ref: str,
-        *,
-        create: bool = True,
-    ) -> str:
-        """Create or verify the one candidate owned by a pending execution."""
-        for commit in (base, old_base, checkpoint):
-            self._validate_base(commit)
-        try:
-            if not is_ancestor(self.repo, old_base, checkpoint, runner=self._runner):
-                raise ExecutionWorkspaceConflict(
-                    "rework predecessor ancestry is invalid"
-                )
-            integrated = is_ancestor(self.repo, checkpoint, base, runner=self._runner)
-        except GitAncestryError as error:
-            raise ExecutionWorkspaceError(
-                f"cannot prove rework ancestry: {error}"
-            ) from error
-        commits = self._runner(
-            self.repo, "rev-list", "--reverse", f"{old_base}..{checkpoint}", check=False
-        )
-        merges = self._runner(
-            self.repo, "rev-list", "--merges", f"{old_base}..{checkpoint}", check=False
-        )
-        if commits.returncode or merges.returncode or merges.stdout.strip():
-            raise ExecutionWorkspaceConflict(
-                "rework predecessor is not a proven linear delta"
-            )
-        delta = commits.stdout.splitlines()
-        candidate = resolve_commit(self.repo, candidate_ref, runner=self._runner)
-        if candidate is None:
-            if not create:
-                raise ExecutionWorkspaceConflict(
-                    "rework candidate pin is missing or changed"
-                )
-            if base == old_base and delta:
-                created = self._runner(
-                    self.repo, "update-ref", candidate_ref, checkpoint, "", check=False
-                )
-                if created.returncode:
-                    raise ExecutionWorkspaceConflict(
-                        "cannot create rework candidate pin"
-                    )
-                candidate = checkpoint
-            elif not delta or integrated:
-                created = self._runner(
-                    self.repo, "update-ref", candidate_ref, base, "", check=False
-                )
-                if created.returncode:
-                    raise ExecutionWorkspaceConflict(
-                        "cannot create rework candidate pin"
-                    )
-                candidate = base
-            else:
-                candidate = self._build_rework_candidate(
-                    base, checkpoint, delta, candidate_ref
-                )
-        if not delta or integrated:
-            if candidate != base:
-                raise ExecutionWorkspaceConflict(
-                    "rework candidate pin conflicts with integrated base"
-                )
-        else:
-            replay = self._runner(
-                self.repo, "rev-list", "--reverse", f"{base}..{candidate}", check=False
-            )
-            merges = self._runner(
-                self.repo, "rev-list", "--merges", f"{base}..{candidate}", check=False
-            )
-            try:
-                valid = is_ancestor(self.repo, base, candidate, runner=self._runner)
-                exact_source = (
-                    base == old_base and candidate == checkpoint
-                    and replay.stdout.splitlines() == delta
-                )
-                # git cherry suppresses commits shared with its upstream. On
-                # the identical base, exact ordered commit identity is stronger
-                # evidence and correctly handles the intentionally reused tip.
-                equivalent = (
-                    ("-",) * len(delta) if exact_source else patch_equivalence(
-                        self.repo, checkpoint, candidate, base, runner=self._runner
-                    )
-                )
-            except (GitAncestryError, GitObservationError) as error:
-                raise ExecutionWorkspaceError(
-                    f"cannot verify rework candidate: {error}"
-                ) from error
-            if (
-                not valid
-                or replay.returncode
-                or merges.returncode
-                or merges.stdout.strip()
-                or len(replay.stdout.splitlines()) != len(delta)
-                or equivalent != ("-",) * len(delta)
-            ):
-                raise ExecutionWorkspaceConflict(
-                    "rework candidate pin is not the exact transplant"
-                )
-        if resolve_commit(self.repo, candidate_ref, runner=self._runner) != candidate:
-            raise ExecutionWorkspaceConflict("rework candidate pin changed")
-        return candidate
-
     def inspect(
         self, base_head: str, expected_head: str | None = None
     ) -> WorkspaceInspection:
@@ -676,7 +388,7 @@ class ExecutionWorkspaceManager:
             raise ExecutionWorkspaceError("execution workspace checkpoint is invalid")
         if workspace.dirty:
             raise ExecutionWorkspaceError("execution worktree is dirty")
-        if self._has_symlinked_path():
+        if self.root.is_symlink() or (self.root / "work").is_symlink():
             raise self._path_conflict("has a symlinked workspace root")
         if self.path.is_symlink():
             raise self._path_conflict("is a symlink")
@@ -919,7 +631,11 @@ class ExecutionWorkspaceManager:
             or workspace.path != self.path
         ):
             raise ExecutionWorkspaceError("execution workspace binding is invalid")
-        if self._has_symlinked_path():
+        if (
+            self.root.is_symlink()
+            or (self.root / "work").is_symlink()
+            or self.path.is_symlink()
+        ):
             raise self._path_conflict("is a symlink")
         registrations = self._registrations()
         registration = registrations.get(self.path.resolve())
