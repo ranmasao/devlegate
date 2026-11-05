@@ -85,6 +85,36 @@ def _worker_identity_from_value(
 
 def validate_state_invariant(state: dict[str, object]) -> None:
     phase = state["phase"]
+    resource = state.get("execution_resource_binding")
+    if resource is not None:
+        if not isinstance(resource, dict):
+            raise DevlegateError("invalid execution resource generation intent")
+        generation = resource.get("generation")
+        if (
+            resource.get("version") != 1
+            or not isinstance(generation, str)
+            or len(generation) != 64
+            or any(character not in "0123456789abcdef" for character in generation)
+            or any(
+                not _is_git_identity(resource.get(field))
+                for field in ("base", "control", "ticket_blob")
+            )
+            or any(
+                resource.get(field) != state.get(state_field)
+                for field, state_field in (
+                    ("ticket_id", "execution_ticket_id"),
+                    ("execution_id", "execution_id"),
+                    ("path", "execution_path"),
+                )
+            )
+            or resource.get("ref") != f"refs/heads/{state.get('execution_branch')}"
+            or resource.get("remote_ref") != resource.get("ref")
+            or not isinstance(resource.get("common"), str)
+            or not resource["common"].startswith("/")
+            or not isinstance(resource.get("remote"), str)
+            or not isinstance(resource.get("prior_path_exists"), bool)
+        ):
+            raise DevlegateError("invalid execution resource generation intent")
     valid_phases = {
         "idle",
         "merge_pending",
@@ -539,4 +569,3 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             )
         except ReviewProvenanceError as error:
             raise DevlegateError(f"invalid state: {error}") from error
-
