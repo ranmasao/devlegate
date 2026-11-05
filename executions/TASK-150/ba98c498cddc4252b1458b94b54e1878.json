@@ -1,0 +1,39 @@
+{
+  "code_base_head": "945dea8e93aaab327b9e7a76cc3e8d0b3519b69f",
+  "conclusion": "incomplete",
+  "control_head": "2e879116e899f41712e61c24e0f257acbfebd8f0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-150",
+  "execution_id": "ba98c498cddc4252b1458b94b54e1878",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-150",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Resolve hosted post-worker restart and dirty-progress retry handling while preserving independently proved generation ownership and existing retry policy.",
+    "Complete bounded checkpoint/publication, reviewed rework, and reconciliation recovery integration; distinguish safely replayable completed receipts from ambiguous effects without adopting historical resources.",
+    "Update affected lifecycle fixtures and assertions for legitimate fresh admission and intentional unproven historical states, and complete fault injection at all required admission, launch, effect and receipt boundaries.",
+    "Resolve the outstanding full-suite regressions and rerun the full configured coverage/CI command and Ruff on the completed implementation."
+  ],
+  "report_artifact": "executions/TASK-150/ba98c498cddc4252b1458b94b54e1878.md",
+  "report_sha256": "6d7ca9561f69271543cc6e1965d1f294b0eff0d8e1205a6ccb858c9d59ee2bb1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-150",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Resolve hosted post-worker restart and dirty-progress retry handling while preserving independently proved generation ownership and existing retry policy.",
+      "Complete bounded checkpoint/publication, reviewed rework, and reconciliation recovery integration; distinguish safely replayable completed receipts from ambiguous effects without adopting historical resources.",
+      "Update affected lifecycle fixtures and assertions for legitimate fresh admission and intentional unproven historical states, and complete fault injection at all required admission, launch, effect and receipt boundaries.",
+      "Resolve the outstanding full-suite regressions and rerun the full configured coverage/CI command and Ruff on the completed implementation."
+    ],
+    "report": "The whole ticket is not complete. The remaining invocation context is insufficient to safely finish the unresolved cross-layer lifecycle changes. The latest focused selection passed 98 tests, Ruff passed, and git diff --check passed. A full configured coverage run completed with 1629 passed, 72 failed and 2 skipped before subsequent fixes; a later recovery/force-retry/reconciliation selection still had 25 failures and 155 passes before the final focused fixes. These failures include lifecycle behavior and fixture/expectation conflicts that require further implementation and validation.",
+    "summary": "Added generation-scoped admission intents, independent filesystem and Git witnesses, strict resource creation, and a read-only resource proof API with explicit upstream-continuity limits. Connected generation evidence to worker handoff, operation receipts, execution reports, and local integration/cleanup checks, with an identity model document and real-Git fixtures."
+  },
+  "workspace_head": "622c5881d1b311cc8c4131aa41e36972f187613d"
+}
