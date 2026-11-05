@@ -133,6 +133,7 @@ from devlegate.recovery_workspace import (
     inspect_bound_workspace,
     repair_bound_workspace,
 )
+from devlegate.resource_binding import ResourceBinding, ResourceProof, UnprovenResource
 from devlegate.review_provenance import (
     ReviewProvenanceError,
     resolve_rework_review,
@@ -1423,6 +1424,11 @@ class ServiceEngine:
         receipts: dict[str, object],
     ) -> None:
         """Checkpoint and retire a proven stranded execution before retry."""
+        try:
+            self._require_execution_generation(clean=False, remote=False)
+        except (ExecutionWorkspaceError, OSError) as error:
+            raise WorkflowBlockedError(str(error)) from error
+        binding = self._execution_generation_binding()
         state = self._state
         execution_id = str(state["execution_id"])
         old_control = str(state["execution_control_head"])
@@ -1438,6 +1444,7 @@ class ServiceEngine:
                 registration, str(state["execution_base_head"])
             )
             manager.verify_submodules(workspace)
+            binding.begin_operation("force-checkpoint", {"before": workspace.head})
             checkpoint = manager.checkpoint(
                 workspace,
                 execution_id,
@@ -1447,6 +1454,9 @@ class ServiceEngine:
                     "ticket generation"
                 ),
             )
+            binding.finish_operation("force-checkpoint", {
+                "before": checkpoint.before_head, "after": checkpoint.after_head,
+            })
         except (ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(
                 f"forced retry workspace checkpoint failed: {error}"
@@ -1605,6 +1615,11 @@ class ServiceEngine:
         self, ticket_id: str, execution_id: str, observed_head: str
     ) -> None:
         state = self._state
+        if state.get("execution_resource_binding") is not None:
+            raise DevlegateError(
+                "generation-bound resources require exact independent proof; "
+                "operator SHA recovery cannot recreate their identity"
+            )
         base_head = state.get("execution_base_head")
         branch = state.get("execution_branch")
         path = state.get("execution_path")
@@ -2824,6 +2839,9 @@ class ServiceEngine:
             return
 
     def _record_worker_identity(self, identity: WorkerProcessIdentity) -> None:
+        if self._state.get("execution_resource_binding") is not None:
+            binding = self._execution_generation_binding()
+            binding.finish_operation("worker", {"identity": identity.as_dict()})
         self._save_state(
             "agent_running",
             execution_stage="worker-running",
@@ -3357,6 +3375,7 @@ class ServiceEngine:
                 "execution_validated_product_head",
                 "execution_product_predecessor",
                 "execution_product_transition",
+                "execution_resource_binding",
                 "execution_control_head",
                 "execution_validated_control_head",
                 "execution_branch",
@@ -3527,6 +3546,8 @@ class ServiceEngine:
         self._owned_execution_id = None
         try:
             return self._run_iteration_body(authorization)
+        except ExecutionWorkspaceError as error:
+            raise WorkflowBlockedError(str(error)) from error
         finally:
             self._owned_execution_id = None
 
@@ -4390,6 +4411,45 @@ class ServiceEngine:
                         "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
                     }
+            resource_binding = None
+            if not pending_agent_execution:
+                resource_manager = ExecutionWorkspaceManager(
+                    self.repo, self.execution_worktree_root, selected_ticket.id,
+                    runner=self._git_runtime,
+                )
+                ticket_blob = self._git_runtime(
+                    self.control_worktree, "rev-parse",
+                    f"{bound_execution_control}:"
+                    f"{self.todo_path}/{selected_ticket.id}.md",
+                ).stdout.strip()
+                resource_binding = ResourceBinding.plan(
+                    resource_manager, execution_id=execution_id,
+                    base=execution_base_head, control=str(bound_execution_control),
+                    ticket_blob=ticket_blob, remote=self.remote_name,
+                    remote_head=execution_remote_head,
+                )
+                resource_predecessor = None
+                if (
+                    authorization is not None
+                    and not authorization.is_zero_delta_retry
+                    and isinstance(failed_for_ticket, dict)
+                    and isinstance(failed_for_ticket.get("execution_id"), str)
+                ):
+                    resource_predecessor = failed_for_ticket["execution_id"]
+                elif resume_required and (
+                    self._state.get("execution_ticket_id") == selected_ticket.id
+                    and isinstance(self._state.get("execution_id"), str)
+                ):
+                    resource_predecessor = self._state["execution_id"]
+                if isinstance(resource_predecessor, str):
+                    predecessor = ResourceBinding.for_execution(
+                        resource_manager, resource_predecessor
+                    )
+                    predecessor.require_local(clean=True)
+                    resource_binding.intent.update({
+                        "predecessor_execution": predecessor.intent["execution_id"],
+                        "predecessor_generation": predecessor.intent["generation"],
+                    })
             self._save_state(
                 "agent_pending",
                 clear_execution=not pending_agent_execution,
@@ -4421,6 +4481,10 @@ class ServiceEngine:
                 ),
                 execution_id=execution_id,
                 execution_remote_head=execution_remote_head,
+                execution_resource_binding=(
+                    resource_binding.intent if resource_binding is not None
+                    else self._state.get("execution_resource_binding")
+                ),
                 worker_identity=None,
                 rework_provenance=rework_provenance,
                 resume_required=None,
@@ -4437,6 +4501,8 @@ class ServiceEngine:
                     else automatic_retry
                 ),
             )
+            if resource_binding is not None:
+                resource_binding.record_intent()
             if self._stop_before_admission():
                 return 0
             self._owned_execution_id = execution_id
@@ -4536,6 +4602,7 @@ class ServiceEngine:
         # This is the last safe gate before committing agent_running.
         if self._stop_before_admission():
             return 0
+        self._require_execution_generation(clean=True, remote=True)
         prompt_artifact = write_worker_prompt_artifact(
             self.state_dir,
             execution_id,
@@ -4574,9 +4641,13 @@ class ServiceEngine:
             worker_identity=None,
         )
         self._owned_execution_id = execution_id
+        self._require_execution_generation(clean=True, remote=True)
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         self._refresh_published_status()
         worker_returned = False
+        self._execution_generation_binding().begin_operation(
+            "worker", {"start": workspace.head},
+        )
         try:
             try:
                 worker_run = self._workers.run(
@@ -4603,6 +4674,11 @@ class ServiceEngine:
             worker_returned = True
         finally:
             if worker_returned and worker_run.worker_group_retired:
+                binding = self._execution_generation_binding()
+                if not (binding.directory / "worker-receipt.json").exists():
+                    binding.finish_operation(
+                        "worker", {"start": workspace.head, "group_retired": True},
+                    )
                 self._save_state(
                     "agent_running",
                     execution_stage="post-worker",
@@ -4615,6 +4691,7 @@ class ServiceEngine:
                 "execution cgroup remains populated; worker retirement is unproven"
             )
         try:
+            self._require_execution_generation(clean=False, remote=True)
             manager = ExecutionWorkspaceManager(
                 self.repo,
                 self.execution_worktree_root,
@@ -4653,6 +4730,12 @@ class ServiceEngine:
             workspace_head=None,
             run=worker_run,
         )
+        execution_result = dataclasses.replace(
+            execution_result,
+            resource_generation=str(
+                self._execution_generation_binding().intent["generation"]
+            ),
+        )
         if execution_result.result.conclusion == "failed":
             self._iteration_diagnostic = (
                 f"worker failed: {execution_result.result.reason}"
@@ -4664,6 +4747,10 @@ class ServiceEngine:
         )
         self._refresh_published_status()
         try:
+            self._require_execution_generation(clean=False, remote=True)
+            self._execution_generation_binding().begin_operation(
+                "checkpoint", {"before": workspace.head},
+            )
             checkpoint = manager.checkpoint(
                 workspace,
                 execution_id,
@@ -4673,6 +4760,11 @@ class ServiceEngine:
                     if execution_result.result.claim is not None
                     else execution_result.result.reason
                 ),
+            )
+            self._execution_generation_binding().finish_operation(
+                "checkpoint", {
+                    "before": checkpoint.before_head, "after": checkpoint.after_head,
+                },
             )
         except (ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(f"execution checkpoint failed: {error}") from error
@@ -5340,6 +5432,86 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
 
+    def execution_resource_proof(self) -> ResourceProof:
+        """Read-only TASK-129 snapshot, not permission for any subsequent action."""
+        state = dict(self._state)
+        intent = state.get("execution_resource_binding")
+        if not isinstance(intent, dict):
+            return ResourceProof(
+                str(state.get("execution_ticket_id", "")),
+                str(state.get("execution_id", "")), "", "unproven",
+                "execution has no independent resource generation binding",
+            )
+
+        def observe(repo: Path, *args: str, **kwargs):
+            # In particular status must not refresh/write the Git index.
+            return _git(repo, "--no-optional-locks", *args, **kwargs)
+
+        try:
+            manager = ExecutionWorkspaceManager(
+                self.repo, self.execution_worktree_root,
+                str(state.get("execution_ticket_id", "")), runner=observe,
+            )
+            binding = ResourceBinding(manager, intent)
+            if intent.get("execution_id") != state.get("execution_id"):
+                raise ExecutionWorkspaceError(
+                    "resource intent execution differs from runtime"
+                )
+            return binding.prove(
+                runner=observe,
+                expected_remote=binding.latest_remote(state.get("execution_remote_head")),
+            )
+        except UnprovenResource as error:
+            return ResourceProof(
+                str(state.get("execution_ticket_id", "")),
+                str(state.get("execution_id", "")),
+                str(intent.get("generation", "")), "unproven", str(error),
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return ResourceProof(
+                str(state.get("execution_ticket_id", "")),
+                str(state.get("execution_id", "")),
+                str(intent.get("generation", "")), "unproven",
+                f"resource observation unavailable: {error}",
+            )
+        except (ExecutionWorkspaceError, ValueError) as error:
+            return ResourceProof(
+                str(state.get("execution_ticket_id", "")),
+                str(state.get("execution_id", "")),
+                str(intent.get("generation", "")), "conflict", str(error),
+            )
+
+    def _require_execution_generation(self, *, clean: bool, remote: bool) -> None:
+        self._assert_repository_owner()
+        binding = self._execution_generation_binding()
+        if remote:
+            proof = binding.prove(
+                runner=self._git_runtime,
+                expected_remote=binding.latest_remote(
+                    self._state.get("execution_remote_head")
+                ), clean=clean, read_only=False,
+            )
+            # Upstream continuity remains unknown. Current exact observation is
+            # sufficient only for the existing non-destructive lifecycle policy.
+            if proof.local_state != "proved" or not proof.upstream_exact:
+                raise ExecutionWorkspaceError(proof.reason)
+        else:
+            binding.require_local(clean=clean)
+
+    def _execution_generation_binding(self) -> ResourceBinding:
+        intent = self._state.get("execution_resource_binding")
+        if not isinstance(intent, dict):
+            raise ExecutionWorkspaceError(
+                "execution has no independent generation intent"
+            )
+        if intent.get("execution_id") != self._state.get("execution_id"):
+            raise ExecutionWorkspaceError("execution generation does not match runtime")
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root,
+            str(self._state["execution_ticket_id"]), runner=self._git_runtime,
+        )
+        return ResourceBinding(manager, intent)
+
     def _prepare_execution_workspace(self, plan: ExecutionPlan) -> ExecutionWorkspace:
         if plan.ticket_id is None or plan.code is None or plan.control is None:
             raise ExecutionWorkspaceError(
@@ -5394,6 +5566,16 @@ class ServiceEngine:
                 f"expected path {manager.path}"
             )
         rework = self._state.get("rework_provenance")
+        intent = self._state.get("execution_resource_binding")
+        if intent is None:
+            raise ExecutionWorkspaceError(
+                "historical execution has no resource generation intent; "
+                "binding cannot be fabricated from matching Git state"
+            )
+        elif isinstance(intent, dict):
+            binding = ResourceBinding(manager, intent)
+        else:
+            raise ExecutionWorkspaceError("invalid resource admission intent")
         if isinstance(rework, dict):
             previous_base = rework.get("previous_base_head")
             previous_checkpoint = rework.get("previous_report_checkpoint")
@@ -5426,6 +5608,9 @@ class ServiceEngine:
                 "admitted",
                 "remote_evidence_published",
             }:
+                ResourceBinding.for_execution(
+                    manager, previous_execution
+                ).require_local(clean=True)
                 self._prepare_rework_remote_evidence(
                     manager.ticket_id,
                     previous_execution,
@@ -5451,15 +5636,26 @@ class ServiceEngine:
                     )
                 workspace = inspection.workspace
             else:
-                workspace = manager.prepare_rework(
-                    base_head, previous_base, previous_checkpoint
+                predecessor = ResourceBinding.for_execution(manager, previous_execution)
+                workspace = binding.prepare_rework(
+                    predecessor, previous_base, previous_checkpoint,
+                    remote_head=self._execution_remote_head(manager.branch),
                 )
                 self._set_rework_preparation_stage("workspace_prepared")
             self._prepare_rework_remote_predecessor(
                 manager, workspace, previous_execution, previous_checkpoint
             )
         else:
-            workspace = manager.prepare(base_head)
+            previous = binding.intent.get("predecessor_execution")
+            if isinstance(previous, str):
+                workspace = binding.prepare_handoff(
+                    ResourceBinding.for_execution(manager, previous),
+                    remote_head=self._execution_remote_head(manager.branch),
+                )
+            else:
+                workspace = binding.prepare(
+                    remote_head=self._execution_remote_head(manager.branch)
+                )
         current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
             self._adopt_validated_control_descendant(
@@ -5483,6 +5679,8 @@ class ServiceEngine:
         the original admission remains separately durable provenance.
         """
         if self._state.get("execution_start_head") is not None:
+            return admitted_base
+        if self._state.get("execution_resource_binding") is not None:
             return admitted_base
         # The plan's exact remote observation is sufficient when it still names
         # the admitted base. Avoid a redundant shared-ref fetch before creating
@@ -5887,17 +6085,35 @@ class ServiceEngine:
             manager.ticket_id, previous_execution, previous_checkpoint
         )
         remote = self._execution_remote_head(manager.branch)
+        binding = None
+        installed = False
+        if self._state.get("execution_resource_binding") is not None:
+            binding = self._execution_generation_binding()
+            binding.require_local(clean=True)
+            if (binding.directory / "predecessor-publication-receipt.json").exists():
+                receipt = binding.operation_receipt("predecessor-publication")
+                if remote != receipt.get("after") or remote != workspace.head:
+                    raise ExecutionWorkspaceError("rework publication receipt differs")
+                installed = True
+            elif remote != previous_checkpoint and remote == workspace.head:
+                raise ExecutionWorkspaceError(
+                    "rework publication is uncertain: independent receipt missing"
+                )
         if remote is not None and remote != previous_checkpoint:
             if remote != workspace.head:
                 raise ExecutionWorkspaceError(
                     "rework preparation conflict: remote execution branch does not "
                     "match the previous checkpoint"
                 )
-        if remote == previous_checkpoint:
+        if remote == previous_checkpoint and not installed:
             if self._execution_remote_head(evidence) != previous_checkpoint:
                 raise ExecutionWorkspaceError(
                     "remote rework evidence could not be proven"
                 )
+            if binding is not None:
+                binding.begin_operation("predecessor-publication", {
+                    "before": previous_checkpoint, "after": workspace.head,
+                })
             pushed = push_refs(
                 workspace.path,
                 self.remote_name,
@@ -5909,11 +6125,22 @@ class ServiceEngine:
             )
             if (
                 pushed.returncode
-                and self._execution_remote_head(manager.branch) != workspace.head
+                and (
+                    binding is not None
+                    or self._execution_remote_head(manager.branch) != workspace.head
+                )
             ):
                 raise ExecutionWorkspaceError(
                     "cannot install rework execution predecessor"
                 )
+            if binding is not None:
+                if self._execution_remote_head(manager.branch) != workspace.head:
+                    raise ExecutionWorkspaceError(
+                        "rework remote changed before receipt"
+                    )
+                binding.finish_operation("predecessor-publication", {
+                    "before": previous_checkpoint, "after": workspace.head,
+                })
         self._save_state(
             "agent_pending",
             execution_remote_head=self._execution_remote_head(manager.branch),
@@ -5926,6 +6153,10 @@ class ServiceEngine:
         checkpoint_head: str,
         expected_remote_head: str | None,
     ) -> None:
+        binding = None
+        if getattr(self, "_state", {}).get("execution_resource_binding") is not None:
+            self._require_execution_generation(clean=True, remote=False)
+            binding = self._execution_generation_binding()
         # An already admitted execution must drain its checkpoint publication.
         # Other callers must not begin publication after shutdown is requested.
         if self._stop_requested():
@@ -5960,6 +6191,12 @@ class ServiceEngine:
                     "execution predecessor is not an ancestor of checkpoint"
                 )
         lease = f"refs/heads/{workspace.branch}:{expected_remote_head or ''}"
+        if binding is not None:
+            binding.begin_operation(
+                "publication", {
+                    "before": expected_remote_head, "after": checkpoint_head,
+                },
+            )
         pushed = push_refs(
             workspace.path,
             self.remote_name,
@@ -5970,12 +6207,27 @@ class ServiceEngine:
         if pushed.returncode:
             current_remote_head = self._execution_remote_head(workspace.branch)
             if current_remote_head == checkpoint_head:
-                return
+                if binding is None:
+                    return
+                raise DevlegateError(
+                    "publication result is ambiguous; matching upstream SHA is not "
+                    "a generation receipt"
+                )
             if current_remote_head == expected_remote_head:
                 raise DevlegateError(
                     pushed.stderr.strip() or "execution checkpoint publication failed"
                 )
             raise DevlegateError("execution branch remote changed during publication")
+        if binding is not None:
+            if self._execution_remote_head(workspace.branch) != checkpoint_head:
+                raise DevlegateError(
+                    "execution branch changed before publication receipt"
+                )
+            binding.finish_operation(
+                "publication", {
+                    "before": expected_remote_head, "after": checkpoint_head,
+                },
+            )
 
     def _execution_remote_head(self, branch: str) -> str | None:
         ref = branch if branch.startswith("refs/") else f"refs/heads/{branch}"
@@ -6165,6 +6417,11 @@ class ServiceEngine:
             report = self._published_accepted_execution_report(ticket_id, pending)
         else:
             report = self._accepted_execution_report(ticket_id)
+        if report.resource_generation is not None and (
+            ticket is None or ticket.state != "done"
+        ):
+            manager = self.recovery_workspace_manager(report.ticket_id)
+            self._require_report_generation(report, manager)
         checkpoint = report.workspace_head
         assert checkpoint is not None
         product_ref = f"refs/heads/{self.remote_branch}"
@@ -6358,6 +6615,20 @@ class ServiceEngine:
         # consumed by `devlegate clean`; the next owner pass may still have a
         # large backlog after this integration.
         self._state["workspace_cleanup_event"] = cleanup
+
+    def _require_report_generation(
+        self, report: ExecutionReport, manager: ExecutionWorkspaceManager
+    ) -> None:
+        if report.resource_generation is None:
+            return
+        binding = ResourceBinding.for_execution(manager, report.execution_id)
+        if binding.intent["generation"] != report.resource_generation:
+            raise WorkflowBlockedError("report names a different resource generation")
+        workspace = binding.require_local(clean=True)
+        if workspace.head != report.workspace_head:
+            raise WorkflowBlockedError(
+                "resource generation differs from report checkpoint"
+            )
 
     def _retire_integrated_workspace(
         self, ticket_id: str, report: ExecutionReport, integration_head: str
@@ -6895,6 +7166,14 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted execution evidence changed before retirement"
             )
+        if report.resource_generation is not None:
+            ref_manager = manager or self.recovery_workspace_manager(report.ticket_id)
+            binding = ResourceBinding.for_execution(ref_manager, report.execution_id)
+            if binding.intent["generation"] != report.resource_generation:
+                raise WorkflowBlockedError(
+                    "cleanup resource generation differs from report"
+                )
+            binding.require_ref(report.workspace_head)
         self._validate_execution_ref_heads(
             report.execution_branch, report.workspace_head
         )
@@ -6905,6 +7184,7 @@ class ServiceEngine:
             report.workspace_head, integration=integration
         )
         if manager is not None and registration is not None:
+            self._require_report_generation(report, manager)
             current = manager._registrations().get(manager.path.resolve())
             if current != registration:
                 raise WorkflowBlockedError(
@@ -6950,6 +7230,17 @@ class ServiceEngine:
             if workspace.head != expected_head or workspace.dirty:
                 raise WorkflowBlockedError("execution worktree is dirty or changed")
             manager.verify_submodules(workspace)
+        reports = ExecutionReportStore(self.control_worktree).list(ticket_id)
+        if any(report.resource_generation is not None for report in reports):
+            report = self._accepted_execution_report(ticket_id)
+            binding = ResourceBinding.for_execution(manager, report.execution_id)
+            if binding.intent["generation"] != report.resource_generation:
+                raise WorkflowBlockedError(
+                    "cleanup resource generation differs from report"
+                )
+            binding.require_ref(expected_head)
+            if workspace is not None:
+                self._require_report_generation(report, manager)
         self._validate_execution_ref_heads(manager.branch, expected_head)
         binding = SimpleNamespace(
             ticket_id=ticket_id,
@@ -8427,6 +8718,8 @@ class ServiceEngine:
         if branch != manager.branch or Path(path) != manager.path:
             raise WorkflowBlockedError("execution workspace binding is invalid")
         try:
+            if state.get("execution_resource_binding") is not None:
+                self._require_execution_generation(clean=False, remote=False)
             manager._validate_base(base_head)
             manager._validate_branch(base_head)
             registrations = manager._registrations()
@@ -8505,8 +8798,24 @@ class ServiceEngine:
 
     def _recover_checkpoint_publication(self) -> None:
         try:
+            if self._state.get("execution_resource_binding") is not None:
+                self._require_execution_generation(clean=True, remote=False)
+                binding = self._execution_generation_binding()
+                receipt = binding.operation_receipt("checkpoint")
+                head = self._resolve_commit_runtime(binding.manager.path, "HEAD")
+                if receipt.get("after") != head:
+                    raise ExecutionWorkspaceError(
+                        "checkpoint receipt differs from HEAD"
+                    )
+                stage = self._state.get("execution_stage")
+                if stage in {"publishing", "post-publication"}:
+                    publication = binding.operation_receipt("publication")
+                    if publication.get("after") != head:
+                        raise ExecutionWorkspaceError(
+                            "publication receipt differs from HEAD"
+                        )
             recover_checkpoint_publication(self)
-        except WorkflowRecoveryError as error:
+        except (WorkflowRecoveryError, ExecutionWorkspaceError, OSError) as error:
             raise WorkflowBlockedError(str(error)) from error
 
     def _recover_lifecycle_report(self) -> ExecutionReport:
@@ -10500,7 +10809,29 @@ class ServiceEngine:
         """Run a reconciliation Git command under service ownership policy."""
         if self._stop_requested():
             raise ShutdownInterrupted
-        return self._git_runtime(cwd, *args, check=check)
+        binding = None
+        operation = None
+        if (
+            getattr(self, "_state", {}).get("execution_resource_binding") is not None
+            and args
+        ):
+            if args[0] == "rebase" and "--abort" not in args:
+                operation = "rewrite"
+            elif args[0] == "reset":
+                operation = "rollback"
+            if operation is not None:
+                self._require_execution_generation(clean=True, remote=False)
+                binding = self._execution_generation_binding()
+                binding.begin_operation(operation, {
+                    "before": self._resolve_commit_runtime(cwd, "HEAD"),
+                    "arguments": list(args),
+                })
+        result = self._git_runtime(cwd, *args, check=check)
+        if binding is not None and operation is not None and result.returncode == 0:
+            binding.finish_operation(operation, {
+                "after": self._resolve_commit_runtime(cwd, "HEAD"),
+            })
+        return result
 
     def reconciliation_pending(self) -> dict[str, object]:
         """Return detached pending evidence, never an alias of owner state."""
@@ -10576,6 +10907,13 @@ class ServiceEngine:
         if not isinstance(reconciliation, dict):
             raise DevlegateError("reconciliation workspace binding is unavailable")
         workspace_path = Path(str(reconciliation.get("execution_path")))
+        binding = None
+        if self._state.get("execution_resource_binding") is not None:
+            self._require_execution_generation(clean=True, remote=False)
+            binding = self._execution_generation_binding()
+            binding.begin_operation("rewrite-publication", {
+                "before": expected_remote, "after": rewritten_head,
+            })
         pushed = push_refs(
             workspace_path,
             self.remote_name,
@@ -10584,12 +10922,20 @@ class ServiceEngine:
             runner=self.reconciliation_git,
         )
         observed = self._execution_remote_head(branch)
+        if binding is not None and pushed.returncode:
+            raise DevlegateError(
+                "rewrite publication outcome is uncertain; independent receipt missing"
+            )
         if pushed.returncode and observed != rewritten_head:
             raise DevlegateError(
                 pushed.stderr.strip() or "published execution rewrite failed"
             )
         if observed != rewritten_head:
             raise DevlegateError("execution branch remote changed during publication")
+        if binding is not None:
+            binding.finish_operation("rewrite-publication", {
+                "before": expected_remote, "after": rewritten_head,
+            })
 
     def reconciliation_pin_rewrite_evidence(
         self, reference: str, rewritten_head: str
@@ -10623,7 +10969,7 @@ class ServiceEngine:
                 rewrite_published=rewrite_published,
                 take_lock=_take_lock,
             )
-        except ReconciliationTransactionError as error:
+        except (ReconciliationTransactionError, ExecutionWorkspaceError) as error:
             raise DevlegateError(str(error)) from error
 
     def _reconcile_resume_owned(
@@ -10796,12 +11142,30 @@ class ServiceEngine:
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         try:
+            if self._state.get("execution_resource_binding") is not None:
+                self._require_execution_generation(clean=False, remote=False)
+                self._execution_generation_binding().operation_receipt("worker")
             return recover_stranded_execution(self, self._state)
-        except ValueError as error:
+        except (ValueError, ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(str(error)) from error
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
+        if state.get("execution_resource_binding") is not None:
+            try:
+                self._require_execution_generation(clean=False, remote=False)
+                binding = self._execution_generation_binding()
+                receipt = binding.operation_receipt("worker")
+                observed_identity = receipt.get("identity")
+                if observed_identity is not None and (
+                    state.get("worker_identity") != observed_identity
+                    and state.get("execution_stage") != "post-worker"
+                ):
+                    raise ExecutionWorkspaceError(
+                        "worker handoff receipt differs from runtime process identity"
+                    )
+            except (ExecutionWorkspaceError, OSError) as error:
+                raise DevlegateError(str(error)) from error
         required = (
             "local_head",
             "remote_head",

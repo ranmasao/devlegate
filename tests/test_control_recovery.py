@@ -772,7 +772,7 @@ def test_worker_created_commit_cannot_reach_lifecycle_or_publication(
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
-    with pytest.raises(DevlegateError, match="checkpoint failed"):
+    with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
         run_test_iteration(devlegate)
 
     execution = next((state / "worktrees").glob("*/work/T-1"))

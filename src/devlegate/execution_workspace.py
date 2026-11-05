@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
@@ -155,8 +156,44 @@ class ExecutionWorkspaceManager:
         self._prepare_submodules(workspace.path)
         return workspace
 
+    def create_reserved(self, base_head: str) -> ExecutionWorkspace:
+        """Create in an owner-pinned empty directory; never adopt an add failure.
+
+        The binding owner has already created the branch with a create-only CAS
+        and holds the reserved directory open through its independent receipt.
+        """
+        self._validate_base(base_head)
+        if (
+            self.path.is_symlink()
+            or not self.path.is_dir()
+            or any(self.path.iterdir())
+            or resolve_commit(
+                self.repo, f"refs/heads/{self.branch}", runner=self._runner
+            ) != base_head
+        ):
+            raise self._path_conflict("reserved creation precondition changed")
+        registrations = self._registrations()
+        if self.path.resolve() in registrations or any(
+            item.get("branch") == self.branch for item in registrations.values()
+        ):
+            raise self._path_conflict("already has a foreign Git registration")
+        created = self._runner(
+            self.repo, "worktree", "add", str(self.path), self.branch, check=False
+        )
+        if created.returncode:
+            raise ExecutionWorkspaceError(
+                "execution worktree creation failed or is ambiguous; "
+                "an existing registration is not a creation receipt"
+            )
+        workspace = self._validate_existing(
+            self._registrations().get(self.path.resolve()), base_head
+        )
+        self._prepare_submodules(workspace.path)
+        return workspace
+
     def prepare_rework(
-        self, base_head: str, previous_base: str, previous_checkpoint: str
+        self, base_head: str, previous_base: str, previous_checkpoint: str,
+        *, creator: Callable[[str], ExecutionWorkspace] | None = None,
     ) -> ExecutionWorkspace:
         """Port a proven linear worker delta onto a newly admitted product base.
 
@@ -303,7 +340,7 @@ class ExecutionWorkspaceManager:
                     "rework preparation conflict: execution branch is not the exact "
                     "proven transplanted implementation"
                 )
-        prepared = self.prepare(base_head)
+        prepared = self.prepare(base_head) if creator is None else creator(base_head)
         if delta and not already_integrated and prepared.head == base_head:
             transplanted = self._runner(
                 prepared.path, "cherry-pick", "--no-edit", *delta, check=False
@@ -759,6 +796,8 @@ class ExecutionWorkspaceManager:
                         f"unexpected Git worktree branch metadata: {line}"
                     )
                 current["branch"] = value[11:]
+            elif key in {"locked", "prunable"}:
+                current[key] = value
         return entries
 
     def _registrations(self) -> dict[Path, WorktreeRegistration]:

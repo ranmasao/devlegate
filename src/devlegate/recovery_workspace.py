@@ -28,6 +28,7 @@ from devlegate.git import (
     run_git,
 )
 from devlegate.recovery import validate_execution_binding
+from devlegate.resource_binding import ResourceBinding
 
 
 class WorkspaceRecoveryCapabilities(Protocol):
@@ -72,6 +73,16 @@ def inspect_bound_workspace(
         return WorkspaceInspection(
             "UNSAFE", "persisted execution workspace binding is invalid"
         )
+    intent = state.get("execution_resource_binding")
+    if isinstance(intent, dict):
+        try:
+            if intent.get("execution_id") != execution_id:
+                raise ExecutionWorkspaceError("generation intent has wrong execution")
+            ResourceBinding(manager, intent).require_local(clean=True)
+        except (ExecutionWorkspaceError, OSError, ValueError) as error:
+            return WorkspaceInspection(
+                "UNSAFE", f"generation identity unproven: {error}"
+            )
     expected_head = state.get("execution_start_head")
     topology = manager.inspect(
         base_head, expected_head if isinstance(expected_head, str) else None
@@ -191,6 +202,10 @@ def repair_bound_workspace(
     owner: WorkspaceRecoveryCapabilities, state: dict[str, object]
 ) -> None:
     """Replace an older, exactly attributed branch generation using Git CAS."""
+    if state.get("execution_resource_binding") is not None:
+        raise ValueError(
+            "generation-bound resources cannot be recreated or adopted by SHA recovery"
+        )
     if (
         state.get("phase") != "agent_pending"
         or state.get("worker_identity") is not None

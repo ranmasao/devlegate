@@ -2540,12 +2540,13 @@ def test_unexpected_execution_remote_creation_blocks_publication(tmp_path, monke
     execution = next((state / "worktrees").glob("*/work/T-1"))
     control = next((state / "worktrees").glob("*/control"))
     assert (execution / "implementation.txt").exists()
-    assert git(execution, "log", "-1", "--pretty=%s").stdout.strip() == (
-        "T-1: Control ticket"
-    )
+    assert git(execution, "rev-parse", "HEAD").stdout == git(
+        working, "rev-parse", "HEAD"
+    ).stdout
+    assert "implementation.txt" in git(execution, "status", "--porcelain").stdout
     message = git(execution, "log", "-1", "--format=%B").stdout
-    assert "Worker result:\ndone" in message
-    assert "Devlegate-Execution:" in message
+    assert "Worker result:" not in message
+    assert "Devlegate-Execution:" not in message
     assert (control / "kanban/todo/T-1.md").exists()
     assert not (control / "kanban/review/T-1.md").exists()
     assert not list((control / "executions").glob("T-1/*.json"))

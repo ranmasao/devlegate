@@ -56,6 +56,7 @@ class ExecutionReport:
     result: ExecutionResult
     report_artifact: str | None = None
     report_sha256: str | None = None
+    resource_generation: str | None = None
 
     @property
     def schema(self) -> str:
@@ -63,7 +64,7 @@ class ExecutionReport:
 
     def as_dict(self) -> dict[str, object]:
         claim = self.result.claim
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "execution_id": self.execution_id,
             "ticket_id": self.ticket_id,
@@ -96,6 +97,9 @@ class ExecutionReport:
             "report_artifact": self.report_artifact,
             "report_sha256": self.report_sha256,
         }
+        if self.resource_generation is not None:
+            payload["resource_generation"] = self.resource_generation
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), indent=2, sort_keys=True) + "\n"
@@ -124,7 +128,10 @@ class ExecutionReport:
             "remaining",
             "reason",
         }
-        optional = {"report_artifact", "report_sha256", "process_started"}
+        optional = {
+            "report_artifact", "report_sha256", "process_started",
+            "resource_generation",
+        }
         if not required.issubset(payload) or set(payload) - required - optional:
             raise ExecutionReportError("execution report fields are invalid")
         if payload["schema"] != _REPORT_SCHEMA:
@@ -149,6 +156,14 @@ class ExecutionReport:
             raise ExecutionReportError("execution report workspace head is invalid")
         report_artifact = payload.get("report_artifact")
         report_sha256 = payload.get("report_sha256")
+        resource_generation = payload.get("resource_generation")
+        if resource_generation is not None and (
+            not isinstance(resource_generation, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", resource_generation)
+        ):
+            raise ExecutionReportError(
+                "execution report resource generation is invalid"
+            )
         if report_artifact is not None and not isinstance(
             report_artifact, str
         ):
@@ -242,6 +257,7 @@ class ExecutionReport:
             result,
             report_artifact,
             report_sha256,
+            resource_generation,
         )
 
 
