@@ -1,0 +1,29 @@
+{
+  "code_base_head": "945dea8e93aaab327b9e7a76cc3e8d0b3519b69f",
+  "conclusion": "completed",
+  "control_head": "d10bcc44d5c02308164dc2137dd1098b8008c237",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-150",
+  "execution_id": "50dd0e8d12e44c43af9c38921a385851",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-150",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-150/50dd0e8d12e44c43af9c38921a385851.md",
+  "report_sha256": "a954d40fe92800203a3f375a89642de34afb39f0625df26f019bd395d45858f1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-150",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Final local validation passed: ./dev coverage -n 4 --dist=worksteal --tb=short (1719 passed, 2 skipped), ./dev lint, and git diff --check. The focused resource-binding and owner regressions also passed (60 tests). Plain-Git upstream continuity remains explicitly unproven. No hosted exact-SHA CI URL is claimed: checkpoint creation, publication, and Git lifecycle belong to Devlegate under the worker contract.",
+    "summary": "Completed generation-aware lifecycle recovery with immutable, ordered operation receipts, generation-safe zero-delta rework, and independent worker-retirement evidence. Preserved dirty-progress retries and receipt-backed restart/reconciliation while blocking uncertain effects and unowned historical resource adoption. Expanded real-Git lifecycle regressions and documented identity, recovery, and upstream continuity limits."
+  },
+  "workspace_head": "41657a6817f7558f923a0c15019e2f236bd0e0af"
+}
