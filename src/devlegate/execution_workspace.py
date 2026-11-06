@@ -219,7 +219,7 @@ class ExecutionWorkspaceManager:
             # A completed no-op may not have published a ticket branch. There
             # is no implementation delta to carry, so create this generation's
             # ordinary branch from its admitted base.
-            return self.prepare(base_head)
+            return self.prepare(base_head) if creator is None else creator(base_head)
         if current.returncode or len(current.stdout.splitlines()) != 1:
             raise ExecutionWorkspaceError(
                 "cannot observe previous execution branch: "

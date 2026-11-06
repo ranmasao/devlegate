@@ -14,10 +14,7 @@ import dataclasses
 from typing import Any, Protocol
 
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
-from devlegate.execution_workspace import (
-    ExecutionWorkspaceError,
-    ExecutionWorkspaceManager,
-)
+from devlegate.execution_workspace import ExecutionWorkspaceError
 
 
 class WorkflowRecoveryError(Exception):
@@ -29,9 +26,6 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_report_matches_binding(self, report: ExecutionReport) -> None: ...
     def recovery_report_matches_state(self, report: ExecutionReport) -> None: ...
     def recovery_workspace(self) -> Any: ...
-    def recovery_workspace_manager(
-        self, ticket_id: str
-    ) -> ExecutionWorkspaceManager: ...
     def recovery_product(self, base: str) -> dict[str, object]: ...
     def recovery_prove_product(self) -> None: ...
     def recovery_zero_delta(
@@ -40,7 +34,6 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_zero_delta_payload(
         self, report: ExecutionReport, product: dict[str, object]
     ) -> dict[str, object]: ...
-    def recovery_ticket_title(self, ticket_id: str) -> str: ...
     def recovery_save_state(self, state: str, **values: object) -> None: ...
     def recovery_publish_execution(
         self, workspace: Any, checkpoint: str, expected: str | None
@@ -48,6 +41,8 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_checkpoint_exact(
         self, workspace: Any, checkpoint: str, start: str
     ) -> bool: ...
+    def recovery_checkpoint(self, workspace: Any, report: ExecutionReport) -> Any: ...
+    def recovery_publication_proved(self, checkpoint: str) -> None: ...
     def recovery_persist_reconciliation(
         self,
         report: ExecutionReport,
@@ -103,18 +98,7 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         owner.recovery_prove_product()
         if workspace.head == start_head:
             try:
-                checkpoint = owner.recovery_workspace_manager(
-                    report.ticket_id
-                ).checkpoint(
-                    workspace,
-                    report.execution_id,
-                    title=owner.recovery_ticket_title(report.ticket_id),
-                    summary=(
-                        report.result.claim.summary
-                        if report.result.claim is not None
-                        else report.result.reason
-                    ),
-                )
+                checkpoint = owner.recovery_checkpoint(workspace, report)
             except (ExecutionWorkspaceError, OSError) as error:
                 raise WorkflowRecoveryError(
                     f"cannot recover execution checkpoint: {error}"
@@ -185,6 +169,7 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
             raise WorkflowRecoveryError(
                 "execution remote does not match the proven checkpoint"
             )
+        owner.recovery_publication_proved(report.workspace_head)
         owner.recovery_save_state(
             "agent_running",
             execution_stage="post-publication",
@@ -192,6 +177,7 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         )
         stage = "post-publication"
     if stage == "post-publication":
+        owner.recovery_publication_proved(str(report.workspace_head))
         if report.workspace_head is None or workspace.head != report.workspace_head:
             raise WorkflowRecoveryError(
                 "execution worktree HEAD changed after publication"

@@ -103,6 +103,7 @@ def persist_agent_running(
     checkpointed=False,
     record_start=False,
     publish=False,
+    record_handoff=True,
 ):
     control = next((state / "worktrees").glob("*/control"))
     code_head = git(devlegate.repo, "rev-parse", "HEAD").stdout.strip()
@@ -111,18 +112,31 @@ def persist_agent_running(
     manager = ExecutionWorkspaceManager(
         devlegate.repo, devlegate.execution_worktree_root, "T-1"
     )
-    workspace = manager.prepare(code_head)
+    from devlegate.resource_binding import ResourceBinding
+
+    binding = ResourceBinding.plan(
+        manager, execution_id=execution_id, base=code_head, control=control_head,
+        ticket_blob=git(control, "rev-parse", "HEAD:kanban/todo/T-1.md").stdout.strip(),
+        remote="origin", remote_head=None,
+    )
+    binding.record_intent()
+    workspace = binding.prepare(remote_head=None)
     if checkpointed:
+        binding.begin_operation("checkpoint", {"before": workspace.head})
         (workspace.path / "prior-checkpoint.txt").write_text("prior checkpoint\n")
         git(workspace.path, "add", "prior-checkpoint.txt")
         git(workspace.path, "commit", "-m", "prior checkpoint")
+        head = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
+        binding.finish_operation("checkpoint", {"after": head})
         if publish:
+            binding.begin_operation("publication", {"before": None, "after": head})
             git(
                 workspace.path,
                 "push",
                 "origin",
                 f"HEAD:refs/heads/{workspace.branch}",
             )
+            binding.finish_operation("publication", {})
         workspace = manager.prepare(code_head)
     execution_start_head = workspace.head if record_start else None
     devlegate._save_state(
@@ -144,6 +158,7 @@ def persist_agent_running(
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         execution_id=execution_id,
+        execution_resource_binding=binding.intent,
         execution_remote_head=workspace.head if publish else None,
         worker_identity={
             "execution_id": execution_id,
@@ -155,6 +170,11 @@ def persist_agent_running(
         },
         **({"execution_start_head": execution_start_head} if record_start else {}),
     )
+    binding.begin_operation("worker", {"start": workspace.head})
+    if record_handoff:
+        binding.finish_operation("worker", {
+            "identity": devlegate._state["worker_identity"],
+        })
     return workspace, control
 
 def control_fixture(tmp_path):
@@ -277,6 +297,30 @@ def _pending_resume_fixture(tmp_path, monkeypatch):
     (working / "dirty-product.txt").unlink()
     return devlegate, working, state
 
+def fixture_checkpoint(engine, path, message):
+    """Model an additional owner checkpoint with independent effect evidence."""
+    with engine._lock():
+        binding = engine._execution_generation_binding()
+        workspace = binding.require_local(clean=False)
+        binding.begin_operation("checkpoint", {"before": workspace.head})
+        git(path, "add", "-A")
+        git(path, "commit", "-m", message)
+        binding.finish_operation("checkpoint", {
+            "after": git(path, "rev-parse", "HEAD").stdout.strip(),
+        })
+
+
+def fixture_publication(engine, path, head):
+    """Model an acknowledged owner publication, rather than SHA-only adoption."""
+    with engine._lock():
+        binding = engine._execution_generation_binding()
+        binding.require_local(clean=True)
+        before = engine._execution_remote_head(binding.manager.branch)
+        binding.begin_operation("publication", {"before": before, "after": head})
+        git(path, "push", "origin", f"{head}:{binding.intent['remote_ref']}")
+        binding.finish_operation("publication", {})
+
+
 def _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -295,8 +339,7 @@ def _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch):
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
     (execution / "second.txt").write_text("second\n")
-    git(execution, "add", "second.txt")
-    git(execution, "commit", "-m", "second checkpoint")
+    fixture_checkpoint(devlegate, execution, "second checkpoint")
     second = git(execution, "rev-parse", "HEAD").stdout.strip()
     first = git(execution, "rev-parse", "HEAD^").stdout.strip()
     git(working, "add", "dirty-product.txt")
@@ -315,11 +358,38 @@ def _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch):
     devlegate._save_state("idle", reconciliation=operation)
     return devlegate, working, state, execution, operation, first, second, target
 
+def fixture_workspace(engine, base, execution_id):
+    """Admit fresh fixture resources before their first filesystem/Git effect."""
+    from devlegate.resource_binding import ResourceBinding
+
+    manager = ExecutionWorkspaceManager(
+        engine.repo, engine.execution_worktree_root, "T-1"
+    )
+    control = engine.control_worktree
+    binding = ResourceBinding.plan(
+        manager, execution_id=execution_id, base=base,
+        control=git(control, "rev-parse", "HEAD").stdout.strip(),
+        ticket_blob=git(control, "rev-parse", "HEAD:kanban/todo/T-1.md").stdout.strip(),
+        remote="origin", remote_head=None,
+    )
+    binding.record_intent()
+    return binding.prepare(remote_head=None)
+
+
 def _persist_pending_execution(
     devlegate, state, workspace, base_head, execution_id, *, start_head=None
 ):
     control = next((state / "worktrees").glob("*/control"))
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
+    from devlegate.resource_binding import ResourceBinding
+
+    manager = ExecutionWorkspaceManager(
+        devlegate.repo, devlegate.execution_worktree_root, "T-1"
+    )
+    try:
+        binding = ResourceBinding.for_execution(manager, execution_id).intent
+    except ExecutionWorkspaceError:
+        binding = None
     devlegate._save_state(
         "agent_pending",
         local_head=base_head,
@@ -336,6 +406,7 @@ def _persist_pending_execution(
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         execution_id=execution_id,
+        execution_resource_binding=binding,
         execution_start_head=start_head or getattr(workspace, "head", base_head),
         execution_remote_head=None,
         worker_identity=None,

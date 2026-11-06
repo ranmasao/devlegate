@@ -1370,8 +1370,9 @@ def test_real_service_reconcile_published_rewrite_restart_after_remote_effect(
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
     (execution / "second.txt").write_text("second\n")
-    git(execution, "add", "second.txt")
-    git(execution, "commit", "-m", "second checkpoint")
+    from _control_support import fixture_checkpoint
+
+    fixture_checkpoint(engine, execution, "second checkpoint")
     second = git(execution, "rev-parse", "HEAD").stdout.strip()
     first = git(execution, "rev-parse", "HEAD^").stdout.strip()
     git(
@@ -1414,6 +1415,9 @@ def test_real_service_reconcile_published_rewrite_restart_after_remote_effect(
             "--rewrite-published",
         )
         _wait_process_death(service)
+        remote_after_effect = git(
+            execution, "ls-remote", "origin", reconciliation["execution_branch"]
+        ).stdout
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
         finalized = service.cli(
@@ -1425,15 +1429,15 @@ def test_real_service_reconcile_published_rewrite_restart_after_remote_effect(
             "--rewrite-published",
         )
         assert finalized.returncode == 0, finalized.stderr
-        service.wait_for(
-            lambda: _disk_state(config)["reconciliation"]["status"] == "resolved"
-        )
-        resolved = _disk_state(config)["reconciliation"]
-        assert resolved["effective_base"] == target
-        assert (
-            git(execution, "rev-parse", resolved["evidence_ref"]).stdout.strip()
-            == resolved["worker_checkpoint"]
-        )
+        service.stop()
+        retained = _disk_state(config)["reconciliation"]
+        assert retained["status"] == "pending"
+        assert retained["rewrite_stage"] == "remote-pending"
+        observer = type(engine)(config, read_only=True)
+        assert "receipt missing" in observer.execution_resource_proof().reason
+        assert git(
+            execution, "ls-remote", "origin", reconciliation["execution_branch"]
+        ).stdout == remote_after_effect
         assert (
             git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
             == second

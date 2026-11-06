@@ -14,10 +14,10 @@ repositories, and worktrees.
 | worker-running, matching live | Exact worker identity is live | Keep service alive and blocked | No | No | Never signal or duplicate the live worker |
 | worker-running, absent | Exact identity is absent | Normalize process loss and use RESUME policy | No | One RESUME | Product/control generation must still match |
 | post-worker | Worker retired; result not durable | Normalize as lost outcome, then explicit/automatic RESUME | No | One RESUME | Never fabricate a worker report |
-| checkpointing | Report durable; checkpoint head absent | Recreate or recognize exact checkpoint | Yes | No | Dirty or ambiguous history blocks |
+| checkpointing | Report plus independent generation/effect journal | Checkpoint only before any attempt, or recognize a receipted exact checkpoint | Yes | No | Missing receipt after an attempted effect blocks; SHA/parent equality is insufficient |
 | post-checkpoint | Report and exact H durable | Re-observe product and continue publication | Yes | No | Product movement triggers reconciliation |
 | publishing before push | H and expected remote R durable | Observe R, push H, verify H | Yes | No | Unexpected remote history blocks |
-| publishing after push | Stage says publishing; remote is H | Recognize H and continue | Yes | No | Remote mismatch blocks |
+| publishing after push | Stage says publishing; independent publication receipt; remote is H | Revalidate receipt and continue | Yes | No | Missing receipt or remote mismatch blocks; matching remote SHA does not prove continuity |
 | post-publication | Remote equals exact H | Re-prove H and enter lifecycle | Yes | No | Remote drift blocks |
 | lifecycle before side effect | Report and lifecycle binding durable | Apply one exact lifecycle commit | Yes | No | Invalid report/control lineage blocks |
 | lifecycle after side effect | Exact lifecycle commit exists locally/remotely | Observe and reuse the existing commit | Yes | No | Contradictory control history blocks |
@@ -30,6 +30,22 @@ repositories, and worktrees.
 | mutable receipt after ACK | Receipt is admission evidence only | Preserve receipt; do not dispatch it | N/A | No | New request id is required for liveness |
 
 ## Rework Preparation Replay
+
+Every newly admitted execution also has the independent generation evidence
+described in `docs/resource-identity.md`. Missing/replaced witnesses block all
+of the execution-resource rows above. A pre-effect SQLite-only admission can
+finish its independent intent only with wholly absent recorded/current resources;
+an existing or partially written evidence directory is not repaired. The
+generation proof API only observes these conditions and cannot finish admission.
+
+`test_resource_binding.py` covers local replacement and creation-effect faults.
+`test_resource_binding_owner.py` exercises real owner admission, handoff receipts,
+worker group retirement, checkpoint/publication receipts, concurrent owners and
+native conflict/abort/continue with a second rewrite after restart.
+The CLI topology tests distinguish completed receipts from an effect interrupted
+before its receipt; the latter stays diagnostic and never repeats the mutation.
+Historical unbound runtime coordinates cannot be converted into fresh generation
+ownership, even if a legacy repair operation previously reconstructed the path.
 
 Rework preparation records each completed side effect. Before the remote
 predecessor is installed, replay requires the previous checkpoint at the

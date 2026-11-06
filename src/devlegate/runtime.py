@@ -3910,6 +3910,11 @@ class ServiceEngine:
                 "bound execution workspace is recoverable:"
             )
         ):
+            if self._state.get("execution_resource_binding") is None:
+                raise WorkspacePreparationBlockedError(
+                    "historical execution has no resource generation intent; "
+                    "automatic resource repair cannot establish ownership"
+                )
             self._repair_bound_execution_workspace()
             execution_plan = self._make_execution_plan(
                 self._state,
@@ -4139,12 +4144,14 @@ class ServiceEngine:
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
             )
+            transition_predecessor = None
             if authorization is None and isinstance(failed_for_ticket, dict):
                 observations = self._status_git_observation()
                 if self._failure_superseded(
                     selected_ticket.id, failed_for_ticket, self._state,
                     observations["control"], observations["code"],
                 ):
+                    transition_predecessor = failed_for_ticket.get("execution_id")
                     failed_for_ticket = None
             manual_retry = self._state.get("manual_retry_required")
             if isinstance(manual_retry, dict) and (
@@ -4330,7 +4337,16 @@ class ServiceEngine:
                 rework_provenance, dict
             ):
                 raise WorkflowBlockedError("persisted rework provenance is malformed")
-            if pending_agent_execution and rework_provenance is None:
+            admitted_retry = self._state.get("automatic_retry")
+            zero_delta_admitted = (
+                isinstance(admitted_retry, dict)
+                and admitted_retry.get("status") == "admitted"
+                and admitted_retry.get("fresh_execution_id") == execution_id
+            )
+            if (
+                pending_agent_execution and rework_provenance is None
+                and not zero_delta_admitted
+            ):
                 try:
                     pending_reports = ExecutionReportStore(self.control_worktree).list(
                         selected_ticket.id
@@ -4441,11 +4457,13 @@ class ServiceEngine:
                     and isinstance(self._state.get("execution_id"), str)
                 ):
                     resource_predecessor = self._state["execution_id"]
+                elif isinstance(transition_predecessor, str):
+                    resource_predecessor = transition_predecessor
                 if isinstance(resource_predecessor, str):
                     predecessor = ResourceBinding.for_execution(
                         resource_manager, resource_predecessor
                     )
-                    predecessor.require_local(clean=True)
+                    predecessor.require_local(clean=False)
                     resource_binding.intent.update({
                         "predecessor_execution": predecessor.intent["execution_id"],
                         "predecessor_generation": predecessor.intent["generation"],
@@ -4602,7 +4620,7 @@ class ServiceEngine:
         # This is the last safe gate before committing agent_running.
         if self._stop_before_admission():
             return 0
-        self._require_execution_generation(clean=True, remote=True)
+        self._require_execution_generation(clean=not workspace.dirty, remote=True)
         prompt_artifact = write_worker_prompt_artifact(
             self.state_dir,
             execution_id,
@@ -4641,7 +4659,7 @@ class ServiceEngine:
             worker_identity=None,
         )
         self._owned_execution_id = execution_id
-        self._require_execution_generation(clean=True, remote=True)
+        self._require_execution_generation(clean=not workspace.dirty, remote=True)
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         self._refresh_published_status()
         worker_returned = False
@@ -4664,9 +4682,13 @@ class ServiceEngine:
                     ),
                 )
             except WorkerAdmissionClosed:
+                self._execution_generation_binding().finish_operation(
+                    "worker", {"admission_closed": True},
+                )
                 self._save_state(
-                    "idle",
+                    "agent_pending",
                     execution_stage=None,
+                    execution_start_head=None,
                     pending_execution_report=None,
                     worker_identity=None,
                 )
@@ -4675,10 +4697,11 @@ class ServiceEngine:
         finally:
             if worker_returned and worker_run.worker_group_retired:
                 binding = self._execution_generation_binding()
-                if not (binding.directory / "worker-receipt.json").exists():
+                if binding.operation_pending("worker"):
                     binding.finish_operation(
                         "worker", {"start": workspace.head, "group_retired": True},
                     )
+                binding.record_worker_retirement()
                 self._save_state(
                     "agent_running",
                     execution_stage="post-worker",
@@ -5459,7 +5482,11 @@ class ServiceEngine:
                 )
             return binding.prove(
                 runner=observe,
-                expected_remote=binding.latest_remote(state.get("execution_remote_head")),
+                expected_remote=state.get("execution_remote_head"),
+                worker_retired=state.get("execution_stage") in {
+                    "post-worker", "checkpointing", "post-checkpoint", "publishing",
+                    "post-publication", "lifecycle",
+                },
             )
         except UnprovenResource as error:
             return ResourceProof(
@@ -5487,9 +5514,8 @@ class ServiceEngine:
         if remote:
             proof = binding.prove(
                 runner=self._git_runtime,
-                expected_remote=binding.latest_remote(
-                    self._state.get("execution_remote_head")
-                ), clean=clean, read_only=False,
+                expected_remote=self._state.get("execution_remote_head"),
+                clean=clean, read_only=False,
             )
             # Upstream continuity remains unknown. Current exact observation is
             # sufficient only for the existing non-destructive lifecycle policy.
@@ -5549,6 +5575,11 @@ class ServiceEngine:
             plan.ticket_id,
             runner=self._git_runtime,
         )
+        if self._state.get("execution_resource_binding") is None:
+            raise ExecutionWorkspaceError(
+                "historical execution has no resource generation intent; "
+                "binding cannot be fabricated from matching Git state"
+            )
         if isinstance(bound_base, str):
             base_head = self._adopt_unstarted_product_descendant(
                 manager, base_head, plan.ticket_id, plan.code.remote_head
@@ -5576,6 +5607,10 @@ class ServiceEngine:
             binding = ResourceBinding(manager, intent)
         else:
             raise ExecutionWorkspaceError("invalid resource admission intent")
+        if binding.intent_pending():
+            if self._execution_remote_head(manager.branch) is not None:
+                raise ExecutionWorkspaceError("upstream changed before intent replay")
+            binding.record_intent()
         if isinstance(rework, dict):
             previous_base = rework.get("previous_base_head")
             previous_checkpoint = rework.get("previous_report_checkpoint")
@@ -5610,7 +5645,7 @@ class ServiceEngine:
             }:
                 ResourceBinding.for_execution(
                     manager, previous_execution
-                ).require_local(clean=True)
+                ).rework_source_absent(previous_base, previous_checkpoint)
                 self._prepare_rework_remote_evidence(
                     manager.ticket_id,
                     previous_execution,
@@ -5648,6 +5683,7 @@ class ServiceEngine:
         else:
             previous = binding.intent.get("predecessor_execution")
             if isinstance(previous, str):
+                manager._validate_branch(base_head)
                 workspace = binding.prepare_handoff(
                     ResourceBinding.for_execution(manager, previous),
                     remote_head=self._execution_remote_head(manager.branch),
@@ -6089,7 +6125,7 @@ class ServiceEngine:
         installed = False
         if self._state.get("execution_resource_binding") is not None:
             binding = self._execution_generation_binding()
-            binding.require_local(clean=True)
+            binding.require_local(clean=False)
             if (binding.directory / "predecessor-publication-receipt.json").exists():
                 receipt = binding.operation_receipt("predecessor-publication")
                 if remote != receipt.get("after") or remote != workspace.head:
@@ -8737,6 +8773,17 @@ class ServiceEngine:
         self, manager: ExecutionWorkspaceManager
     ) -> ExecutionWorkspace:
         """Observe a staged rewrite without validating its persisted base yet."""
+        if self._state.get("execution_resource_binding") is not None:
+            binding = self._execution_generation_binding()
+            if binding.rebase_state():
+                binding.require_rebase_stage()
+                return ExecutionWorkspace(
+                    ticket_id=manager.ticket_id, branch=manager.branch,
+                    path=manager.path, head=str(binding._expected_head()),
+                    base_head=str(self._state.get("execution_base_head", "")),
+                    dirty=True,
+                )
+            return binding.require_local(clean=False)
         expected_path = manager.path.resolve()
         registrations = manager._registrations()
         registration = registrations.get(expected_path)
@@ -8799,24 +8846,44 @@ class ServiceEngine:
     def _recover_checkpoint_publication(self) -> None:
         try:
             if self._state.get("execution_resource_binding") is not None:
-                self._require_execution_generation(clean=True, remote=False)
                 binding = self._execution_generation_binding()
-                receipt = binding.operation_receipt("checkpoint")
-                head = self._resolve_commit_runtime(binding.manager.path, "HEAD")
-                if receipt.get("after") != head:
-                    raise ExecutionWorkspaceError(
-                        "checkpoint receipt differs from HEAD"
-                    )
-                stage = self._state.get("execution_stage")
-                if stage in {"publishing", "post-publication"}:
-                    publication = binding.operation_receipt("publication")
-                    if publication.get("after") != head:
-                        raise ExecutionWorkspaceError(
-                            "publication receipt differs from HEAD"
-                        )
+                binding.require_worker_retirement()
+                binding.require_local(
+                    clean=self._state.get("execution_stage") != "checkpointing"
+                )
             recover_checkpoint_publication(self)
         except (WorkflowRecoveryError, ExecutionWorkspaceError, OSError) as error:
             raise WorkflowBlockedError(str(error)) from error
+
+    def recovery_checkpoint(self, workspace, report: ExecutionReport):
+        binding = None
+        if self._state.get("execution_resource_binding") is not None:
+            self._require_execution_generation(clean=False, remote=True)
+            binding = self._execution_generation_binding()
+            binding.begin_operation("checkpoint", {"before": workspace.head})
+        checkpoint = self.recovery_workspace_manager(report.ticket_id).checkpoint(
+            workspace, report.execution_id,
+            title=self.recovery_ticket_title(report.ticket_id),
+            summary=(
+                report.result.claim.summary if report.result.claim is not None
+                else report.result.reason
+            ),
+        )
+        if binding is not None:
+            binding.finish_operation("checkpoint", {
+                "before": checkpoint.before_head, "after": checkpoint.after_head,
+            })
+        return checkpoint
+
+    def recovery_publication_proved(self, checkpoint: str) -> None:
+        if self._state.get("execution_resource_binding") is not None:
+            receipt = self._execution_generation_binding().operation_receipt(
+                "publication"
+            )
+            if receipt.get("after") != checkpoint:
+                raise WorkflowBlockedError(
+                    "publication receipt differs from checkpoint"
+                )
 
     def _recover_lifecycle_report(self) -> ExecutionReport:
         try:
@@ -10815,22 +10882,41 @@ class ServiceEngine:
             getattr(self, "_state", {}).get("execution_resource_binding") is not None
             and args
         ):
-            if args[0] == "rebase" and "--abort" not in args:
+            if args[0] == "rebase":
                 operation = "rewrite"
             elif args[0] == "reset":
                 operation = "rollback"
             if operation is not None:
-                self._require_execution_generation(clean=True, remote=False)
                 binding = self._execution_generation_binding()
+                self._assert_repository_owner()
+                if cwd != binding.manager.path:
+                    raise ExecutionWorkspaceError(
+                        "reconciliation effect targets a different workspace"
+                    )
+                if args[0] == "rebase" and any(
+                    stage in args for stage in ("--continue", "--abort", "--skip")
+                ):
+                    binding.require_rebase_stage()
+                else:
+                    self._require_execution_generation(clean=True, remote=False)
                 binding.begin_operation(operation, {
-                    "before": self._resolve_commit_runtime(cwd, "HEAD"),
+                    "before": binding._expected_head(),
                     "arguments": list(args),
                 })
         result = self._git_runtime(cwd, *args, check=check)
-        if binding is not None and operation is not None and result.returncode == 0:
-            binding.finish_operation(operation, {
-                "after": self._resolve_commit_runtime(cwd, "HEAD"),
-            })
+        if binding is not None and operation is not None:
+            if args[0] == "rebase" and result.returncode != 0:
+                binding.finish_operation(operation, {
+                    "after": self._resolve_commit_runtime(
+                        self.repo, str(binding.intent["ref"])
+                    ),
+                    "returncode": result.returncode,
+                    "rebase_state": binding.rebase_state(),
+                })
+            elif result.returncode == 0:
+                binding.finish_operation(operation, {
+                    "after": self._resolve_commit_runtime(cwd, "HEAD"),
+                })
         return result
 
     def reconciliation_pending(self) -> dict[str, object]:
@@ -10924,7 +11010,8 @@ class ServiceEngine:
         observed = self._execution_remote_head(branch)
         if binding is not None and pushed.returncode:
             raise DevlegateError(
-                "rewrite publication outcome is uncertain; independent receipt missing"
+                "execution branch remote changed during publication or publication "
+                "outcome is uncertain; independent receipt missing"
             )
         if pushed.returncode and observed != rewritten_head:
             raise DevlegateError(
@@ -11156,6 +11243,8 @@ class ServiceEngine:
                 self._require_execution_generation(clean=False, remote=False)
                 binding = self._execution_generation_binding()
                 receipt = binding.operation_receipt("worker")
+                if state.get("execution_stage") == "post-worker":
+                    binding.require_worker_retirement()
                 observed_identity = receipt.get("identity")
                 if observed_identity is not None and (
                     state.get("worker_identity") != observed_identity

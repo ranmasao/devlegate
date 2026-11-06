@@ -4,7 +4,13 @@
 """Admission and effect receipts under the real serialized service owner."""
 
 import pytest
-from _control_support import Devlegate, control_fixture, git, invoke
+from _control_support import (
+    Devlegate,
+    _multi_checkpoint_update_base_fixture,
+    control_fixture,
+    git,
+    invoke,
+)
 from runtime_helpers import run_test_iteration
 
 from devlegate.execution_workspace import ExecutionWorkspaceError
@@ -104,7 +110,7 @@ def test_effect_receipt_crashes_recover_exactly_or_block(
     assert git(owner.repo, "rev-parse", "HEAD").stdout == before_head
 
 
-def test_admission_crash_before_independent_intent_has_no_resource_effect(
+def test_admission_crash_before_independent_intent_replays_only_absent_resources(
     engine, monkeypatch
 ):
     owner, config = engine
@@ -122,9 +128,15 @@ def test_admission_crash_before_independent_intent_has_no_resource_effect(
     restarted = Devlegate(config)
     proof = restarted.execution_resource_proof()
     assert proof.state == "unproven" and "missing evidence" in proof.reason
-    with pytest.raises(DevlegateError):
-        run_test_iteration(restarted)
-    assert not git(owner.repo, "for-each-ref", intent["ref"]).stdout
+    def worker(_workspace, _prompt, **_kwargs):
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None,
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", worker)
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["execution_resource_binding"] == intent
+    assert restarted.execution_resource_proof().local_state == "proved"
 
 
 def test_second_owner_cannot_create_generation_evidence(engine):
@@ -162,6 +174,33 @@ def test_worker_handoff_receipt_precedes_runtime_identity(engine, monkeypatch):
     assert len(observed) == 1
 
 
+def test_post_worker_requires_independent_group_retirement(engine, monkeypatch):
+    owner, config = engine
+    original = owner._save_state
+
+    def crash_after_retirement(phase, **fields):
+        original(phase, **fields)
+        if fields.get("execution_stage") == "post-worker":
+            raise InjectedCrash()
+
+    monkeypatch.setattr(owner, "_save_state", crash_after_retirement)
+    with pytest.raises(InjectedCrash):
+        run_test_iteration(owner)
+    binding = owner._execution_generation_binding()
+    binding.require_worker_retirement()
+    retired = next(binding.directory.glob("worker-retired.*.json"))
+    retired.unlink()
+    restarted = Devlegate(config)
+    monkeypatch.setattr(
+        restarted._workers, "run",
+        lambda *_args, **_kwargs: pytest.fail("unproven retirement launched worker"),
+    )
+    head = git(binding.manager.path, "rev-parse", "HEAD").stdout
+    with pytest.raises(DevlegateError, match="group retirement is unproven"):
+        run_test_iteration(restarted)
+    assert git(binding.manager.path, "rev-parse", "HEAD").stdout == head
+
+
 def test_admission_preserves_archived_branch_worktree_and_evidence(engine):
     owner, _config = engine
     archived = owner.execution_worktree_root / "work" / "TASK-134"
@@ -189,3 +228,69 @@ def test_admission_preserves_archived_branch_worktree_and_evidence(engine):
     assert git(owner.repo, "rev-parse", branch).stdout.strip() == head
     assert git(owner.repo, "rev-parse", evidence).stdout.strip() == head
     assert git(owner.repo, "ls-remote", "origin", evidence).stdout.split()[0] == head
+
+
+def test_native_conflict_abort_and_second_rewrite_keep_generation(
+    tmp_path, monkeypatch
+):
+    owner, repo, _state, execution, _reconciliation, _first, second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    generation = owner._state["execution_resource_binding"]["generation"]
+    (repo / "first.txt").write_text("conflicting target\n")
+    git(repo, "add", "first.txt")
+    git(repo, "commit", "-m", "conflicting product")
+    git(repo, "push", "origin", "HEAD:main")
+    target = git(repo, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
+        owner.reconcile_update_base("T-1", target)
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
+    assert not git(execution, "status", "--porcelain").stdout
+    (repo / "first.txt").unlink()
+    git(repo, "commit", "-am", "remove conflicting product file")
+    git(repo, "push", "origin", "HEAD:main")
+    target = git(repo, "rev-parse", "HEAD").stdout.strip()
+    restarted = Devlegate(owner.env_file)
+    assert restarted.reconcile_update_base("T-1", target) == 0
+    binding = restarted._execution_generation_binding()
+    rewrites = [path for _, operation, path in binding._attempts()
+                if operation == "rewrite"]
+    assert len(rewrites) == 3  # conflict, acknowledged abort, second attempt
+    assert binding.intent["generation"] == generation
+    assert binding.require_local(clean=True).head == git(
+        execution, "rev-parse", "HEAD"
+    ).stdout.strip()
+    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
+
+
+def test_native_continue_after_receipted_conflict_and_restart(tmp_path, monkeypatch):
+    owner, repo, _state, execution, _reconciliation, _first, _second, _target = (
+        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
+    )
+    (repo / "first.txt").write_text("conflicting target\n")
+    git(repo, "add", "first.txt")
+    git(repo, "commit", "-m", "conflicting product")
+    git(repo, "push", "origin", "HEAD:main")
+    target = git(repo, "rev-parse", "HEAD").stdout.strip()
+    original = owner.reconciliation_git
+
+    def interrupted(cwd, *args, **kwargs):
+        result = original(cwd, *args, **kwargs)
+        if args[0] == "rebase" and result.returncode:
+            raise InjectedCrash()
+        return result
+
+    monkeypatch.setattr(owner, "reconciliation_git", interrupted)
+    with pytest.raises(InjectedCrash):
+        owner.reconcile_update_base("T-1", target)
+    restarted = Devlegate(owner.env_file)
+    (execution / "first.txt").write_text("first\n")
+    git(execution, "add", "first.txt")
+    git(execution, "config", "core.editor", "true")
+    with restarted._lock():
+        assert restarted.reconciliation_git(
+            execution, "rebase", "--continue"
+        ).returncode == 0
+        workspace = restarted._execution_generation_binding().require_local(clean=True)
+    assert workspace.head == git(execution, "rev-parse", "HEAD").stdout.strip()
+    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target

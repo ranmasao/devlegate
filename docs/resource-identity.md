@@ -57,6 +57,13 @@ After creation, fsync witnesses and the exclusive receipt before recording
 prepared state or launching a worker. A retry with no effects may proceed;
 existing effects without exact independent receipts block. A lost marker or
 receipt is never regenerated from SQLite or from matching Git history.
+The one pre-effect exception is an admission interrupted before the independent
+intent directory exists. Its already committed SQLite token can finish the WAL
+write only when recorded and current worktree, registration, local ref and
+upstream ref are all absent. A partial evidence directory, an existing ref even
+at the expected SHA, or any creation reservation blocks that replay. The proof
+API continues to report missing independent evidence until the owner finishes
+this step; the read path never repairs it.
 
 Worker, checkpoint and publication attempts have independent, exclusive intent
 and receipt files. Missing/partial receipts, an attempted operation with unknown
@@ -66,6 +73,28 @@ also retain separate receipts. No generic historical continuation is inferred.
 An explicit retry can receive a new token only by proving its exact independently
 recorded predecessor and recording an explicit handoff. New unrelated admissions
 cannot inherit a prior generation, even at the same ticket path and SHA.
+Operations have immutable generation, operation and monotonic sequence identities.
+The first stage uses `<operation>-intent.json`; later stages use
+`<operation>.<sequence>-intent.json`, with corresponding exclusive receipts.
+Completed stages are read in sequence order, including interleaved rewrites and
+rollbacks. A second attempt requires every prior stage to have a valid receipt;
+it cannot overwrite, reuse or skip an uncertain stage. Native rebase conflicts
+record the observed return code, original branch ref and rebase administrative
+headers. Continue/abort requires that exact receipted stage and the pinned local
+identity. Failure between the Git effect and that receipt blocks even abort.
+
+Worker handoff records process identity before the runtime worker-running state.
+A separate immutable retirement observation names that exact handoff stage and
+is fsynced before post-worker state. A launch receipt alone is not proof that the
+worker group retired; missing retirement evidence blocks post-worker recovery.
+A supervisor's explicit admission-closed result records that no process was
+launched and returns the same admission to agent-pending. A later launch uses a
+new operation stage. Proven process loss or ordinary retired worker groups retain
+dirty progress for an explicitly admitted retry; a new generation gets its own
+marker and creation receipt rather than inheriting its predecessor's identity.
+Reviewed zero-delta executions whose resources were ordinarily retired have no
+resources to hand off. Rework creates new reserved resources with a fresh token,
+even if the base, ticket branch and checkout path are identical.
 
 Checkpoint and publication retain the same generation. They require fresh
 identity observations in addition to the existing exact-HEAD, cleanliness,

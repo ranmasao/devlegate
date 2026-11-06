@@ -641,7 +641,11 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
             admission.original_base,
         )
         if rebased.returncode:
-            owner.reconciliation_git(workspace.path, "rebase", "--abort")
+            aborted = owner.reconciliation_git(workspace.path, "rebase", "--abort")
+            if aborted.returncode:
+                raise ReconciliationTransactionError(
+                    "reconciliation conflict could not be safely aborted"
+                )
             try:
                 restored = resolve_commit(
                     workspace.path, "HEAD", runner=owner.reconciliation_git
@@ -657,6 +661,11 @@ def start_fresh_rewrite(owner: Any, ticket_id: str, admission: UpdateBaseAdmissi
                 raise ReconciliationTransactionError(
                     "reconciliation conflict could not be safely aborted"
                 )
+            owner._save_state(
+                "idle", execution_base_head=admission.original_base,
+                execution_start_head=admission.original_base,
+                reconciliation=reconciliation,
+            )
             raise ReconciliationTransactionError(
                 "reconciliation conflict; manual/advanced reconciliation is required"
             )

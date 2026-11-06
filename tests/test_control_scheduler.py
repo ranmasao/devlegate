@@ -921,7 +921,7 @@ def test_bound_pending_generation_blocks_changed_ticket_content(tmp_path):
     assert "changed execution ticket eligibility" in result.stderr
 
 
-def test_unstarted_product_descendant_replays_after_fast_forward_effect(
+def test_unbound_preworker_state_cannot_adopt_product_descendant(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -973,38 +973,25 @@ def test_unstarted_product_descendant_replays_after_fast_forward_effect(
     assert advanced.code is not None
     assert advanced.code.local_head == base
     assert advanced.code.remote_head == descendant
-    original_fast_forward = devlegate._merge_fast_forward_runtime
-
-    def interrupt_after_fast_forward(*args, **kwargs):
-        result = original_fast_forward(*args, **kwargs)
-        assert result.returncode == 0
-        raise SystemExit("interrupted pre-worker base transition")
-
     monkeypatch.setattr(
-        devlegate, "_merge_fast_forward_runtime", interrupt_after_fast_forward
+        devlegate, "_merge_fast_forward_runtime",
+        lambda *_args, **_kwargs: pytest.fail("unbound execution mutated product"),
     )
-    with pytest.raises(SystemExit, match="interrupted pre-worker base transition"):
+    with pytest.raises(ExecutionWorkspaceError, match="no resource generation intent"):
         devlegate._prepare_execution_workspace(advanced)
-    interrupted = state_payload(state)
-    assert interrupted["execution_product_transition"] == {
-        "status": "admitted",
-        "ticket_id": "T-1",
-        "predecessor": base,
-        "target": descendant,
-    }
-    assert git(working, "rev-parse", "HEAD").stdout.strip() == descendant
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == base
     assert not manager.path.exists()
 
     restarted = Devlegate(config)
     replay = restarted.plan_view()
-    workspace = restarted._prepare_execution_workspace(replay)
+    with pytest.raises(ExecutionWorkspaceError, match="no resource generation intent"):
+        restarted._prepare_execution_workspace(replay)
 
     payload = state_payload(state)
-    assert workspace.base_head == descendant
     assert payload["execution_id"] == "pending-transition"
     assert payload["execution_admitted_base_head"] == base
-    assert payload["execution_base_head"] == descendant
-    assert payload["execution_product_transition"]["status"] == "adopted"
+    assert payload["execution_base_head"] == base
+    assert "execution_product_transition" not in payload
 
 
 def test_running_worker_defers_clean_product_descendant_to_integration(

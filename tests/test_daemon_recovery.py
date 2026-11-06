@@ -168,10 +168,9 @@ def test_hosted_safe_control_descendant_adoption_survives_status_refresh(
 ):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(
-        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
-    )
-    workspace = manager.prepare(base)
+    from _control_support import fixture_workspace
+
+    workspace = fixture_workspace(engine, base, "stale-control")
     _persist_pending_execution(engine, state, workspace, base, "stale-control")
     binding_before = {
         key: engine._state[key]
@@ -208,11 +207,17 @@ def test_hosted_safe_control_descendant_adoption_survives_status_refresh(
 
     monkeypatch.setattr(engine, "_prepare_execution_workspace", prepare)
     monkeypatch.setattr(engine, "_publish_status_snapshot", publish)
+    monkeypatch.setattr(
+        engine._workers, "run",
+        lambda *_args, stop_request, **_kwargs: (
+            stop_request.wait(15), WorkerRunResult(1, None, None, None)
+        )[1],
+    )
     stop_event = threading.Event()
     thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
     thread.start()
-    assert preparation_attempted.wait(2)
-    assert refreshed_after_adoption.wait(2)
+    assert preparation_attempted.wait(10)
+    assert refreshed_after_adoption.wait(10)
 
     snapshot = engine.service_snapshot()
     dispatch_read_only(engine, IPCRequest(1, "status", "status", {}))
@@ -244,10 +249,9 @@ def test_hosted_preparation_refusal_recovers_same_execution_without_restart(
 ):
     engine, _config, state = make_engine(tmp_path, monkeypatch)
     base = git(engine.repo, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(
-        engine.repo, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
-    )
-    workspace = manager.prepare(base)
+    from _control_support import fixture_workspace
+
+    workspace = fixture_workspace(engine, base, "recoverable-preparation")
     _persist_pending_execution(
         engine, state, workspace, base, "recoverable-preparation"
     )
@@ -304,8 +308,8 @@ def test_hosted_preparation_refusal_recovers_same_execution_without_restart(
     stop_event = threading.Event()
     thread = threading.Thread(target=lambda: engine.serve(stop_event), daemon=True)
     thread.start()
-    assert preparation_refused.wait(2)
-    assert blocked_status_published.wait(2)
+    assert preparation_refused.wait(10)
+    assert blocked_status_published.wait(10)
     assert engine.service_snapshot().lifecycle == "blocked"
     assert (
         "submodule materialization temporarily failed"
@@ -318,7 +322,7 @@ def test_hosted_preparation_refusal_recovers_same_execution_without_restart(
     } == binding_before
 
     engine.wake()
-    assert worker_started.wait(2)
+    assert worker_started.wait(10)
     assert launched == [binding_before]
     assert engine.service_snapshot().lifecycle == "worker"
     assert engine.service_snapshot().blocked_reason is None

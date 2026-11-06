@@ -667,16 +667,15 @@ def test_precheckpoint_integrity_failure_with_stop_keeps_retry_semantics(
 
     def worker(_workspace, _prompt, **_kwargs):
         stop_event.set()
+        monkeypatch.setattr(
+            ExecutionWorkspaceManager, "verify_submodules",
+            lambda _manager, _workspace: (_ for _ in ()).throw(
+                ExecutionWorkspaceError("submodule changed")
+            ),
+        )
         return WorkerRunResult(1, None, None, None)
 
     monkeypatch.setattr(engine._workers, "run", worker)
-    monkeypatch.setattr(
-        ExecutionWorkspaceManager,
-        "verify_submodules",
-        lambda _manager, _workspace: (_ for _ in ()).throw(
-            ExecutionWorkspaceError("submodule changed")
-        ),
-    )
 
     with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
         run_test_iteration(engine, stop_event)

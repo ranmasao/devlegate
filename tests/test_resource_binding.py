@@ -484,3 +484,133 @@ def test_symlinked_administrative_path_is_not_hidden_by_resolving_paths(
     assert result.state == "conflict"
     assert "path differs" in result.reason or "symlink" in result.reason
     assert snapshot(binding.manager.root.parent) == before
+
+
+@pytest.mark.parametrize("interrupted", [None, "worktree", "receipt"])
+def test_zero_delta_rework_after_ordinary_retirement(
+    resources, monkeypatch, interrupted
+):
+    previous = resources
+    workspace = previous.prepare(remote_head=None)
+    manager = previous.manager
+    manager.retire(workspace, workspace.head)
+    run_git(
+        manager.repo, "update-ref", "-d", str(previous.intent["ref"]), workspace.head
+    )
+    current = ResourceBinding.plan(
+        manager, execution_id="reviewed-rework", base=workspace.head,
+        control=str(previous.intent["control"]),
+        ticket_blob=str(previous.intent["ticket_blob"]),
+        remote="origin", remote_head=None,
+    )
+    current.record_intent()
+    original = manager._runner
+
+    def create(repo, *args, **kwargs):
+        result = original(repo, *args, **kwargs)
+        if interrupted == "worktree" and args[:2] == ("worktree", "add"):
+            raise OSError("interrupted creation")
+        return result
+
+    monkeypatch.setattr(manager, "_runner", create)
+    if interrupted == "receipt":
+        import devlegate.resource_binding as module
+        write = module._write_once
+
+        def receipt(path, value):
+            write(path, value)
+            if path.name == "receipt.json":
+                raise OSError("interrupted receipt")
+
+        monkeypatch.setattr(module, "_write_once", receipt)
+    if interrupted:
+        with pytest.raises(OSError, match="interrupted"):
+            current.prepare_rework(
+                previous, workspace.head, workspace.head, remote_head=None,
+            )
+        monkeypatch.undo()
+    if interrupted == "worktree":
+        before = snapshot(manager.root.parent)
+        with pytest.raises(ExecutionWorkspaceError):
+            current.prepare_rework(
+                previous, workspace.head, workspace.head, remote_head=None,
+            )
+        assert snapshot(manager.root.parent) == before
+    else:
+        recreated = current.prepare_rework(
+            previous, workspace.head, workspace.head, remote_head=None,
+        )
+        assert recreated.head == workspace.head
+        assert proof(current).local_state == "proved"
+        assert proof(previous).local_state != "proved"
+
+
+def test_repeatable_operations_do_not_reuse_uncertain_attempts(resources):
+    binding = resources
+    workspace = binding.prepare(remote_head=None)
+    for operation in ("rewrite", "rollback", "rewrite", "rewrite", "rollback"):
+        binding.require_local(clean=True)
+        binding.begin_operation(operation, {"before": workspace.head})
+        binding.finish_operation(operation, {"after": workspace.head})
+        binding = ResourceBinding.for_execution(binding.manager, "execution-one")
+    assert [item[1] for item in binding._attempts()] == [
+        "rewrite", "rollback", "rewrite", "rewrite", "rollback",
+    ]
+    assert proof(binding).local_state == "proved"
+    binding.begin_operation("rewrite", {"before": workspace.head})
+    before = snapshot(binding.manager.root.parent)
+    restarted = ResourceBinding.for_execution(binding.manager, "execution-one")
+    with pytest.raises(ExecutionWorkspaceError, match="receipt missing"):
+        restarted.begin_operation("rewrite", {"before": workspace.head})
+    assert "receipt missing" in proof(restarted).reason
+    assert snapshot(binding.manager.root.parent) == before
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_no_branch_rework_manager_uses_generation_creator(
+    resources, monkeypatch, interrupted
+):
+    binding = resources
+    base = str(binding.intent["base"])
+    called = []
+
+    def create(admitted):
+        called.append(admitted)
+        return binding.prepare(remote_head=None)
+
+    if interrupted:
+        monkeypatch.setattr(
+            binding, "_record_creation",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("lost receipt")),
+        )
+        with pytest.raises(OSError, match="lost receipt"):
+            binding.manager.prepare_rework(base, base, base, creator=create)
+        monkeypatch.undo()
+        before = snapshot(binding.manager.root.parent)
+        with pytest.raises(ExecutionWorkspaceError, match="ambiguous"):
+            binding.prepare(remote_head=None)
+        assert snapshot(binding.manager.root.parent) == before
+    else:
+        workspace = binding.manager.prepare_rework(base, base, base, creator=create)
+        assert workspace.head == base
+        assert proof(binding).local_state == "proved"
+    assert called == [base]
+
+
+def test_failed_rebase_cannot_receipt_an_unexpected_branch_change(resources):
+    binding = resources
+    workspace = binding.prepare(remote_head=None)
+    binding.begin_operation("rewrite", {"before": workspace.head})
+    repo = binding.manager.repo
+    tree = run_git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+    foreign = run_git(
+        repo, "commit-tree", tree, "-p", workspace.head, input_text="foreign\n",
+    ).stdout.strip()
+    run_git(repo, "update-ref", str(binding.intent["ref"]), foreign, workspace.head)
+    before = snapshot(binding.manager.root.parent)
+    with pytest.raises(ExecutionWorkspaceError, match="failed rebase changed"):
+        binding.finish_operation("rewrite", {
+            "after": foreign, "returncode": 1, "rebase_state": {},
+        })
+    assert not (binding.directory / "rewrite-receipt.json").exists()
+    assert snapshot(binding.manager.root.parent) == before

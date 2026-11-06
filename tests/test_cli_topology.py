@@ -2141,6 +2141,20 @@ def test_real_service_transaction_stage_restart_preserves_execution(
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
 
+        if point == "checkpoint_after_effect":
+            # The commit is observable, but there is no independent effect
+            # receipt. A matching parent/SHA must not fabricate a success.
+            service.wait_ready()
+            service.stop()
+            retained = _disk_state(config)
+            assert retained["execution_id"] == execution_id
+            assert retained["execution_stage"] == "checkpointing"
+            assert attempts.read_text().splitlines() == ["attempt"]
+            observer = type(engine)(config, read_only=True)
+            assert "receipt missing" in observer.execution_resource_proof().reason
+            assert not (engine.control_worktree / "kanban/review/T-1.md").exists()
+            return
+
         def completed():
             state = _disk_state(config)
             return (

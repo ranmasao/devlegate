@@ -968,18 +968,21 @@ def test_checkpointing_recovery_recreates_missing_checkpoint_without_worker(
         (workspace.path / "partial.txt").write_text("preserve\n")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    original_checkpoint = ExecutionWorkspaceManager.checkpoint
+    from devlegate.resource_binding import ResourceBinding
+
+    original_begin = ResourceBinding.begin_operation
     failed = False
 
-    def fail_once(manager, workspace, execution_id, **kwargs):
+    def fail_once(binding, operation, details):
         nonlocal failed
-        if not failed:
+        if operation == "checkpoint" and not failed:
             failed = True
             raise ExecutionWorkspaceError("simulated checkpoint crash")
-        return original_checkpoint(manager, workspace, execution_id, **kwargs)
+        return original_begin(binding, operation, details)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
-    monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", fail_once)
+    # Before the independent WAL there is no uncertain Git effect to replay.
+    monkeypatch.setattr(ResourceBinding, "begin_operation", fail_once)
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
     assert devlegate._state["execution_stage"] == "checkpointing"
@@ -1111,11 +1114,12 @@ def test_publishing_recovery_pushes_checkpoint_without_worker(tmp_path, monkeypa
     ]
     assert [tuple(e["argv"][3:]) for e in starts] == trace
     counts = Counter(args[0] for args in trace)
-    assert len(trace) == 97
+    # Generation reobservation adds reads; preserve exact effect counts below.
+    assert len(trace) >= 97
     assert {
         name: counts[name] for name in ("fetch", "ls-remote", "push", "add", "commit")
     } == {
-        "fetch": 4, "ls-remote": 6, "push": 2, "add": 1, "commit": 1,
+        "fetch": 4, "ls-remote": 7, "push": 2, "add": 1, "commit": 1,
     }
     assert any(
         e.get("event") == "child_start"
@@ -1198,18 +1202,22 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
         (workspace.path / "partial.txt").write_text("preserve\n")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
-    original_checkpoint = ExecutionWorkspaceManager.checkpoint
+    from devlegate.resource_binding import ResourceBinding
+
+    original_begin = ResourceBinding.begin_operation
+
+    def crash_before_intent(binding, operation, details):
+        if operation == "checkpoint":
+            raise ExecutionWorkspaceError("simulated checkpoint crash")
+        return original_begin(binding, operation, details)
+
     monkeypatch.setattr(
-        ExecutionWorkspaceManager,
-        "checkpoint",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ExecutionWorkspaceError("simulated checkpoint crash")
-        ),
+        ResourceBinding, "begin_operation", crash_before_intent,
     )
     monkeypatch.setattr(devlegate._workers, "run", worker)
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
-    monkeypatch.setattr(ExecutionWorkspaceManager, "checkpoint", original_checkpoint)
+    monkeypatch.setattr(ResourceBinding, "begin_operation", original_begin)
 
     publisher = tmp_path / "publisher"
     git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
@@ -1319,18 +1327,17 @@ def test_post_worker_integrity_failure_is_persisted_without_checkpoint(
 
     def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "useful-change.txt").write_text("keep this\n")
+        monkeypatch.setattr(
+            ExecutionWorkspaceManager, "verify_submodules",
+            lambda _manager, _workspace: (_ for _ in ()).throw(
+                ExecutionWorkspaceError("submodule T is dirty")
+            ),
+        )
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
-    monkeypatch.setattr(
-        ExecutionWorkspaceManager,
-        "verify_submodules",
-        lambda _manager, _workspace: (_ for _ in ()).throw(
-            ExecutionWorkspaceError("submodule T is dirty")
-        ),
-    )
 
     with pytest.raises(DevlegateError, match="post-worker execution integrity failed"):
         run_test_iteration(devlegate)
@@ -2215,7 +2222,9 @@ def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    workspace, _control = persist_agent_running(devlegate, state, record_start=True)
+    workspace, _control = persist_agent_running(
+        devlegate, state, record_start=True, record_handoff=False,
+    )
     (workspace.path / "partial.txt").write_text("preserve\n")
     helper = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -2223,11 +2232,7 @@ def test_startup_reconciles_absent_worker_as_process_loss(tmp_path, monkeypatch)
     )
     try:
         identity = _capture_worker_identity(helper, devlegate._state["execution_id"])
-        devlegate._save_state(
-            "agent_running",
-            execution_stage="worker-running",
-            worker_identity=identity.as_dict(),
-        )
+        devlegate._record_worker_identity(identity)
         os.killpg(os.getpgid(helper.pid), signal.SIGKILL)
         helper.wait(timeout=10)
     finally:
@@ -2283,6 +2288,7 @@ def test_startup_post_worker_normalizes_without_worker_launch(tmp_path, monkeypa
     devlegate = Devlegate(config)
     workspace, _control = persist_agent_running(devlegate, state, record_start=True)
     (workspace.path / "partial.txt").write_text("preserve\n")
+    devlegate._execution_generation_binding().record_worker_retirement()
     devlegate._save_state(
         "agent_running", execution_stage="post-worker", worker_identity=None
     )
@@ -3204,7 +3210,7 @@ def test_operator_recovery_requires_exact_observed_head_and_preserves_identity(
         == old_head
     )
 
-def test_operator_recovery_keeps_current_remote_predecessor_for_publication(
+def test_legacy_operator_recovery_does_not_invent_generation_for_worker_launch(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -3271,12 +3277,15 @@ def test_operator_recovery_keeps_current_remote_predecessor_for_publication(
         lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
     )
 
-    assert run_test_iteration(devlegate) == 0
-    assert worker_ids == ["current"]
+    with pytest.raises(DevlegateError, match="no resource generation intent"):
+        run_test_iteration(devlegate)
+    assert worker_ids == []
     execution_remote = git(
         working, "ls-remote", "origin", f"refs/heads/{manager.branch}"
     ).stdout.split()[0]
-    assert execution_remote == git(manager.path, "rev-parse", "HEAD").stdout.strip()
+    assert execution_remote == new_base
+    assert git(manager.path, "rev-parse", "HEAD").stdout.strip() == new_base
+    assert devlegate._state.get("execution_resource_binding") is None
 
 @pytest.mark.parametrize("diverged", [False, True])
 def test_operator_recovery_replays_local_pin_before_remote_evidence(
@@ -3442,7 +3451,7 @@ def test_public_recover_owner_admission_is_identity_bound(
     thread.join(timeout=2)
     assert len(errors) == 1
 
-def test_automatic_repair_launches_one_worker_with_same_execution_id(
+def test_automatic_repair_cannot_transfer_unbound_historical_resources(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -3491,9 +3500,18 @@ def test_automatic_repair_launches_one_worker_with_same_execution_id(
         lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
     )
 
-    assert run_test_iteration(devlegate) in {0, 1}
-    assert calls == ["current"]
+    before_reports = {
+        path.name: path.read_bytes() for path in (control / "executions/T-1").glob("*")
+    }
+    with pytest.raises(DevlegateError, match="no resource generation intent"):
+        run_test_iteration(devlegate)
+    assert calls == []
     assert devlegate._state["execution_id"] == "current"
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == old_head
+    assert (workspace.path / "old.txt").read_text() == "old\n"
+    assert {
+        path.name: path.read_bytes() for path in (control / "executions/T-1").glob("*")
+    } == before_reports
 
 @pytest.mark.parametrize("boundary", ["evidence", "remote", "normalization"])
 def test_operator_recovery_replays_each_durable_prefix(

@@ -313,7 +313,28 @@ def test_accepted_ticket_uses_newest_review_generation_at_same_checkpoint(
     git(control, "commit", "-m", "retry review generation")
     retry_parent = git(control, "rev-parse", "HEAD").stdout.strip()
 
-    second = replace(first, execution_id="retry-generation", control_head=retry_parent)
+    from devlegate.resource_binding import ResourceBinding
+
+    with devlegate._lock():
+        prior = devlegate._execution_generation_binding()
+        current = ResourceBinding.plan(
+            prior.manager, execution_id="retry-generation", base=first.code_base_head,
+            control=retry_parent,
+            ticket_blob=git(
+                control, "rev-parse", "HEAD:kanban/todo/T-1.md"
+            ).stdout.strip(),
+            remote="origin", remote_head=first.workspace_head,
+        )
+        current.intent.update({
+            "predecessor_execution": first.execution_id,
+            "predecessor_generation": prior.intent["generation"],
+        })
+        current.record_intent()
+        current.prepare_handoff(prior, remote_head=first.workspace_head)
+    second = replace(
+        first, execution_id="retry-generation", control_head=retry_parent,
+        resource_generation=current.intent["generation"],
+    )
     ExecutionReportStore(control).write(second)
     (control / "kanban/todo/T-1.md").rename(review)
     git(control, "add", "-A")
@@ -614,12 +635,7 @@ def test_resolving_reconciliation_restart_recovers_retained_report(
     checkpoint = reconciliation["worker_checkpoint"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
     if published_before_restart:
-        git(
-            execution,
-            "push",
-            "origin",
-            f"{checkpoint}:refs/heads/{reconciliation['execution_branch']}",
-        )
+        fixture_publication(devlegate, execution, checkpoint)
     else:
         git(
             execution,
@@ -851,7 +867,10 @@ def test_update_base_recovers_local_pending_after_rebase_before_next_wal_stage(
     git(working, "commit", "-m", "advance product")
     git(working, "push", "origin", "HEAD:main")
     target = git(working, "rev-parse", "HEAD").stdout.strip()
-    git(execution, "rebase", "--onto", target, original_base)
+    with devlegate._lock():
+        devlegate.reconciliation_git(
+            execution, "rebase", "--onto", target, original_base
+        )
     operation = {
         **reconciliation,
         "rewrite_authorized": True,
@@ -945,8 +964,7 @@ def test_update_base_rewrites_exact_published_lineage_only_with_authorization(
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
     (execution / "second.txt").write_text("second\n")
-    git(execution, "add", "second.txt")
-    git(execution, "commit", "-m", "second checkpoint")
+    fixture_checkpoint(devlegate, execution, "second checkpoint")
     second = git(execution, "rev-parse", "HEAD").stdout.strip()
     first = git(execution, "rev-parse", "HEAD^").stdout.strip()
     published = first if published_checkpoint == "first" else second

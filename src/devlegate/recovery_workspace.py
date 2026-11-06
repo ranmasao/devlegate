@@ -78,7 +78,12 @@ def inspect_bound_workspace(
         try:
             if intent.get("execution_id") != execution_id:
                 raise ExecutionWorkspaceError("generation intent has wrong execution")
-            ResourceBinding(manager, intent).require_local(clean=True)
+            binding = ResourceBinding(manager, intent)
+            if binding.creation_pending():
+                return WorkspaceInspection(
+                    "REUSABLE", "generation intent is untouched; creation is pending"
+                )
+            binding.require_local(clean=False)
         except (ExecutionWorkspaceError, OSError, ValueError) as error:
             return WorkspaceInspection(
                 "UNSAFE", f"generation identity unproven: {error}"

@@ -311,21 +311,131 @@ class ResourceBinding:
                     "bound upstream endpoint changed or is missing"
                 )
 
+    def creation_pending(self) -> bool:
+        """An untouched admission may prepare; an interrupted effect may not."""
+        if self.intent_pending():
+            return True
+        self._validate_intent()
+        if (self.directory / "receipt.json").exists():
+            return False
+        if any(path.name != "intent.json" for path in self.directory.iterdir()):
+            raise UnprovenResource("creation effect is uncertain: receipt missing")
+        if (
+            self.manager.path.exists() != self.intent["prior_path_exists"]
+            or resolve_ref_commit(
+                self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
+            ) != self.intent["prior_local"]
+            or self.manager._registrations().get(self.manager.path.resolve())
+            != self.intent["prior_registration"]
+        ):
+            raise ExecutionWorkspaceError(
+                "creation preconditions changed since admission"
+            )
+        return True
+
+    def intent_pending(self) -> bool:
+        """SQLite intent can precede its independent WAL, never any Git effect.
+
+        Only an absent evidence directory and wholly absent resources permit
+        finishing that ordering step. A partial directory or any resource blocks.
+        """
+        _safe_path(self.directory)
+        _safe_path(self.manager.path)
+        return (
+            not self.directory.exists()
+            and self.intent["prior_local"] is None
+            and self.intent["prior_remote"] is None
+            and self.intent["prior_registration"] is None
+            and not self.intent["prior_path_exists"]
+            and not self.manager.path.exists()
+            and not self.manager._branch_exists()
+            and not any(
+                item.get("branch") == self.manager.branch
+                or path == self.manager.path.resolve()
+                for path, item in self.manager._registrations().items()
+            )
+        )
+
+    def _attempts(self) -> list[tuple[int, str, Path]]:
+        """Read the immutable, globally ordered operation journal."""
+        attempts = []
+        for path in self.directory.glob("*-intent.json"):
+            operation = path.name.removesuffix("-intent.json").split(".")[0]
+            if operation not in _OPERATIONS:
+                continue
+            intent = _read(path)
+            sequence = intent.get("sequence")
+            if (
+                type(sequence) is not int or sequence < 1
+                or intent.get("generation") != self.intent["generation"]
+                or intent.get("operation") != operation
+            ):
+                raise ExecutionWorkspaceError("invalid operation journal identity")
+            attempts.append((sequence, operation, path))
+        attempts.sort()
+        if [item[0] for item in attempts] != list(range(1, len(attempts) + 1)):
+            raise ExecutionWorkspaceError("operation journal has a gap or duplicate")
+        seen = set()
+        for sequence, operation, path in attempts:
+            name = operation if operation not in seen else f"{operation}.{sequence:08d}"
+            if path.name != f"{name}-intent.json":
+                raise ExecutionWorkspaceError(
+                    "operation journal path differs from stage"
+                )
+            seen.add(operation)
+        for path in self.directory.glob("*-receipt.json"):
+            operation = path.name.removesuffix("-receipt.json").split(".")[0]
+            if operation in _OPERATIONS and not path.with_name(
+                path.name.replace("-receipt", "-intent")
+            ).exists():
+                raise UnprovenResource(
+                    f"{operation} outcome is unknown: independent intent missing"
+                )
+        return attempts
+
+    def _receipt(self, path: Path) -> dict[str, object]:
+        intent = _read(path)
+        receipt = _read(path.with_name(path.name.replace("-intent", "-receipt")))
+        if (
+            receipt.get("generation") != self.intent["generation"]
+            or any(intent[key] != receipt.get(key) for key in intent)
+        ):
+            raise ExecutionWorkspaceError("operation evidence has mismatched identity")
+        return receipt
+
+    def _require_settled(self) -> None:
+        for _sequence, operation, path in self._attempts():
+            try:
+                self._receipt(path)
+            except FileNotFoundError as error:
+                raise UnprovenResource(
+                    f"{operation} effect is uncertain: independent receipt missing",
+                    local_proved=True,
+                ) from error
+
     def begin_operation(self, operation: str, details: dict[str, object]) -> None:
-        """Durable single-attempt WAL. An uncertain attempt is not replayed."""
+        """Reserve a unique stage; never reuse or overwrite an uncertain attempt."""
         if operation not in _OPERATIONS:
             raise ValueError("invalid resource operation")
         self._validate_intent()
-        _write_once(self.directory / f"{operation}-intent.json", {
+        self._require_settled()
+        attempts = self._attempts()
+        sequence = len(attempts) + 1
+        name = operation if not any(item[1] == operation for item in attempts) else (
+            f"{operation}.{sequence:08d}"
+        )
+        _write_once(self.directory / f"{name}-intent.json", {
             **details, "generation": self.intent["generation"],
+            "sequence": sequence, "operation": operation,
         })
 
     def finish_operation(self, operation: str, details: dict[str, object]) -> None:
         if operation not in _OPERATIONS:
             raise ValueError("invalid resource operation")
         try:
-            _read(self.directory / f"{operation}-intent.json")
-        except FileNotFoundError as error:
+            path = [item[2] for item in self._attempts() if item[1] == operation][-1]
+            intent = _read(path)
+        except IndexError as error:
             raise UnprovenResource(
                 f"{operation} outcome is unknown: independent intent missing"
             ) from error
@@ -335,44 +445,76 @@ class ResourceBinding:
                 raise ExecutionWorkspaceError(
                     "worker receipt has wrong execution identity"
                 )
-        if operation in {"checkpoint", "rewrite", "rollback", "force-checkpoint"}:
+        if operation == "rewrite" and details.get("returncode", 0) != 0:
+            self._validate_local_identity()
+            if details.get("after") != intent.get("before"):
+                raise ExecutionWorkspaceError(
+                    "failed rebase changed the bound branch; outcome is uncertain"
+                )
+            if details.get("after") != resolve_ref_commit(
+                self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
+            ):
+                raise ExecutionWorkspaceError("rebase branch changed before receipt")
+        elif operation in {"checkpoint", "rewrite", "rollback", "force-checkpoint"}:
             workspace = self._observe_local(clean=True)
             if workspace.head != details.get("after"):
                 raise ExecutionWorkspaceError(
                     "local ref changed before operation receipt"
                 )
-        _write_once(self.directory / f"{operation}-receipt.json", {
-            **details, "generation": self.intent["generation"],
+        if any(details[key] != intent[key] for key in details.keys() & intent.keys()):
+            raise ExecutionWorkspaceError("operation result differs from its intent")
+        _write_once(path.with_name(path.name.replace("-intent", "-receipt")), {
+            **intent, **details,
         })
 
     def operation_receipt(self, operation: str) -> dict[str, object]:
         if operation not in _OPERATIONS:
             raise ValueError("invalid resource operation")
         try:
-            intent = _read(self.directory / f"{operation}-intent.json")
-            receipt = _read(self.directory / f"{operation}-receipt.json")
-        except FileNotFoundError as error:
+            path = [item[2] for item in self._attempts() if item[1] == operation][-1]
+            return self._receipt(path)
+        except (FileNotFoundError, IndexError) as error:
             raise UnprovenResource(
                 f"{operation} outcome is unknown: independent intent or receipt missing"
             ) from error
-        if (
-            intent.get("generation") != self.intent["generation"]
-            or receipt.get("generation") != self.intent["generation"]
-            or any(
-                intent[key] != receipt[key] for key in intent.keys() & receipt.keys()
+
+    def operation_pending(self, operation: str) -> bool:
+        attempts = [item[2] for item in self._attempts() if item[1] == operation]
+        return bool(attempts) and not attempts[-1].with_name(
+            attempts[-1].name.replace("-intent", "-receipt")
+        ).exists()
+
+    def record_worker_retirement(self) -> None:
+        """Record the supervisor's observed group retirement before post-worker."""
+        receipt = self.operation_receipt("worker")
+        _write_once(
+            self.directory / f"worker-retired.{receipt['sequence']:08d}.json",
+            {"generation": self.intent["generation"], "worker": receipt},
+        )
+
+    def require_worker_retirement(self) -> None:
+        receipt = self.operation_receipt("worker")
+        try:
+            observed = _read(
+                self.directory / f"worker-retired.{receipt['sequence']:08d}.json"
             )
-        ):
+        except FileNotFoundError as error:
+            raise UnprovenResource(
+                "worker group retirement is unproven: independent receipt missing",
+                local_proved=True,
+            ) from error
+        if observed != {"generation": self.intent["generation"], "worker": receipt}:
             raise ExecutionWorkspaceError(
-                "operation evidence has mismatched generation"
+                "worker retirement receipt differs from handoff"
             )
-        return receipt
 
     def latest_remote(self, initial: str | None) -> str | None:
-        for operation in (
-            "rewrite-publication", "publication", "predecessor-publication",
-        ):
-            if (self.directory / f"{operation}-receipt.json").exists():
-                value = self.operation_receipt(operation).get("after")
+        self._require_settled()
+        for _sequence, operation, path in reversed(self._attempts()):
+            if operation in {
+                "rewrite-publication", "publication", "predecessor-publication",
+            }:
+                value = self._receipt(path).get("after")
                 if not isinstance(value, str):
                     raise ExecutionWorkspaceError(
                         "invalid independent publication receipt"
@@ -467,6 +609,7 @@ class ResourceBinding:
     def _record_creation(
         self, workspace: ExecutionWorkspace, *,
         expected_identity: list[int] | None = None,
+        clean: bool = True,
     ) -> None:
         manager = self.manager
         if expected_identity is None:
@@ -503,7 +646,7 @@ class ResourceBinding:
             "reflog_size": len(reflog),
             "reflog_prefix_sha256": hashlib.sha256(reflog).hexdigest(),
         })
-        self.require_local(clean=True)
+        self.require_local(clean=clean)
 
     def prepare_rework(
         self, predecessor: ResourceBinding, previous_base: str, checkpoint: str,
@@ -517,6 +660,16 @@ class ResourceBinding:
             raise ExecutionWorkspaceError(
                 "interrupted generation handoff has no creation receipt"
             )
+        if (
+            predecessor.intent["execution_id"] == self.intent["execution_id"]
+            or predecessor.manager.path != self.manager.path
+            or predecessor.intent["common"] != self.intent["common"]
+        ):
+            raise ExecutionWorkspaceError("reviewed generation identity differs")
+        if predecessor.rework_source_absent(previous_base, checkpoint):
+            # An ordinary zero-delta retirement left no resource to hand off.
+            # This admission must create fresh resources, not adopt the old SHA.
+            return self.prepare(remote_head=remote_head)
         predecessor.require_local(clean=True)
         if (
             predecessor.intent["execution_id"] == self.intent["execution_id"]
@@ -565,20 +718,44 @@ class ResourceBinding:
             for descriptor in descriptors:
                 os.close(descriptor)
 
+    def rework_source_absent(self, previous_base: str, checkpoint: str) -> bool:
+        """Recognize only a proven, ordinarily retired zero-delta predecessor."""
+        self._validate_intent()
+        self._require_settled()
+        if _read(self.directory / "receipt.json").get("generation") != (
+            self.intent["generation"]
+        ):
+            raise ExecutionWorkspaceError("predecessor creation receipt differs")
+        if checkpoint != self._expected_head():
+            raise ExecutionWorkspaceError("predecessor checkpoint receipt differs")
+        absent = (
+            checkpoint == previous_base
+            and not self.manager.path.exists()
+            and not self.manager._branch_exists()
+            and self.manager.path.resolve() not in self.manager._registrations()
+            and not any(
+                item.get("branch") == self.manager.branch
+                for item in self.manager._registrations().values()
+            )
+        )
+        if not absent:
+            self.require_local(clean=True)
+        return absent
+
     def prepare_handoff(
         self, predecessor: ResourceBinding, *, remote_head: str | None
     ) -> ExecutionWorkspace:
         """Rebind proven resources only after the owner admits an explicit retry."""
         self._validate_intent()
         if (self.directory / "receipt.json").exists():
-            return self.require_local(clean=True)
+            return self.require_local(clean=False)
         if (self.directory / "handoff-intent.json").exists():
             raise ExecutionWorkspaceError("interrupted retry handoff has no receipt")
         descriptor = os.open(
             self.manager.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
         try:
-            workspace = predecessor.require_local(clean=True)
+            workspace = predecessor.require_local(clean=False)
             if (
                 self.intent.get("predecessor_generation")
                 != predecessor.intent["generation"]
@@ -600,10 +777,10 @@ class ResourceBinding:
                 "generation": self.intent["generation"],
                 "predecessor": predecessor.intent["generation"],
             })
-            predecessor.require_local(clean=True)
+            predecessor.require_local(clean=False)
             (self._admin() / "devlegate-generation.json").unlink()
             _sync_directory(self._admin())
-            self._record_creation(workspace, expected_identity=identity)
+            self._record_creation(workspace, expected_identity=identity, clean=False)
             return dataclasses.replace(workspace, base_head=str(self.intent["base"]))
         finally:
             os.close(descriptor)
@@ -635,15 +812,7 @@ class ResourceBinding:
         self, *, clean: bool, read_only: bool = False
     ) -> ExecutionWorkspace:
         workspace = self._observe_local(clean=clean, read_only=read_only)
-        for operation in _OPERATIONS:
-            if (
-                (self.directory / f"{operation}-intent.json").exists()
-                and not (self.directory / f"{operation}-receipt.json").exists()
-            ):
-                raise UnprovenResource(
-                    f"{operation} effect is uncertain: independent receipt missing",
-                    local_proved=True,
-                )
+        self._require_settled()
         expected = self._expected_head()
         if workspace.head != expected:
             raise ExecutionWorkspaceError(
@@ -653,22 +822,15 @@ class ResourceBinding:
 
     def _expected_head(self) -> object:
         expected = _read(self.directory / "receipt.json").get("head")
-        for operation in ("checkpoint", "rewrite", "rollback", "force-checkpoint"):
-            if (self.directory / f"{operation}-receipt.json").exists():
-                expected = self.operation_receipt(operation).get("after")
+        for _sequence, operation, path in self._attempts():
+            if operation in {"checkpoint", "rewrite", "rollback", "force-checkpoint"}:
+                expected = self._receipt(path).get("after")
         return expected
 
     def require_ref(self, expected: str) -> None:
         """Reobserve the local ref independently when ordinary cleanup lost a path."""
         self._validate_intent()
-        for operation in _OPERATIONS:
-            if (
-                (self.directory / f"{operation}-intent.json").exists()
-                and not (self.directory / f"{operation}-receipt.json").exists()
-            ):
-                raise UnprovenResource(
-                    f"{operation} effect is uncertain: independent receipt missing"
-                )
+        self._require_settled()
         current = resolve_ref_commit(
             self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
         )
@@ -700,10 +862,8 @@ class ResourceBinding:
         if digest != receipt.get("reflog_prefix_sha256"):
             raise ExecutionWorkspaceError("local ref generation reflog prefix changed")
 
-    def _observe_local(
-        self, *, clean: bool, read_only: bool = False
-    ) -> ExecutionWorkspace:
-        """Identity gate in addition to existing operation-specific authority."""
+    def _validate_local_identity(self) -> Path:
+        """Validate pinned filesystem evidence even during a detached rebase."""
         self._validate_intent()
         receipt = _read(self.directory / "receipt.json")
         admin = self._admin()
@@ -749,6 +909,39 @@ class ResourceBinding:
                 raise ExecutionWorkspaceError(
                     f"execution Git resource is locked: {lock}"
                 )
+        return admin
+
+    def rebase_state(self) -> dict[str, str]:
+        admin = self._validate_local_identity()
+        for name in ("rebase-merge", "rebase-apply"):
+            directory = admin / name
+            _safe_path(directory)
+            if directory.exists():
+                return {
+                    field: (directory / field).read_text().strip()
+                    for field in ("head-name", "orig-head", "onto")
+                }
+        return {}
+
+    def require_rebase_stage(self) -> None:
+        """Only an observed, receipted native rebase permits continue/abort."""
+        self._require_settled()
+        receipt = self.operation_receipt("rewrite")
+        observed = self.rebase_state()
+        if (
+            not observed or observed != receipt.get("rebase_state")
+            or observed["head-name"] != self.intent["ref"]
+            or resolve_ref_commit(
+                self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
+            ) != self._expected_head()
+        ):
+            raise ExecutionWorkspaceError("native rebase stage has no exact receipt")
+
+    def _observe_local(
+        self, *, clean: bool, read_only: bool = False
+    ) -> ExecutionWorkspace:
+        """Identity gate in addition to existing operation-specific authority."""
+        self._validate_local_identity()
         def observe(repo: Path, *args: str, **kwargs):
             if read_only and args[0] == "status":
                 filters = self.manager._runner(
@@ -802,7 +995,7 @@ class ResourceBinding:
 
     def prove(
         self, *, runner: GitRunner, expected_remote: str | None, clean: bool = True,
-        read_only: bool = True,
+        read_only: bool = True, worker_retired: bool = False,
     ) -> ResourceProof:
         """Strictly read-only snapshot for reset previews; no fetch or state writes."""
         values: _ProofIdentity = {
@@ -816,6 +1009,9 @@ class ResourceBinding:
         }
         try:
             self.require_local(clean=clean, read_only=read_only)
+            if worker_retired:
+                self.require_worker_retirement()
+            expected_remote = self.latest_remote(expected_remote)
         except UnprovenResource as error:
             return ResourceProof(
                 **values, state="unproven",
@@ -836,25 +1032,6 @@ class ResourceBinding:
             return ResourceProof(
                 **values, state="conflict", local_state="conflict", reason=str(error),
             )
-        for operation in _OPERATIONS:
-            if (
-                (self.directory / f"{operation}-intent.json").exists()
-                and not (self.directory / f"{operation}-receipt.json").exists()
-            ):
-                return ResourceProof(
-                    **values, state="unproven", local_state="proved",
-                    reason=(
-                        f"{operation} effect is uncertain: independent receipt missing"
-                    ),
-                )
-            if (self.directory / f"{operation}-receipt.json").exists():
-                try:
-                    self.operation_receipt(operation)
-                except (ExecutionWorkspaceError, OSError, ValueError) as error:
-                    return ResourceProof(
-                        **values, state="conflict", local_state="proved",
-                        reason=f"invalid {operation} evidence: {error}",
-                    )
         try:
             observed = remote_ref(
                 self.manager.repo, str(self.intent["remote"]),

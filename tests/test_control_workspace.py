@@ -2879,8 +2879,7 @@ def test_update_base_transplants_multiple_unpublished_checkpoints(
     git(execution, "config", "user.email", "test@example.com")
     git(execution, "config", "user.name", "Test User")
     (execution / "second.txt").write_text("second\n")
-    git(execution, "add", "second.txt")
-    git(execution, "commit", "-m", "second checkpoint")
+    fixture_checkpoint(devlegate, execution, "second checkpoint")
     second = git(execution, "rev-parse", "HEAD").stdout.strip()
     git(working, "add", "dirty-product.txt")
     git(working, "commit", "-m", "advance product")
@@ -2937,6 +2936,8 @@ def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
     devlegate, _working, _state, execution, reconciliation, first, _second, target = (
         _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
     )
+    binding = devlegate._execution_generation_binding()
+    binding.begin_operation("checkpoint", {"before": _second})
     (execution / "side.txt").write_text("side\n")
     git(execution, "add", "side.txt")
     git(execution, "commit", "-m", "side checkpoint")
@@ -2951,6 +2952,7 @@ def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
         check=True,
     ).stdout.strip()
     git(execution, "reset", "--hard", merge)
+    binding.finish_operation("checkpoint", {"after": merge})
     git(execution, "update-ref", reconciliation["evidence_ref"], merge)
     operation = {
         **reconciliation,
@@ -4010,7 +4012,7 @@ def test_product_advance_does_not_rebind_execution_base(tmp_path):
     assert git(working, "rev-parse", "HEAD").stdout.strip() != execution_head
 
 
-def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatch):
+def test_lost_generation_after_product_advance_is_not_recreated(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     assert invoke(working, "--once", config=config).returncode == 1
@@ -4049,8 +4051,10 @@ def test_recreate_after_product_advance_uses_execution_head(tmp_path, monkeypatc
     )
 
     assert invoke(working, "--once", config=config).returncode == 1
-    assert execution.exists()
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == execution_head
+    assert not execution.exists()
+    assert (
+        git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == execution_head
+    )
     assert state_payload(state)["execution_base_head"] == original_base
 
 
