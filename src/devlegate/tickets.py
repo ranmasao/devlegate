@@ -224,13 +224,12 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
     """Load, validate, and graph-check all configured workflow directories."""
     tickets: list[Ticket] = []
     locations: dict[str, list[Path]] = {}
+    if set(workflow_paths) != set(WORKFLOW_STATES):
+        raise TicketError("workflow paths must configure exactly all six states")
     for state in WORKFLOW_STATES:
-        # Older callers supplying the original five paths remain supported.
-        directory = repo / workflow_paths.get(state, f"kanban/{state}")
-        if not directory.exists():
-            continue
-        if not directory.is_dir():
-            raise TicketError(f"managed workflow path is not a directory: {directory}")
+        directory = repo / workflow_paths[state]
+        if directory.is_symlink() or not directory.is_dir():
+            raise TicketError(f"managed workflow directory is unavailable: {directory}")
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
             if not is_canonical_ticket_name(path.name):
                 continue

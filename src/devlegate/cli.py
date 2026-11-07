@@ -8,8 +8,10 @@ import dataclasses
 import json
 import os
 import select
+import shutil
 import subprocess
 import sys
+import textwrap
 import time
 import uuid
 from collections.abc import Callable
@@ -1984,9 +1986,18 @@ def _render_status_text(
                 repository_rows,
             ),
             "",
-            "Workflow  "
-            + "  ·  ".join(
-                f"{state.title()}: {count}" for state, count in snapshot.counts
+            textwrap.fill(
+                "Workflow  "
+                + "  \u00b7  ".join(
+                    f"{state.title()}: {count}" for state, count in snapshot.counts
+                ),
+                width=(
+                    max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+                    if sys.stdout.isatty() else 10000
+                ),
+                subsequent_indent="          ",
+                break_long_words=False,
+                break_on_hyphens=False,
             ),
         ]
     )

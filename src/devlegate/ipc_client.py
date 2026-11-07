@@ -362,9 +362,6 @@ def _optional_observation(value: object, label: str) -> GitObservation | None:
 def _counts(value: object) -> tuple[tuple[str, int], ...]:
     mapping = _mapping(value, "ticket counts")
     expected = ("backlog", "todo", "review", "accepted", "done", "abandoned")
-    if "abandoned" not in mapping:
-        # Read-only compatibility with snapshots from five-board owners.
-        expected = expected[:-1]
     if set(mapping) != set(expected):
         raise ValueError("ticket counts must contain exactly the expected states")
     counts = []

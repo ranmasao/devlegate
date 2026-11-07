@@ -3074,10 +3074,6 @@ class ServiceEngine:
         self._validate_control_worktree()
         for state, configured_path in self._workflow_paths().items():
             directory = self.control_worktree / configured_path
-            if state == "abandoned" and not (
-                directory.exists() or directory.is_symlink()
-            ):
-                continue
             if not directory.is_dir():
                 raise WorkflowBlockedError(
                     f"managed workflow directory is unavailable: {directory} ({state})"
@@ -11854,12 +11850,7 @@ class ServiceEngine:
             *[
                 (
                     f"workflow directory ({state})",
-                    (self.control_worktree / configured_path).is_dir()
-                    or (
-                        state == "abandoned"
-                        and not (self.control_worktree / configured_path).exists()
-                        and not (self.control_worktree / configured_path).is_symlink()
-                    ),
+                    (self.control_worktree / configured_path).is_dir(),
                     str(self.control_worktree / configured_path),
                 )
                 for state, configured_path in self._workflow_paths().items()
