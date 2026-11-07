@@ -164,6 +164,8 @@ Current limits:
 - [Project Setup](docs/PROJECT_SETUP.md): attach Devlegate to an existing project.
 - [Operations](docs/OPERATIONS.md): addressing, services, status, logs, and recovery.
 - [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
+- [Abandonment foundations](docs/abandonment.md): request schema, bounded evidence,
+  and the current execution/finalization limitation.
 - [Distribution](docs/DISTRIBUTION.md): wheel, standalone, Debian, and Arch details.
 - [Development](docs/DEVELOPMENT.md): source-tree setup and development commands.
 - [Release Packaging](docs/RELEASE_PACKAGING.md): maintainer artifact mechanics.

@@ -19,8 +19,10 @@ class TicketError(ValueError):
 
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-_WORKFLOW_STATES = ("backlog", "todo", "review", "accepted", "done")
+WORKFLOW_STATES = ("backlog", "todo", "review", "accepted", "done", "abandoned")
 _METADATA_KEYS = {"type", "title", "depends_on"}
+_ABANDONMENT_KEYS = _METADATA_KEYS | {"target", "start_head"}
+_HEAD = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
 def is_canonical_ticket_name(name: str) -> bool:
@@ -36,6 +38,10 @@ class Ticket:
     depends_on: tuple[str, ...]
     body: str
     path: Path
+    type: str = "devlegate.ticket"
+    target: str | None = None
+    start_head: str | None = None
+    abandonment_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,18 +52,25 @@ class TicketStore:
 
     def __post_init__(self) -> None:
         index = {ticket.id: ticket for ticket in self.tickets}
+        reserved = {
+            ticket.target
+            for ticket in self.tickets
+            if ticket.type == "devlegate.abandonment"
+            and ticket.state in {"todo", "review", "accepted"}
+        }
         runnable = tuple(
             sorted(
                 (
                     ticket
                     for ticket in self.tickets
                     if ticket.state == "todo"
+                    and ticket.id not in reserved
                     and all(
                         index[dependency].state == "done"
                         for dependency in ticket.depends_on
                     )
                 ),
-                key=lambda ticket: ticket.id,
+                key=lambda ticket: (ticket.type != "devlegate.abandonment", ticket.id),
             )
         )
         object.__setattr__(self, "_index", MappingProxyType(index))
@@ -79,8 +92,7 @@ def _ticket_error(path: Path, reason: str) -> TicketError:
     return TicketError(f"invalid ticket {path}: {reason}")
 
 
-def _split_ticket(path: Path) -> tuple[str, str]:
-    text = path.read_text()
+def _split_ticket(path: Path, text: str) -> tuple[str, str]:
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].rstrip("\r\n") != "---":
         raise _ticket_error(path, "missing opening frontmatter delimiter")
@@ -102,23 +114,33 @@ def _split_ticket(path: Path) -> tuple[str, str]:
 
 
 def _parse_ticket(path: Path, state: str) -> Ticket:
+    return parse_ticket_text(path, state, path.read_text())
+
+
+def parse_ticket_text(path: Path, state: str, text: str) -> Ticket:
+    """Validate immutable ticket text without materializing a control checkout."""
     ticket_id = path.stem
     if not is_canonical_ticket_name(path.name):
         raise _ticket_error(path, "filename must be a valid ticket ID ending in .md")
-    metadata_text, body = _split_ticket(path)
+    metadata_text, body = _split_ticket(path, text)
     try:
         metadata = loads(metadata_text)
     except (NanoYAMLError, TypeError) as error:
         raise _ticket_error(path, f"invalid NanoYAML metadata: {error}") from error
-    if set(metadata) != _METADATA_KEYS and not set(metadata).issubset(_METADATA_KEYS):
-        unknown = sorted(set(metadata) - _METADATA_KEYS)
+    kind = metadata.get("type")
+    keys = _ABANDONMENT_KEYS if kind == "devlegate.abandonment" else _METADATA_KEYS
+    if not set(metadata).issubset(keys):
+        unknown = sorted(set(metadata) - keys)
         if unknown:
             raise _ticket_error(path, f"unknown metadata key {unknown[0]!r}")
     for key in ("type", "title"):
         if key not in metadata:
             raise _ticket_error(path, f'missing required metadata key "{key}"')
-    if metadata["type"] != "devlegate.ticket":
-        raise _ticket_error(path, 'metadata "type" must be "devlegate.ticket"')
+    if kind not in {"devlegate.ticket", "devlegate.abandonment"}:
+        raise _ticket_error(
+            path, 'metadata "type" must be "devlegate.ticket" '
+            'or "devlegate.abandonment"'
+        )
     title = metadata["title"]
     if not isinstance(title, str) or not title.strip():
         raise _ticket_error(path, 'metadata "title" must be a non-empty string')
@@ -143,7 +165,35 @@ def _parse_ticket(path: Path, state: str) -> Ticket:
             raise _ticket_error(path, f"invalid dependency ID {dependency!r}")
         if dependency == ticket_id:
             raise _ticket_error(path, "ticket cannot depend on itself")
-    return Ticket(ticket_id, state, title.strip(), tuple(dependencies), body, path)
+    target = start_head = reason = None
+    if kind == "devlegate.abandonment":
+        target = metadata.get("target")
+        start_head = metadata.get("start_head")
+        if not isinstance(target, str) or not _ID.fullmatch(target):
+            raise _ticket_error(path, 'metadata "target" must be exactly one ticket ID')
+        if target == ticket_id:
+            raise _ticket_error(path, "abandonment request cannot target itself")
+        if not isinstance(start_head, str) or not _HEAD.fullmatch(start_head):
+            raise _ticket_error(
+                path, 'metadata "start_head" must be a full product HEAD'
+            )
+        reason = _required_section(path, body, "Abandonment reason")
+        _required_section(path, body, "Report requirements")
+    return Ticket(
+        ticket_id, state, title.strip(), tuple(dependencies), body, path,
+        kind, target, start_head, reason,
+    )
+
+
+def _required_section(path: Path, body: str, heading: str) -> str:
+    matches = list(re.finditer(rf"(?m)^#{{1,6}} {heading}[ \t]*$", body))
+    if len(matches) != 1:
+        raise _ticket_error(path, f"body must contain exactly one {heading!r} section")
+    tail = body[matches[0].end():]
+    content = re.split(r"(?m)^#{1,6} ", tail, maxsplit=1)[0].strip()
+    if not content or not re.search(r"[A-Za-z0-9]", content):
+        raise _ticket_error(path, f"{heading} must contain concrete text")
+    return content
 
 
 def _validate_cycles(tickets: Mapping[str, Ticket]) -> None:
@@ -174,8 +224,9 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
     """Load, validate, and graph-check all configured workflow directories."""
     tickets: list[Ticket] = []
     locations: dict[str, list[Path]] = {}
-    for state in _WORKFLOW_STATES:
-        directory = repo / workflow_paths[state]
+    for state in WORKFLOW_STATES:
+        # Older callers supplying the original five paths remain supported.
+        directory = repo / workflow_paths.get(state, f"kanban/{state}")
         if not directory.exists():
             continue
         if not directory.is_dir():
@@ -200,6 +251,29 @@ def load_ticket_store(repo: Path, workflow_paths: Mapping[str, str]) -> TicketSt
                     f"missing dependency: {ticket.id} depends on {dependency}"
                 )
     _validate_cycles(by_id)
+    reservations: dict[str, str] = {}
+    for ticket in tickets:
+        if ticket.type != "devlegate.abandonment":
+            continue
+        target = by_id.get(ticket.target or "")
+        if target is None:
+            raise _ticket_error(
+                ticket.path, f"missing abandonment target {ticket.target}"
+            )
+        if target.type != "devlegate.ticket":
+            raise _ticket_error(ticket.path, "target must be an implementation ticket")
+        if ticket.state in {"todo", "review", "accepted"}:
+            if target.state in {"done", "abandoned"}:
+                raise _ticket_error(
+                    ticket.path, "abandonment target is already terminal"
+                )
+            if target.id in reservations:
+                raise _ticket_error(
+                    ticket.path,
+                    f"conflicting abandonment request {reservations[target.id]} "
+                    f"already reserves {target.id}",
+                )
+            reservations[target.id] = ticket.id
     return TicketStore(tuple(sorted(tickets, key=lambda item: item.id)))
 
 
@@ -207,6 +281,7 @@ __all__ = [
     "Ticket",
     "TicketError",
     "TicketStore",
+    "WORKFLOW_STATES",
     "is_canonical_ticket_name",
     "load_ticket_store",
 ]

@@ -20,6 +20,7 @@ workflow. Use these paths exactly:
 - review: `{{ workflow.review_path }}`
 - accepted: `{{ workflow.accepted_path }}`
 - done: `{{ workflow.done_path }}`
+- abandoned (terminal; never satisfies dependencies): `{{ workflow.abandoned_path }}`
 
 Execution evidence lives under `executions/<ticket-id>/<execution-id>.json`.
 Implementation lineage uses `{{ execution.branch_prefix }}<ticket-id>`.
