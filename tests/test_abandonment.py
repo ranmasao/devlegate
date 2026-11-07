@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -32,7 +33,15 @@ PATHS = {
 }
 
 
+def workflow_directories(repo):
+    for path in PATHS.values():
+        directory = repo / path
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / ".gitkeep").touch()
+
+
 def ticket(repo, ticket_id, state="todo", *, dependencies=()):
+    workflow_directories(repo)
     path = repo / PATHS[state] / f"{ticket_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     deps = f'"depends_on": {json.dumps(list(dependencies))}\n' if dependencies else ""
@@ -44,6 +53,7 @@ def ticket(repo, ticket_id, state="todo", *, dependencies=()):
 
 
 def request(repo, request_id="Z-REQUEST", target="A-TARGET", start_head="a" * 40):
+    workflow_directories(repo)
     path = repo / PATHS["todo"] / f"{request_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -61,10 +71,22 @@ def test_abandoned_dependency_is_known_but_never_satisfied(tmp_path):
     store = load_ticket_store(tmp_path, PATHS)
     assert store.by_id["A"].state == "abandoned"
     assert not store.runnable
-    # Existing callers with five paths still discover the default sixth board.
-    assert load_ticket_store(
-        tmp_path, {k: v for k, v in PATHS.items() if k != "abandoned"}
-    ).by_id["A"].state == "abandoned"
+    with pytest.raises(TicketError, match="all six states"):
+        load_ticket_store(
+            tmp_path, {k: v for k, v in PATHS.items() if k != "abandoned"}
+        )
+
+
+def test_absent_or_symlinked_sixth_board_is_refused(tmp_path):
+    workflow_directories(tmp_path)
+    abandoned = tmp_path / PATHS["abandoned"]
+    (abandoned / ".gitkeep").unlink()
+    abandoned.rmdir()
+    with pytest.raises(TicketError, match="directory is unavailable.*abandoned"):
+        load_ticket_store(tmp_path, PATHS)
+    abandoned.symlink_to(tmp_path / PATHS["done"], target_is_directory=True)
+    with pytest.raises(TicketError, match="directory is unavailable.*abandoned"):
+        load_ticket_store(tmp_path, PATHS)
 
 
 def test_request_reserves_target_and_has_selection_priority(tmp_path):
@@ -109,7 +131,7 @@ def test_request_conflict_missing_and_terminal_target_fail_closed(tmp_path):
         load_ticket_store(tmp_path, PATHS)
     second.unlink()
     done = tmp_path / PATHS["done"]
-    done.mkdir()
+    done.mkdir(exist_ok=True)
     target.rename(done / target.name)
     with pytest.raises(TicketError, match="already terminal"):
         load_ticket_store(tmp_path, PATHS)
@@ -129,7 +151,7 @@ def test_request_cannot_enter_checkout_worker_or_product_integration(tmp_path, s
     path = request(tmp_path)
     if state != "todo":
         destination = tmp_path / PATHS[state] / path.name
-        destination.parent.mkdir(parents=True)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         path.rename(destination)
     engine = ServiceEngine.__new__(ServiceEngine)
     store = load_ticket_store(tmp_path, PATHS)
@@ -244,15 +266,108 @@ def test_allowlist_stale_object_and_owner_assertion(tmp_path):
         bundle.read(bundle.id, identity, 0, 1)
 
 
-def test_changed_content_is_not_released_under_old_digest(tmp_path, monkeypatch):
+def test_changed_content_is_not_released_under_old_digest(tmp_path):
     repo = init_repo(tmp_path / "objects")
     source = owner_source(repo)
     builder = EvidenceBuilder(source)
     identity = builder.add(GitArtifact("blob", (blob(repo, b"original"),)))
     bundle = builder.seal({})
-    monkeypatch.setattr(source, "scan", lambda *_args, **_kwargs: (8, "0" * 64, b"x"))
+    source._verified.clear()
     with pytest.raises(EvidenceError, match="changed"):
         bundle.read(bundle.id, identity, 0, 1)
+
+
+def test_sequential_binary_pages_have_linear_source_io(tmp_path, monkeypatch):
+    repo = init_repo(tmp_path / "objects")
+    data = bytes(range(256)) * (MAX_READ_BYTES // 256) * 32
+    source = owner_source(repo)
+    builder = EvidenceBuilder(source)
+    identity = builder.add(GitArtifact("blob", (blob(repo, data),)))
+    bundle = builder.seal({})
+    remaining = source._bytes_left
+    starts = []
+    original = source._start
+
+    def start(artifact):
+        starts.append(artifact)
+        return original(artifact)
+
+    monkeypatch.setattr(source, "_start", start)
+    for offset in range(0, len(data), MAX_READ_BYTES):
+        result = bundle.read(bundle.id, identity, offset, MAX_READ_BYTES)
+        assert base64.b64decode(result["content"]) == data[
+            offset:offset + MAX_READ_BYTES
+        ]
+    assert starts == [GitArtifact("blob", (blob(repo, data),))]
+    # Include one tiny immutable-size observation per page, never a full rescan.
+    assert remaining - source._bytes_left < len(data) + 1024
+    bundle.close()
+    assert source._stream is None
+
+
+def test_replaced_object_page_is_denied_before_release(tmp_path):
+    repo = init_repo(tmp_path / "objects")
+    data = b"a" * (MAX_READ_BYTES * 2)
+    oid = blob(repo, data)
+    replacement = blob(repo, b"b" * len(data))
+    source = owner_source(repo)
+    builder = EvidenceBuilder(source)
+    identity = builder.add(GitArtifact("blob", (oid,)))
+    bundle = builder.seal({})
+    # Corrupt only this disposable loose object, preserving the requested name.
+    (repo / ".git/objects" / oid[:2] / oid[2:]).chmod(0o600)
+    (repo / ".git/objects" / oid[:2] / oid[2:]).write_bytes(
+        (repo / ".git/objects" / replacement[:2] / replacement[2:]).read_bytes()
+    )
+    with pytest.raises(EvidenceError, match="changed"):
+        bundle.read(bundle.id, identity, MAX_READ_BYTES, 1)
+    assert source._stream is None
+
+
+def test_owner_byte_call_and_elapsed_budgets_are_enforced(tmp_path, monkeypatch):
+    repo = init_repo(tmp_path / "objects")
+    artifact = GitArtifact("blob", (blob(repo, b"a" * (MAX_READ_BYTES + 1)),))
+    source = OwnerGitEvidence(repo, lambda: None, byte_budget=MAX_READ_BYTES)
+    with pytest.raises(EvidenceError, match="byte budget"):
+        source.scan(artifact)
+    source = OwnerGitEvidence(repo, lambda: None, call_budget=2)
+    source.scan(artifact)
+    with pytest.raises(EvidenceError, match="request/time budget"):
+        source.scan(artifact)
+    source = OwnerGitEvidence(repo, lambda: None, seconds_budget=0.05)
+    monkeypatch.setattr(source, "_command", lambda *_args: [
+        sys.executable, "-c", "import time; time.sleep(10)",
+    ])
+    with pytest.raises(EvidenceError, match="time budget"):
+        source.scan(artifact)
+
+
+def test_control_tree_observations_skip_unrelated_history(tmp_path, monkeypatch):
+    product, control, _head, _start, _base2, _checkpoint2 = history_fixture(tmp_path)
+    for index in range(20):
+        (control / "unrelated.txt").write_text(str(index))
+        commit(control, "Unrelated control publication")
+    head = git(control, "rev-parse", "HEAD")
+    store = load_ticket_store(control, PATHS)
+    source = owner_source(control)
+    observations = []
+    small = source.small
+
+    def observe(*args, **kwargs):
+        if args[0] == "ls-tree":
+            observations.append(args)
+        return small(*args, **kwargs)
+
+    monkeypatch.setattr(source, "small", observe)
+    bundle = build_abandonment_evidence(
+        control=source, product=owner_source(product), control_head=head,
+        request=store.by_id["Z-REQUEST"], target=store.by_id["A-TARGET"],
+        request_path="kanban/todo/Z-REQUEST.md", target_path="kanban/todo/A-TARGET.md",
+    )
+    assert len(bundle.manifest()["executions"]) == 2
+    # Four target events, final tree, specs, two admissions, two exact review
+    # disposition comparisons. Unrelated commits add no tree observations.
+    assert len(observations) == 12
 
 
 def test_non_utf8_and_utf8_limit_boundary_keep_index_entries(tmp_path):
@@ -296,7 +411,7 @@ def test_source_selectors_cannot_be_refs_or_paths(objects):
         GitArtifact("blob", objects)
 
 
-def publish_report(repo, execution_id, base, checkpoint):
+def publish_report(repo, execution_id, base, checkpoint, *, deferred=False):
     admission = git(repo, "rev-parse", "HEAD")
     claim = WorkerClaim("incomplete", "Investigated the approach", ("Finish work",), ())
     result = ExecutionResult(0, None, None, claim, "incomplete", (),
@@ -320,11 +435,12 @@ def publish_report(repo, execution_id, base, checkpoint):
         f"control: {admission}\ndisposition: rework\n-->\n"
         "The approach needs another iteration.\n"
     )
-    (review / "A-TARGET.md").rename(repo / PATHS["todo"] / "A-TARGET.md")
+    destination = "backlog" if deferred else "todo"
+    (review / "A-TARGET.md").rename(repo / PATHS[destination] / "A-TARGET.md")
     commit(repo, "Publish independently attributed rework review")
 
 
-def history_fixture(tmp_path):
+def history_fixture(tmp_path, *, deferred=False):
     product = init_repo(tmp_path / "product")
     (product / "file.txt").write_text("starting point\n")
     (product / "obsolete.txt").write_text("remove in the second execution\n")
@@ -344,7 +460,7 @@ def history_fixture(tmp_path):
     commit(control, "Admit target")
     # IDs deliberately run opposite lexical order.
     publish_report(control, "f" * 32, start, checkpoint1)
-    publish_report(control, "0" * 32, base2, checkpoint2)
+    publish_report(control, "0" * 32, base2, checkpoint2, deferred=deferred)
     request(control, start_head=start)
     head = commit(control, "Admit abandonment request")
     return product, control, head, start, base2, checkpoint2
@@ -355,7 +471,8 @@ def build_fixture(product, control, head):
     return build_abandonment_evidence(
         control=owner_source(control), product=owner_source(product), control_head=head,
         request=store.by_id["Z-REQUEST"], target=store.by_id["A-TARGET"],
-        request_path="kanban/todo/Z-REQUEST.md", target_path="kanban/todo/A-TARGET.md",
+        request_path="kanban/todo/Z-REQUEST.md",
+        target_path=store.by_id["A-TARGET"].path.relative_to(control).as_posix(),
     )
 
 
@@ -383,6 +500,44 @@ def test_real_git_chronology_distinct_bases_reviews_and_bounded_binary(tmp_path)
     assert base64.b64decode(result["content"]) == (bytes(range(256)) * 1024)
     assert "NOT cumulative" in manifest["latest_state_comparison"]["label"]
     assert manifest["gaps"]  # Resource-generation proof is never invented.
+
+
+def test_still_deferred_review_has_exact_historical_attribution(tmp_path):
+    product, control, head, _start, _base2, _checkpoint = history_fixture(
+        tmp_path, deferred=True,
+    )
+    bundle = build_fixture(product, control, head)
+    manifest = bundle.manifest()
+    assert manifest["executions"][0]["review_decision"] == "rework"
+    assert manifest["executions"][1]["review_decision"] == "rework-deferred"
+    assert all("review_gap" not in entry for entry in manifest["executions"])
+    assert "kanban/backlog/A-TARGET.md" in manifest["specifications"]
+
+
+def test_unavailable_diff_preserves_attributed_file_index(tmp_path, monkeypatch):
+    product, control, head, _start, _base2, _checkpoint = history_fixture(tmp_path)
+    source = owner_source(product)
+    start = source._start
+
+    def bounded_start(artifact):
+        if artifact.kind == "diff":
+            raise EvidenceError("diff producer cannot complete within owner budgets")
+        return start(artifact)
+
+    monkeypatch.setattr(source, "_start", bounded_start)
+    store = load_ticket_store(control, PATHS)
+    bundle = build_abandonment_evidence(
+        control=owner_source(control), product=source, control_head=head,
+        request=store.by_id["Z-REQUEST"], target=store.by_id["A-TARGET"],
+        request_path="kanban/todo/Z-REQUEST.md", target_path="kanban/todo/A-TARGET.md",
+    )
+    manifest = bundle.manifest()
+    for entry in manifest["executions"]:
+        assert entry["delta"]["files"]
+        assert "owner budgets" in entry["delta"]["diff"]["gap"]
+        assert entry["delta"]["diff"]["source"]["objects"] == [
+            entry["code_base_head"], entry["checkpoint"],
+        ]
 
 
 def test_changed_review_and_missing_latest_checkpoint_are_explicit_gaps(tmp_path):

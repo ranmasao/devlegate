@@ -16,7 +16,10 @@ import hashlib
 import json
 import os
 import re
+import resource
+import selectors
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,12 +28,21 @@ from types import MappingProxyType
 from devlegate.execution_provenance import lifecycle_commit_is_exact
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.git import GitAncestryError, GitObservationError
-from devlegate.review_provenance import ReviewProvenanceError, resolve_rework_review
+from devlegate.review_provenance import (
+    MAX_REVIEW_BYTES,
+    ReviewProvenanceError,
+    restore_review_binding,
+)
 from devlegate.tickets import Ticket, TicketError, parse_ticket_text
 
 MAX_EXCERPT_BYTES = 256 * 1024
 MAX_INLINE_BYTES = 4 * 1024 * 1024
 MAX_READ_BYTES = 256 * 1024
+MAX_SOURCE_BYTES = 16 * 1024 * 1024 * 1024
+MAX_SOURCE_CALLS = 65536
+MAX_SOURCE_SECONDS = 600
+MAX_COMMAND_SECONDS = 60
+MAX_COMMAND_MEMORY_BYTES = 1024 * 1024 * 1024
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
@@ -75,9 +87,128 @@ class OwnerGitEvidence:
     reads. This class must never be passed into the worker process.
     """
 
-    def __init__(self, repo: Path, assert_owner: Callable[[], None]) -> None:
+    def __init__(
+        self, repo: Path, assert_owner: Callable[[], None], *,
+        byte_budget: int = MAX_SOURCE_BYTES, call_budget: int = MAX_SOURCE_CALLS,
+        seconds_budget: float = MAX_SOURCE_SECONDS,
+    ) -> None:
         self._repo = repo.resolve(strict=True)
         self._assert_owner = assert_owner
+        if byte_budget < 1 or call_budget < 1 or seconds_budget <= 0:
+            raise EvidenceError("evidence source budgets must be positive")
+        self._bytes_left = byte_budget
+        self._calls_left = call_budget
+        self._deadline = time.monotonic() + seconds_budget
+        self.limits = MappingProxyType({
+            "source_bytes": byte_budget, "source_calls": call_budget,
+            "source_seconds": seconds_budget, "command_seconds": MAX_COMMAND_SECONDS,
+            "command_memory_bytes": MAX_COMMAND_MEMORY_BYTES,
+        })
+        self._verified: dict[GitArtifact, tuple[int, str, tuple[bytes, ...]]] = {}
+        self._stream: (
+            tuple[GitArtifact, subprocess.Popen[bytes], int, float] | None
+        ) = None
+        self._page: tuple[GitArtifact, int, bytes] | None = None
+
+    def _admit(self) -> None:
+        self._assert_owner()
+        if self._bytes_left <= 0:
+            self.close()
+            raise EvidenceError("owner evidence source byte budget exhausted")
+        if self._calls_left <= 0 or time.monotonic() >= self._deadline:
+            self.close()
+            raise EvidenceError("owner evidence request/time budget exhausted")
+        self._calls_left -= 1
+
+    def __enter__(self) -> OwnerGitEvidence:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # A bundle is normally closed by its owner. Also avoid a stranded pipe
+        # producer if evidence construction raises before returning a bundle.
+        if hasattr(self, "_stream"):
+            self.close()
+
+    def close(self) -> None:
+        """Release the single bounded paging session, including on worker exit."""
+        if self._stream is not None:
+            _artifact, process, _offset, _deadline = self._stream
+            self._stream = None
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            assert process.stdout is not None
+            process.stdout.close()
+        self._page = None
+
+    def _read(
+        self, process: subprocess.Popen[bytes], size: int, deadline: float,
+    ) -> bytes:
+        """Read at most one page, with wall/CPU and total source-I/O bounds.
+
+        Git is single-process here. A hard elapsed deadline also bounds its CPU
+        use, and a blocked pipe cannot bypass the deadline. No producer output
+        is retained beyond one page. Charge skipped and rejected bytes as well.
+        """
+        assert process.stdout is not None
+        value = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while len(value) < size:
+                timeout = min(deadline, self._deadline) - time.monotonic()
+                if timeout <= 0 or not selector.select(timeout):
+                    process.kill()
+                    raise EvidenceError("owner evidence command/time budget exhausted")
+                chunk = os.read(process.stdout.fileno(), size - len(value))
+                if not chunk:
+                    break
+                self._bytes_left -= len(chunk)
+                if self._bytes_left < 0:
+                    process.kill()
+                    raise EvidenceError("owner evidence source byte budget exhausted")
+                value.extend(chunk)
+        return bytes(value)
+
+    def _artifact_args(self, artifact: GitArtifact) -> tuple[str, ...]:
+        if artifact.kind == "blob":
+            return ("cat-file", "blob", artifact.objects[0])
+        return (
+            "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+            "--src-prefix=a/", "--dst-prefix=b/", "--full-index", "--no-renames",
+            "--diff-algorithm=myers", "--unified=3", *artifact.objects, "--",
+        )
+
+    def _start(self, artifact: GitArtifact) -> subprocess.Popen[bytes]:
+        return self._spawn(*self._artifact_args(artifact))
+
+    def _spawn(self, *args: str) -> subprocess.Popen[bytes]:
+        process = subprocess.Popen(
+            self._command(*args), stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=self._environment(),
+        )
+        try:
+            # Unlike preexec_fn this is safe in the multithreaded service owner.
+            # The CPU ceiling remains enforced while a paging session is idle.
+            resource.prlimit(
+                process.pid, resource.RLIMIT_CPU,
+                (MAX_COMMAND_SECONDS, MAX_COMMAND_SECONDS),
+            )
+            resource.prlimit(
+                process.pid, resource.RLIMIT_AS,
+                (MAX_COMMAND_MEMORY_BYTES, MAX_COMMAND_MEMORY_BYTES),
+            )
+        except ProcessLookupError:
+            pass  # A completed producer is handled by the normal exit checks.
+        except BaseException:
+            process.kill()
+            process.wait()
+            assert process.stdout is not None
+            process.stdout.close()
+            raise
+        return process
 
     def _command(self, *args: str) -> list[str]:
         # Disable ambient replace refs, external diffs, textconv, pagers and
@@ -99,38 +230,128 @@ class OwnerGitEvidence:
         self, artifact: GitArtifact, *, offset: int = 0, length: int = 0
     ) -> tuple[int, str, bytes]:
         """Hash the entire source while retaining only the selected byte range."""
-        self._assert_owner()
+        self._admit()
         if (
             type(offset) is not int or type(length) is not int
             or offset < 0 or length < 0 or length > MAX_READ_BYTES
         ):
             raise EvidenceError("invalid scan byte range")
-        if artifact.kind == "blob":
-            args = ("cat-file", "blob", artifact.objects[0])
-        else:
-            args = (
-                "diff", "--no-ext-diff", "--no-textconv", "--no-color",
-                "--src-prefix=a/", "--dst-prefix=b/", "--full-index", "--no-renames",
-                "--diff-algorithm=myers", "--unified=3", *artifact.objects, "--",
-            )
+        self.close()
         digest = hashlib.sha256()
+        object_digest = None
+        if artifact.kind == "blob":
+            declared_size = self.small("cat-file", "-s", artifact.objects[0]).strip()
+            if not declared_size.isdigit():
+                raise EvidenceError("immutable Git blob has an invalid size")
+            object_digest = hashlib.new(
+                "sha1" if len(artifact.objects[0]) == 40 else "sha256"
+            )
+            object_digest.update(b"blob " + declared_size + b"\0")
+        pages = []
         selected = bytearray()
         size = 0
-        with subprocess.Popen(
-            self._command(*args), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=self._environment(),
-        ) as process:
-            assert process.stdout is not None
-            while chunk := process.stdout.read(64 * 1024):
-                digest.update(chunk)
-                start = max(0, offset - size)
-                stop = min(len(chunk), offset + length - size)
-                if stop > start:
-                    selected.extend(chunk[start:stop])
-                size += len(chunk)
-            if process.wait() != 0:
+        deadline = time.monotonic() + MAX_COMMAND_SECONDS
+        with self._start(artifact) as process:
+            try:
+                while chunk := self._read(process, MAX_READ_BYTES, deadline):
+                    digest.update(chunk)
+                    if object_digest is not None:
+                        object_digest.update(chunk)
+                    pages.append(hashlib.sha256(chunk).digest())
+                    start = max(0, offset - size)
+                    stop = min(len(chunk), offset + length - size)
+                    if stop > start:
+                        selected.extend(chunk[start:stop])
+                    size += len(chunk)
+                if process.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
+                    raise EvidenceError(
+                        "immutable Git artifact is absent or unreadable"
+                    )
+            finally:
+                if process.poll() is None:
+                    process.kill()
+        sha256 = digest.hexdigest()
+        if (
+            object_digest is not None
+            and object_digest.hexdigest() != artifact.objects[0]
+        ):
+            raise EvidenceError("immutable Git blob does not match its source identity")
+        self._verified[artifact] = (size, sha256, tuple(pages))
+        return size, sha256, bytes(selected)
+
+    def read_verified(
+        self, artifact: GitArtifact, size: int, digest: str, offset: int, length: int,
+    ) -> bytes:
+        """Verify pages against the initial full scan, streaming sequentially.
+
+        One open stream and one cached page per repository, not a giant mirror.
+        Sequential reconstruction reads O(size) source bytes. Random seeks may
+        restart the stream, but all skipped bytes consume the shared I/O budget.
+        No bytes escape until their entire page matches the admitted scan.
+        """
+        self._admit()
+        verification = self._verified.get(artifact)
+        if verification is None or verification[:2] != (size, digest):
+            raise EvidenceError("artifact changed or has no verified page index")
+        if (
+            type(offset) is not int or type(length) is not int or offset < 0
+            or length < 1 or length > MAX_READ_BYTES or offset + length > size
+        ):
+            raise EvidenceError("invalid or excessive artifact byte range")
+        # Do not serve cached bytes after the underlying identity disappears.
+        for oid in artifact.objects:
+            observation = self._small_result("cat-file", "-s", oid)
+            if observation.returncode:
+                self.close()
                 raise EvidenceError("immutable Git artifact is absent or unreadable")
-        return size, digest.hexdigest(), bytes(selected)
+            if (
+                artifact.kind == "blob"
+                and observation.stdout.strip() != str(size).encode()
+            ):
+                self.close()
+                raise EvidenceError("artifact changed or is no longer available")
+        selected = bytearray()
+        for page_number in range(
+            offset // MAX_READ_BYTES, (offset + length - 1) // MAX_READ_BYTES + 1,
+        ):
+            page_start = page_number * MAX_READ_BYTES
+            if self._page is not None and self._page[:2] == (artifact, page_number):
+                page = self._page[2]
+            else:
+                if (
+                    self._stream is None or self._stream[0] != artifact
+                    or self._stream[2] > page_start
+                ):
+                    self.close()
+                    self._stream = (
+                        artifact, self._start(artifact), 0,
+                        time.monotonic() + MAX_COMMAND_SECONDS,
+                    )
+                _source, process, position, deadline = self._stream
+                try:
+                    page = b""
+                    while position <= page_start:
+                        page = self._read(
+                            process, min(MAX_READ_BYTES, size - position), deadline,
+                        )
+                        if (
+                            len(page) != min(MAX_READ_BYTES, size - position)
+                            or hashlib.sha256(page).digest()
+                            != verification[2][position // MAX_READ_BYTES]
+                        ):
+                            raise EvidenceError(
+                                "artifact changed or is no longer available"
+                            )
+                        self._page = (artifact, position // MAX_READ_BYTES, page)
+                        position += len(page)
+                        self._stream = (artifact, process, position, deadline)
+                except BaseException:
+                    self.close()
+                    raise
+            start = max(0, offset - page_start)
+            stop = min(len(page), offset + length - page_start)
+            selected.extend(page[start:stop])
+        return bytes(selected)
 
     def small(self, *args: str, limit: int = MAX_INLINE_BYTES) -> bytes:
         """Bound control/index observations independently of excerpt budgets."""
@@ -142,18 +363,30 @@ class OwnerGitEvidence:
     def _small_result(
         self, *args: str, limit: int = MAX_INLINE_BYTES,
     ) -> subprocess.CompletedProcess[bytes]:
-        self._assert_owner()
-        with subprocess.Popen(
-            self._command(*args), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=self._environment(),
-        ) as process:
+        self._admit()
+        with self._spawn(*args) as process:
             assert process.stdout is not None
-            value = process.stdout.read(limit + 1)
-            if len(value) > limit:
-                process.kill()
-                process.wait()
-                raise EvidenceError("control/index observation exceeds its byte limit")
-            return subprocess.CompletedProcess(args, process.wait(), value, b"")
+            deadline = time.monotonic() + MAX_COMMAND_SECONDS
+            try:
+                value = bytearray()
+                while len(value) <= limit:
+                    chunk = self._read(
+                        process, min(MAX_READ_BYTES, limit + 1 - len(value)), deadline,
+                    )
+                    if not chunk:
+                        break
+                    value.extend(chunk)
+                if len(value) > limit:
+                    raise EvidenceError(
+                        "control/index observation exceeds its byte limit"
+                    )
+                return subprocess.CompletedProcess(
+                    args, process.wait(timeout=max(0.001, deadline - time.monotonic())),
+                    bytes(value), b"",
+                )
+            finally:
+                if process.poll() is None:
+                    process.kill()
 
     def _runner(
         self, repo: Path, *args: str, check: bool = True,
@@ -172,12 +405,7 @@ class OwnerGitEvidence:
     def ancestor(self, older: str, newer: str) -> bool:
         if not all(_OID.fullmatch(value) for value in (older, newer)):
             raise EvidenceError("ancestry requires full object identities")
-        self._assert_owner()
-        result = subprocess.run(
-            self._command("merge-base", "--is-ancestor", older, newer),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=self._environment(), check=False,
-        )
+        result = self._small_result("merge-base", "--is-ancestor", older, newer)
         if result.returncode not in {0, 1}:
             raise EvidenceError("ancestry objects are unavailable")
         return result.returncode == 0
@@ -205,7 +433,7 @@ class ArtifactRecord:
 
 
 class EvidenceBundle:
-    """Sealed manifest with an exact artifact allowlist and stateless paging."""
+    """Sealed manifest with an exact artifact allowlist and bounded paging."""
 
     def __init__(
         self, sources: dict[str, OwnerGitEvidence], metadata: dict[str, object],
@@ -216,7 +444,10 @@ class EvidenceBundle:
         manifest = {
             "schema": "devlegate.abandonment-evidence.v1", **metadata,
             "limits": {"excerpt": MAX_EXCERPT_BYTES, "inline": MAX_INLINE_BYTES,
-                       "read": MAX_READ_BYTES},
+                       "read": MAX_READ_BYTES,
+                       "repositories": {
+                           name: dict(source.limits) for name, source in sources.items()
+                       }},
             "artifacts": [record.as_dict() for record in records],
         }
         self._manifest = _canonical(manifest)
@@ -238,15 +469,13 @@ class EvidenceBundle:
             or offset > record.size or length > record.size - offset
         ):
             raise EvidenceError("invalid or excessive artifact byte range")
-        size, digest, value = self._sources[record.source.repository].scan(
-            record.source, offset=offset, length=length
+        value = self._sources[record.source.repository].read_verified(
+            record.source, record.size, record.sha256, offset, length,
         )
-        if size != record.size or digest != record.sha256:
-            raise EvidenceError("artifact changed or is no longer available")
         try:
             content = value.decode("utf-8")
             encoding = "utf-8"
-            if "\0" in content:
+            if any(ord(char) < 32 and char not in "\t\r\n" for char in content):
                 content = base64.b64encode(value).decode("ascii")
                 encoding = "base64"
         except UnicodeDecodeError:
@@ -254,10 +483,14 @@ class EvidenceBundle:
             encoding = "base64"
         return {
             "manifest_id": self.id, "artifact_id": artifact_id,
-            "source": record.source.as_dict(), "sha256": digest,
+            "source": record.source.as_dict(), "sha256": record.sha256,
             "offset": offset, "length": len(value), "encoding": encoding,
             "content": content, "chunk_sha256": hashlib.sha256(value).hexdigest(),
         }
+
+    def close(self) -> None:
+        for source in self._sources.values():
+            source.close()
 
 
 class EvidenceBuilder:
@@ -338,6 +571,66 @@ def _safe_path(path: str) -> None:
         raise EvidenceError("evidence path must be canonical and repository-relative")
 
 
+def _review_disposition(
+    control: OwnerGitEvidence, *, report: ExecutionReport, publication: str,
+    revision: str, review_oid: str, todo_path: str, review_path: str,
+    backlog_path: str,
+) -> tuple[str, dict[str, object]]:
+    """Bind the original historical rejection, including still-deferred work.
+
+    Unlike resume admission, historical attribution does not require a deferred
+    target to have been promoted back to todo. The proven linear chain and
+    immutable-artifact index are checked by the caller. Inspect only the exact
+    review disposition event, not every unrelated commit until the next worker.
+    """
+    if (
+        report.result.transport_error is not None or not report.result.egress_ok
+        or report.workspace_head is None
+    ):
+        raise EvidenceError("failed worker cannot be attributed curator feedback")
+    artifact = f"reviews/{report.ticket_id}/{report.execution_id}.md"
+    content = control.small(
+        "cat-file", "blob", review_oid, limit=MAX_REVIEW_BYTES,
+    ).decode("utf-8")
+    binding = restore_review_binding(
+        {
+            "content": content, "path": artifact, "publication": revision,
+            "transition": [revision],
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        },
+        ticket_id=report.ticket_id, execution_id=report.execution_id,
+        checkpoint=report.workspace_head, control_head=report.control_head,
+    )
+    raw = control.small(
+        "diff-tree", "-r", "--no-commit-id", "--name-status", "--no-renames",
+        "-z", revision, "--",
+    ).split(b"\0")
+    if raw[-1] != b"" or len(raw) % 2 != 1:
+        raise EvidenceError("malformed historical review disposition index")
+    changes = {
+        (raw[index].decode("ascii"), raw[index + 1].decode("utf-8"))
+        for index in range(0, len(raw) - 1, 2)
+    }
+    review_ticket = f"{review_path}/{report.ticket_id}.md"
+    original = _tree(control, publication, review_ticket).get(review_ticket)
+    if original is None or original[0] != "100644":
+        raise EvidenceError("review generation ticket is not a regular admitted blob")
+    for decision, destination in (
+        ("rework", todo_path), ("rework-deferred", backlog_path),
+    ):
+        target = f"{destination}/{report.ticket_id}.md"
+        if changes == {("A", artifact), ("D", review_ticket), ("A", target)}:
+            if _tree(control, revision, target).get(target) != original:
+                raise EvidenceError(
+                    "ticket changed during historical review disposition"
+                )
+            return decision, {
+                "publication": binding.publication, "sha256": binding.sha256,
+                "transition": list(binding.transition),
+            }
+    raise EvidenceError("review publication is not an exact bound rejection/deferral")
+
+
 def _delta(
     source: OwnerGitEvidence, builder: EvidenceBuilder, base: str, checkpoint: str,
 ) -> dict[str, object]:
@@ -381,9 +674,18 @@ def _delta(
                 except EvidenceError as error:
                     item[label] = {"gap": str(error), "object": oid}
         files.append(item)
+    try:
+        diff: object = builder.add(GitArtifact("diff", (base, checkpoint)))
+    except EvidenceError as error:
+        # Preserve the attributed file index even when Git cannot produce the
+        # complete diff within owner budgets. Never manufacture a smaller diff.
+        diff = {
+            "gap": str(error),
+            "source": GitArtifact("diff", (base, checkpoint)).as_dict(),
+        }
     return {
         "base": base, "checkpoint": checkpoint,
-        "diff": builder.add(GitArtifact("diff", (base, checkpoint))), "files": files,
+        "diff": diff, "files": files,
     }
 
 
@@ -423,22 +725,35 @@ def build_abandonment_evidence(
     except EvidenceError as error:
         start_head_status = f"gap: {error}"
         gaps.append(f"initial product HEAD unavailable or unproven: {error}")
-    commits = control.small(
-        "rev-list", "--reverse", "--first-parent", control_head
+    chain = control.small(
+        "rev-list", "--reverse", "--first-parent", "--parents", control_head
     ).decode("ascii").splitlines()
+    commits: list[str] = []
     previous = None
+    for line in chain:
+        commit, *parents = line.split()
+        if parents != ([previous] if previous else []):
+            raise EvidenceError("control chronology is not a proven linear history")
+        commits.append(commit)
+        previous = commit
+    positions = {commit: index for index, commit in enumerate(commits)}
     publications: dict[str, tuple[str, str]] = {}
     versions: dict[str, set[str]] = {}
     interrupted: set[str] = set()
     report_prefix = f"executions/{target.id}/"
     review_prefix = f"reviews/{target.id}/"
-    for commit in commits:
-        parents = control.small(
-            "rev-list", "--parents", "-n", "1", commit
-        ).decode().split()
-        if parents[1:] != ([previous] if previous else []):
-            raise EvidenceError("control chronology is not a proven linear history")
-        previous = commit
+    # Tree observations scale with this target's publication events, not every
+    # unrelated control commit. The single chain observation above still proves
+    # linear chronology (including rejecting merges) and admission positions.
+    events = control.small(
+        "log", "--reverse", "--first-parent", "--format=%H", control_head,
+        "--", report_prefix, review_prefix,
+    ).decode("ascii").splitlines()
+    if any(commit not in positions for commit in events) or events != sorted(
+        set(events), key=positions.__getitem__,
+    ):
+        raise EvidenceError("publication events do not follow the proven control chain")
+    for commit in events:
         tree = _tree(control, commit, report_prefix, review_prefix)
         interrupted.update(
             path for path in publications
@@ -478,6 +793,20 @@ def build_abandonment_evidence(
         for path in (request_path, target_path)
     }
     executions: list[dict[str, object]] = []
+    report_paths = [
+        path for path in publications
+        if path.startswith(report_prefix) and path.endswith(".json")
+    ]
+    next_reports = dict(zip(report_paths, report_paths[1:], strict=False))
+    parsed_reports: dict[str, ExecutionReport] = {}
+
+    def parse_report(path: str) -> ExecutionReport:
+        if path not in parsed_reports:
+            parsed_reports[path] = ExecutionReport.from_dict(json.loads(
+                control.small("cat-file", "blob", publications[path][1])
+            ))
+        return parsed_reports[path]
+
     latest: str | None = None
     # Dict insertion order is publication order along the proven control chain,
     # with path order only as a tie-breaker for artifacts in the same commit.
@@ -494,12 +823,12 @@ def build_abandonment_evidence(
             latest = None
             continue
         try:
-            raw = control.small("cat-file", "blob", oid)
-            report = ExecutionReport.from_dict(json.loads(raw))
+            report = parse_report(path)
             if (
                 path != f"{report_prefix}{report.execution_id}.json"
                 or report.ticket_id != target.id
-                or report.control_head not in commits[:commits.index(publication)]
+                or positions.get(report.control_head, len(commits))
+                >= positions[publication]
             ):
                 raise EvidenceError("execution admission identity/lineage is unproven")
             if not lifecycle_commit_is_exact(
@@ -548,38 +877,32 @@ def build_abandonment_evidence(
                     review_artifact in interrupted
                     or len(versions[review_artifact]) != 1
                     or final_tree.get(review_artifact) != ("100644", review_oid)
-                    or commits.index(revision) <= commits.index(publication)
+                    or positions[revision] <= positions[publication]
                 ):
                     entry["review_gap"] = "review changed, absent or predates report"
                 else:
                     try:
-                        # Stop at the next execution's admission control head,
-                        # before later rework cycles can confound this review.
-                        next_admission = control_head
-                        for later_path, later_publication in publications.items():
-                            _later_commit, later_oid = later_publication
-                            if (
-                                later_path.startswith(report_prefix)
-                                and later_path.endswith(".json")
-                                and commits.index(_later_commit)
-                                > commits.index(publication)
-                            ):
-                                later_report = ExecutionReport.from_dict(json.loads(
-                                    control.small("cat-file", "blob", later_oid)
-                                ))
-                                next_admission = later_report.control_head
-                                break
-                        binding = resolve_rework_review(
-                            control._repo, next_admission, publication, report,
+                        later_path = next_reports.get(path)
+                        if later_path is not None:
+                            if positions[publications[later_path][0]] <= positions[
+                                publication
+                            ]:
+                                raise EvidenceError(
+                                    "multiple execution reports share a publication"
+                                )
+                            next_admission = parse_report(later_path).control_head
+                            if positions.get(next_admission, -1) < positions[revision]:
+                                raise EvidenceError(
+                                    "review postdates the next execution admission"
+                                )
+                        decision, binding = _review_disposition(
+                            control, report=report, publication=publication,
+                            revision=revision, review_oid=review_oid,
                             todo_path=todo_path, review_path=review_path,
-                            backlog_path=backlog_path, runner=control._runner,
+                            backlog_path=backlog_path,
                         )
-                        entry["review_decision"] = "rework"
-                        entry["review_binding"] = {
-                            "publication": binding.publication,
-                            "sha256": binding.sha256,
-                            "transition": list(binding.transition),
-                        }
+                        entry["review_decision"] = decision
+                        entry["review_binding"] = binding
                     except (ReviewProvenanceError, EvidenceError) as error:
                         entry["review_gap"] = str(error)
             else:

@@ -245,6 +245,7 @@ def fresh_control_fixture(tmp_path):
         "BACKLOG_PATH=workflow/backlog\nTODO_PATH=workflow/todo\n"
         "REVIEW_PATH=workflow/review\nDONE_PATH=workflow/done\n"
         "ACCEPTED_PATH=workflow/accepted\n"
+        "ABANDONED_PATH=workflow/abandoned\n"
         "OPENCODE_BIN=true\nOPENCODE_MODEL=fake\n"
         f"STATE_DIR={state}\n"
     )

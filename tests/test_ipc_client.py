@@ -210,7 +210,8 @@ def test_status_round_trip_preserves_complete_view():
         True,
         representative_observation(),
         representative_observation("devlegate/control"),
-        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5),
+         ("abandoned", 6)),
         (("T-1", "Ticket"),),
         (
             (
@@ -283,7 +284,8 @@ def test_status_text_is_identical_after_ipc_round_trip():
         False,
         representative_observation(),
         representative_observation("devlegate/control"),
-        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5),
+         ("abandoned", 6)),
         (("T-1", "Ticket"),),
         (
             (
@@ -328,7 +330,8 @@ def test_reconciliation_text_distinguishes_actionable_history(status):
         False,
         representative_observation(),
         representative_observation("devlegate/control"),
-        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5),
+         ("abandoned", 6)),
         (),
         (),
         (),
@@ -360,7 +363,8 @@ def test_counts_decode_in_canonical_order():
         False,
         representative_observation(),
         None,
-        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5),
+         ("abandoned", 6)),
         (),
         (),
         (),
@@ -369,6 +373,7 @@ def test_counts_decode_in_canonical_order():
         ExecutionPlan("none", "none", code=representative_observation()),
     ).as_dict()
     value["tickets"]["counts"] = {
+        "abandoned": 6,
         "done": 5,
         "accepted": 4,
         "review": 3,
@@ -382,6 +387,7 @@ def test_counts_decode_in_canonical_order():
         ("review", 3),
         ("accepted", 4),
         ("done", 5),
+        ("abandoned", 6),
     )
 
 
@@ -403,7 +409,8 @@ def test_malformed_status_nested_shapes_raise_ipc_error(mutate):
         False,
         representative_observation(),
         None,
-        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5)),
+        (("backlog", 1), ("todo", 2), ("review", 3), ("accepted", 4), ("done", 5),
+         ("abandoned", 6)),
         (),
         (
             (

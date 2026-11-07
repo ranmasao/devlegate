@@ -162,13 +162,7 @@ def attach_existing_control(
                 )
             for state, configured_path in workflow_paths.items():
                 directory = control_worktree / configured_path
-                if state == "abandoned" and not (
-                    directory.exists() or directory.is_symlink()
-                ):
-                    # A pre-feature five-board control branch remains valid;
-                    # attaching it must not introduce a historical migration.
-                    continue
-                if not (control_worktree / configured_path).is_dir():
+                if not directory.is_dir():
                     raise ControlGitWorkflowError(
                         f"managed workflow directory is unavailable: "
                         f"{control_worktree / configured_path} ({state})"
