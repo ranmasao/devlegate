@@ -38,7 +38,7 @@ _HEADER = re.compile(
     r"execution: (?P<execution>[0-9a-f]{32})\n"
     r"checkpoint: (?P<checkpoint>[0-9a-f]{40})\n"
     r"control: (?P<control>[0-9a-f]{40})\n"
-    r"disposition: (?P<disposition>rework)\n-->\n",
+    r"disposition: (?P<disposition>rework|accept)\n-->\n",
 )
 
 
@@ -67,8 +67,11 @@ def restore_review_binding(
     execution_id: str,
     checkpoint: str,
     control_head: str,
+    disposition: str = "rework",
 ) -> ReviewBinding:
     """Validate a persisted immutable binding before reusing its prompt data."""
+    if disposition not in {"rework", "accept"}:
+        raise ReviewProvenanceError("unsupported curator review disposition")
     required = {
         "content",
         "path",
@@ -124,7 +127,7 @@ def restore_review_binding(
             "execution": execution_id,
             "checkpoint": checkpoint,
             "control": control_head,
-            "disposition": "rework",
+            "disposition": disposition,
         }
     ):
         raise ReviewProvenanceError("persisted curator review attribution is invalid")
