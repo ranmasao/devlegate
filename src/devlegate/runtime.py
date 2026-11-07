@@ -154,6 +154,7 @@ from devlegate.runtime_state_validation import (
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.status_projection import blocked_tickets
 from devlegate.tickets import (
+    WORKFLOW_STATES,
     Ticket,
     TicketError,
     TicketStore,
@@ -577,8 +578,8 @@ def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
 
 def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
     entries: list[str] = []
-    for state in ("backlog", "todo", "review", "accepted", "done"):
-        directory = repo / workflow_paths[state]
+    for state in WORKFLOW_STATES:
+        directory = repo / workflow_paths.get(state, f"kanban/{state}")
         if directory.is_dir():
             entries.append(f"{state}\0dir\n")
         elif directory.exists():
@@ -746,6 +747,7 @@ class ServiceEngine:
         self.review_path = setting("REVIEW_PATH", "kanban/review")
         self.accepted_path = setting("ACCEPTED_PATH", "kanban/accepted")
         self.done_path = setting("DONE_PATH", "kanban/done")
+        self.abandoned_path = setting("ABANDONED_PATH", "kanban/abandoned")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
@@ -2862,7 +2864,7 @@ class ServiceEngine:
                 state,
                 sum(ticket.state == state for ticket in ticket_store.tickets),
             )
-            for state in ("backlog", "todo", "review", "accepted", "done")
+            for state in WORKFLOW_STATES
         )
         self._publish_service_snapshot(
             lifecycle="blocked" if blocked_reason else "processing",
@@ -2892,6 +2894,7 @@ class ServiceEngine:
             "review": self.review_path,
             "accepted": self.accepted_path,
             "done": self.done_path,
+            "abandoned": self.abandoned_path,
         }
 
     @contextmanager
@@ -3071,6 +3074,10 @@ class ServiceEngine:
         self._validate_control_worktree()
         for state, configured_path in self._workflow_paths().items():
             directory = self.control_worktree / configured_path
+            if state == "abandoned" and not (
+                directory.exists() or directory.is_symlink()
+            ):
+                continue
             if not directory.is_dir():
                 raise WorkflowBlockedError(
                     f"managed workflow directory is unavailable: {directory} ({state})"
@@ -9967,6 +9974,26 @@ class ServiceEngine:
             return AdmissionBarrier(
                 "blocked", "repository", "code or control working tree is dirty"
             )
+        abandonment = next(
+            (
+                ticket for ticket in ticket_store.tickets
+                if ticket.type == "devlegate.abandonment"
+                and ticket.state in {"todo", "review", "accepted"}
+            ),
+            None,
+        )
+        if abandonment is not None:
+            # Cgroups prove process lifetime, not filesystem or credential
+            # isolation. Never route this request through an ordinary checkout
+            # worker or through product integration until the evidence-only
+            # execution and reviewed disposition boundaries are available.
+            return AdmissionBarrier(
+                "blocked", "abandonment",
+                f"abandonment request {abandonment.id} reserves {abandonment.target}; "
+                "Git-free analysis isolation and reviewed finalization are not "
+                "available; keep the request pending",
+                abandonment.id,
+            )
         boundary = tuple(
             ticket
             for ticket in ticket_store.tickets
@@ -10044,7 +10071,7 @@ class ServiceEngine:
                 control=control,
                 counts=tuple(
                     (state_name, 0)
-                    for state_name in ("backlog", "todo", "review", "accepted", "done")
+                    for state_name in WORKFLOW_STATES
                 ),
                 runnable=(),
                 blocked=(),
@@ -10065,7 +10092,7 @@ class ServiceEngine:
             )
         counts = tuple(
             (name, sum(ticket.state == name for ticket in ticket_store.tickets))
-            for name in ("backlog", "todo", "review", "accepted", "done")
+            for name in WORKFLOW_STATES
         )
         runnable = tuple((ticket.id, ticket.title) for ticket in ticket_store.runnable)
         dependency_blocked = tuple(
@@ -11619,6 +11646,7 @@ class ServiceEngine:
             review_path=self.review_path,
             accepted_path=self.accepted_path,
             done_path=self.done_path,
+            abandoned_path=self.abandoned_path,
             product_branch=self.remote_branch,
         )
 
@@ -11826,7 +11854,12 @@ class ServiceEngine:
             *[
                 (
                     f"workflow directory ({state})",
-                    (self.control_worktree / configured_path).is_dir(),
+                    (self.control_worktree / configured_path).is_dir()
+                    or (
+                        state == "abandoned"
+                        and not (self.control_worktree / configured_path).exists()
+                        and not (self.control_worktree / configured_path).is_symlink()
+                    ),
                     str(self.control_worktree / configured_path),
                 )
                 for state, configured_path in self._workflow_paths().items()
@@ -11899,10 +11932,10 @@ class ServiceEngine:
         if ticket_store is not None:
             ticket_counts = {
                 state: sum(ticket.state == state for ticket in ticket_store.tickets)
-                for state in ("backlog", "todo", "review", "accepted", "done")
+                for state in WORKFLOW_STATES
             }
             write("Ticket storage:")
-            for state in ("backlog", "todo", "review", "accepted", "done"):
+            for state in WORKFLOW_STATES:
                 write(f"  {state}: {ticket_counts[state]}")
             write(f"Runnable tickets: {len(ticket_store.runnable)}")
             selected = ticket_store.selected()
