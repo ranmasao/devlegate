@@ -70,7 +70,7 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
         "devlegate/control"
     )
     assert len(git(control, "rev-list", "--parents", "-n1", "HEAD").stdout.split()) == 1
-    for state_name in ("backlog", "todo", "review", "accepted", "done"):
+    for state_name in ("backlog", "todo", "review", "accepted", "done", "abandoned"):
         assert (control / "workflow" / state_name / ".gitkeep").is_file()
     assert not (control / "reviews/.devlegate-review-v1").exists()
     assert not (working / "workflow").exists()

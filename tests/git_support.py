@@ -68,7 +68,7 @@ def _add_control(
     git(seed, "switch", "--orphan", "devlegate/control")
     if remove_product is not None:
         (seed / remove_product).unlink(missing_ok=True)
-    for name in ("backlog", "todo", "review", "accepted", "done"):
+    for name in ("backlog", "todo", "review", "accepted", "done", "abandoned"):
         (seed / "kanban" / name).mkdir(parents=True)
         (seed / "kanban" / name / ".gitkeep").touch()
     if ticket:
