@@ -1446,12 +1446,23 @@ def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
             resolve_commit(working, f"refs/heads/{workspaces['T-2'].branch}")
             == checkpoint
         )
-        status = service.cli("clean", "--json")
-        assert status.returncode == 0
-        assert any(
-            item["ticket_id"] == "T-2"
-            and item["reason"] == "done execution is published and disposable"
-            for item in json.loads(status.stdout)["decisions"]
+        # Physical retirement precedes publication of the complete inventory.
+        # An IPC read between those owner-side stages still returns the prior
+        # snapshot. Wait for publication, not just disappearance of T-1's ref.
+        def inventory_published():
+            status = service.cli("clean", "--json")
+            assert status.returncode == 0
+            return any(
+                item["ticket_id"] == "T-2"
+                and item["reason"] == "done execution is published and disposable"
+                for item in json.loads(status.stdout)["decisions"]
+            )
+
+        service.wait_for(inventory_published)
+        assert workspaces["T-2"].path.is_dir()
+        assert (
+            resolve_commit(working, f"refs/heads/{workspaces['T-2'].branch}")
+            == checkpoint
         )
 
 

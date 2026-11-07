@@ -9979,14 +9979,13 @@ class ServiceEngine:
             None,
         )
         if abandonment is not None:
-            # Cgroups prove process lifetime, not filesystem or credential
-            # isolation. Never route this request through an ordinary checkout
-            # worker or through product integration until the evidence-only
-            # execution and reviewed disposition boundaries are available.
+            # Never route this request through an ordinary checkout worker or
+            # product integration. Trusted evidence workers are supported, but
+            # durable admission and reviewed disposition are not yet connected.
             return AdmissionBarrier(
                 "blocked", "abandonment",
                 f"abandonment request {abandonment.id} reserves {abandonment.target}; "
-                "Git-free analysis isolation and reviewed finalization are not "
+                "durable evidence admission and reviewed finalization are not "
                 "available; keep the request pending",
                 abandonment.id,
             )

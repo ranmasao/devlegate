@@ -575,8 +575,9 @@ def _review_disposition(
     control: OwnerGitEvidence, *, report: ExecutionReport, publication: str,
     revision: str, review_oid: str, todo_path: str, review_path: str,
     backlog_path: str,
+    accepted_path: str,
 ) -> tuple[str, dict[str, object]]:
-    """Bind the original historical rejection, including still-deferred work.
+    """Bind an exact historical acceptance, rejection or deferral.
 
     Unlike resume admission, historical attribution does not require a deferred
     target to have been promoted back to todo. The proven linear chain and
@@ -592,6 +593,10 @@ def _review_disposition(
     content = control.small(
         "cat-file", "blob", review_oid, limit=MAX_REVIEW_BYTES,
     ).decode("utf-8")
+    # Acceptance uses the same exact attribution header, but is deliberately
+    # opt-in here. Ordinary rework admission still accepts only rework headers.
+    header = content.partition("\n-->\n")[0]
+    disposition = "accept" if header.endswith("\ndisposition: accept") else "rework"
     binding = restore_review_binding(
         {
             "content": content, "path": artifact, "publication": revision,
@@ -600,6 +605,7 @@ def _review_disposition(
         },
         ticket_id=report.ticket_id, execution_id=report.execution_id,
         checkpoint=report.workspace_head, control_head=report.control_head,
+        disposition=disposition,
     )
     raw = control.small(
         "diff-tree", "-r", "--no-commit-id", "--name-status", "--no-renames",
@@ -615,9 +621,17 @@ def _review_disposition(
     original = _tree(control, publication, review_ticket).get(review_ticket)
     if original is None or original[0] != "100644":
         raise EvidenceError("review generation ticket is not a regular admitted blob")
+    parents = control.small("rev-list", "--parents", "-n", "1", revision).split()
+    if len(parents) != 2 or _tree(
+        control, parents[1].decode("ascii"), review_ticket,
+    ).get(review_ticket) != original:
+        raise EvidenceError("review predecessor changed the reviewed ticket")
     for decision, destination in (
         ("rework", todo_path), ("rework-deferred", backlog_path),
+        ("accepted", accepted_path),
     ):
+        if (decision == "accepted") != (disposition == "accept"):
+            continue
         target = f"{destination}/{report.ticket_id}.md"
         if changes == {("A", artifact), ("D", review_ticket), ("A", target)}:
             if _tree(control, revision, target).get(target) != original:
@@ -628,7 +642,7 @@ def _review_disposition(
                 "publication": binding.publication, "sha256": binding.sha256,
                 "transition": list(binding.transition),
             }
-    raise EvidenceError("review publication is not an exact bound rejection/deferral")
+    raise EvidenceError("review publication is not an exact bound disposition")
 
 
 def _delta(
@@ -695,6 +709,8 @@ def build_abandonment_evidence(
     request_path: str, target_path: str,
     todo_path: str = "kanban/todo", review_path: str = "kanban/review",
     backlog_path: str = "kanban/backlog",
+    accepted_path: str = "kanban/accepted",
+    product_head: str | None = None,
 ) -> EvidenceBundle:
     """Extract chronological evidence, preserving uncertainty as explicit gaps.
 
@@ -711,13 +727,20 @@ def build_abandonment_evidence(
         or not _OID.fullmatch(control_head)
     ):
         raise EvidenceError("request is not a validated abandonment specification")
-    for path in (request_path, target_path, todo_path, review_path, backlog_path):
+    for path in (
+        request_path, target_path, todo_path, review_path, backlog_path, accepted_path,
+    ):
         _safe_path(path)
     builder = EvidenceBuilder(product, control=control)
     gaps: list[str] = [
         "current owned-resource observation and generation binding not supplied; "
         "this bundle cannot authorize cleanup",
     ]
+    if product_head is not None and (
+        not _OID.fullmatch(product_head)
+        or product.small("cat-file", "-t", product_head).strip() != b"commit"
+    ):
+        raise EvidenceError("observed product HEAD is not an exact available commit")
     try:
         if product.small("cat-file", "-t", request.start_head).strip() != b"commit":
             raise EvidenceError("initial product HEAD is not a commit")
@@ -842,6 +865,10 @@ def build_abandonment_evidence(
                 "checkpoint": report.workspace_head,
                 "resource_generation_claim": report.resource_generation,
                 "conclusion": report.result.conclusion,
+                "integration": {
+                    "state": "unknown",
+                    "reason": "review outcome alone does not prove product integration",
+                },
             })
             admitted_spec_path = f"{todo_path}/{target.id}.md"
             admitted_spec = _tree(control, report.control_head, admitted_spec_path)
@@ -900,6 +927,7 @@ def build_abandonment_evidence(
                             revision=revision, review_oid=review_oid,
                             todo_path=todo_path, review_path=review_path,
                             backlog_path=backlog_path,
+                            accepted_path=accepted_path,
                         )
                         entry["review_decision"] = decision
                         entry["review_binding"] = binding
@@ -912,6 +940,19 @@ def build_abandonment_evidence(
             entry["delta"] = _delta(
                 product, builder, report.code_base_head, report.workspace_head
             )
+            if product_head is not None:
+                integrated = product.ancestor(report.workspace_head, product_head)
+                entry["integration"] = {
+                    "state": "checkpoint-in-product" if integrated else
+                    "checkpoint-not-in-product",
+                    "product_head": product_head,
+                    "reason": (
+                        "checkpoint ancestry is proven; later reverts or edits may "
+                        "have changed its effects" if integrated else
+                        "checkpoint is not an ancestor of this observed product HEAD; "
+                        "equivalent changes or cherry-picks remain unknown"
+                    ),
+                }
             latest = report.workspace_head
         except (
             EvidenceError, ExecutionReportError, UnicodeError, json.JSONDecodeError,
@@ -944,4 +985,5 @@ def build_abandonment_evidence(
         "start_head_status": start_head_status,
         "control_head": control_head, "specifications": specification,
         "executions": executions, "latest_state_comparison": comparison, "gaps": gaps,
+        "observed_product_head": product_head,
     })

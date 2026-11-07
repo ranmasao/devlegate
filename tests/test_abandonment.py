@@ -160,7 +160,7 @@ def test_request_cannot_enter_checkout_worker_or_product_integration(tmp_path, s
     )
     assert barrier.action == "blocked"
     assert barrier.kind == "abandonment"
-    assert "Git-free analysis isolation" in barrier.reason
+    assert "durable evidence admission" in barrier.reason
     assert "A-TARGET" in barrier.reason
 
 
@@ -365,9 +365,9 @@ def test_control_tree_observations_skip_unrelated_history(tmp_path, monkeypatch)
         request_path="kanban/todo/Z-REQUEST.md", target_path="kanban/todo/A-TARGET.md",
     )
     assert len(bundle.manifest()["executions"]) == 2
-    # Four target events, final tree, specs, two admissions, two exact review
-    # disposition comparisons. Unrelated commits add no tree observations.
-    assert len(observations) == 12
+    # Four target events, final tree, specs, two admissions, and exact review
+    # predecessor/destination proofs. Unrelated commits add no tree observations.
+    assert len(observations) == 14
 
 
 def test_non_utf8_and_utf8_limit_boundary_keep_index_entries(tmp_path):
@@ -411,7 +411,9 @@ def test_source_selectors_cannot_be_refs_or_paths(objects):
         GitArtifact("blob", objects)
 
 
-def publish_report(repo, execution_id, base, checkpoint, *, deferred=False):
+def publish_report(
+    repo, execution_id, base, checkpoint, *, deferred=False, accepted=False,
+):
     admission = git(repo, "rev-parse", "HEAD")
     claim = WorkerClaim("incomplete", "Investigated the approach", ("Finish work",), ())
     result = ExecutionResult(0, None, None, claim, "incomplete", (),
@@ -429,18 +431,19 @@ def publish_report(repo, execution_id, base, checkpoint, *, deferred=False):
     commit(repo, "Publish execution and enter review")
     review_path = repo / "reviews" / "A-TARGET" / f"{execution_id}.md"
     review_path.parent.mkdir(parents=True, exist_ok=True)
+    disposition = "accept" if accepted else "rework"
     review_path.write_text(
         "<!-- devlegate-review-v1\n"
         f"ticket: A-TARGET\nexecution: {execution_id}\ncheckpoint: {checkpoint}\n"
-        f"control: {admission}\ndisposition: rework\n-->\n"
+        f"control: {admission}\ndisposition: {disposition}\n-->\n"
         "The approach needs another iteration.\n"
     )
-    destination = "backlog" if deferred else "todo"
+    destination = "accepted" if accepted else ("backlog" if deferred else "todo")
     (review / "A-TARGET.md").rename(repo / PATHS[destination] / "A-TARGET.md")
     commit(repo, "Publish independently attributed rework review")
 
 
-def history_fixture(tmp_path, *, deferred=False):
+def history_fixture(tmp_path, *, deferred=False, accepted=False):
     product = init_repo(tmp_path / "product")
     (product / "file.txt").write_text("starting point\n")
     (product / "obsolete.txt").write_text("remove in the second execution\n")
@@ -460,7 +463,8 @@ def history_fixture(tmp_path, *, deferred=False):
     commit(control, "Admit target")
     # IDs deliberately run opposite lexical order.
     publish_report(control, "f" * 32, start, checkpoint1)
-    publish_report(control, "0" * 32, base2, checkpoint2, deferred=deferred)
+    publish_report(control, "0" * 32, base2, checkpoint2,
+                   deferred=deferred, accepted=accepted)
     request(control, start_head=start)
     head = commit(control, "Admit abandonment request")
     return product, control, head, start, base2, checkpoint2
@@ -512,6 +516,62 @@ def test_still_deferred_review_has_exact_historical_attribution(tmp_path):
     assert manifest["executions"][1]["review_decision"] == "rework-deferred"
     assert all("review_gap" not in entry for entry in manifest["executions"])
     assert "kanban/backlog/A-TARGET.md" in manifest["specifications"]
+
+
+def test_exact_accepted_review_is_attributed_without_inventing_integration(tmp_path):
+    product, control, head, _start, _base2, _checkpoint = history_fixture(
+        tmp_path, accepted=True,
+    )
+    manifest = build_fixture(product, control, head).manifest()
+    last = manifest["executions"][1]
+    assert last["review_decision"] == "accepted"
+    assert "review_gap" not in last
+    assert last["integration"]["state"] == "unknown"
+
+
+def test_product_checkpoint_attribution_uses_exact_owner_observation(tmp_path):
+    product, control, head, start, _base2, checkpoint = history_fixture(tmp_path)
+    store = load_ticket_store(control, PATHS)
+
+    def observed(product_head):
+        return build_abandonment_evidence(
+            control=owner_source(control), product=owner_source(product),
+            control_head=head, request=store.by_id["Z-REQUEST"],
+            target=store.by_id["A-TARGET"],
+            request_path="kanban/todo/Z-REQUEST.md",
+            target_path="kanban/todo/A-TARGET.md", product_head=product_head,
+        ).manifest()
+
+    integrated = observed(checkpoint)["executions"]
+    assert all(
+        entry["integration"]["state"] == "checkpoint-in-product" for entry in integrated
+    )
+    assert all(
+        entry["integration"]["product_head"] == checkpoint for entry in integrated
+    )
+    not_integrated = observed(start)["executions"]
+    assert all(
+        entry["integration"]["state"] == "checkpoint-not-in-product"
+        for entry in not_integrated
+    )
+    assert "cherry-picks remain unknown" in not_integrated[0]["integration"]["reason"]
+    with pytest.raises(EvidenceError, match="exact available commit"):
+        observed("HEAD")
+
+
+def test_mismatched_accepted_review_header_is_not_a_proven_disposition(tmp_path):
+    product, control, head, _start, _base2, _checkpoint = history_fixture(
+        tmp_path, accepted=True,
+    )
+    review = control / "reviews/A-TARGET" / ("0" * 32 + ".md")
+    # A changed accepted review must remain a gap, not a rejection or acceptance
+    # manufactured from its latest contents.
+    review.write_text(review.read_text().replace("disposition: accept",
+                                                "disposition: rework"))
+    head = commit(control, "Change disposable accepted review")
+    manifest = build_fixture(product, control, head).manifest()
+    assert "review_gap" in manifest["executions"][1]
+    assert "review_decision" not in manifest["executions"][1]
 
 
 def test_unavailable_diff_preserves_attributed_file_index(tmp_path, monkeypatch):

@@ -2,9 +2,9 @@
 
 This implementation is not yet an operational abandonment workflow. It adds
 the terminal board, request schema, scheduler reservation, owner-only evidence
-library and a Linux evidence-isolation launcher/private bounded read channel.
-The service deliberately refuses pending abandonment requests: isolated agent
-dispatch and independently reviewed finalization are not yet connected. Do not
+library, a trusted evidence-worker supervisor and scoped bounded read channels.
+The service deliberately refuses pending abandonment requests: durable owner
+admission and independently reviewed finalization are not yet connected. Do not
 move live tickets to `abandoned` manually to
 request cleanup. No abandonment-specific cleanup authorization is enabled.
 
@@ -51,7 +51,7 @@ missing targets and already terminal targets are rejected.
 
 Requests in `todo`, `review` or `accepted` reserve their target against fresh
 scheduler selection. Request selection has priority over implementation
-tickets. Until the isolated execution and finalization path is implemented,
+tickets. Until the durable admission and finalization path is implemented,
 the plan is explicitly blocked, including for accepted requests. The ordinary
 worker and product integration paths must not process them.
 
@@ -72,11 +72,20 @@ its own base-to-checkpoint delta. Attributable rework decisions use the
 existing independent review attribution checker and verify the exact original
 same-commit ticket move and review publication. A still-deferred rejection is
 identified as `rework-deferred`; historical attribution does not require a new
-worker admission or rescan unrelated later control commits. Unavailable or changed evidence
+worker admission or rescan unrelated later control commits. Exact historical
+acceptances are attributable with the same bound header and `disposition:
+accept`, published with the unchanged review-to-accepted move. Legacy acceptance
+without attributable text remains an explicit review gap. The default ordinary
+rework binding still rejects acceptance headers. Unavailable or changed evidence
 and unproven review decisions remain explicit gaps. A missing latest
 checkpoint never falls back to an older execution. An initial-to-latest state
 comparison is labelled as a state comparison, not cumulative contribution,
-and is emitted only if ancestry is proven.
+and is emitted only if ancestry is proven. When the owner supplies an exact
+observed product HEAD, each checkpoint is labelled as in or outside that commit's
+ancestry. Acceptance alone never proves integration; ancestry does not prove
+the effects survived later reverts, and absent ancestry does not disprove
+equivalent changes or cherry-picks. Without that observation integration is
+explicitly unknown.
 
 Files, control text and diffs have immutable object identities, SHA-256 content
 digests, byte sizes and stable artifact IDs. File entries identify renames,
@@ -114,31 +123,41 @@ identity and an explicit gap are retained alongside the attributed file index.
 
 The reader does not accept filesystem paths, ref names, arbitrary Git commands
 or symlink targets. It disables external diff/text conversion and lazy object
-fetching. Only manifest data and read responses may eventually cross into an
-isolated agent. Passing the owner-side Python objects, repository path, owner
-IPC or credentials to that agent would violate the execution boundary.
+fetching. Only manifest data and read responses cross the evidence tool channel.
+Owner-side Python objects and privileged service dispatch are never exposed
+through this channel.
 
 ## Required completion and recovery boundary
 
-`evidence_launcher.py` is a fail-closed, dedicated-child Linux launcher. Landlock
-ABI 6+ restricts filesystem access to owner-audited runtime data, an immutable
-evidence directory and private writable scratch. Execute permission is limited
-to explicit regular executable files (including an ELF interpreter when
-needed). Source, Git storage, credentials and `/proc` are not allowlisted. The
-launcher clears the inherited environment, accepts only explicit provider-key
-and runtime environment names, and closes unexpected descriptors before exec.
-The launch specification is trusted owner input, never agent input; owner
-dispatch must validate its runtime roots against source/control/credential
-resources and start the launcher with a clean environment too.
+Mandatory kernel-enforced agent confinement is explicitly deferred to TASK-152.
+The experimental launcher and kernel-isolation tests have been removed. TASK-151
+uses the existing trusted-agent model: worker instructions, OpenCode directory
+permissions and supervised cgroup lifetime containment. A cgroup is a process
+lifetime boundary, not filesystem or credential isolation. An agent with general
+shell access as the service UID may reach other resources. This implementation
+does not claim OS-enforced denial of Git, credentials or privileged IPC.
 
-A seccomp filter rejects alternate syscall ABIs, non-IP socket creation,
-socketpair, ptrace/process-memory reads, keyring access, descriptor theft and
-io_uring bypasses. Landlock scoped signals and abstract Unix sockets further
-separate the worker from the owner. Only private pipe descriptors cross this
-boundary; privileged Unix service IPC is inaccessible. The launcher supports
-x86_64 and aarch64 Linux and refuses before worker exec when the boundary cannot
-be installed. Cgroup containment is still needed for process lifetime/recovery.
-This library mechanism is not yet an operational OpenCode analysis worker.
+`EvidenceWorkspace.prepare` creates a fresh private evidence directory outside
+repository ancestry. It contains only the manifest, not a checkout or `.git`.
+The manifest is read-only, bounded to 64 MiB including its index and JSON
+encoding, and pinned by content digest; its directory identity is checked before
+worker admission. It does not mirror omitted source objects.
+
+`WorkerSupervisor.run` supports this workspace with the existing execution
+logging, prompt delivery, process identity, worker egress, cancellation and
+cgroup retirement. The worker gets a generated `devlegate_evidence_read` tool
+bound to one manifest and one private socket, not owner-side Python objects or
+the privileged service dispatcher. The owner services reads in the supervised
+wait loop, on the repository-owner thread. Socket I/O is nonblocking, with one
+active connection and bounded request/response buffers; idle or partial clients
+do not stop supervision. Owner extraction still has its independent source-I/O
+and producer deadlines. A channel failure interrupts and retires the worker.
+
+`EvidenceSocket` accepts only the same four read fields as `EvidencePipe`, one
+request per connection. Its default quotas match the pipe quotas below.
+Malformed requests, unauthorized IDs and excessive ranges are refused and
+consume quotas. It never unlinks a preexisting endpoint on admission, and only
+removes its own endpoint on close. There is no generic filesystem or Git API.
 
 `EvidencePipe` uses the existing length-prefixed IPC framing but has no service
 method dispatcher: the only request fields are `manifest_id`, `artifact_id`,
@@ -147,14 +166,22 @@ retains its Git capability. Defaults are a 4 KiB maximum request, 1 MiB maximum
 encoded response, 8,192 total requests, 2 GiB total encoded responses, 30-second
 pipe I/O deadlines and a 600-second session deadline. Invalid reads consume
 quotas. Stalled/oversized frames and exhausted budgets close the session. No
-response history is accumulated. The service still needs to schedule these
-owner-side reads alongside supervised analysis and cancellation.
+response history is accumulated.
+
+The analysis prompt requires a concrete reason, every execution/review outcome,
+meaningful changes and research, integrated versus discarded work, unfinished
+work, known gaps, future conclusions and exact manifest/checkpoint identities.
+`devlegate_report` remains the only semantic egress. Analysis reports are bounded
+to 64 KiB UTF-8; completed claims must contain the required nonempty sections and
+exact identities. Structural completeness is not semantic correctness or review
+acceptance. Incomplete/blocked claims remain untrusted draft evidence too.
 
 The remaining service integration must bind admission to exact request and
 target blobs, prove quiescent ownership, persist the exclusive disposition,
-launch an evidence-only isolated agent and validate the semantic report through
-Reviewer. A cgroup is a process-lifetime boundary, not filesystem isolation.
-The current explicit refusal must remain until that stronger boundary exists.
+dispatch the evidence-only agent from durable service state and validate the
+semantic report through Reviewer. The current explicit refusal remains until
+durable admission, finalization and recovery are connected, not because of the
+deferred kernel sandbox requirement.
 
 The intended authoritative report placement is
 `abandonments/<target>/<request-execution>.md`. Publication must follow all
