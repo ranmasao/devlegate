@@ -109,13 +109,18 @@ class EvidenceWorkspace:
                    hashlib.sha256(encoded).hexdigest())
 
     def validate(self) -> None:
+        if any(parent.is_symlink() for parent in (self.path, *self.path.parents)):
+            raise EvidenceError("symlink in evidence workspace path")
         directory = self.path.lstat()
         if not stat.S_ISDIR(directory.st_mode) or (
             directory.st_dev, directory.st_ino,
         ) != self.directory_identity:
             raise EvidenceError("evidence workspace is absent or substituted")
-        if (self.path / ".git").exists() or (self.path / ".git").is_symlink():
-            raise EvidenceError("evidence workspace must not contain .git")
+        if any(
+            (parent / ".git").exists() or (parent / ".git").is_symlink()
+            for parent in (self.path, *self.path.parents)
+        ):
+            raise EvidenceError("evidence workspace must not have Git ancestry or .git")
         manifest = self.path / "manifest.json"
         if manifest.is_symlink() or not manifest.is_file():
             raise EvidenceError("evidence manifest is not a regular file")

@@ -374,14 +374,19 @@ def test_daemon_host_signal_handler_splits_abort_from_graceful_lifecycle(
 ):
     installed = {}
     lifecycle_calls = []
+    delivered = threading.Event()
 
     def install(signum, handler):
         if callable(handler):
             installed[signum] = handler
 
     class FakeServiceEngine:
+        def wake(self):
+            delivered.set()
+
         def serve(self, stop_event, *, lock_handle=None, once=False):
             installed[signum](signum, None)
+            assert delivered.wait(5)
             if expected_kind is None:
                 assert not stop_event.is_set()
                 assert lifecycle_calls == ["stop"]
@@ -433,15 +438,21 @@ def test_restart_authority_handoff_requires_internal_hosting(
 )
 def test_daemon_host_operator_abort_precedes_graceful_lifecycle(monkeypatch, signals):
     installed = {}
+    delivered = threading.Event()
 
     def install(signum, handler):
         if callable(handler):
             installed[signum] = handler
 
     class FakeServiceEngine:
+        def wake(self):
+            delivered.set()
+
         def serve(self, stop_intent, *, lock_handle=None, once=False):
             for signum in signals:
                 installed[signum](signum, None)
+                assert delivered.wait(5)
+                delivered.clear()
             assert stop_intent.kind == "operator_abort"
             return 0
 
@@ -455,6 +466,56 @@ def test_daemon_host_operator_abort_precedes_graceful_lifecycle(monkeypatch, sig
     ):
         result = host._serve_engine(intent)
     assert result == 130
+
+
+def test_signal_during_buffered_output_defers_lifecycle_until_outside_handler(
+    monkeypatch,
+):
+    """SIGTERM inside flush must not recursively flush the same stdout buffer."""
+    import io
+
+    installed = {}
+    delivered = threading.Event()
+
+    class InterruptingStream(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.interrupted = False
+            self.flushing = False
+            self.lock = threading.RLock()
+
+        def flush(self):
+            with self.lock:
+                assert not self.flushing, "reentrant buffered flush"
+                self.flushing = True
+                try:
+                    if not self.interrupted:
+                        self.interrupted = True
+                        installed[signal.SIGTERM](signal.SIGTERM, None)
+                finally:
+                    self.flushing = False
+
+    class FakeServiceEngine:
+        def wake(self):
+            delivered.set()
+
+    def install(signum, handler):
+        if callable(handler):
+            installed[signum] = handler
+
+    stream = InterruptingStream()
+    monkeypatch.setattr(daemon.signal, "signal", install)
+    monkeypatch.setattr(daemon.signal, "getsignal", lambda _: signal.SIG_DFL)
+
+    def lifecycle(*_args):
+        daemon.service_log("stop accepted", stream=stream)
+        return {}
+
+    host = daemon.ServiceHost(FakeServiceEngine())
+    with host._signal_ownership(daemon.ShutdownIntent(), lifecycle):
+        daemon.service_log("operational output", stream=stream)
+        assert delivered.wait(5)
+    assert "stop accepted" in stream.getvalue()
 
 def test_stop_during_observation_prevents_fresh_mutation(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)

@@ -2,10 +2,10 @@
 
 This implementation is not yet an operational abandonment workflow. It adds
 the terminal board, request schema, scheduler reservation, owner-only evidence
-library, a trusted evidence-worker supervisor and scoped bounded read channels.
-The service deliberately refuses pending abandonment requests: durable owner
-admission and independently reviewed finalization are not yet connected. Do not
-move live tickets to `abandoned` manually to
+library, durable exclusive admission, supervised evidence analysis and scoped
+bounded read channels. The service records analysis proposals in runtime state;
+independently reviewed control publication and finalization are not yet connected.
+Do not move live tickets to `abandoned` manually to
 request cleanup. No abandonment-specific cleanup authorization is enabled.
 
 ## Board and request format
@@ -51,9 +51,37 @@ missing targets and already terminal targets are rejected.
 
 Requests in `todo`, `review` or `accepted` reserve their target against fresh
 scheduler selection. Request selection has priority over implementation
-tickets. Until the durable admission and finalization path is implemented,
-the plan is explicitly blocked, including for accepted requests. The ordinary
-worker and product integration paths must not process them.
+tickets. A runnable request is admitted only under the repository owner after
+quiescence and exact committed specification/resource checks. The ordinary
+checkout worker and product integration paths do not process these requests.
+The plan remains explicitly blocked while reviewed finalization is pending,
+including for requests moved to `accepted`.
+
+Admission persists the request/target blob identities, initial and observed
+product HEADs, reason digest, execution identity and local resource-generation
+observation before workspace creation or worker launch. A changed reason, target
+or target specification blocks replay rather than silently retargeting the
+request. Removing an admitted request does not release the durable reservation.
+Live or uncertain worker ownership, reconciliation, pending integration, recovery
+and foreign/unproven worktrees are refused without canceling an existing worker.
+Dirty owned worktrees are observed without modifying them; their uncheckpointed
+data is explicitly a gap in the immutable checkpoint evidence.
+
+The scheduler runs analysis in `STATE_DIR/analysis/analysis-*`, a private directory
+outside repository ancestry. It durably records prepared/running/reported stages,
+the manifest and directory identities, supervised process identity and proposed
+ExecutionReport. A reported result replays without launching another worker. A
+lost process with proven absent containment produces a failed report, never an
+invented semantic summary. Live/unknown containment or the uncertain launch
+window blocks with an ownership diagnostic. The current implementation does not
+yet provide publication, independent acceptance or an operator resume command
+for that blocked launch window. The report proposal alone cannot change boards
+or authorize disposal.
+
+Upstream observations are retained for later lease comparisons and labelled
+`unproven` for continuity. A matching remote name and SHA is not independent
+proof that a deleted ref was never recreated. Upstream-only resources with no
+local ownership evidence are refused at admission.
 
 ## Evidence library
 
@@ -176,11 +204,10 @@ to 64 KiB UTF-8; completed claims must contain the required nonempty sections an
 exact identities. Structural completeness is not semantic correctness or review
 acceptance. Incomplete/blocked claims remain untrusted draft evidence too.
 
-The remaining service integration must bind admission to exact request and
-target blobs, prove quiescent ownership, persist the exclusive disposition,
-dispatch the evidence-only agent from durable service state and validate the
-semantic report through Reviewer. The current explicit refusal remains until
-durable admission, finalization and recovery are connected, not because of the
+The remaining service integration must publish the proposal for independent
+Reviewer validation, require exact acceptance, finalize the control transition
+and connect retirement/recovery. The current explicit finalization refusal
+remains because those owner transitions are unfinished, not because of the
 deferred kernel sandbox requirement.
 
 The intended authoritative report placement is
