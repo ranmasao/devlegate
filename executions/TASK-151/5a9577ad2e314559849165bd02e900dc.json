@@ -1,0 +1,43 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "incomplete",
+  "control_head": "a3c1843a54e6bc5b4180b6cd9b1e8d003e4659b3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "5a9577ad2e314559849165bd02e900dc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect evidence extraction to durable exact-blob request admission, persistent exclusive target disposition, and comprehensive live-worker/integration/reconciliation/recovery ownership refusal checks.",
+    "Implement and prove a Git-free filesystem, credential and control-IPC isolation boundary for the analysis worker, and expose only manifest-authorized bounded artifact reads through that boundary.",
+    "Complete evidence attribution for all review/disposition types and independently verified generation/checkpoint/current-resource observations; the current extractor explicitly reports unavailable ownership proof as a gap.",
+    "Require a bounded substantive abandonment report and exact independent reviewer acceptance, then implement serialized replayable publication to abandonments/<target>/<request-execution>.md with unchanged-target abandonment and request completion, without product integration.",
+    "Implement separate abandonment authorization for shared owner cleanup primitives, exclusive code-pin retirement, dirty owned-worktree disposal, local CAS and remote identity/lease guards, with durable per-resource intent/status and restart recovery.",
+    "Add end-to-end isolation, reviewed publication, crash/replay and abandonment-retirement regressions, and complete the full configured CI run."
+  ],
+  "report_artifact": "executions/TASK-151/5a9577ad2e314559849165bd02e900dc.md",
+  "report_sha256": "1ab2721e150de8431effa7fcea468eb5637cdcb8e49ccfc119f5d1c79357483e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect evidence extraction to durable exact-blob request admission, persistent exclusive target disposition, and comprehensive live-worker/integration/reconciliation/recovery ownership refusal checks.",
+      "Implement and prove a Git-free filesystem, credential and control-IPC isolation boundary for the analysis worker, and expose only manifest-authorized bounded artifact reads through that boundary.",
+      "Complete evidence attribution for all review/disposition types and independently verified generation/checkpoint/current-resource observations; the current extractor explicitly reports unavailable ownership proof as a gap.",
+      "Require a bounded substantive abandonment report and exact independent reviewer acceptance, then implement serialized replayable publication to abandonments/<target>/<request-execution>.md with unchanged-target abandonment and request completion, without product integration.",
+      "Implement separate abandonment authorization for shared owner cleanup primitives, exclusive code-pin retirement, dirty owned-worktree disposal, local CAS and remote identity/lease guards, with durable per-resource intent/status and restart recovery.",
+      "Add end-to-end isolation, reviewed publication, crash/replay and abandonment-retirement regressions, and complete the full configured CI run."
+    ],
+    "report": "This invocation reached its implementation/context budget before the end-to-end owner workflow and isolation could be completed. Existing cgroup containment proves process lifetime, not evidence-only filesystem or credential isolation, so pending requests are explicitly refused rather than routed through ordinary workers or integration. No abandonment report publication or abandonment-specific resource retirement is enabled. Focused configured coverage validation passed 237 tests; after subsequent evidence refinements, 89 focused tests passed. Ruff and git diff --check passed. Full-suite attempts exceeded execution time limits; the latest parallel attempt reached approximately 73 percent without a reported failure before timeout, which is not a full-suite pass. All new real-Git fixtures use disposable repositories; no live ticket or hosted operator resources were abandoned or retired.",
+    "summary": "Added the abandoned board, strict abandonment request metadata and body validation, target reservation in ticket selection, and an explicit runtime admission refusal. Added an owner-only evidence library with chronological execution extraction, per-base deltas, rework review provenance, bounded inline excerpts and digest-verified artifact paging, plus documentation of the implemented boundaries."
+  },
+  "workspace_head": "2474fa684123ba6f7302735c7bfebf77cdfc0530"
+}
