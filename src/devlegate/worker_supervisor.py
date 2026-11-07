@@ -19,6 +19,12 @@ from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 
+from devlegate.evidence_channel import EvidenceSocket
+from devlegate.evidence_worker import (
+    EvidenceWorkspace,
+    evidence_tool,
+    validate_analysis_claim,
+)
 from devlegate.execution_containment import (
     ContainmentError,
     ContainmentProvider,
@@ -298,6 +304,7 @@ def _run_opencode(
     worker_started_handler: Callable[[], None] | None = None,
     prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
+    owner_poll: Callable[[], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -531,7 +538,7 @@ def _run_opencode(
 
     if identity_error is not None:
         returncode = finish_interrupted()
-    elif stop_request is None:
+    elif stop_request is None and owner_poll is None:
         try:
             returncode = _wait_process(process)
         except KeyboardInterrupt:
@@ -540,6 +547,8 @@ def _run_opencode(
     else:
         while True:
             try:
+                if owner_poll is not None:
+                    owner_poll()
                 returncode = _wait_process(process, WORKER_WAIT_INTERVAL)
                 break
             except subprocess.TimeoutExpired:
@@ -548,6 +557,19 @@ def _run_opencode(
                     interrupt(kind)
                     returncode = finish_interrupted()
                     break
+            except KeyboardInterrupt:
+                if owner_poll is None:
+                    raise
+                interrupt("operator_abort")
+                returncode = finish_interrupted()
+                break
+            except Exception as error:
+                if owner_poll is None:
+                    raise
+                transport_error = f"owner evidence channel failed: {error}"
+                interrupt("operator_abort")
+                returncode = finish_interrupted()
+                break
     stdout_thread.join()
     stderr_thread.join()
     if prompt_thread.is_alive() and stdin is not None:
@@ -651,7 +673,7 @@ class WorkerSupervisor:
 
     def run(
         self,
-        workspace: ExecutionWorkspace,
+        workspace: ExecutionWorkspace | EvidenceWorkspace,
         prompt: str,
         *,
         execution_id: str,
@@ -659,10 +681,19 @@ class WorkerSupervisor:
         identity_handler: Callable[[WorkerProcessIdentity], None] | None = None,
         interruption_handler: Callable[[str], None] | None = None,
         prompt_delivered_handler: Callable[[], None] | None = None,
+        evidence: EvidenceSocket | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
-        if not isinstance(workspace, ExecutionWorkspace):
-            raise TypeError("worker workspace must be ExecutionWorkspace")
+        if isinstance(workspace, EvidenceWorkspace):
+            workspace.validate()
+            if (
+                evidence is None
+                or evidence.bundle.manifest()["manifest_id"] != workspace.manifest_id
+                or evidence.path.parent != workspace.path
+            ):
+                raise WorkerSupervisionError("evidence worker channel binding differs")
+        elif not isinstance(workspace, ExecutionWorkspace) or evidence is not None:
+            raise TypeError("worker workspace/channel type differs")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
         execution_path = workspace.path.resolve()
@@ -710,6 +741,11 @@ export default tool({
 })
 """
         )
+        if evidence is not None:
+            assert isinstance(workspace, EvidenceWorkspace)
+            (tool_dir / "devlegate_evidence_read.ts").write_text(
+                evidence_tool(evidence.path, workspace.manifest_id)
+            )
         config = {
             "$schema": "https://opencode.ai/config.json",
             "permission": {
@@ -720,6 +756,14 @@ export default tool({
             },
         }
         environment = worker_environment()
+        if evidence is not None:
+            # Do not hand owner Git/IPC configuration to the analysis worker.
+            # This is environment hygiene under the trusted-worker model, not
+            # a claim that shell access as the same UID is kernel-confined.
+            environment = {
+                key: value for key, value in environment.items()
+                if not key.startswith(("GIT_", "SSH_", "DEVLEGATE_"))
+            }
         environment["PWD"] = str(execution_path)
         environment["OPENCODE_CONFIG_DIR"] = str(config_dir)
         environment["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, sort_keys=True)
@@ -761,8 +805,14 @@ export default tool({
                 worker_started_handler=mark_worker_started,
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
+                owner_poll=evidence.poll if evidence is not None else None,
             )
             claim, egress_error = parser.finish()
+            if evidence is not None and claim is not None:
+                try:
+                    validate_analysis_claim(claim, evidence.bundle)
+                except ValueError as error:
+                    claim, egress_error = None, str(error)
             result = WorkerRunResult(
                 opencode_result.process_returncode,
                 opencode_result.transport_error,

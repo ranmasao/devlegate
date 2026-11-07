@@ -4,7 +4,8 @@
 """Private bounded artifact pipes, without access to privileged service dispatch.
 
 The repository-owner thread calls serve_one; no helper thread receives Git
-capability. Only the two worker pipe ends cross the evidence sandbox boundary.
+capability. Only the two worker pipe ends cross the logical evidence boundary.
+This is a scoped tool channel, not kernel-enforced worker isolation.
 """
 
 from __future__ import annotations
@@ -12,8 +13,10 @@ from __future__ import annotations
 import json
 import os
 import selectors
+import socket
 import struct
 import time
+from pathlib import Path
 
 from devlegate.abandonment_evidence import EvidenceBundle, EvidenceError
 from devlegate.ipc_protocol import encode_frame
@@ -24,6 +27,145 @@ MAX_REQUESTS = 8192
 MAX_RESPONSE_TOTAL = 2 * 1024 * 1024 * 1024
 IO_SECONDS = 30
 SESSION_SECONDS = 600
+
+
+def _read_reply(bundle: EvidenceBundle, raw: bytes) -> bytes:
+    try:
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {
+            "manifest_id", "artifact_id", "offset", "length",
+        }:
+            raise EvidenceError("evidence requests must have exact read fields")
+        if not all(
+            isinstance(request[key], str) and len(request[key]) == 64
+            for key in ("manifest_id", "artifact_id")
+        ):
+            raise EvidenceError("invalid manifest/artifact identity")
+        result = bundle.read(**request)
+        reply = {"ok": True, "result": result}
+    except (EvidenceError, UnicodeError, json.JSONDecodeError) as error:
+        reply = {"ok": False, "error": str(error)}
+    payload = json.dumps(reply, ensure_ascii=True, separators=(",", ":")).encode()
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise EvidenceError("evidence response frame exceeds its byte limit")
+    return encode_frame(payload)
+
+
+class EvidenceSocket:
+    """Owner-polled, manifest-scoped read tool for trusted OpenCode workers.
+
+    No Git capability leaves the calling owner thread. One request per
+    connection, one active connection, bounded frames, shared lifetime quotas,
+    and nonblocking socket I/O keep cancellation and supervision responsive.
+    This endpoint has no privileged service dispatcher or filesystem reader.
+    """
+
+    def __init__(
+        self, bundle: EvidenceBundle, path: Path, *,
+        requests: int = MAX_REQUESTS, response_bytes: int = MAX_RESPONSE_TOTAL,
+        io_seconds: float = IO_SECONDS, session_seconds: float = SESSION_SECONDS,
+    ) -> None:
+        if min(requests, response_bytes, io_seconds, session_seconds) <= 0:
+            raise EvidenceError("evidence channel budgets must be positive")
+        self.bundle = bundle
+        self.path = path
+        self._requests = requests
+        self._remaining = response_bytes
+        self._io_seconds = io_seconds
+        self._deadline = time.monotonic() + session_seconds
+        self._client: socket.socket | None = None
+        self._input = bytearray()
+        self._output = b""
+        self._position = 0
+        self._client_deadline = 0.0
+        self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            # Never unlink an existing socket or follow a symlink on admission.
+            self._listener.bind(str(path))
+            os.chmod(path, 0o600)
+            self._listener.listen(1)
+            self._listener.setblocking(False)
+            self._identity = path.lstat()
+        except BaseException:
+            self._listener.close()
+            raise
+
+    def _drop_client(self) -> None:
+        if self._client is not None:
+            self._client.close()
+        self._client = None
+        self._input.clear()
+        self._output = b""
+        self._position = 0
+
+    def close(self) -> None:
+        self._drop_client()
+        self._listener.close()
+        try:
+            current = self.path.lstat()
+            if (current.st_dev, current.st_ino) == (
+                self._identity.st_dev, self._identity.st_ino,
+            ):
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def __enter__(self) -> EvidenceSocket:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def poll(self) -> None:
+        """Perform bounded socket work on the repository-owner thread only."""
+        if time.monotonic() >= self._deadline:
+            raise EvidenceError("evidence channel session deadline exhausted")
+        if self._client is None:
+            try:
+                self._client, _ = self._listener.accept()
+            except BlockingIOError:
+                return
+            self._client.setblocking(False)
+            self._client_deadline = time.monotonic() + self._io_seconds
+            self._requests -= 1
+            if self._requests < 0:
+                self._drop_client()
+                raise EvidenceError("evidence channel request budget exhausted")
+        if time.monotonic() >= self._client_deadline:
+            self._drop_client()
+            return
+        try:
+            if not self._output:
+                chunk = self._client.recv(MAX_REQUEST_BYTES + 5 - len(self._input))
+                if not chunk:
+                    self._drop_client()
+                    return
+                self._input.extend(chunk)
+                if len(self._input) < 4:
+                    return
+                length = struct.unpack(">I", self._input[:4])[0]
+                if not 1 <= length <= MAX_REQUEST_BYTES:
+                    self._drop_client()
+                    return
+                if len(self._input) < length + 4:
+                    return
+                if len(self._input) != length + 4:
+                    self._drop_client()
+                    return
+                self._output = _read_reply(self.bundle, bytes(self._input[4:]))
+                self._remaining -= len(self._output)
+                if self._remaining < 0:
+                    self._drop_client()
+                    raise EvidenceError("evidence aggregate response budget exhausted")
+            self._position += self._client.send(
+                self._output[self._position:self._position + 65536]
+            )
+            if self._position == len(self._output):
+                self._drop_client()
+        except BlockingIOError:
+            pass
+        except (BrokenPipeError, ConnectionResetError):
+            self._drop_client()
 
 
 class EvidencePipe:
@@ -130,27 +272,7 @@ class EvidencePipe:
                 raise EvidenceError("evidence request frame exceeds its byte limit")
             raw = self._transfer(self._request_r, length=length)
             assert raw is not None
-            try:
-                request = json.loads(raw)
-                if not isinstance(request, dict) or set(request) != {
-                    "manifest_id", "artifact_id", "offset", "length",
-                }:
-                    raise EvidenceError("evidence requests must have exact read fields")
-                if not all(
-                    isinstance(request[key], str) and len(request[key]) == 64
-                    for key in ("manifest_id", "artifact_id")
-                ):
-                    raise EvidenceError("invalid manifest/artifact identity")
-                result = self.bundle.read(**request)
-                reply = {"ok": True, "result": result}
-            except (EvidenceError, UnicodeError, json.JSONDecodeError) as error:
-                reply = {"ok": False, "error": str(error)}
-            payload = json.dumps(
-                reply, ensure_ascii=True, separators=(",", ":"),
-            ).encode()
-            if len(payload) > MAX_RESPONSE_BYTES:
-                raise EvidenceError("evidence response frame exceeds its byte limit")
-            frame = encode_frame(payload)
+            frame = _read_reply(self.bundle, raw)
             self._response_bytes -= len(frame)
             if self._response_bytes < 0:
                 raise EvidenceError(

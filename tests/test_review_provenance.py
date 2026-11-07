@@ -61,6 +61,18 @@ def test_restore_review_binding_accepts_known_inert_legacy_markers():
     assert restored.content == binding["content"]
 
 
+def test_acceptance_binding_is_opt_in_and_cannot_authorize_ordinary_rework():
+    binding, ticket_id, execution_id, checkpoint, control = _binding()
+    binding["content"] = binding["content"].replace("disposition: rework",
+                                                "disposition: accept")
+    binding["sha256"] = hashlib.sha256(binding["content"].encode()).hexdigest()
+    arguments = dict(ticket_id=ticket_id, execution_id=execution_id,
+                     checkpoint=checkpoint, control_head=control)
+    with pytest.raises(ReviewProvenanceError, match="attribution"):
+        restore_review_binding(binding, **arguments)
+    assert restore_review_binding(binding, **arguments, disposition="accept").content
+
+
 @pytest.mark.parametrize("key, value", [("legacy", True), ("legacy_boundary", "x")])
 def test_restore_review_binding_rejects_non_inert_legacy_markers(key, value):
     binding, ticket_id, execution_id, checkpoint, control = _binding()
