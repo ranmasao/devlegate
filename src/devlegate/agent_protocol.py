@@ -35,6 +35,7 @@ class RenderContext:
     product_branch: str
     accepted_path: str = "kanban/accepted"
     execution_branch_prefix: str = "devlegate/work/"
+    abandoned_path: str = "kanban/abandoned"
 
     def values(self) -> dict[str, str]:
         return {
@@ -44,6 +45,7 @@ class RenderContext:
             "workflow.review_path": self.review_path,
             "workflow.accepted_path": self.accepted_path,
             "workflow.done_path": self.done_path,
+            "workflow.abandoned_path": self.abandoned_path,
             "product.branch": self.product_branch,
             "execution.branch_prefix": self.execution_branch_prefix,
         }
