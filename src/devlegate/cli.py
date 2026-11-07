@@ -2251,6 +2251,7 @@ def _logs_command(args: argparse.Namespace, target: ProjectTarget) -> int:
                 "review": setting("REVIEW_PATH", "kanban/review"),
                 "accepted": setting("ACCEPTED_PATH", "kanban/accepted"),
                 "done": setting("DONE_PATH", "kanban/done"),
+                "abandoned": setting("ABANDONED_PATH", "kanban/abandoned"),
             }
             if args.follow:
                 return follow_ticket(
