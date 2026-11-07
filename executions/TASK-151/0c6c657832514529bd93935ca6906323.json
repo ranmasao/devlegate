@@ -1,0 +1,43 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "incomplete",
+  "control_head": "07f00bdff247c41cef95ba9eb0096fed9ac29967",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "0c6c657832514529bd93935ca6906323",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect evidence extraction to durable owner admission binding the exact request and target blobs, exclusive reservation, resource-generation observations, and live-worker/integration/reconciliation/retry/recovery refusals.",
+    "Wire the evidence-only launcher and artifact pipes into supervised analysis-agent dispatch, audited runtime/provider configuration, cancellation and recovery, and bounded substantive devlegate_report egress.",
+    "Complete remaining historical review/disposition variants and verified integrated-versus-discarded/resource attribution without inferring generation or remote continuity from matching names and SHAs.",
+    "Implement exact independent reviewer acceptance and one serialized, replayable publication of the abandonment report, unchanged target move to abandoned, and request completion to done without product integration.",
+    "Add abandonment-specific authorization to shared worktree/ref/code-pin cleanup with durable per-resource intent/status, ownership reobservation, CAS/lease guards and partial-retirement recovery.",
+    "Add end-to-end owner/IPC/reviewer, duplicate-publication, crash/restart and destructive-cleanup regressions in disposable repositories covering the completed service path."
+  ],
+  "report_artifact": "executions/TASK-151/0c6c657832514529bd93935ca6906323.md",
+  "report_sha256": "c9e8e97866a230c86c4a14838e8af430a7cebe8c7590e59be1b7fe4da29eeaf6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect evidence extraction to durable owner admission binding the exact request and target blobs, exclusive reservation, resource-generation observations, and live-worker/integration/reconciliation/retry/recovery refusals.",
+      "Wire the evidence-only launcher and artifact pipes into supervised analysis-agent dispatch, audited runtime/provider configuration, cancellation and recovery, and bounded substantive devlegate_report egress.",
+      "Complete remaining historical review/disposition variants and verified integrated-versus-discarded/resource attribution without inferring generation or remote continuity from matching names and SHAs.",
+      "Implement exact independent reviewer acceptance and one serialized, replayable publication of the abandonment report, unchanged target move to abandoned, and request completion to done without product integration.",
+      "Add abandonment-specific authorization to shared worktree/ref/code-pin cleanup with durable per-resource intent/status, ownership reobservation, CAS/lease guards and partial-retirement recovery.",
+      "Add end-to-end owner/IPC/reviewer, duplicate-publication, crash/restart and destructive-cleanup regressions in disposable repositories covering the completed service path."
+    ],
+    "report": "The remaining cross-cutting owner/supervisor/publication/retirement state machine cannot be safely implemented and validated within the remaining invocation context. Production abandonment admission remains explicitly refused; the enforced launcher and artifact channel are exercised in disposable child-process fixtures but are not connected to service analysis dispatch. The whole ticket is not complete. Configured ./dev coverage -n 4 --dist=worksteal completed with 1775 passed and 2 skipped; ./dev lint and git diff --check passed. No live abandonment or operator-resource retirement was performed.",
+    "summary": "Made sequential artifact paging linear with verified page hashes and shared owner I/O, request, time and memory budgets; limited historical tree scans to target publication events and added exact deferred-review attribution. Required all six workflow directories and status counts, and added a fail-closed Linux Landlock/seccomp evidence launcher with a private bounded artifact pipe. Updated disposable regressions and operator documentation."
+  },
+  "workspace_head": "f95058a7dba0bee670243c066a4a52608fc1c634"
+}
