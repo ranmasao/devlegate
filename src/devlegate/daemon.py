@@ -364,18 +364,34 @@ class ServiceHost:
         request_lifecycle: Callable[[str, str, bool], dict[str, object]],
     ) -> Iterator[None]:
         wake = getattr(self.engine, "wake", None)
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(write_fd, False)
 
         def request_stop(signum: int, _frame: object) -> None:
-            if signum == signal.SIGINT:
-                stop_intent.request("operator_abort", source="operator_abort")
-            else:
-                try:
-                    request_lifecycle("stop", f"signal-{uuid.uuid4().hex}", False)
-                except DevlegateError as error:
-                    service_log(f"graceful SIGTERM request failed: {error}")
-            if wake is not None:
-                wake()
+            # A Python signal can interrupt a buffered write or a lock holder.
+            # Never log, persist lifecycle state or acquire locks on that stack.
+            try:
+                os.write(write_fd, bytes((signum,)))
+            except BlockingIOError:
+                pass  # A full pipe already contains pending shutdown requests.
 
+        def relay_signals() -> None:
+            while data := os.read(read_fd, 4096):
+                for signum in data:
+                    if signum == signal.SIGINT:
+                        stop_intent.request("operator_abort", source="operator_abort")
+                    else:
+                        try:
+                            request_lifecycle(
+                                "stop", f"signal-{uuid.uuid4().hex}", False
+                            )
+                        except DevlegateError as error:
+                            service_log(f"graceful SIGTERM request failed: {error}")
+                    if wake is not None:
+                        wake()
+
+        relay = threading.Thread(target=relay_signals, name="signal-relay", daemon=True)
+        relay.start()
         previous: dict[int, Callable[[int, object], object]] = {}
         try:
             for signum in (signal.SIGINT, signal.SIGTERM):
@@ -385,6 +401,9 @@ class ServiceHost:
         finally:
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
+            os.close(write_fd)
+            relay.join()
+            os.close(read_fd)
 
     def _reexec(self, authority: object, request_id: str) -> None:
         """Replace the internally hosted service with a fresh Python image."""

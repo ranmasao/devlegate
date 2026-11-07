@@ -711,6 +711,7 @@ def build_abandonment_evidence(
     backlog_path: str = "kanban/backlog",
     accepted_path: str = "kanban/accepted",
     product_head: str | None = None,
+    admission: dict[str, object] | None = None,
 ) -> EvidenceBundle:
     """Extract chronological evidence, preserving uncertainty as explicit gaps.
 
@@ -732,10 +733,31 @@ def build_abandonment_evidence(
     ):
         _safe_path(path)
     builder = EvidenceBuilder(product, control=control)
-    gaps: list[str] = [
-        "current owned-resource observation and generation binding not supplied; "
-        "this bundle cannot authorize cleanup",
-    ]
+    gaps: list[str] = []
+    if admission is None:
+        gaps.append(
+            "current owned-resource observation and generation binding not supplied; "
+            "this bundle cannot authorize cleanup"
+        )
+    else:
+        # Admission validates its own schema at the owner boundary. Extraction
+        # also checks its exact source identities, and copies caller-owned data.
+        copied_admission = json.loads(_canonical(admission))
+        if not isinstance(copied_admission, dict):
+            raise EvidenceError("manifest admission must be an object")
+        admission = copied_admission
+        if any(admission.get(key) != expected for key, expected in (
+            ("request_id", request.id), ("target_id", target.id),
+            ("control_head", control_head), ("product_head", product_head),
+            ("start_head", request.start_head),
+        )):
+            raise EvidenceError("manifest admission identity differs")
+        resources = admission.get("resources")
+        if isinstance(resources, dict) and resources.get("dirty"):
+            gaps.append(
+                "owned target worktree has uncheckpointed dirty/untracked data; "
+                "immutable checkpoint deltas do not describe that mutable content"
+            )
     if product_head is not None and (
         not _OID.fullmatch(product_head)
         or product.small("cat-file", "-t", product_head).strip() != b"commit"
@@ -811,6 +833,17 @@ def build_abandonment_evidence(
             raise EvidenceError("admitted specification is invalid") from error
         if parsed != ticket:
             raise EvidenceError("ticket does not match the exact admitted control blob")
+    if admission is not None:
+        for key, path in (("request", request_path), ("target", target_path)):
+            binding = admission.get(key)
+            if not isinstance(binding, dict) or binding.get("path") != path or (
+                binding.get("blob") != specs[path][1]
+            ):
+                raise EvidenceError("manifest specification differs from admission")
+        if admission["reason_sha256"] != hashlib.sha256(
+            request.abandonment_reason.encode("utf-8")
+        ).hexdigest():
+            raise EvidenceError("manifest reason differs from admission")
     specification = {
         path: text_artifact(path, control_head, specs[path][1])
         for path in (request_path, target_path)
@@ -986,4 +1019,5 @@ def build_abandonment_evidence(
         "control_head": control_head, "specifications": specification,
         "executions": executions, "latest_state_comparison": comparison, "gaps": gaps,
         "observed_product_head": product_head,
+        "admission": admission,
     })

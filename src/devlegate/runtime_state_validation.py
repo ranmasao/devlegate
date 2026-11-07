@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Read-only validation of persisted runtime state."""
 
+from devlegate.abandonment_admission import AbandonmentAdmission
+from devlegate.abandonment_evidence import EvidenceError
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
 from devlegate.worker_supervisor import WorkerProcessIdentity
@@ -85,6 +87,70 @@ def _worker_identity_from_value(
 
 def validate_state_invariant(state: dict[str, object]) -> None:
     phase = state["phase"]
+    admission = state.get("abandonment_admission")
+    if admission is not None:
+        try:
+            binding = AbandonmentAdmission.restore(admission).as_dict()
+        except EvidenceError as error:
+            raise DevlegateError(str(error)) from error
+        if phase != "idle":
+            raise DevlegateError("abandonment admission conflicts with execution phase")
+        analysis = state.get("abandonment_analysis")
+        if analysis is not None:
+            if not isinstance(analysis, dict) or not {
+                "stage", "workspace", "worker_identity", "report",
+            }.issubset(analysis) or set(analysis) - {
+                "stage", "workspace", "worker_identity", "report", "interruption",
+            }:
+                raise DevlegateError("invalid abandonment analysis state")
+            stage = analysis["stage"]
+            if stage not in {"prepared", "running", "reported"}:
+                raise DevlegateError("invalid abandonment analysis stage")
+            workspace = analysis["workspace"]
+            if not isinstance(workspace, dict) or set(workspace) != {
+                "ticket_id", "path", "manifest_id", "directory_identity",
+                "manifest_sha256",
+            } or workspace["ticket_id"] != binding["request_id"]:
+                raise DevlegateError("invalid abandonment evidence workspace")
+            for field in ("manifest_id", "manifest_sha256"):
+                digest = workspace[field]
+                if not isinstance(digest, str) or len(digest) != 64 or any(
+                    char not in "0123456789abcdef" for char in digest
+                ):
+                    raise DevlegateError("invalid abandonment manifest identity")
+            identity = workspace["directory_identity"]
+            if not isinstance(identity, list) or len(identity) != 2 or any(
+                type(item) is not int or item < 0 for item in identity
+            ) or not isinstance(workspace["path"], str) or not (
+                workspace["path"].startswith("/")
+            ):
+                raise DevlegateError(
+                    "invalid abandonment workspace filesystem identity"
+                )
+            _worker_identity_from_value(
+                analysis["worker_identity"], binding["execution_id"]
+            )
+            if stage != "running" and analysis["worker_identity"] is not None:
+                raise DevlegateError("abandonment analysis still owns a worker")
+            if stage == "reported":
+                try:
+                    report = ExecutionReport.from_dict(analysis["report"])
+                except ExecutionReportError as error:
+                    raise DevlegateError(str(error)) from error
+                if (
+                    report.execution_id != binding["execution_id"]
+                    or report.ticket_id != binding["request_id"]
+                    or report.control_head != binding["control_head"]
+                    or report.code_base_head != binding["product_head"]
+                    or report.execution_path != workspace["path"]
+                    or report.execution_branch != ""
+                    or report.workspace_head is not None
+                ):
+                    raise DevlegateError("abandonment analysis report binding differs")
+            elif analysis["report"] is not None:
+                raise DevlegateError("abandonment analysis has a premature result")
+    elif state.get("abandonment_analysis") is not None:
+        raise DevlegateError("abandonment analysis has no durable admission")
     resource = state.get("execution_resource_binding")
     if resource is not None:
         if not isinstance(resource, dict):

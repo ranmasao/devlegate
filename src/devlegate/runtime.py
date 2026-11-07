@@ -21,6 +21,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from devlegate import __version__
+from devlegate.abandonment_admission import (
+    AbandonmentAdmission,
+    observe_resources,
+    require_quiescence,
+)
+from devlegate.abandonment_evidence import (
+    EvidenceError,
+    OwnerGitEvidence,
+    build_abandonment_evidence,
+)
 from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
@@ -38,6 +48,12 @@ from devlegate.control_git_workflow import (
     attach_existing_control,
     bootstrap_control,
     sync_control,
+)
+from devlegate.evidence_channel import EvidenceSocket
+from devlegate.evidence_worker import (
+    EvidenceWorkspace,
+    analysis_prompt,
+    validate_analysis_claim,
 )
 from devlegate.execution_provenance import (
     ExecutionProvenanceError,
@@ -161,6 +177,7 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     load_ticket_store,
 )
+from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
@@ -3874,6 +3891,9 @@ class ServiceEngine:
         if self._stop_before_admission():
             return 0
         ticket_store = self._ticket_store()
+        self._observe_abandonment_admission(ticket_store, control_head, local_head)
+        if self._state.get("abandonment_admission") is not None:
+            self._run_abandonment_analysis(ticket_store)
         try:
             load_project_context(self.repo)
         except ProjectContextError as error:
@@ -9910,6 +9930,215 @@ class ServiceEngine:
             state_after, git_after, ticket_store, workflow_error=ticket_error
         )
 
+    def _observe_abandonment_admission(
+        self, store: TicketStore, control_head: str, product_head: str,
+    ) -> None:
+        """Persist an exclusive source/resource binding before analysis effects."""
+        self._assert_repository_owner()
+        existing = self._state.get("abandonment_admission")
+        request = next((
+            item for item in store.runnable
+            if item.type == "devlegate.abandonment"
+        ), None)
+        if existing is None and request is None:
+            return
+        source = OwnerGitEvidence(self.control_worktree, self._assert_repository_owner)
+        try:
+            if existing is not None:
+                require_quiescence(self._state, self._workers.active_count)
+                AbandonmentAdmission.restore(existing).verify(
+                    store=store, control=source, control_head=control_head,
+                    control_root=self.control_worktree,
+                )
+                return
+            assert request is not None
+            require_quiescence(self._state, self._workers.active_count)
+            target = store.by_id[request.target]
+            resources = observe_resources(
+                repo=self.repo, root=self.execution_worktree_root,
+                remote=self.remote_name, target=target,
+                control=self.control_worktree, control_head=control_head,
+                source=source, runner=self._git_runtime,
+            )
+            admission = AbandonmentAdmission.create(
+                state=self._state, active_count=self._workers.active_count,
+                store=store, request=request, control=source,
+                control_head=control_head, product_head=product_head,
+                execution_id=new_execution_id(), resources=resources,
+                control_root=self.control_worktree,
+            )
+            self._save_state("idle", abandonment_admission=admission.as_dict())
+        except (EvidenceError, GitObservationError, ExecutionWorkspaceError) as error:
+            raise WorkflowBlockedError(
+                f"abandonment admission refused: {error}"
+            ) from error
+        finally:
+            source.close()
+
+    def _run_abandonment_analysis(self, store: TicketStore) -> None:
+        """Dispatch only the evidence worker; never enter product integration.
+
+        Until reviewed publication is available the proposed immutable report is
+        retained durably in owner state and the exclusive reservation remains.
+        """
+        self._assert_repository_owner()
+        value = AbandonmentAdmission.restore(
+            self._state.get("abandonment_admission")
+        ).as_dict()
+        analysis = self._state.get("abandonment_analysis")
+        if analysis is not None:
+            if not isinstance(analysis, dict):
+                raise WorkflowBlockedError("invalid abandonment analysis state")
+            if analysis.get("stage") == "reported":
+                return
+            if analysis.get("stage") == "running":
+                identity = _worker_identity_from_value(
+                    analysis.get("worker_identity"), value["execution_id"]
+                )
+                observation = (
+                    self._workers.observe(identity)
+                    if identity is not None else "unknown"
+                )
+                if identity is not None and observation == "absent":
+                    # The semantic result was never durably received. Record a
+                    # failed execution, not an invented summary or an automatic
+                    # second process using the same execution identity.
+                    report = build_execution_report(
+                        execution_id=value["execution_id"],
+                        ticket_id=value["request_id"],
+                        code_base_head=value["product_head"],
+                        control_head=value["control_head"], execution_branch="",
+                        execution_path=analysis["workspace"]["path"],
+                        workspace_head=None,
+                        run=WorkerRunResult(
+                            -1, "analysis process lost before durable result", None,
+                            None, interruption_kind="process_loss",
+                        ),
+                    )
+                    self._save_state("idle", abandonment_analysis={
+                        **analysis, "stage": "reported", "worker_identity": None,
+                        "report": report.as_dict(), "interruption": "process_loss",
+                    })
+                    return
+                raise WorkflowBlockedError(
+                    "abandonment analysis interrupted; worker ownership is "
+                    f"{observation}; inspect the execution containment and recover "
+                    "the analysis before retrying (the target remains reserved)"
+                )
+            if analysis.get("stage") != "prepared":
+                raise WorkflowBlockedError("unknown abandonment analysis stage")
+        if self._stop_before_admission():
+            return
+        source = OwnerGitEvidence(self.control_worktree, self._assert_repository_owner)
+        product = OwnerGitEvidence(self.repo, self._assert_repository_owner)
+        request = store.by_id[value["request_id"]]
+        target = store.by_id[value["target_id"]]
+        # Admission must still describe the current owned resource observation.
+        # The analysis itself receives immutable checkpoints, never this checkout.
+        try:
+            observed = observe_resources(
+                repo=self.repo, root=self.execution_worktree_root,
+                remote=self.remote_name, target=target, control=self.control_worktree,
+                control_head=value["control_head"], source=source,
+                runner=self._git_runtime,
+            )
+        except (EvidenceError, GitObservationError, ExecutionWorkspaceError) as error:
+            raise WorkflowBlockedError(
+                f"abandonment resource observation refused: {error}"
+            ) from error
+        if observed != value["resources"]:
+            raise WorkflowBlockedError(
+                "abandonment target resource observation changed after admission"
+            )
+        try:
+            bundle = build_abandonment_evidence(
+                control=source, product=product, control_head=value["control_head"],
+                request=request, target=target, request_path=value["request"]["path"],
+                target_path=value["target"]["path"], todo_path=self.todo_path,
+                review_path=self.review_path, backlog_path=self.backlog_path,
+                accepted_path=self.accepted_path, product_head=value["product_head"],
+                admission=value,
+            )
+            if analysis is None:
+                root = self.state_dir / "analysis"
+                root.mkdir(mode=0o700, exist_ok=True)
+                workspace = EvidenceWorkspace.prepare(root, request.id, bundle)
+                analysis = {
+                    "stage": "prepared", "workspace": dataclasses.asdict(workspace),
+                    "worker_identity": None, "report": None,
+                }
+                analysis["workspace"]["path"] = str(workspace.path)
+                analysis["workspace"]["directory_identity"] = list(
+                    workspace.directory_identity
+                )
+                self._save_state("idle", abandonment_analysis=analysis)
+            else:
+                saved = analysis["workspace"]
+                workspace = EvidenceWorkspace(
+                    saved["ticket_id"], Path(saved["path"]), saved["manifest_id"],
+                    tuple(saved["directory_identity"]), saved["manifest_sha256"],
+                )
+                if workspace.path.parent != self.state_dir / "analysis" or (
+                    workspace.ticket_id != request.id
+                    or workspace.manifest_id != bundle.manifest()["manifest_id"]
+                ):
+                    raise EvidenceError("persisted analysis workspace binding differs")
+                workspace.validate()
+            if self._stop_before_admission():
+                return
+
+            def persist(**changes: object) -> None:
+                nonlocal analysis
+                analysis = {**analysis, **changes}
+                self._save_state("idle", abandonment_analysis=analysis)
+
+            with EvidenceSocket(bundle, workspace.path / "read.sock") as evidence:
+                persist(stage="running")
+                self._publish_service_snapshot(lifecycle="worker", worker_running=True)
+                try:
+                    run = self._workers.run(
+                        workspace, analysis_prompt(request.body, workspace.manifest_id),
+                        execution_id=value["execution_id"],
+                        stop_request=self._stop_event,
+                        identity_handler=lambda identity: persist(
+                            worker_identity=identity.as_dict()
+                        ),
+                        interruption_handler=lambda kind: persist(interruption=kind),
+                        evidence=evidence,
+                    )
+                except WorkerAdmissionClosed:
+                    persist(stage="prepared")
+                    return
+                finally:
+                    self._publish_service_snapshot(
+                        lifecycle="processing", worker_running=False
+                    )
+            if not run.worker_group_retired:
+                raise EvidenceError("analysis containment retirement is unproven")
+            if run.interruption_kind is not None and run.transport_error is None:
+                run = dataclasses.replace(
+                    run,
+                    transport_error=f"analysis interrupted: {run.interruption_kind}",
+                )
+            workspace.validate()
+            if run.claim is not None:
+                validate_analysis_claim(run.claim, bundle)
+            report = build_execution_report(
+                execution_id=value["execution_id"], ticket_id=request.id,
+                code_base_head=value["product_head"],
+                control_head=value["control_head"],
+                execution_branch="", execution_path=str(workspace.path),
+                workspace_head=None, run=run,
+            )
+            persist(stage="reported", worker_identity=None, report=report.as_dict())
+        except (EvidenceError, GitObservationError, ExecutionWorkspaceError) as error:
+            raise WorkflowBlockedError(
+                f"abandonment analysis refused: {error}"
+            ) from error
+        finally:
+            source.close()
+            product.close()
+
     def _admission_barrier(
         self,
         state: dict[str, object],
@@ -9969,6 +10198,18 @@ class ServiceEngine:
         if dirty:
             return AdmissionBarrier(
                 "blocked", "repository", "code or control working tree is dirty"
+            )
+        admitted = state.get("abandonment_admission")
+        if admitted is not None:
+            try:
+                binding = AbandonmentAdmission.restore(admitted).as_dict()
+            except EvidenceError as error:
+                return AdmissionBarrier("blocked", "abandonment", str(error))
+            return AdmissionBarrier(
+                "blocked", "abandonment",
+                f"admitted abandonment request {binding['request_id']} exclusively "
+                f"reserves {binding['target_id']}; reviewed finalization is pending",
+                binding["request_id"],
             )
         abandonment = next(
             (
