@@ -1,0 +1,41 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "incomplete",
+  "control_head": "8d091c5cb5f6ac485d897e1389752ebeca1f1bbc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "4c9398669a3b4eb3a8511ff8bf7710c4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect evidence extraction and worker dispatch to owner-serialized durable admission of the exact request and target blobs, exclusive disposition, verified resource generations, and quiescent target ownership.",
+    "Implement durable analysis execution, cancellation and process-loss recovery within the service scheduler, including replay of persisted semantic reports.",
+    "Require exact independent reviewer acceptance and atomically publish one abandonment report, move the unchanged target to abandoned, and complete the request without product integration.",
+    "Implement abandonment-specific cleanup authorization using shared retirement primitives, durable per-resource retry state, ownership reobservation, local CAS, remote identity/lease safeguards, and exclusive code-pin retirement.",
+    "Add disposable end-to-end owner/IPC/reviewer/publication/cleanup crash-replay regressions and complete operational workflow and recovery documentation."
+  ],
+  "report_artifact": "executions/TASK-151/4c9398669a3b4eb3a8511ff8bf7710c4.md",
+  "report_sha256": "b77e9f1048f95fdbf4fe609df0f5c6120edd51cd4760920a92692c8690fb415c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect evidence extraction and worker dispatch to owner-serialized durable admission of the exact request and target blobs, exclusive disposition, verified resource generations, and quiescent target ownership.",
+      "Implement durable analysis execution, cancellation and process-loss recovery within the service scheduler, including replay of persisted semantic reports.",
+      "Require exact independent reviewer acceptance and atomically publish one abandonment report, move the unchanged target to abandoned, and complete the request without product integration.",
+      "Implement abandonment-specific cleanup authorization using shared retirement primitives, durable per-resource retry state, ownership reobservation, local CAS, remote identity/lease safeguards, and exclusive code-pin retirement.",
+      "Add disposable end-to-end owner/IPC/reviewer/publication/cleanup crash-replay regressions and complete operational workflow and recovery documentation."
+    ],
+    "report": "The remaining owner lifecycle state machine and retirement work exceed this invocation's remaining implementation/context budget. Operational abandonment remains explicitly refused; the new supervisor/evidence support is not connected to terminal publication or destructive cleanup. Local configured validation passed: ./dev coverage -n 4 --dist=worksteal produced 1780 passed and 2 skipped; Ruff and git diff --check passed. The historical hosted CI failure log was inspected, but no new hosted CI result is claimed. No production abandonment or operator-resource retirement was performed.",
+    "summary": "Replaced the experimental kernel sandbox with trusted evidence-only worker support, owner-polled bounded artifact reads, supervised cancellation, and bounded analysis-report validation. Extended exact historical acceptance and product-checkpoint attribution, synchronized the cleanup inventory regression with publication, and documented the trusted-agent boundary."
+  },
+  "workspace_head": "b9d4ad0220533ddb2c5066e0296c75a6abb4a671"
+}
