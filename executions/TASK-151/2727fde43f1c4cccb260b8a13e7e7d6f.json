@@ -1,0 +1,41 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "incomplete",
+  "control_head": "9ec1323f354141e524fbdea4b530c02915711a23",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "2727fde43f1c4cccb260b8a13e7e7d6f",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Publish immutable analysis ExecutionReports and manifest identities to control history for independent review, and implement exact acceptance/rework provenance for abandonment requests.",
+    "Implement serialized crash-replayable publication of one reviewed abandonment report with the unchanged target moved to abandoned and the request completed, without product integration.",
+    "Add abandonment-specific authorization to shared cleanup primitives, inventory and retire only exclusive target-owned worktrees/branches/code pins, and persist per-resource progress with local CAS, remote lease and generation revalidation.",
+    "Complete owner/IPC recovery and retry for interrupted analysis launch windows and reviewed rework generations.",
+    "Exercise full review/publication/finalization/partial-retirement interruption fixtures and obtain green hosted CI on the Devlegate-owned resulting checkpoint."
+  ],
+  "report_artifact": "executions/TASK-151/2727fde43f1c4cccb260b8a13e7e7d6f.md",
+  "report_sha256": "88a4b5fbdca49e6d8007f1ca844e127431cc688112cd9277bf5bf74b8767a37a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Publish immutable analysis ExecutionReports and manifest identities to control history for independent review, and implement exact acceptance/rework provenance for abandonment requests.",
+      "Implement serialized crash-replayable publication of one reviewed abandonment report with the unchanged target moved to abandoned and the request completed, without product integration.",
+      "Add abandonment-specific authorization to shared cleanup primitives, inventory and retire only exclusive target-owned worktrees/branches/code pins, and persist per-resource progress with local CAS, remote lease and generation revalidation.",
+      "Complete owner/IPC recovery and retry for interrupted analysis launch windows and reviewed rework generations.",
+      "Exercise full review/publication/finalization/partial-retirement interruption fixtures and obtain green hosted CI on the Devlegate-owned resulting checkpoint."
+    ],
+    "report": "The invocation reached its available implementation/validation budget before the remaining owner publication and retirement state machines could be safely completed and verified. Current behavior intentionally retains the exclusive reservation and blocks terminal finalization after recording the analysis proposal; no abandonment disposal authorization is enabled. Configured coverage completed with 1810 passed and 2 skipped before the final target-history guard was added; the final focused run passed 131 tests, including that guard and the reported hosted-cleanup regression. ./dev lint and git diff --check passed. Two earlier full coverage attempts exceeded their command timeouts; the completed full run passed. Hosted exact-checkpoint CI has not been run because checkpoint creation/push belongs to Devlegate.",
+    "summary": "Moved signal-triggered lifecycle handling off the interrupted logging stack through a pipe-backed relay. Added durable abandonment source/resource admission, immutable manifest admission bindings, scheduler-dispatched evidence analysis, persisted worker/result identities and conservative restart handling. Updated operator documentation and disposable real-Git regressions for these paths."
+  },
+  "workspace_head": "37d5fd2e33bb085c52fff077f74fbf38bf1be4ee"
+}
