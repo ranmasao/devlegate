@@ -9,8 +9,14 @@ from devlegate.tickets import TicketError, load_ticket_store
 
 PATHS = {
     state: f"kanban/{state}"
-    for state in ("backlog", "todo", "review", "accepted", "done")
+    for state in ("backlog", "todo", "review", "accepted", "done", "abandoned")
 }
+
+
+@pytest.fixture(autouse=True)
+def workflow_directories(tmp_path):
+    for path in PATHS.values():
+        (tmp_path / path).mkdir(parents=True)
 
 
 def write_ticket(
@@ -43,8 +49,8 @@ def test_valid_ticket_and_independent_ticket_parse(tmp_path):
 def test_flow_dependency_sequence_parses_and_selects(tmp_path):
     done = tmp_path / "kanban/done"
     todo = tmp_path / "kanban/todo"
-    done.mkdir(parents=True)
-    todo.mkdir(parents=True)
+    done.mkdir(parents=True, exist_ok=True)
+    todo.mkdir(parents=True, exist_ok=True)
     (done / "ED-10.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "ED-10"\n---\n'
         "Implement it.\n"
@@ -62,7 +68,7 @@ def test_flow_dependency_sequence_parses_and_selects(tmp_path):
 
 def test_flow_empty_dependency_sequence_is_rejected_by_ticket_schema(tmp_path):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "ED-17.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "ED-17"\n'
         '"depends_on": []\n---\nImplement it.\n'
@@ -77,7 +83,7 @@ def test_flow_empty_dependency_sequence_is_rejected_by_ticket_schema(tmp_path):
 
 def test_missing_or_invalid_frontmatter_fails(tmp_path):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "ED-17.md").write_text("body\n")
 
     with pytest.raises(TicketError, match="opening frontmatter"):
@@ -93,7 +99,7 @@ def test_missing_or_invalid_frontmatter_fails(tmp_path):
 )
 def test_frontmatter_delimiters_and_nanoyaml_are_strict(tmp_path, content, message):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "ED-17.md").write_text(content)
 
     with pytest.raises(TicketError, match=message):
@@ -102,7 +108,7 @@ def test_frontmatter_delimiters_and_nanoyaml_are_strict(tmp_path, content, messa
 
 def test_noncanonical_filename_is_not_ticket(tmp_path):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "bad id.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Bad"\n---\nbody\n'
     )
@@ -129,7 +135,7 @@ def test_editor_artifacts_are_ignored_beside_canonical_ticket(tmp_path):
 
 def test_canonical_directory_entry_fails_closed(tmp_path):
     directory = tmp_path / "kanban/todo/ED-17.md"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(TicketError, match="invalid managed ticket entry"):
         load_ticket_store(tmp_path, PATHS)
@@ -152,7 +158,7 @@ def test_canonical_directory_entry_fails_closed(tmp_path):
 )
 def test_required_and_shaped_metadata_is_strict(tmp_path, metadata, message):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / "ED-17.md").write_text(f"---\n{metadata}\n---\nbody\n")
 
     with pytest.raises(TicketError, match=message):
@@ -171,7 +177,7 @@ def test_required_and_shaped_metadata_is_strict(tmp_path, metadata, message):
 )
 def test_strict_metadata_fails(tmp_path, metadata):
     directory = tmp_path / "kanban/todo"
-    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
     lines = ["---", '"type": "devlegate.ticket"', '"title": "A"']
     for key, value in metadata.items():
         if key == "depends_on":
@@ -203,7 +209,7 @@ def test_review_is_not_done_and_done_dependency_is_satisfied(tmp_path):
     write_ticket(tmp_path, "todo", "ED-11", depends_on=["ED-10"])
     assert load_ticket_store(tmp_path, PATHS).selected() is None
 
-    (tmp_path / "kanban/done").mkdir(parents=True)
+    (tmp_path / "kanban/done").mkdir(parents=True, exist_ok=True)
     (tmp_path / "kanban/review/ED-10.md").rename(tmp_path / "kanban/done/ED-10.md")
     assert load_ticket_store(tmp_path, PATHS).selected().id == "ED-11"
 
