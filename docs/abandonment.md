@@ -1,12 +1,13 @@
-# Abandonment request and evidence foundations
+# Reviewed abandonment requests
 
-This implementation is not yet an operational abandonment workflow. It adds
-the terminal board, request schema, scheduler reservation, owner-only evidence
-library, durable exclusive admission, supervised evidence analysis and scoped
-bounded read channels. The service records analysis proposals in runtime state;
-independently reviewed control publication and finalization are not yet connected.
-Do not move live tickets to `abandoned` manually to
-request cleanup. No abandonment-specific cleanup authorization is enabled.
+This implementation connects evidence analysis, immutable proposal publication,
+independent review and the atomic terminal board transition. Local retirement
+uses independent generation evidence and the reviewed terminal decision. The
+full feature remains unfinished: remote branch continuity and exclusive code-pin
+retirement still fail closed, and uncertain launch/control-publication conflicts
+do not yet have a dedicated owner recovery command. Do not use this unfinished
+implementation to dispose of live operator resources. A manual board move is
+not a substitute for the reviewed transition or resource ownership proof.
 
 ## Board and request format
 
@@ -54,8 +55,8 @@ scheduler selection. Request selection has priority over implementation
 tickets. A runnable request is admitted only under the repository owner after
 quiescence and exact committed specification/resource checks. The ordinary
 checkout worker and product integration paths do not process these requests.
-The plan remains explicitly blocked while reviewed finalization is pending,
-including for requests moved to `accepted`.
+The request remains reserved while its analysis or independent review is pending.
+An accepted request enters abandonment finalization, never product integration.
 
 Admission persists the request/target blob identities, initial and observed
 product HEADs, reason digest, execution identity and local resource-generation
@@ -73,10 +74,9 @@ the manifest and directory identities, supervised process identity and proposed
 ExecutionReport. A reported result replays without launching another worker. A
 lost process with proven absent containment produces a failed report, never an
 invented semantic summary. Live/unknown containment or the uncertain launch
-window blocks with an ownership diagnostic. The current implementation does not
-yet provide publication, independent acceptance or an operator resume command
-for that blocked launch window. The report proposal alone cannot change boards
-or authorize disposal.
+window blocks with an ownership diagnostic. There is not yet an operator resume
+command for that blocked launch window. A report proposal alone cannot authorize
+the terminal disposition or disposal.
 
 Upstream observations are retained for later lease comparisons and labelled
 `unproven` for continuity. A matching remote name and SHA is not independent
@@ -155,7 +155,7 @@ fetching. Only manifest data and read responses cross the evidence tool channel.
 Owner-side Python objects and privileged service dispatch are never exposed
 through this channel.
 
-## Required completion and recovery boundary
+## Trust and execution boundary
 
 Mandatory kernel-enforced agent confinement is explicitly deferred to TASK-152.
 The experimental launcher and kernel-isolation tests have been removed. TASK-151
@@ -204,26 +204,91 @@ to 64 KiB UTF-8; completed claims must contain the required nonempty sections an
 exact identities. Structural completeness is not semantic correctness or review
 acceptance. Incomplete/blocked claims remain untrusted draft evidence too.
 
-The remaining service integration must publish the proposal for independent
-Reviewer validation, require exact acceptance, finalize the control transition
-and connect retirement/recovery. The current explicit finalization refusal
-remains because those owner transitions are unfinished, not because of the
-deferred kernel sandbox requirement.
+## Independent review and publication
 
-The intended authoritative report placement is
-`abandonments/<target>/<request-execution>.md`. Publication must follow all
-existing execution/review records and atomically move the unchanged target to
-`abandoned` and the request to `done`, with idempotent replay and no product
-merge. Only that reviewed canonical transition may authorize abandonment
-retirement. None of these publication or retirement effects are implemented
-by the evidence library.
+After receiving a durable analysis result, the owner publishes the exact
+ExecutionReport and proposed text under `executions/<request>/<execution>.json`
+and `.md`, the bounded manifest under
+`abandonment-proposals/<request>/<execution>.manifest.json`, and the source binding
+under `abandonment-proposals/<request>/<execution>.json`. The latter binds both
+admitted ticket blobs, the
+source control HEAD, initial and observed product HEADs, resource generation,
+manifest identity/digest, proposal digest and semantic conclusion. The same
+publication moves the unchanged request from `todo` to `review`. Failed analysis
+also goes to independent review; it cannot be accepted as a completed report.
 
-Retirement must reuse guarded owner-side operations with separate abandonment
-authorization, not weaken the existing done/integration proof. Only proven
-target-owned worktrees, branches and exclusive code pins may be removed.
-Immutable execution JSON, curator reviews and the final report stay in control
-history. A remote ref with a matching name and SHA does not prove uninterrupted
-remote identity. Unknown remote state or uncertain generation must block that
-destructive step. Persisted per-resource cleanup intent and observations must
-support restart after partial retirement; blocked cleanup must not reverse the
-terminal board transition.
+The curator independently checks the exact proposal and manifest, then publishes
+`reviews/<request>/<execution>.md` with this header (replace every placeholder):
+
+```text
+<!-- devlegate-abandonment-review-v1
+ticket: REQUEST-ID
+execution: FULL-32-HEX-EXECUTION-ID
+control: ADMITTED-CONTROL-HEAD
+publication: ANALYSIS-PUBLICATION-COMMIT
+manifest: MANIFEST-ID
+proposal: PROPOSED-REPORT-SHA256
+disposition: accept
+-->
+```
+
+For a failed report without proposed text, `proposal` is `none`; such a report
+can only receive `rework`. The review body must explain the independent decision.
+In the **same control commit**, move the byte-identical request from `review`
+to `accepted` for `accept`, or to `todo` for `rework`. That commit must contain
+only the review artifact and request move. An altered artifact, mismatched
+publication/digest, changed source or conflicting disposition is refused.
+Ordinary implementation review headers do not authorize abandonment.
+
+Rework preserves the previous immutable proposal and review. The owner reserves
+a fresh execution/manifest identity and supplies the previous review to the new
+analyst. Old acceptance cannot authorize the new generation. Source amendments
+still fail the original admission binding; rework does not silently retarget it.
+
+On exact acceptance of a completed report, one owner transaction publishes
+`abandonments/<target>/<request-execution>.md`, moves the unchanged target to
+`abandoned`, and moves the unchanged request to `done`. The canonical text
+contains the exact proposal plus reviewer and manifest provenance. All target
+reports/reviews precede this commit. No analysis artifact or target code is
+merged into the product branch. Dependants remain blocked by `abandoned`.
+
+Publication builds an isolated Git tree without editing the control worktree or
+index. Parent/commit identities and per-path content digests are durably
+journaled before the owner pushes with an exact remote lease, then fast-forwards
+its checkout. The owner journal does not duplicate the large evidence index.
+A restart after commit construction, push or checkout advancement reuses the
+same transaction. It neither reruns the analyst nor creates a duplicate report.
+Loss of the scratch evidence workspace after proposal publication is harmless:
+replay reads the immutable published manifest. A changed publication parent,
+dirty control checkout or conflicting remote lineage remains blocked with its
+retained transaction; dedicated owner reconciliation is still unfinished.
+
+## Retirement and recovery
+
+Only canonical reviewed terminal publication authorizes abandonment cleanup;
+ordinary done/integration checks are unchanged. Retirement revalidates the
+published proposal, exact review, terminal commit, current board blobs, target
+history, process quiescence and independent resource generation before each
+destructive boundary. No product ancestry is required. The existing worktree
+removal and local ref CAS/occupancy/restoration primitives are reused. Dirty
+files in the registered owned worktree can be discarded; foreign/reused paths,
+uncertain workers, changed refs and invalid submodules are retained.
+
+The per-target retirement journal records `pending`, `blocked` or `retired` plus
+worktree, local/upstream ref and code-pin progress. It is separate from request
+admission, so terminal publication releases the scheduler reservation even if
+cleanup is blocked. Partial worktree/local deletion resumes after process loss.
+Blocked cleanup is not repeatedly polled by scheduler ticks. Inspect it with
+`devlegate clean`; `devlegate clean --apply` explicitly retries the bounded
+cleanup cohort using the retained terminal authority. Terminal board state and
+immutable text history survive any cleanup failure.
+
+**Current retirement limitation:** an existing upstream ticket branch is always
+retained because its continuity is explicitly unproven. A matching name and SHA
+or a successful lease is not proof of uninterrupted identity. Existing target
+code-pinning refs are also retained pending independent ownership/generation
+proof. These conditions block cleanup before local destructive work. The owner
+observes both local and remote code-pin namespaces; unknown remote observations
+also block. Finishing authorized remote/pin retirement and their recovery path
+is required before this feature is complete. Do not remove these guards or
+manually erase resources merely to make a cleanup status green.

@@ -419,11 +419,25 @@ class ExecutionWorkspaceManager:
 
     def retire(self, workspace: ExecutionWorkspace, expected_head: str) -> None:
         """Remove one validated, clean execution worktree registration."""
+        self._retire(workspace, expected_head)
+
+    def retire_abandoned(self, workspace: ExecutionWorkspace, expected_head: str,
+                         authorize) -> None:
+        """Discard dirty content only behind the owner's terminal authority gate.
+
+        The callback must prove canonical reviewed abandonment and independently
+        reobserve the exact resource generation. Ordinary cleanup stays clean-only.
+        """
+        authorize()
+        self._retire(workspace, expected_head, authorize=authorize)
+
+    def _retire(self, workspace: ExecutionWorkspace, expected_head: str,
+                authorize=None) -> None:
         if workspace.ticket_id != self.ticket_id or workspace.branch != self.branch:
             raise ExecutionWorkspaceError("execution workspace identity is invalid")
         if workspace.path != self.path or workspace.head != expected_head:
             raise ExecutionWorkspaceError("execution workspace checkpoint is invalid")
-        if workspace.dirty:
+        if workspace.dirty and authorize is None:
             raise ExecutionWorkspaceError("execution worktree is dirty")
         if self.root.is_symlink() or (self.root / "work").is_symlink():
             raise self._path_conflict("has a symlinked workspace root")
@@ -448,10 +462,12 @@ class ExecutionWorkspaceManager:
                 raise self._path_conflict("is not a registered execution worktree")
             return
         validated = self._validate_existing(registration, workspace.base_head)
-        if validated.head != expected_head or validated.dirty:
+        if validated.head != expected_head or (validated.dirty and authorize is None):
             raise ExecutionWorkspaceError("execution worktree changed before removal")
         self._validate_submodule_paths(self.path)
         self._verify_submodules(self.path)
+        if authorize is not None:
+            authorize()
         removed = self._runner(
             self.repo, "worktree", "remove", "--force", str(self.path), check=False
         )

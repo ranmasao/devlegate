@@ -151,6 +151,69 @@ def validate_state_invariant(state: dict[str, object]) -> None:
                 raise DevlegateError("abandonment analysis has a premature result")
     elif state.get("abandonment_analysis") is not None:
         raise DevlegateError("abandonment analysis has no durable admission")
+    publication = state.get("abandonment_publication")
+    if publication is not None:
+        if not isinstance(publication, dict) or set(publication) != {
+            "proposal", "terminal",
+        } or admission is None or not isinstance(
+            state.get("abandonment_analysis"), dict
+        ):
+            raise DevlegateError("invalid abandonment publication journal")
+        if state["abandonment_analysis"]["stage"] != "reported":
+            raise DevlegateError("abandonment publication precedes retained result")
+        for field in ("proposal", "terminal"):
+            transaction = publication[field]
+            if field == "terminal" and transaction is None:
+                continue
+            if not isinstance(transaction, dict) or set(transaction) != {
+                "parent", "commit", "changes",
+            } or not all(_is_git_identity(transaction[key])
+                         for key in ("parent", "commit")):
+                raise DevlegateError("invalid abandonment control transaction")
+            changes = transaction["changes"]
+            if not isinstance(changes, dict) or not changes or not all(
+                isinstance(path, str) and isinstance(content, (str, type(None)))
+                for path, content in changes.items()
+            ):
+                raise DevlegateError("invalid abandonment transaction contents")
+            if any(content is not None and (
+                len(content) != 64 or any(char not in "0123456789abcdef"
+                                          for char in content)
+            ) for content in changes.values()):
+                raise DevlegateError("invalid abandonment transaction digest")
+    retirements = state.get("abandonment_retirements")
+    if retirements is not None:
+        if not isinstance(retirements, dict):
+            raise DevlegateError("invalid abandonment retirement journal")
+        for target, record in retirements.items():
+            if not isinstance(record, dict) or set(record) != {
+                "admission", "analysis", "publication", "cleanup",
+            }:
+                raise DevlegateError("invalid abandonment retirement record")
+            if not isinstance(record["publication"], dict) or (
+                record["publication"].get("terminal") is None
+            ):
+                raise DevlegateError("abandonment retirement lacks terminal identity")
+            validate_state_invariant({
+                "phase": "idle", "abandonment_admission": record["admission"],
+                "abandonment_analysis": record["analysis"],
+                "abandonment_publication": record["publication"],
+            })
+            if record["admission"]["target_id"] != target or (
+                record["publication"]["terminal"] is None
+            ):
+                raise DevlegateError("abandonment retirement lacks terminal identity")
+            cleanup = record["cleanup"]
+            if not isinstance(cleanup, dict) or set(cleanup) != {
+                "status", "worktree", "local_ref", "upstream_ref", "code_pins",
+                "reason",
+            } or cleanup["status"] not in {"pending", "blocked", "retired"} or (
+                not isinstance(cleanup["reason"], str)
+            ) or any(cleanup[field] not in {"pending", "removing", "absent"}
+                     for field in (
+                         "worktree", "local_ref", "upstream_ref", "code_pins",
+            )):
+                raise DevlegateError("invalid abandonment cleanup progress")
     resource = state.get("execution_resource_binding")
     if resource is not None:
         if not isinstance(resource, dict):
