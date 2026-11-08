@@ -1,0 +1,29 @@
+{
+  "code_base_head": "90de39375177b34923e2c81df8e2e06158323a4e",
+  "conclusion": "completed",
+  "control_head": "f2b5b5e54fca63e9ea5c2d43155bb79ac61e8d2f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-153",
+  "execution_id": "ddad93bbae8340a39526595a154f89fb",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-153",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-153/ddad93bbae8340a39526595a154f89fb.md",
+  "report_sha256": "273fa1c1ffcf58fe3c8518004e04bd762c5165a01f9ad3a247796d30424d5615",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-153",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Validation: ./dev test-parallel -q passed with 1845 passed and 2 skipped; ./dev lint and git diff --check passed. The disposable fixtures reproduce the reported causal path without accessing live-service state.",
+    "summary": "Separated current failure visibility from worker admission authorization using shared, cached first-parent lifecycle proofs. Unrelated workers no longer revive superseded failures; matching ownership and recovery warnings remain visible, while removal and post-transition edits can retire status entries without authorizing re-execution. Added real-Git and CLI regressions covering restart, lifecycle transitions, ambiguous changes, and preservation of historical evidence."
+  },
+  "workspace_head": "eeddda978826d2051ff424f60c8715cf9e7f5f73"
+}
