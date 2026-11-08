@@ -1,0 +1,37 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "blocked",
+  "control_head": "17ffd2a4182963a5cbbfab6d46ffdddf6186d0f6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "9447450e24674937bd0ca69b16b0cc1a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must create and publish the final implementation checkpoint and run configured hosted CI on that exact SHA; the worker contract prohibits the Git lifecycle actions needed to do this."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain a green hosted CI run on the exact final implementation checkpoint after Devlegate-owned checkpoint publication."
+  ],
+  "report_artifact": "executions/TASK-151/9447450e24674937bd0ca69b16b0cc1a.md",
+  "report_sha256": "66c035420813eb69358b3ab8efba0561bb7dee0b4a3c69b82e1ef187306fd6b4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must create and publish the final implementation checkpoint and run configured hosted CI on that exact SHA; the worker contract prohibits the Git lifecycle actions needed to do this."
+    ],
+    "remaining": [
+      "Obtain a green hosted CI run on the exact final implementation checkpoint after Devlegate-owned checkpoint publication."
+    ],
+    "report": "The carried-forward reviewed publication, immutable analysis evidence, exact curator acceptance and atomic terminal transition remain intact. Safe owned local cleanup now proceeds independently of blocked remote refs or code pins. Each admitted resource has durable generation, pre-action authorization, post-action observation/failure and status; recreated resources are refused. Remote authority follows independent creation/publication receipts and generation handoffs, with fresh lease-guarded deletion and an explicit manual-retention policy. Local pin receipts use reflog witnesses to reject same-SHA replacement; remote ABA remains an explicitly documented operational assumption. Receipted upstream-only leftovers are supported. Recovery can prove uncertain launch containment absent or, with explicit authorization and exact process/kernel membership checks, retire an identified analyst without relaunching it or inventing a semantic result. Explicit publication reconciliation retains prior journals, validates unchanged contents and first-parent ancestry, and refuses altered decisions or secondary-parent adoption. Disposable real-Git and owner/IPC regressions cover generation handoffs, local progress with blocked remote resources, remote/pin deletion crashes, local pin ABA, missing receipts, manual policy, publication conflicts and analyst recovery. The latest full configured './dev coverage -n 4 --dist=worksteal' run passed with 1840 passed and 2 skipped, reporting 79% aggregate coverage. A subsequent one-line CLI output-format correction and its recovery-command parameterization passed the focused CLI tests (2 passed). './dev lint' and 'git diff --check' pass on the final workspace. Earlier standalone-download HTTP 503/504 failures were external and passed on subsequent full runs; packaging tests were not skipped or redesigned. No live hosted execution resources, workflow/ticket state or Git lifecycle were modified. Exact-final-checkpoint hosted CI is not claimed and requires Devlegate-owned publication.",
+    "summary": "Decoupled abandonment retirement into independently journaled worktree, local branch, upstream branch and code-pin operations, with generation receipts, CAS/lease guards and replay protection. Added explicit owner/IPC analyst recovery and first-parent publication reconciliation, plus operator documentation for operational remote authority and manual retention."
+  },
+  "workspace_head": "90de39375177b34923e2c81df8e2e06158323a4e"
+}
