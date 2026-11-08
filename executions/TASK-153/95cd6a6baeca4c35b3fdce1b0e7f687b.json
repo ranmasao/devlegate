@@ -1,0 +1,29 @@
+{
+  "code_base_head": "90de39375177b34923e2c81df8e2e06158323a4e",
+  "conclusion": "completed",
+  "control_head": "db3f9d53165cccf3aceeafdc4113ec284efb511a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-153",
+  "execution_id": "95cd6a6baeca4c35b3fdce1b0e7f687b",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-153",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-153/95cd6a6baeca4c35b3fdce1b0e7f687b.md",
+  "report_sha256": "9127dfab17967341b0d6d1e7b450a23239bc0088107a153eb9cb0bb5bfe45bc5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-153",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Revised the carried-forward implementation against the review feedback and removed the for_status policy switch. Real-Git regressions cover human/JSON status, restart, unrelated product dirt/advances/missing remote refs, branch-owned retirement markers, new failure generations, deferral/requeue, removal, edits, deletion/recreation, and ambiguous control history. The 220-unrelated-commit regression limits ls-tree calls to ticket events. Focused status/control tests passed (165 tests). Full configured validation passed: ./dev coverage -n 4 --dist=worksteal (1845 passed, 2 skipped), ./dev lint, and git diff --check. Hosted exact-checkpoint CI is owned by Devlegate and was not launched from this worker.",
+    "summary": "Separated historical failure visibility from strict retry and admission authorization, so published ticket lifecycle transitions remain retired despite unrelated workers or product checkout changes. Scoped unresolved ownership and recovery checks to the affected ticket, and bounded Git tree inspection to ticket-specific lifecycle events while retaining immutable failure evidence."
+  },
+  "workspace_head": "b4cde8b9d2994a81d5292b376f7eb1e2775a8408"
+}
