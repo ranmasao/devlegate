@@ -104,19 +104,22 @@ def persist_agent_running(
     record_start=False,
     publish=False,
     record_handoff=True,
+    ticket_id="T-1",
 ):
     control = next((state / "worktrees").glob("*/control"))
     code_head = git(devlegate.repo, "rev-parse", "HEAD").stdout.strip()
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
     todo_fingerprint, _count = _todo_fingerprint(control, devlegate.todo_path)
     manager = ExecutionWorkspaceManager(
-        devlegate.repo, devlegate.execution_worktree_root, "T-1"
+        devlegate.repo, devlegate.execution_worktree_root, ticket_id
     )
     from devlegate.resource_binding import ResourceBinding
 
     binding = ResourceBinding.plan(
         manager, execution_id=execution_id, base=code_head, control=control_head,
-        ticket_blob=git(control, "rev-parse", "HEAD:kanban/todo/T-1.md").stdout.strip(),
+        ticket_blob=git(
+            control, "rev-parse", f"HEAD:kanban/todo/{ticket_id}.md"
+        ).stdout.strip(),
         remote="origin", remote_head=None,
     )
     binding.record_intent()
@@ -148,11 +151,11 @@ def persist_agent_running(
         handled_control_head=control_head,
         handled_todo_fingerprint=todo_fingerprint,
         control_head=control_head,
-        selected_ticket_id="T-1",
+        selected_ticket_id=ticket_id,
         selected_ticket_body="work\n",
         selected_ticket_title="Control ticket",
         selected_ticket_dependencies=[],
-        execution_ticket_id="T-1",
+        execution_ticket_id=ticket_id,
         execution_base_head=code_head,
         execution_control_head=control_head,
         execution_branch=workspace.branch,
