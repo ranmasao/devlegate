@@ -2760,6 +2760,36 @@ def test_worker_ownership_scopes_published_failure_visibility(
         worker_ticket == "T-1"
     )
 
+    # Product observations belong to admission, not the old failure's lifecycle.
+    (working / "other-product.txt").write_text("unrelated product work\n")
+    for product_state in ("dirty", "ahead", "published", "unfetched"):
+        if product_state == "ahead":
+            git(working, "add", "other-product.txt")
+            git(working, "commit", "-m", "unrelated product advance")
+        elif product_state == "published":
+            git(working, "push", "origin", "HEAD")
+        elif product_state == "unfetched":
+            git(working, "update-ref", "-d", "refs/remotes/origin/main")
+        for observed in (engine, Devlegate(config)):
+            snapshot = observed.status_view()
+            assert bool(snapshot.failed_executions) == (worker_ticket == "T-1")
+            assert snapshot.bound_ticket_id == worker_ticket
+            assert observed._retry_candidates() == ()
+            assert observed._state["failed_executions"]["T-1"] == metadata
+        assert report_store.read("T-1", metadata["execution_id"]) == report
+
+    if worker_ticket == "T-2":
+        # Ref retirement identifies ownership by branch, without a ticket_id.
+        engine._save_state("agent_running", execution_ref_retirement={
+            "branch": "devlegate/work/T-2", "expected_head": "a" * 40,
+        })
+        assert not engine.status_view().failed_executions
+        engine._save_state("agent_running", execution_ref_retirement={
+            "branch": "devlegate/work/T-1", "expected_head": "a" * 40,
+        })
+        assert engine.status_view().failed_executions
+        engine._save_state("agent_running", execution_ref_retirement=None)
+
     # Matching unresolved intent must override even a cached history proof.
     engine._save_state(
         "agent_running", manual_retry_required={
@@ -2844,7 +2874,28 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     assert engine.status_view().failed_executions
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     restarted = Devlegate(config)
+    commands = []
+    if destination == "done":
+        # Hundreds of irrelevant first-parent commits must not produce hundreds
+        # of tree-inspection subprocesses on the first poll (or after restart).
+        head = git(control, "rev-parse", "HEAD").stdout.strip()
+        tree = git(control, "rev-parse", "HEAD^{tree}").stdout.strip()
+        for _ in range(220):
+            head = git(control, "commit-tree", tree, "-p", head,
+                       "-m", "unrelated control event").stdout.strip()
+        git(control, "reset", "--hard", head)
+        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        original_git = restarted._git_runtime
+
+        def counted_git(repo, *args, **kwargs):
+            commands.append(args)
+            return original_git(repo, *args, **kwargs)
+
+        monkeypatch.setattr(restarted, "_git_runtime", counted_git)
     snapshot = restarted.status_view()
+    if destination == "done":
+        assert sum(args[0] == "ls-tree" for args in commands) <= 4
+        assert any(args[0] == "log" and "--" in args for args in commands)
     assert not snapshot.failed_executions
     assert not snapshot.as_dict()["failed_executions"]
     assert "Failed executions" not in restarted._render_status_text(snapshot)
@@ -2969,8 +3020,11 @@ def test_failed_generation_product_lineage_and_ticket_transition(
         assert report_store.read("T-1", metadata["execution_id"]) == report
         assert restarted._state["failed_executions"]["T-1"] == metadata
     else:
-        assert snapshot.failed_executions
-        assert not snapshot.failed_executions[0].retryable
+        if scenario == "product-only":
+            assert snapshot.failed_executions
+            assert not snapshot.failed_executions[0].retryable
+        else:
+            assert not snapshot.failed_executions
         assert snapshot.plan.action != "run-worker"
         run_test_iteration(restarted)
         assert len(calls) == 1

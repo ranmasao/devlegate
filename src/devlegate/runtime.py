@@ -9916,16 +9916,8 @@ class ServiceEngine:
         self, ticket_id: str, metadata: object, state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
-        *, for_status: bool = False,
     ) -> bool:
-        """Require published descendant history proving a ticket left its state.
-
-        A changed ticket body or a different checkout is not a transition. An
-        unreadable, dirty, divergent, or unfetched observation cannot prove one.
-        The retained failure and reports are never modified by this projection.
-        Status can retire a proved removal or a failure edited after an intact
-        transition; admission still requires the original blob throughout.
-        """
+        """Authorize admission only with TASK-137's strict generation proof."""
         if not isinstance(metadata, dict) or control is None:
             return False
         if code is not None:
@@ -9959,24 +9951,11 @@ class ServiceEngine:
                     "force_retry_authorization", "execution_ref_retirement"):
             marker = state.get(key)
             if (
-                for_status and key == "execution_ref_retirement"
-                and isinstance(marker, dict)
-                and "ticket_id" not in marker
-                and marker.get("branch") != f"devlegate/work/{ticket_id}"
-            ):
-                # Retirement intents bind resources by branch, not ticket_id.
-                continue
-            if (
                 isinstance(marker, dict)
                 and marker.get("ticket_id", ticket_id) == ticket_id
             ):
                 return False
-        if state.get("worker_identity") is not None and (
-            not for_status
-            or state.get("selected_ticket_id") in {None, ticket_id}
-            or state.get("execution_ticket_id") == ticket_id
-            or state.get("execution_id") == metadata.get("execution_id")
-        ):
+        if state.get("worker_identity") is not None:
             return False
         live = self.live_execution_evidence()
         if isinstance(live, dict) and live.get("ticket_id") == ticket_id:
@@ -9993,10 +9972,70 @@ class ServiceEngine:
             return False
         if base == control.local_head:
             return False
-        retired, admissible = self._ticket_supersession_proof(
+        _, admissible = self._ticket_supersession_proof(
             ticket_id, base, control.local_head
         )
-        return retired if for_status else admissible
+        return admissible
+
+    def _historical_failure_retired(
+        self, ticket_id: str, metadata: object, state: dict[str, object],
+        control: GitObservation | None,
+    ) -> bool:
+        """Project published ticket lifecycle history, independent of product Git.
+
+        This is not retry or admission authority. Only matching or unidentifiable
+        ownership/intents keep an otherwise retired failure current.
+        """
+        if not isinstance(metadata, dict) or control is None:
+            return False
+        if (
+            control.detached or control.branch != self.control_branch
+            or not control.working_tree_clean or not control.remote_head
+            or control.local_head != control.remote_head
+        ):
+            return False
+
+        def may_own_ticket(marker: object) -> bool:
+            if not isinstance(marker, dict):
+                return marker is not None
+            owners = [marker.get("ticket_id")]
+            branch = marker.get("branch")
+            if isinstance(branch, str) and branch.startswith("devlegate/work/"):
+                owners.append(branch.removeprefix("devlegate/work/"))
+            execution_id = marker.get("execution_id")
+            if execution_id is not None:
+                if execution_id == metadata.get("execution_id"):
+                    return True
+                if execution_id == state.get("execution_id"):
+                    owners.extend((state.get("selected_ticket_id"),
+                                   state.get("execution_ticket_id")))
+            known = [owner for owner in owners if isinstance(owner, str) and owner]
+            return not known or ticket_id in known
+
+        for key in ("reconciliation", "accepted_integration", "automatic_retry",
+                    "manual_retry_required", "resume_required", "operator_recovery",
+                    "force_retry_authorization", "execution_ref_retirement"):
+            if may_own_ticket(state.get(key)):
+                return False
+        if state.get("worker_identity") is not None or state.get("phase") != "idle":
+            if may_own_ticket({
+                "ticket_id": state.get("selected_ticket_id"),
+                "execution_id": state.get("execution_id"),
+                "branch": state.get("execution_branch"),
+            }) or state.get("execution_ticket_id") == ticket_id:
+                return False
+        live = self.live_execution_evidence()
+        if live is not None and may_own_ticket(live):
+            return False
+        base = metadata.get("control_head")
+        if not isinstance(base, str) or not _is_git_identity(base):
+            return False
+        if base == control.local_head:
+            return False
+        retired, _ = self._ticket_supersession_proof(
+            ticket_id, base, control.local_head
+        )
+        return retired
 
     def _ticket_supersession_proof(
         self, ticket_id: str, base: str, head: str,
@@ -10029,8 +10068,17 @@ class ServiceEngine:
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
             return False, False
-        commits = lineage.stdout.splitlines()
-        commits = list(reversed(commits[:commits.index(base) + 1]))
+        # Inspect ticket events, not every unrelated control commit. Include all
+        # workflow paths so edits and deletion/recreation cannot masquerade as
+        # an intact lifecycle move. First-parent merge diffs describe mainline.
+        events = self._git_runtime(
+            self.control_worktree, "log", "--first-parent", "--full-history",
+            "--format=%H", "--reverse", f"{base}..{head}", "--", *paths,
+            check=False,
+        )
+        if events.returncode != 0:
+            return False, False
+        commits = [base, *events.stdout.splitlines()]
         original_blob = None
         previous_path = None
         transitioned = False
@@ -11163,18 +11211,11 @@ class ServiceEngine:
         )
         admission_failures = failed_executions
         if isinstance(failures, dict):
-            admission_failures = tuple(
-                failure for failure in admission_failures
-                if not self._failure_superseded(
-                    failure.ticket_id, failures.get(failure.ticket_id), state,
-                    control, code,
-                )
-            )
             failed_executions = tuple(
                 failure for failure in failed_executions
-                if not self._failure_superseded(
+                if not self._historical_failure_retired(
                     failure.ticket_id, failures.get(failure.ticket_id), state,
-                    control, code, for_status=True,
+                    control,
                 )
             )
         live_evidence = self.live_execution_evidence()
@@ -11193,7 +11234,12 @@ class ServiceEngine:
         if plan.action == "run-worker" and not plan.bound:
             selected_failure = next(
                 (failure for failure in admission_failures
-                 if failure.ticket_id == plan.ticket_id), None
+                 if failure.ticket_id == plan.ticket_id
+                 and isinstance(failures, dict)
+                 and not self._failure_superseded(
+                     failure.ticket_id, failures.get(failure.ticket_id), state,
+                     control, code,
+                 )), None
             )
             if selected_failure is not None:
                 reason = selected_failure.nonretryable_reason
