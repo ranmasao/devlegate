@@ -31,6 +31,15 @@ from devlegate.abandonment_evidence import (
     OwnerGitEvidence,
     build_abandonment_evidence,
 )
+from devlegate.abandonment_publication import (
+    make_transaction,
+    proposal_files,
+    resolve_review,
+    terminal_changes,
+    verify_proposal,
+    verify_terminal,
+    verify_transaction,
+)
 from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
@@ -2509,6 +2518,17 @@ class ServiceEngine:
             if not candidate.get("head"):
                 candidate["head"] = fields[0]
         keys = sorted(candidates)
+        for record in (self._state.get("abandonment_retirements") or {}).values():
+            if record["cleanup"]["status"] == "retired":
+                continue
+            admission = record["admission"]
+            resources = admission["resources"]
+            candidates.setdefault(admission["target_id"], {
+                "ticket_id": admission["target_id"], "path": resources["path"],
+                "branch": resources["branch"],
+                "head": resources["local_head"] or admission["product_head"],
+            })
+            keys = sorted(candidates)
         if not keys:
             return []
         cursor = self._state.get("workspace_cleanup_cursor")
@@ -3535,6 +3555,11 @@ class ServiceEngine:
 
     def _sync_control(self) -> tuple[str, str]:
         """Fetch and fast-forward the already initialized control checkout."""
+        publication = self._state.get("abandonment_publication")
+        if isinstance(publication, dict):
+            transaction = publication.get("terminal") or publication.get("proposal")
+            if transaction is not None:
+                self._publish_abandonment_transaction(transaction)
         try:
             return sync_control(
                 control_worktree=self.control_worktree,
@@ -3891,9 +3916,20 @@ class ServiceEngine:
         if self._stop_before_admission():
             return 0
         ticket_store = self._ticket_store()
+        publication = self._state.get("abandonment_publication")
+        if isinstance(publication, dict) and publication.get("terminal") is not None:
+            self._finish_abandonment()
+            return 0
+        retirements = self._state.get("abandonment_retirements") or {}
+        for target_id, record in retirements.items():
+            if record["cleanup"]["status"] == "pending":
+                self._finish_abandonment(target_id=target_id)
+                return 0
         self._observe_abandonment_admission(ticket_store, control_head, local_head)
         if self._state.get("abandonment_admission") is not None:
             self._run_abandonment_analysis(ticket_store)
+            self._advance_abandonment()
+            return 0
         try:
             load_project_context(self.repo)
         except ProjectContextError as error:
@@ -6807,6 +6843,7 @@ class ServiceEngine:
         *,
         report: ExecutionReport | None = None,
         candidate: dict[str, str] | None = None,
+        abandonment=None,
     ) -> None:
         """Release only exact, already-published disposable execution refs."""
         self._assert_repository_owner()
@@ -6816,7 +6853,7 @@ class ServiceEngine:
             expected_head
         ):
             raise WorkflowBlockedError("execution ref identity is not canonical")
-        if report is not None and candidate is not None:
+        if sum(value is not None for value in (report, candidate, abandonment)) > 1:
             raise ValueError("execution retirement validation is ambiguous")
         local_ref = f"refs/heads/{branch}"
         local_head = self._resolve_commit_runtime(self.repo, local_ref)
@@ -6880,6 +6917,8 @@ class ServiceEngine:
                 # Re-prove durable ownership, ref identity, dependencies, and
                 # product ancestry immediately before deleting its local ref.
                 self._observe_cleanup_candidate(candidate, manager._registrations())
+            elif abandonment is not None:
+                abandonment()
             # Recheck the exact observed head before the helper's compare-
             # and-delete transaction.  The helper also rechecks all Git
             # worktree registrations so foreign checkouts are retained.
@@ -6940,6 +6979,14 @@ class ServiceEngine:
             return
         if remote_head != expected_head:
             raise WorkflowBlockedError("remote execution ref changed before removal")
+        if abandonment is not None:
+            # Plain Git leases protect a value, not uninterrupted remote identity.
+            # The current admission explicitly records that continuity is unproven.
+            # Never promote its matching SHA to deletion authority.
+            raise WorkflowBlockedError(
+                "abandonment upstream continuity is unproven; owner must resolve "
+                "remote identity before retirement"
+            )
         if report is not None:
             self._revalidate_cleanup_retirement(report)
             remote_head = remote_ref(
@@ -7385,6 +7432,24 @@ class ServiceEngine:
                 raise WorkflowBlockedError("control working tree is dirty")
             tickets = self._ticket_store().by_id
         for target in targets:
+            retained = (self._state.get("abandonment_retirements") or {}).get(
+                target.get("ticket_id")
+            )
+            if retained is not None:
+                if retained["cleanup"]["status"] == "retired":
+                    decisions.append({
+                        "ticket_id": target["ticket_id"], "status": "blocked",
+                        "reason": "retired abandonment generation cannot authorize "
+                                  "newly observed resources",
+                    })
+                    continue
+                if apply:
+                    self._finish_abandonment(target_id=target["ticket_id"], retry=True)
+                cleanup = self._state["abandonment_retirements"][target["ticket_id"]][
+                    "cleanup"
+                ]
+                decisions.append({"ticket_id": target["ticket_id"], **cleanup})
+                continue
             if target.get("head") == "" and all(
                 isinstance(target.get(field), str) and target[field]
                 for field in ("ticket_id", "path", "branch")
@@ -9976,11 +10041,7 @@ class ServiceEngine:
             source.close()
 
     def _run_abandonment_analysis(self, store: TicketStore) -> None:
-        """Dispatch only the evidence worker; never enter product integration.
-
-        Until reviewed publication is available the proposed immutable report is
-        retained durably in owner state and the exclusive reservation remains.
-        """
+        """Dispatch only the evidence worker; never enter product integration."""
         self._assert_repository_owner()
         value = AbandonmentAdmission.restore(
             self._state.get("abandonment_admission")
@@ -10097,7 +10158,8 @@ class ServiceEngine:
                 self._publish_service_snapshot(lifecycle="worker", worker_running=True)
                 try:
                     run = self._workers.run(
-                        workspace, analysis_prompt(request.body, workspace.manifest_id),
+                        workspace, analysis_prompt(request.body, workspace.manifest_id)
+                        + str(self._state.get("abandonment_feedback") or ""),
                         execution_id=value["execution_id"],
                         stop_request=self._stop_event,
                         identity_handler=lambda identity: persist(
@@ -10138,6 +10200,323 @@ class ServiceEngine:
         finally:
             source.close()
             product.close()
+
+    def _publish_abandonment_transaction(self, transaction: dict) -> None:
+        """Resume only the journaled exact commit; remote lease precedes checkout."""
+        self._assert_repository_owner()
+        try:
+            verify_transaction(self.control_worktree, transaction, self._git_runtime)
+            self._validate_control_worktree()
+            if self._status_runtime(self.control_worktree):
+                raise EvidenceError(
+                    "control worktree is dirty; preserve edits and repair it"
+                )
+            fetched = fetch_ref(
+                self.control_worktree, self.remote_name, self.control_branch,
+                runner=self._git_runtime,
+            )
+            if fetched.returncode:
+                raise EvidenceError("cannot observe abandonment publication remote")
+            upstream = remote_ref(
+                self.control_worktree, self.remote_name,
+                f"refs/heads/{self.control_branch}", runner=self._git_runtime,
+            )
+            commit, parent = transaction["commit"], transaction["parent"]
+            if upstream == parent:
+                pushed = push_refs(
+                    self.control_worktree, self.remote_name,
+                    f"{commit}:refs/heads/{self.control_branch}",
+                    options=(
+                        f"--force-with-lease=refs/heads/{self.control_branch}:{parent}",
+                    ), runner=self._git_runtime,
+                )
+                upstream = remote_ref(
+                    self.control_worktree, self.remote_name,
+                    f"refs/heads/{self.control_branch}", runner=self._git_runtime,
+                )
+                if upstream != commit:
+                    raise EvidenceError(
+                        pushed.stderr.strip() or "abandonment control publication raced"
+                    )
+            elif upstream is None or not is_ancestor(
+                self.control_worktree, commit, upstream, runner=self._git_runtime,
+            ):
+                raise EvidenceError(
+                    "abandonment publication parent changed; retained transaction "
+                    "requires owner reconciliation before retry"
+                )
+        except (EvidenceError, GitObservationError, GitAncestryError) as error:
+            raise WorkflowBlockedError(str(error)) from error
+
+    def _advance_abandonment(self) -> None:
+        """Publish proposal, await an exact curator decision, then commit both moves."""
+        self._assert_repository_owner()
+        analysis = self._state.get("abandonment_analysis")
+        if not isinstance(analysis, dict) or analysis.get("stage") != "reported":
+            return
+        admission = AbandonmentAdmission.restore(
+            self._state.get("abandonment_admission")
+        ).as_dict()
+        report = ExecutionReport.from_dict(analysis["report"])
+        saved = analysis["workspace"]
+        workspace = EvidenceWorkspace(
+            saved["ticket_id"], Path(saved["path"]), saved["manifest_id"],
+            tuple(saved["directory_identity"]), saved["manifest_sha256"],
+        )
+        try:
+            publication = self._state.get("abandonment_publication")
+            if publication is None:
+                workspace.validate()
+                manifest_text = (workspace.path / "manifest.json").read_text()
+            else:
+                # Once published, immutable control evidence is authoritative.
+                # Loss of the scratch evidence directory cannot rerun analysis.
+                manifest_text = read_path(
+                    self.control_worktree, publication["proposal"]["commit"],
+                    f"abandonment-proposals/{report.ticket_id}/"
+                    f"{report.execution_id}.manifest.json",
+                    runner=self._git_runtime,
+                )
+            files = proposal_files(
+                admission, report, manifest_text,
+                workspace.manifest_sha256, workspace.manifest_id,
+            )
+            head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+            if not isinstance(head, str):
+                raise EvidenceError("abandonment control HEAD is unavailable")
+            if publication is None:
+                source = f"{self.todo_path}/{admission['request_id']}.md"
+                destination = f"{self.review_path}/{admission['request_id']}.md"
+                body = read_path(self.control_worktree, head, source,
+                                 runner=self._git_runtime)
+                if body is None:
+                    raise EvidenceError("analysis request is not in todo")
+                transaction = make_transaction(
+                    self.control_worktree, head,
+                    {**files, source: None, destination: body},
+                    f"Publish abandonment analysis {report.ticket_id} "
+                    f"({report.execution_id})", self._git_runtime,
+                )
+                publication = {"proposal": transaction, "terminal": None}
+                self._save_state("idle", abandonment_publication=publication)
+                head, _ = self._sync_control()
+            verify_proposal(self.control_worktree, head, publication["proposal"],
+                            files, self._git_runtime)
+            review = resolve_review(
+                self.control_worktree, head, admission,
+                publication["proposal"]["commit"], workspace.manifest_id, report,
+                review_path=self.review_path, todo_path=self.todo_path,
+                accepted_path=self.accepted_path, runner=self._git_runtime,
+            )
+            if review is None:
+                return
+            if review["disposition"] == "rework":
+                # The reviewed proposal remains immutable. A fresh identity and
+                # manifest distinguish the next analyst generation on replay.
+                admission["execution_id"] = new_execution_id()
+                self._save_state(
+                    "idle", abandonment_admission=admission,
+                    abandonment_analysis=None, abandonment_publication=None,
+                    abandonment_feedback=(
+                        "\n\nIndependent review of the previous analysis:\n"
+                        + review["content"]
+                    ),
+                )
+                return
+            changes = terminal_changes(
+                self.control_worktree, head, admission, report,
+                publication["proposal"]["commit"], workspace.manifest_id, review,
+                accepted_path=self.accepted_path, done_path=self.done_path,
+                abandoned_path=self.abandoned_path, runner=self._git_runtime,
+            )
+            terminal = make_transaction(
+                self.control_worktree, head, changes,
+                f"Abandon {admission['target_id']} via {admission['request_id']} "
+                f"({report.execution_id})", self._git_runtime,
+            )
+            self._save_state("idle", abandonment_publication={
+                **publication, "terminal": terminal,
+            })
+            self._sync_control()
+            self._finish_abandonment()
+        except (EvidenceError, ExecutionReportError, GitObservationError,
+                GitAncestryError) as error:
+            raise WorkflowBlockedError(
+                f"abandonment review refused: {error}"
+            ) from error
+
+    def _finish_abandonment(self, *, target_id: str | None = None,
+                            retry: bool = False) -> None:
+        """Keep the terminal control decision independent of cleanup progress."""
+        self._assert_repository_owner()
+        retirements = dict(self._state.get("abandonment_retirements") or {})
+        if target_id is None:
+            admission = AbandonmentAdmission.restore(
+                self._state.get("abandonment_admission")
+            ).as_dict()
+            target_id = admission["target_id"]
+            record = {
+                "admission": admission, "analysis": self._state["abandonment_analysis"],
+                "publication": self._state["abandonment_publication"],
+                "cleanup": {"status": "pending", "worktree": "pending",
+                            "local_ref": "pending", "upstream_ref": "pending",
+                            "code_pins": "pending", "reason": ""},
+            }
+            if target_id in retirements and retirements[target_id] != record:
+                raise WorkflowBlockedError("conflicting abandonment retirement journal")
+            retirements[target_id] = record
+            # Terminal publication releases scheduler exclusivity. Cleanup has
+            # a separate durable journal and cannot reserve unrelated tickets.
+            self._save_state(
+                "idle", abandonment_retirements=retirements,
+                abandonment_admission=None, abandonment_analysis=None,
+                abandonment_publication=None, abandonment_feedback=None,
+            )
+        record = retirements[target_id]
+        cleanup = record["cleanup"]
+        if isinstance(cleanup, dict) and (
+            cleanup.get("status") == "retired"
+            or cleanup.get("status") == "blocked" and not retry
+        ):
+            return
+        admission = AbandonmentAdmission.restore(record["admission"]).as_dict()
+        resources = admission["resources"]
+        analysis = record["analysis"]
+        report = ExecutionReport.from_dict(analysis["report"])
+        workspace = analysis["workspace"]
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, admission["target_id"],
+            runner=self._git_runtime,
+        )
+        def persist(**changes):
+            nonlocal cleanup
+            cleanup = {**cleanup, **changes}
+            retirements[target_id] = {**record, "cleanup": cleanup}
+            self._save_state("idle", abandonment_retirements=retirements,
+                             abandonment_cleanup={"ticket_id": target_id, **cleanup})
+
+        def authority():
+            self._assert_repository_owner()
+            if self._stop_requested():
+                raise ShutdownInterrupted
+            current, _ = self._sync_control()
+            if self._status_runtime(self.control_worktree):
+                raise EvidenceError(
+                    "control checkout is dirty before abandonment cleanup"
+                )
+            files = proposal_files(
+                admission, report,
+                read_path(
+                    self.control_worktree, current,
+                    f"abandonment-proposals/{report.ticket_id}/"
+                    f"{report.execution_id}.manifest.json",
+                    runner=self._git_runtime,
+                ), workspace["manifest_sha256"], workspace["manifest_id"],
+            )
+            verify_terminal(
+                self.control_worktree, current, admission, report,
+                record["publication"], files, workspace["manifest_id"],
+                review_path=self.review_path, todo_path=self.todo_path,
+                accepted_path=self.accepted_path, done_path=self.done_path,
+                abandoned_path=self.abandoned_path, runner=self._git_runtime,
+            )
+            state = dict(self._state)
+            retirement = state.get("execution_ref_retirement")
+            if retirement is not None:
+                if retirement != {"branch": manager.branch,
+                                  "expected_head": resources["local_head"]}:
+                    raise EvidenceError("conflicting local ref retirement intent")
+                state["execution_ref_retirement"] = None
+            require_quiescence(state, self._workers.active_count)
+            active = state.get("abandonment_analysis")
+            if isinstance(active, dict) and active.get("stage") == "running":
+                raise EvidenceError("another abandonment worker ownership is uncertain")
+            if str(manager.path) != resources["path"]:
+                raise EvidenceError("abandoned resource path differs from admission")
+            upstream = remote_ref(
+                self.repo, self.remote_name, f"refs/heads/{manager.branch}",
+                runner=self._git_runtime,
+            )
+            if upstream is not None:
+                raise EvidenceError(
+                    "abandonment upstream identity is unproven; preserve the remote "
+                    "ref and resolve its continuity before retrying cleanup"
+                )
+            registrations = manager._registrations()
+            registration = registrations.get(manager.path.resolve())
+            if manager.path.is_symlink() or any(
+                path != manager.path.resolve() and item.get("branch") == manager.branch
+                for path, item in registrations.items()
+            ) or (registration is None and manager.path.exists()):
+                raise EvidenceError("abandoned checkout ownership is ambiguous")
+            local = self._resolve_commit_runtime(
+                self.repo, f"refs/heads/{manager.branch}"
+            )
+            if resources["generation"] is None:
+                if registration is not None or local is not None:
+                    raise EvidenceError(
+                        "new resources appeared after abandonment admission"
+                    )
+                return None
+            binding = ResourceBinding.for_execution(manager, resources["execution_id"])
+            if binding.intent["generation"] != resources["generation"]:
+                raise EvidenceError("abandoned resource generation changed")
+            binding.require_worker_retirement()
+            binding.require_ref(resources["local_head"])
+            if registration is not None:
+                if registration != resources["registration"]:
+                    raise EvidenceError("abandoned worktree registration changed")
+                owned = binding.require_local(clean=False, read_only=True)
+                if owned.head != resources["local_head"]:
+                    raise EvidenceError("abandoned worktree checkpoint changed")
+                return owned
+            return None
+
+        try:
+            persist(status="pending", reason="")
+            owned = authority()
+            pins = self._git_runtime(
+                self.repo, "for-each-ref", "--format=%(refname)",
+                f"refs/devlegate/executions/{admission['target_id']}/",
+                f"refs/devlegate/reconciliation/{admission['target_id']}/",
+                f"refs/devlegate/recovery/workspace/{admission['target_id']}/",
+                f"refs/devlegate/recovery/force-retry/{admission['target_id']}/",
+                f"refs/devlegate/recovery/operator/{admission['target_id']}/",
+                check=False,
+            )
+            remote_pins = self._git_runtime(
+                self.repo, "ls-remote", self.remote_name,
+                f"refs/devlegate/executions/{admission['target_id']}/*",
+                f"refs/devlegate/reconciliation/{admission['target_id']}/*",
+                f"refs/devlegate/recovery/workspace/{admission['target_id']}/*",
+                f"refs/devlegate/recovery/force-retry/{admission['target_id']}/*",
+                f"refs/devlegate/recovery/operator/{admission['target_id']}/*",
+                check=False,
+            )
+            if pins.returncode or remote_pins.returncode or (
+                pins.stdout.strip() or remote_pins.stdout.strip()
+            ):
+                raise EvidenceError(
+                    "exclusive code-pin retirement needs independent generation proof; "
+                    "retaining unproven refs: "
+                    + (pins.stdout.strip() or remote_pins.stdout.strip()
+                       or "unavailable")
+                )
+            persist(code_pins="absent", worktree="removing")
+            if owned is not None:
+                manager.retire_abandoned(owned, resources["local_head"], authority)
+            authority()
+            persist(worktree="absent", local_ref="removing")
+            if resources["local_head"] is not None:
+                self._retire_execution_refs(
+                    manager.branch, resources["local_head"], abandonment=authority,
+                )
+            authority()
+            persist(status="retired", local_ref="absent", upstream_ref="absent")
+        except (EvidenceError, ExecutionWorkspaceError, ExecutionReportError,
+                GitObservationError, GitAncestryError, OSError,
+                subprocess.SubprocessError, WorkflowBlockedError) as error:
+            persist(status="blocked", reason=str(error))
 
     def _admission_barrier(
         self,

@@ -11,6 +11,11 @@ context and are not part of the Devlegate protocol.
 
 ## Review Input
 
+For a `devlegate.abandonment` request, use the abandonment-specific protocol
+below. It has no implementation branch, checkpoint to integrate, or product
+merge authorization. The following ordinary review rules apply to
+`devlegate.ticket` implementations.
+
 For ticket T under `{{ workflow.review_path }}`, inspect:
 
 1. The canonical ticket specification on `{{ workflow.control_branch }}`.
@@ -83,3 +88,41 @@ implementation done, treat WorkerClaim as authoritative validation, or create a 
 hardening ticket for ordinary review failure. Do not tell workers to use `git show`
 or otherwise read the private control worktree; current feedback is injected into
 the worker prompt by Devlegate.
+
+## Abandonment Request Review
+
+Independently inspect the request and target specifications, the exact analysis
+ExecutionReport and adjacent `.md` proposal under `executions/<request>/<execution>`.
+Read the `.manifest.json` evidence index and `.json` source binding under
+`abandonment-proposals/<request>/<execution>`. Verify
+the admitted blobs, source control HEAD, manifest identity/digest, per-execution
+checkpoints and review decisions. Check that the substantive proposal explains
+the reason, every execution/review outcome, meaningful changes and research,
+integrated versus discarded work, unfinished work, gaps and future conclusions.
+Do not treat a completed analyst claim or a single original-to-final diff as
+independent acceptance or cumulative ticket contribution.
+
+Publish `reviews/<request>/<execution>.md` with this exact distinct header and
+your independent findings. Take identities from the verified publication:
+
+```text
+<!-- devlegate-abandonment-review-v1
+ticket: <request id>
+execution: <32-lowercase-hex analysis execution id>
+control: <admitted source control HEAD>
+publication: <analysis publication commit>
+manifest: <manifest id>
+proposal: <proposed report SHA-256, or none if no proposed report exists>
+disposition: accept
+-->
+```
+
+Use `accept` only for an independently sufficient completed analysis. In the same
+control commit, move the unchanged request from `{{ workflow.review_path }}` to
+`{{ workflow.accepted_path }}`. For rejection, incomplete or failed analysis,
+use `rework` and move it to `{{ workflow.todo_path }}` instead. Include only the
+review and request move in this commit; preserve the request blob byte-for-byte.
+Never alter the target, publish the terminal abandonment report, dispose of
+resources or merge product code yourself. Devlegate alone performs the atomic
+terminal transition and separately guarded cleanup. Existing reports/reviews
+are immutable; another analysis generation requires another independent review.

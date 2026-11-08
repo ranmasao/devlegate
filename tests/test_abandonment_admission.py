@@ -302,11 +302,10 @@ def test_owner_dispatch_persists_identity_result_and_reservation_across_restart(
         )
 
     monkeypatch.setattr(engine._workers, "run", worker)
-    error = RuntimeError if mode.endswith("loss") else DevlegateError
-    message = "simulated owner process loss" if mode.endswith("loss") else (
-        "reviewed finalization is pending"
-    )
-    with pytest.raises(error, match=message):
+    if mode.endswith("loss"):
+        with pytest.raises(RuntimeError, match="simulated owner process loss"):
+            run_test_iteration(engine)
+    else:
         run_test_iteration(engine)
     assert len(calls) == 1
     record = engine._state["abandonment_analysis"]
@@ -321,10 +320,12 @@ def test_owner_dispatch_persists_identity_result_and_reservation_across_restart(
     )
     message = (
         "ownership is matching-live" if mode == "live-loss" else
-        "ownership is unknown" if mode == "launch-loss" else
-        "reviewed finalization is pending"
+        "ownership is unknown"
     )
-    with pytest.raises(DevlegateError, match=message):
+    if mode in {"live-loss", "launch-loss"}:
+        with pytest.raises(DevlegateError, match=message):
+            run_test_iteration(restored)
+    else:
         run_test_iteration(restored)
     if mode != "process-loss":
         assert restored._state["abandonment_analysis"] == record
