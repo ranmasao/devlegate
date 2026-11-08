@@ -554,6 +554,14 @@ def test_live_superseding_execution_hides_only_its_historical_failure(
     assert [failure.ticket_id for failure in active.failed_executions] == ["T-99"]
     assert "T-1" not in active.as_dict()["failed_executions"]
 
+    # A live owner cannot hide a failure recorded for that very generation.
+    engine._save_state("agent_running", failed_executions={
+        "T-1": {**metadata, "execution_id": "execution-1"}, "T-99": metadata,
+    })
+    assert {f.ticket_id for f in engine.status_view().failed_executions} == {
+        "T-1", "T-99",
+    }
+
     engine._owned_execution_id = None
     ended = engine.status_view()
 
