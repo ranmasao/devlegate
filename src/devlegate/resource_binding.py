@@ -522,6 +522,57 @@ class ResourceBinding:
                 return value
         return initial
 
+    def abandonment_remote_authority(self, seen: set[str] | None = None) -> str | None:
+        """Prove operational authority, not impossible remote ABA continuity.
+
+        Walk independent generation handoffs back to a receipted create. A
+        matching initial remote observation alone is never creation authority.
+        This deliberately does not change normal integration cleanup policy.
+        """
+        self._validate_intent()
+        self._require_settled()
+        self.require_worker_retirement()
+        seen = set() if seen is None else set(seen)
+        token = str(self.intent["generation"])
+        if token in seen:
+            raise ExecutionWorkspaceError("remote generation handoff cycle")
+        if len(seen) >= 128:
+            raise ExecutionWorkspaceError(
+                "remote generation handoff exceeds 128 links; manual authority required"
+            )
+        seen.add(token)
+        current = self.intent["prior_remote"]
+        if current is not None:
+            predecessor = None
+            for name in ("rework-started.json", "handoff-intent.json"):
+                path = self.directory / name
+                if path.exists():
+                    predecessor = _read(path).get("predecessor")
+            if not isinstance(predecessor, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", predecessor
+            ):
+                raise ExecutionWorkspaceError(
+                    "remote creation has no independent generation handoff receipt"
+                )
+            prior = ResourceBinding(
+                self.manager, _read(self.directory.parent / predecessor / "intent.json")
+            )
+            if prior.intent["generation"] != predecessor:
+                raise ExecutionWorkspaceError("remote predecessor generation differs")
+            if prior.abandonment_remote_authority(seen) != current:
+                raise ExecutionWorkspaceError("remote predecessor receipt differs")
+        for _sequence, operation, path in self._attempts():
+            if operation in {
+                "publication", "rewrite-publication", "predecessor-publication",
+            }:
+                receipt = self._receipt(path)
+                if receipt.get("before") != current or not isinstance(
+                    receipt.get("after"), str
+                ):
+                    raise ExecutionWorkspaceError("remote publication chain differs")
+                current = receipt["after"]
+        return current
+
     def prepare(self, *, remote_head: str | None) -> ExecutionWorkspace:
         """Fresh creation or exact receipt replay; never SHA-based adoption."""
         self._validate_intent()

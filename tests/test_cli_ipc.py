@@ -691,16 +691,17 @@ def test_retry_fails_closed_when_authority_exists_but_socket_is_unavailable(
     finally:
         authority.close()
 
+@pytest.mark.parametrize("command", ["recover", "abandonment-recover"])
 def test_recover_cli_forwards_ticket_execution_and_observed_head(
-    cli_daemon, git_fixture, monkeypatch, capsys
+    cli_daemon, git_fixture, monkeypatch, capsys, command,
 ):
     observed_head = "a" * 40
     calls = []
     monkeypatch.setattr(
         cli_daemon,
-        "submit_recover",
-        lambda ticket_id, execution_id, observed, *, request_id: (
-            calls.append((ticket_id, execution_id, observed, request_id))
+        "submit_" + command.replace("-", "_"),
+        lambda ticket_id, execution_id, observed, *, request_id, **options: (
+            calls.append((ticket_id, execution_id, observed, request_id, options))
             or {
                 "accepted": True,
                 "ticket_id": ticket_id,
@@ -716,17 +717,21 @@ def test_recover_cli_forwards_ticket_execution_and_observed_head(
             "devlegate",
             "--env",
             str(_short_runtime_config(git_fixture)),
-            "recover",
+            command,
             "T-1",
             "execution-1",
             "--observed-head",
             observed_head,
+            *(["--terminate-analyst"] if command == "abandonment-recover" else []),
         ],
     )
 
     assert main() == 0
     assert calls[0][:3] == ("T-1", "execution-1", observed_head)
     assert calls[0][3]
+    assert calls[0][4] == (
+        {"terminate": True} if command == "abandonment-recover" else {}
+    )
     assert "recovery accepted: T-1" in capsys.readouterr().out
 
 def test_retry_interactive_candidates_are_rendered_and_selected_locally(

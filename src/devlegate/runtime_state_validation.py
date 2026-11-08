@@ -101,6 +101,7 @@ def validate_state_invariant(state: dict[str, object]) -> None:
                 "stage", "workspace", "worker_identity", "report",
             }.issubset(analysis) or set(analysis) - {
                 "stage", "workspace", "worker_identity", "report", "interruption",
+                "launch_evidence", "recovery",
             }:
                 raise DevlegateError("invalid abandonment analysis state")
             stage = analysis["stage"]
@@ -206,14 +207,22 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             cleanup = record["cleanup"]
             if not isinstance(cleanup, dict) or set(cleanup) != {
                 "status", "worktree", "local_ref", "upstream_ref", "code_pins",
-                "reason",
+                "reason", "receipts",
             } or cleanup["status"] not in {"pending", "blocked", "retired"} or (
                 not isinstance(cleanup["reason"], str)
-            ) or any(cleanup[field] not in {"pending", "removing", "absent"}
+            ) or any(cleanup[field] not in {"pending", "removing", "absent", "blocked"}
                      for field in (
                          "worktree", "local_ref", "upstream_ref", "code_pins",
             )):
                 raise DevlegateError("invalid abandonment cleanup progress")
+            if not isinstance(cleanup["receipts"], dict) or any(
+                not isinstance(key, str) or not isinstance(receipt, dict)
+                or set(receipt) != {"status", "generation", "before", "after", "reason"}
+                or receipt["status"] not in {"pending", "removing", "absent", "blocked"}
+                or not isinstance(receipt["reason"], str)
+                for key, receipt in cleanup["receipts"].items()
+            ):
+                raise DevlegateError("invalid per-resource abandonment receipt")
     resource = state.get("execution_resource_binding")
     if resource is not None:
         if not isinstance(resource, dict):

@@ -666,6 +666,32 @@ class WorkerSupervisor:
         with self._lock:
             return execution_id in self._active
 
+    def analysis_launch_evidence(self, execution_id: str):
+        capture = getattr(self.containment_provider, "launch_evidence", None)
+        return capture(execution_id) if capture is not None else None
+
+    def recover_analysis(self, execution_id: str, evidence, identity, *, terminate):
+        """Bounded recovery; no process launch and no guessed semantic result."""
+        recover = getattr(self.containment_provider, "recover_launch", None)
+        if not isinstance(evidence, dict) or recover is None:
+            raise ContainmentError(
+                "analysis launch containment evidence is unavailable"
+            )
+        pid = None
+        if identity is not None:
+            if identity.execution_id != execution_id or (
+                identity.containment_id != evidence.get("containment")
+            ):
+                raise ContainmentError("analysis recovery process binding differs")
+            observation = observe_worker_identity(identity)
+            if observation == "matching-live":
+                pid = identity.pid
+            elif observation != "absent":
+                raise ContainmentError(
+                    "analysis recovery process identity is ambiguous"
+                )
+        return recover(execution_id, evidence, pid=pid, terminate=terminate)
+
     def observe(self, identity: WorkerProcessIdentity) -> str:
         if identity.containment_id:
             return self.containment_provider.observe(identity.containment_id)

@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from devlegate.abandonment_evidence import EvidenceError, OwnerGitEvidence
+from devlegate.abandonment_refs import inventory, prefixes, require_pin
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
@@ -112,20 +113,39 @@ def observe_resources(*, repo: Path, root: Path, remote: str, target: Ticket,
         "registration": registration, "local_head": local,
         "upstream_head": upstream, "upstream_continuity": "unproven",
         "generation": None, "execution_id": None, "dirty": None,
+        "code_pins": [],
     }
-    if registration is None and local is None:
-        if upstream is not None:
-            raise EvidenceError(
-                "upstream-only target resource has no independent local ownership; "
-                "resolve its ownership before admitting abandonment"
-            )
-        return result
-    assert local is not None
-    # Ref-only leftovers still require the independent ref-generation witness.
     reports = ExecutionReportStore(control).list(target.id)
+    for pin in inventory(repo, remote, target.id, runner):
+        pin = {**pin, "generation": None, "execution_id": None,
+               "gap": "no independently receipted execution pin"}
+        for report in reports:
+            if report.resource_generation is None:
+                continue
+            try:
+                binding = ResourceBinding.for_execution(manager, report.execution_id)
+                if binding.intent["generation"] != report.resource_generation:
+                    continue
+                require_pin(binding, pin)
+            except (EvidenceError, ExecutionWorkspaceError, OSError, ValueError):
+                continue
+            report_path = f"executions/{target.id}/{report.execution_id}.json"
+            if source.small("show", f"{control_head}:{report_path}") != (
+                report.to_json().encode("utf-8")
+            ):
+                raise EvidenceError("pin report differs from admitted control history")
+            pin.update(generation=report.resource_generation,
+                       execution_id=report.execution_id, gap=None)
+            break
+        result["code_pins"].append(pin)
+    if registration is None and local is None and upstream is None:
+        return result
+    # Ref-only leftovers still require the independent ref-generation witness.
     matches = []
     for report in reports:
-        if report.resource_generation is None or report.workspace_head != local:
+        if report.resource_generation is None or report.workspace_head != (
+            local if local is not None else upstream
+        ):
             continue
         report_path = f"executions/{target.id}/{report.execution_id}.json"
         entry = source.small("ls-tree", control_head, "--", report_path).decode()
@@ -147,7 +167,10 @@ def observe_resources(*, repo: Path, root: Path, remote: str, target: Ticket,
                 workspace = binding.require_local(clean=False, read_only=True)
                 dirty = workspace.dirty
             else:
-                binding.require_ref(local)
+                if local is not None:
+                    binding.require_ref(local)
+                elif binding.abandonment_remote_authority() != upstream:
+                    raise EvidenceError("upstream-only publication generation differs")
                 dirty = None
             binding.require_worker_retirement()
         except (OSError, ValueError, ExecutionWorkspaceError) as error:
@@ -157,7 +180,8 @@ def observe_resources(*, repo: Path, root: Path, remote: str, target: Ticket,
         matches.append((report, binding, dirty))
     if len(matches) != 1:
         raise EvidenceError(
-            "abandonment resource has no unique independently verified generation; "
+            ("upstream-only " if local is None else "abandonment ")
+            + "resource has no unique independently verified generation; "
             "do not adopt an old or replacement checkout"
         )
     report, binding, dirty = matches[0]
@@ -218,10 +242,38 @@ class AbandonmentAdmission:
         if not isinstance(resources, dict) or set(resources) != {
             "path", "branch", "registration", "local_head", "upstream_head",
             "upstream_continuity", "generation", "execution_id", "dirty",
+            "code_pins",
         } or resources["branch"] != f"devlegate/work/{value['target_id']}":
             raise EvidenceError("invalid admitted abandonment resources")
         if resources["upstream_continuity"] != "unproven":
             raise EvidenceError("abandonment cannot assert plain Git remote continuity")
+        pins = resources["code_pins"]
+        if not isinstance(pins, list) or len(pins) > 4096 or any(
+            not isinstance(pin, dict) or set(pin) != {
+                "location", "ref", "head", "generation", "execution_id", "gap",
+            } or pin["location"] not in {"local", "remote"}
+            or not isinstance(pin["ref"], str)
+            or not isinstance(pin["head"], str) or not _OID.fullmatch(pin["head"])
+            for pin in pins
+        ):
+            raise EvidenceError("invalid admitted code pin inventory")
+        identities = set()
+        for pin in pins:
+            identity = (pin["location"], pin["ref"])
+            if identity in identities or not any(
+                pin["ref"].startswith(prefix) for prefix in prefixes(value["target_id"])
+            ):
+                raise EvidenceError("duplicate or foreign admitted code pin")
+            identities.add(identity)
+            if pin["generation"] is None:
+                if pin["execution_id"] is not None or not isinstance(pin["gap"], str):
+                    raise EvidenceError("unproven admitted code pin lacks a gap")
+            elif not isinstance(pin["generation"], str) or not re.fullmatch(
+                r"[0-9a-f]{64}", pin["generation"]
+            ) or not isinstance(pin["execution_id"], str) or not re.fullmatch(
+                r"[0-9a-f]{32}", pin["execution_id"]
+            ) or pin["gap"] is not None:
+                raise EvidenceError("invalid admitted code pin generation")
         if not isinstance(resources["path"], str) or not Path(
             resources["path"]
         ).is_absolute() or (

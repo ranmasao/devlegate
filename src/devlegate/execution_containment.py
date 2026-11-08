@@ -10,6 +10,7 @@ supervisors provision the delegated root; they are not part of this API.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -458,6 +459,48 @@ class LinuxCgroupContainmentProvider:
 
     def create(self, execution_id: str) -> ExecutionContainment:
         return ExecutionContainment.create(execution_id)
+
+    def launch_evidence(self, execution_id: str) -> dict:
+        """Capture the configured launch root before the uncertain spawn window."""
+        if not re.fullmatch(r"[0-9a-f]{32}", execution_id):
+            raise ContainmentError("invalid recovery execution identity")
+        mount = _cgroup2_mount()
+        root = _configured_root(mount) if mount is not None else None
+        if root is None or not root.is_dir() or root.is_symlink():
+            raise ContainmentError("cannot bind analysis launch root")
+        metadata = root.stat()
+        return {"root": str(root), "identity": [metadata.st_dev, metadata.st_ino],
+                "boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                "containment": f"cgroup:{root / ('execution-' + execution_id)}"}
+
+    def recover_launch(self, execution_id: str, evidence: dict, *, pid: int | None,
+                       terminate: bool) -> str:
+        if evidence != self.launch_evidence(execution_id):
+            raise ContainmentError("analysis launch root or boot identity changed")
+        identity = evidence["containment"]
+        observation = self.observe(identity)
+        if observation == "absent":
+            return observation
+        if observation != "matching-live" or not terminate or pid is None:
+            raise ContainmentError(
+                "analysis containment is live or uncertain; identified worker "
+                "termination requires explicit authorization"
+            )
+        path = Path(identity.removeprefix("cgroup:"))
+        mount = _cgroup2_mount()
+        if mount is None:
+            raise ContainmentError("analysis cgroup mount is unavailable")
+        expected = "0::/" + str(path.relative_to(mount))
+        if expected not in Path(f"/proc/{pid}/cgroup").read_text().splitlines():
+            raise ContainmentError("identified worker is not in the launch containment")
+        boundary = ExecutionContainment(path, recursive_kill=True)
+        boundary.force_terminate()
+        if not boundary.wait_empty(5):
+            raise ContainmentError(
+                "analysis containment did not retire within 5 seconds"
+            )
+        boundary.destroy()
+        return "absent"
 
     def observe(self, identity: str) -> str:
         if not identity.startswith("cgroup:"):

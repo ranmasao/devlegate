@@ -143,6 +143,23 @@ def dispatch_mutation(
         return engine.submit_drop(
             ticket_id, execution_id, request_id=request.request_id
         )
+    if request.method == "abandonment-recover":
+        payload = request.payload
+        if set(payload) != {"ticket_id", "execution_id", "observed_head", "terminate"}:
+            raise IPCProtocolError(
+                "invalid_request", "invalid abandonment recovery fields"
+            )
+        if not all(isinstance(payload[key], str) and payload[key]
+                   for key in ("ticket_id", "execution_id", "observed_head")) or (
+            type(payload["terminate"]) is not bool
+        ):
+            raise IPCProtocolError(
+                "invalid_request", "invalid abandonment recovery identity"
+            )
+        return engine.submit_abandonment_recover(
+            payload["ticket_id"], payload["execution_id"], payload["observed_head"],
+            terminate=payload["terminate"], request_id=request.request_id,
+        )
     if request.method == "recover":
         if set(request.payload) != {"ticket_id", "execution_id", "observed_head"}:
             raise IPCProtocolError(

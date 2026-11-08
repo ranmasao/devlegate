@@ -160,7 +160,7 @@ def test_request_cannot_enter_checkout_worker_or_product_integration(tmp_path, s
     )
     assert barrier.action == "blocked"
     assert barrier.kind == "abandonment"
-    assert "durable evidence admission" in barrier.reason
+    assert barrier.ticket_id == "Z-REQUEST"
     assert "A-TARGET" in barrier.reason
 
 

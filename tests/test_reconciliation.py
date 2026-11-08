@@ -178,7 +178,7 @@ def test_product_evidence_rejects_unowned_or_stopped_git(
         engine._stop_event.set()
     report = SimpleNamespace(
         ticket_id="T-1", execution_id="exec", code_base_head="base",
-        workspace_head="checkpoint",
+        workspace_head="checkpoint", resource_generation=None,
     )
     product = {"remote_head": "remote", "local_head": "local"}
 
@@ -213,7 +213,7 @@ def product_evidence(tmp_path):
     report = SimpleNamespace(
         ticket_id="T-1", execution_id="exec", code_base_head=base,
         workspace_head=checkpoint, execution_branch="work", execution_path="work",
-        as_dict=lambda: {"workspace_head": checkpoint},
+        as_dict=lambda: {"workspace_head": checkpoint}, resource_generation=None,
     )
     product = {
         "remote_head": base, "local_head": checkpoint, "reason": "changed",
@@ -449,6 +449,8 @@ def test_rework_pin_replays_after_stop_following_ref_creation(tmp_path, monkeypa
     checkpoint = git("rev-parse", "HEAD")
     engine = ServiceEngine.__new__(ServiceEngine)
     engine.repo = tmp_path
+    engine.execution_worktree_root = tmp_path / "resources"
+    engine.control_worktree = tmp_path / "control"
     engine._host_owner_thread_id = None
     engine._stop_event = threading.Event()
     original = runtime._git

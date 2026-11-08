@@ -1,13 +1,11 @@
 # Reviewed abandonment requests
 
 This implementation connects evidence analysis, immutable proposal publication,
-independent review and the atomic terminal board transition. Local retirement
-uses independent generation evidence and the reviewed terminal decision. The
-full feature remains unfinished: remote branch continuity and exclusive code-pin
-retirement still fail closed, and uncertain launch/control-publication conflicts
-do not yet have a dedicated owner recovery command. Do not use this unfinished
-implementation to dispose of live operator resources. A manual board move is
-not a substitute for the reviewed transition or resource ownership proof.
+independent review and the atomic terminal board transition. Retirement uses
+independent per-generation operation receipts and the reviewed terminal decision.
+The owner has explicit recovery operations for uncertain analyst launches and
+conflicting publication parents. A manual board move is not a substitute for
+the reviewed transition or resource ownership proof.
 
 ## Board and request format
 
@@ -74,14 +72,16 @@ the manifest and directory identities, supervised process identity and proposed
 ExecutionReport. A reported result replays without launching another worker. A
 lost process with proven absent containment produces a failed report, never an
 invented semantic summary. Live/unknown containment or the uncertain launch
-window blocks with an ownership diagnostic. There is not yet an operator resume
-command for that blocked launch window. A report proposal alone cannot authorize
-the terminal disposition or disposal.
+window blocks with an ownership diagnostic. The owner recovery command below
+can establish absence or retire an exactly identified live analyst. A report
+proposal alone cannot authorize the terminal disposition or disposal.
 
 Upstream observations are retained for later lease comparisons and labelled
 `unproven` for continuity. A matching remote name and SHA is not independent
 proof that a deleted ref was never recreated. Upstream-only resources with no
-local ownership evidence are refused at admission.
+independent publication receipts are refused at admission. An upstream-only
+resource with a unique immutable execution report and a receipted creation/update
+chain remains eligible even after its local checkout and branch have gone.
 
 ## Evidence library
 
@@ -261,7 +261,7 @@ same transaction. It neither reruns the analyst nor creates a duplicate report.
 Loss of the scratch evidence workspace after proposal publication is harmless:
 replay reads the immutable published manifest. A changed publication parent,
 dirty control checkout or conflicting remote lineage remains blocked with its
-retained transaction; dedicated owner reconciliation is still unfinished.
+retained transaction until explicit owner reconciliation.
 
 ## Retirement and recovery
 
@@ -275,7 +275,9 @@ files in the registered owned worktree can be discarded; foreign/reused paths,
 uncertain workers, changed refs and invalid submodules are retained.
 
 The per-target retirement journal records `pending`, `blocked` or `retired` plus
-worktree, local/upstream ref and code-pin progress. It is separate from request
+independent worktree, local-ref, upstream-ref and individual local/remote code-pin
+receipts. Each resource has a generation, pre-action observation and authorization,
+post-action observation or failure, status and actionable reason. It is separate from request
 admission, so terminal publication releases the scheduler reservation even if
 cleanup is blocked. Partial worktree/local deletion resumes after process loss.
 Blocked cleanup is not repeatedly polled by scheduler ticks. Inspect it with
@@ -283,12 +285,80 @@ Blocked cleanup is not repeatedly polled by scheduler ticks. Inspect it with
 cleanup cohort using the retained terminal authority. Terminal board state and
 immutable text history survive any cleanup failure.
 
-**Current retirement limitation:** an existing upstream ticket branch is always
-retained because its continuity is explicitly unproven. A matching name and SHA
-or a successful lease is not proof of uninterrupted identity. Existing target
-code-pinning refs are also retained pending independent ownership/generation
-proof. These conditions block cleanup before local destructive work. The owner
-observes both local and remote code-pin namespaces; unknown remote observations
-also block. Finishing authorized remote/pin retirement and their recovery path
-is required before this feature is complete. Do not remove these guards or
-manually erase resources merely to make a cleanup status green.
+Safe local worktree removal and local-branch CAS deletion proceed even if an
+independent upstream or pin is blocked. Completed resources cannot authorize a
+recreated same-name resource. An interrupted authorized deletion can be resumed
+by reobserving absence; a failed delete is recorded as blocked rather than
+reported as success. Normal scheduler passes do not retry blocked resources.
+
+### Remote operational authority and code pins
+
+Remote deletion requires the admitted namespace, exact execution generation,
+independent local publication receipts and an attributable generation handoff
+chain back to creation (at most 128 handoff links per retirement proof).
+Immediately before deletion, the owner rechecks terminal
+review authority, quiescence, generation and the remote value. The delete uses
+an exact `--force-with-lease`, followed by a fresh observation. Missing receipts,
+changed values, remote outages and conflicting current ownership retain the
+affected resource. Normal done/integration retirement policy is unchanged.
+
+**Threat-model assumption:** remote writers cooperate with Devlegate's ownership
+model. Other actors with remote write permission can delete and recreate a ref
+at the same SHA without detection by ordinary Git. Operation receipts plus a
+lease provide operational authority, not proof of uninterrupted remote identity.
+For a remote where that residual risk is unacceptable, set the local Git policy
+`devlegate.abandonmentRemoteAuthority` to `manual`. Cleanup then retains remote
+resources with a manual-authority diagnostic while allowing safe local progress.
+The default policy is `leased`; unknown policy values fail closed. After an
+independent authorized remote disposition, `devlegate clean --apply` reobserves
+the resource using the retained journal. It never adopts a newly appeared ref.
+
+Code pins are indexed at admission and bound to individual immutable execution
+reports and independent creation receipts. Newly created generation-bound pins
+carry a local reflog witness and exact content receipt; remote pin publication
+has its own intent/receipt. Local ABA replacement invalidates the witness even
+at the same SHA. Remote pins use the operational assumption above. Only exact
+admitted, exclusive pins with proven generation and retired workers can be
+removed. Rework, drop, forced-retry and reconciliation pin creation use these
+receipts. Existing pins without independent receipts and pins appearing after
+admission are listed as blocked, never swept by namespace. Immutable execution
+JSON, curator reviews, disposition text, manifests and canonical reports remain.
+
+### Explicit owner recovery
+
+Use the request ID, full analysis execution ID and freshly observed full control
+HEAD from the blocked operation:
+
+```sh
+devlegate abandonment-recover REQUEST-ID EXECUTION-ID --observed-head FULL-CONTROL-HEAD
+```
+
+This is a serialized, identity-bound owner/IPC operation with the existing
+durable mutable-request receipts. It refuses dirty control edits, stale HEADs,
+other workers, pending integration/recovery and mismatched request generations.
+An acknowledgement confirms admission; inspect status/service logs for outcome.
+
+For a `running` analyst, the owner compares the pre-launch cgroup-root identity
+and boot identity and observes that exact containment. Empty/absent containment
+permits a failed ExecutionReport with no semantic claim, preserving the manifest
+and workspace identity for independent review. It never relaunches the possibly
+live execution. To authorize termination of an identified still-live analyst,
+add `--terminate-analyst`. The owner verifies process start identity, exact
+containment and kernel membership, requests recursive cgroup termination and
+waits at most five seconds for emptiness. An unidentified live group, changed
+root/boot, unavailable evidence or ambiguous process identity is refused without
+signals. Resolve that process ownership externally, then repeat the supported
+operation; no direct runtime database edits are required.
+
+For a retained proposal/terminal publication, the operation verifies immutable
+journal contents and first-parent control ancestry (bounded to 10,000 commits).
+It recognizes an already-published exact transaction or reuses its unchanged
+valid parent. If another writer advanced the parent, this explicit command is
+the fresh authorization to replay the same changes on the specified descendant,
+only when none of the admitted transaction paths changed. The previous journal,
+replacement and authorization remain in owner history. A terminal replay also
+revalidates the exact independent acceptance and terminal contents. Changed
+paths, non-first-parent publication, divergent history or altered review require
+an independently authorized control decision; there is no silent rebase,
+force-overwrite or forged acceptance. A restart retains the proposal, manifest,
+review, terminal report and disposal journal throughout recovery.

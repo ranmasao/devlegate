@@ -161,13 +161,55 @@ def verify_transaction(repo: Path, transaction: dict, runner) -> None:
         raise EvidenceError("abandonment publication contains unrelated changes")
 
 
+def first_parent_contains(repo: Path, ancestor: str, head: str, runner) -> bool:
+    result = runner(repo, "rev-list", "--first-parent", "--max-count=10001", head,
+                    check=False)
+    if not result.returncode and ancestor in result.stdout.splitlines():
+        return True
+    if result.returncode or len(result.stdout.splitlines()) > 10000:
+        raise EvidenceError(
+            "control first-parent proof exceeds bounded recovery history"
+        )
+    return False
+
+
+def reconcile_transaction(repo: Path, transaction: dict, head: str, runner) -> dict:
+    """Explicit owner decision only; retain old journal and never rebase silently."""
+    verify_transaction(repo, transaction, runner)
+    if first_parent_contains(repo, transaction["commit"], head, runner):
+        return transaction
+    parent = transaction["parent"]
+    if not first_parent_contains(repo, parent, head, runner):
+        raise EvidenceError(
+            "publication parent is not in first-parent control ancestry"
+        )
+    changed = runner(repo, "log", "--format=%H", "--max-count=1",
+                     f"{parent}..{head}", "--", *transaction["changes"], check=False)
+    if changed.returncode or changed.stdout.strip():
+        raise EvidenceError(
+            "admitted publication paths changed; restore the exact admitted decision "
+            "through independent control review before authorizing recovery"
+        )
+    if head == parent:
+        return transaction
+    changes = {path: (read_path(repo, transaction["commit"], path, runner=runner)
+                      if content is not None else None)
+               for path, content in transaction["changes"].items()}
+    replacement = make_transaction(
+        repo, head, changes, "Explicitly reconcile abandonment publication", runner,
+    )
+    if replacement["changes"] != transaction["changes"]:
+        raise EvidenceError("authorized publication contents changed")
+    return replacement
+
+
 def verify_proposal(repo: Path, head: str, publication: dict,
                     files: dict[str, str], runner) -> None:
     verify_transaction(repo, publication, runner)
     if any(publication["changes"].get(path) != digest(content)
            for path, content in files.items()):
         raise EvidenceError("published analysis differs from retained result")
-    if not is_ancestor(repo, publication["commit"], head, runner=runner):
+    if not first_parent_contains(repo, publication["commit"], head, runner):
         raise EvidenceError("analysis publication is not in current control history")
     for path, content in files.items():
         if read_path(repo, head, path, runner=runner) != content or (
@@ -297,8 +339,8 @@ def verify_terminal(repo: Path, head: str, admission: dict, report: ExecutionRep
         manifest_id, review, accepted_path=accepted_path, done_path=done_path,
         abandoned_path=abandoned_path, runner=runner,
     )
-    if terminal["changes"] != change_digests(expected) or not is_ancestor(
-        repo, terminal["commit"], head, runner=runner,
+    if terminal["changes"] != change_digests(expected) or not first_parent_contains(
+        repo, terminal["commit"], head, runner,
     ):
         raise EvidenceError("terminal abandonment does not match reviewed disposition")
     for path, content in expected.items():

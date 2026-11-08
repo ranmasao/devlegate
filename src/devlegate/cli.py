@@ -441,6 +441,26 @@ def _recover_daemon(
     return 0
 
 
+def _abandonment_recover_daemon(env_file, ticket_id, execution_id, observed_head,
+                                terminate, output_format):
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        if not locator.daemon_authority_present():
+            raise DevlegateError("start the service before abandonment recovery")
+        result = request(locator.socket_path, "abandonment-recover", {
+            "ticket_id": ticket_id, "execution_id": execution_id,
+            "observed_head": observed_head, "terminate": terminate,
+        }, mutable=True)
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    expected = {"accepted": True, "ticket_id": ticket_id,
+                "execution_id": execution_id, "observed_head": observed_head}
+    if result != expected:
+        raise DevlegateError("invalid abandonment recovery acknowledgement")
+    emit(result, output_format, f"abandonment recovery accepted: {ticket_id}")
+    return 0
+
+
 def _reconcile_daemon(
     env_file: Path,
     ticket_id: str,
@@ -2702,6 +2722,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--observed-head", required=True, help="exact conflicting branch HEAD"
     )
     add_output_arguments(recover_parser)
+    abandonment_recover = commands.add_parser(
+        "abandonment-recover",
+        help="resolve an exact uncertain abandonment analyst or publication",
+    )
+    abandonment_recover.add_argument("ticket_id")
+    abandonment_recover.add_argument("execution_id")
+    abandonment_recover.add_argument("--observed-head", required=True)
+    abandonment_recover.add_argument("--terminate-analyst", action="store_true")
+    add_output_arguments(abandonment_recover)
     reconcile_parser = commands.add_parser(
         "reconcile",
         help="resolve a pending reconciliation",
@@ -3153,6 +3182,11 @@ def main() -> int:
             return _clean_daemon(
                 env_file,
                 output_format=args.output_format,
+            )
+        if args.command == "abandonment-recover":
+            return _abandonment_recover_daemon(
+                env_file, args.ticket_id, args.execution_id, args.observed_head,
+                args.terminate_analyst, args.output_format,
             )
         if args.command == "recover":
             return _recover_daemon(
