@@ -2697,6 +2697,79 @@ def test_explicit_retry_rejects_unsafe_agent_running_workspace(tmp_path, monkeyp
         workspace.path / "unsafe.txt"
     ).read_text() == "uncommitted dependency change\n"
 
+@pytest.mark.parametrize("worker_ticket", ["T-1", "T-2"])
+def test_worker_ownership_scopes_published_failure_visibility(
+    tmp_path, monkeypatch, worker_ticket
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers, "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
+    )
+    assert run_test_iteration(engine) == 1
+    metadata = dict(engine._state["failed_executions"]["T-1"])
+    control = engine.control_worktree
+    source = control / "kanban/todo/T-1.md"
+    (control / "kanban/todo/T-2.md").write_bytes(source.read_bytes())
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "queue new ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    engine._save_state("idle", execution_stage=None)
+    if worker_ticket == "T-1":
+        # Uncertain ownership of the original failed generation, not a new
+        # attempt adopting the old generation's retained workspace.
+        engine._save_state(
+            "agent_running", selected_ticket_id="T-1", selected_ticket_body="work\n",
+            execution_ticket_id="T-1", execution_id=metadata["execution_id"],
+            worker_identity={
+                "execution_id": metadata["execution_id"], "pid": 1, "pgid": 1,
+                "sid": 1, "boot_id": "test-prior-boot", "start_time": 0,
+            },
+        )
+    else:
+        persist_agent_running(
+            engine, state, execution_id="new-worker", ticket_id=worker_ticket
+        )
+    engine._save_state("agent_running", execution_stage="worker-running")
+    source.rename(control / "kanban/done/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "finish old ticket and queue new ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    report_store = ExecutionReportStore(control)
+    report = report_store.read("T-1", metadata["execution_id"])
+
+    for observed in (engine, Devlegate(config)):
+        snapshot = observed.status_view()
+        assert bool(snapshot.failed_executions) == (worker_ticket == "T-1")
+        assert snapshot.bound_ticket_id == worker_ticket
+        assert snapshot.execution_stage == "worker-running"
+        assert snapshot.plan.action != "run-worker" or snapshot.plan.bound
+        assert observed._retry_candidates() == ()
+        assert observed._state["failed_executions"]["T-1"] == metadata
+        assert report_store.read("T-1", metadata["execution_id"]) == report
+    human = invoke(working, "status", config=config)
+    structured = invoke(working, "status", "--json", config=config)
+    # The prior-boot worker is uncertain to a standalone CLI observer.
+    assert human.returncode == structured.returncode == 1
+    assert ("Failed executions" in human.stdout) == (worker_ticket == "T-1")
+    assert worker_ticket in human.stdout
+    assert bool(json.loads(structured.stdout)["failed_executions"]) == (
+        worker_ticket == "T-1"
+    )
+
+    # Matching unresolved intent must override even a cached history proof.
+    engine._save_state(
+        "agent_running", manual_retry_required={
+            "ticket_id": "T-1", "execution_id": metadata["execution_id"],
+            "generation": "old", "request_id": "pending",
+        }
+    )
+    assert engine.status_view().failed_executions
+
+
 def test_stale_failed_execution_remains_visible_but_not_retryable(
     tmp_path, monkeypatch
 ):
@@ -2772,11 +2845,6 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     restarted = Devlegate(config)
     snapshot = restarted.status_view()
-    if destination == "deleted":
-        assert snapshot.failed_executions
-        assert restarted._state["failed_executions"]["T-1"] == metadata
-        assert report_store.read("T-1", metadata["execution_id"]) == report
-        return
     assert not snapshot.failed_executions
     assert not snapshot.as_dict()["failed_executions"]
     assert "Failed executions" not in restarted._render_status_text(snapshot)
@@ -2958,7 +3026,9 @@ def test_side_branch_deletion_and_divergent_remote_do_not_supersede_failure(
     assert json.loads(structured.stdout)["failed_executions"][0]["id"] == "T-1"
 
 
-@pytest.mark.parametrize("change", ["unrelated", "edited"])
+@pytest.mark.parametrize(
+    "change", ["unrelated", "edited", "edit-before-move", "recreated"]
+)
 def test_changed_control_without_immutable_transition_stays_blocked(
     tmp_path, monkeypatch, change
 ):
@@ -2984,6 +3054,21 @@ def test_changed_control_without_immutable_transition_stays_blocked(
         git(control, "commit", "-m", "defer ticket")
         target.rename(source)
         source.write_text(source.read_text() + "edited\n")
+    elif change == "edit-before-move":
+        source.write_text(source.read_text() + "edited\n")
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "change ticket identity before transition")
+        target = control / "kanban/backlog/T-1.md"
+        source.rename(target)
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "defer changed ticket")
+        target.rename(source)
+    elif change == "recreated":
+        original = source.read_bytes()
+        source.unlink()
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "remove ticket")
+        source.write_bytes(original)
     else:
         (control / "unrelated.txt").write_text("unrelated\n")
     git(control, "add", "-A")
@@ -2995,7 +3080,10 @@ def test_changed_control_without_immutable_transition_stays_blocked(
         snapshot = restarted.status_view()
         assert snapshot.plan.action == "none"
         assert "failed execution" in snapshot.plan.reason
-        assert snapshot.failed_executions[0].nonretryable_reason
+        if change == "edited":
+            assert not snapshot.failed_executions
+        else:
+            assert snapshot.failed_executions[0].nonretryable_reason
         assert restarted._retry_candidates() == ()
         run_test_iteration(restarted)
         assert restarted._state["failed_executions"]["T-1"] == metadata

@@ -9916,12 +9916,15 @@ class ServiceEngine:
         self, ticket_id: str, metadata: object, state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
+        *, for_status: bool = False,
     ) -> bool:
         """Require published descendant history proving a ticket left its state.
 
         A changed ticket body or a different checkout is not a transition. An
         unreadable, dirty, divergent, or unfetched observation cannot prove one.
         The retained failure and reports are never modified by this projection.
+        Status can retire a proved removal or a failure edited after an intact
+        transition; admission still requires the original blob throughout.
         """
         if not isinstance(metadata, dict) or control is None:
             return False
@@ -9956,18 +9959,33 @@ class ServiceEngine:
                     "force_retry_authorization", "execution_ref_retirement"):
             marker = state.get(key)
             if (
+                for_status and key == "execution_ref_retirement"
+                and isinstance(marker, dict)
+                and "ticket_id" not in marker
+                and marker.get("branch") != f"devlegate/work/{ticket_id}"
+            ):
+                # Retirement intents bind resources by branch, not ticket_id.
+                continue
+            if (
                 isinstance(marker, dict)
                 and marker.get("ticket_id", ticket_id) == ticket_id
             ):
                 return False
-        if state.get("worker_identity") is not None:
+        if state.get("worker_identity") is not None and (
+            not for_status
+            or state.get("selected_ticket_id") in {None, ticket_id}
+            or state.get("execution_ticket_id") == ticket_id
+            or state.get("execution_id") == metadata.get("execution_id")
+        ):
             return False
         live = self.live_execution_evidence()
         if isinstance(live, dict) and live.get("ticket_id") == ticket_id:
             return False
         if (
             state.get("phase") != "idle"
-            and state.get("selected_ticket_id") == ticket_id
+            and ticket_id in (
+                state.get("selected_ticket_id"), state.get("execution_ticket_id")
+            )
         ):
             return False
         base = metadata.get("control_head")
@@ -9975,28 +9993,49 @@ class ServiceEngine:
             return False
         if base == control.local_head:
             return False
+        retired, admissible = self._ticket_supersession_proof(
+            ticket_id, base, control.local_head
+        )
+        return retired if for_status else admissible
+
+    def _ticket_supersession_proof(
+        self, ticket_id: str, base: str, head: str,
+    ) -> tuple[bool, bool]:
+        """Prove status retirement separately from safe same-blob re-execution.
+
+        Only an intact first-parent move or removal retires the failed attempt.
+        Edits before that event and reappearance after removal are ambiguous.
+        Later edits do not revive history, but cannot authorize a new worker.
+        Cache successful immutable proofs only; all mutable guards run each poll.
+        """
+        key = (ticket_id, base, head)
+        cache = getattr(self, "_supersession_proofs", {})
         try:
             if not self._is_ancestor_runtime(
-                self.control_worktree, base, control.local_head
+                self.control_worktree, base, head
             ):
-                return False
+                return False, False
         except WorkflowBlockedError:
-            return False
+            return False, False
+        if key in cache:
+            return cache[key]
         paths = [f"{path}/{ticket_id}.md" for path in self._workflow_paths().values()]
         # A side branch may delete a ticket even though the published mainline
         # retains it at the merge. Only transitions of the observed first-parent
         # history can supersede this failure.
         lineage = self._git_runtime(
-            self.control_worktree, "rev-list", "--first-parent", control.local_head,
+            self.control_worktree, "rev-list", "--first-parent", head,
             check=False,
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
-            return False
+            return False, False
         commits = lineage.stdout.splitlines()
         commits = list(reversed(commits[:commits.index(base) + 1]))
         original_blob = None
         previous_path = None
         transitioned = False
+        intact = True
+        removed = False
         todo_path = f"{self.todo_path}/{ticket_id}.md"
         for commit in commits:
             tree = self._git_runtime(
@@ -10004,24 +10043,40 @@ class ServiceEngine:
                 check=False,
             )
             if tree.returncode != 0:
-                return False
+                return False, False
             entries = tree.stdout.splitlines()
+            if not entries and original_blob is not None:
+                removed = True
+                transitioned = True
+                intact = False
+                continue
             if len(entries) != 1 or "\t" not in entries[0]:
-                return False
+                return False, False
+            if removed:
+                return False, False
             descriptor, path = entries[0].split("\t", 1)
             fields = descriptor.split()
             if len(fields) != 3 or fields[1] != "blob" or path not in paths:
-                return False
+                return False, False
             if original_blob is None:
                 if path != todo_path:
-                    return False
+                    return False, False
                 original_blob = fields[2]
             elif fields[2] != original_blob:
-                return False
+                if not transitioned:
+                    return False, False
+                intact = False
             if previous_path == todo_path and path != todo_path:
                 transitioned = True
             previous_path = path
-        return transitioned
+        result = (transitioned, transitioned and intact)
+        # Bounded, process-local cache; no historic records are rewritten.
+        # A fully readable history with no transition is also immutable evidence.
+        if len(cache) >= 256:
+            cache.clear()
+        cache[key] = result
+        self._supersession_proofs = cache
+        return result
 
     def _collect_status_attempt(
         self, *, allow_workflow_blocked: bool = False
@@ -11106,12 +11161,20 @@ class ServiceEngine:
         failed_executions = self._evaluate_failed_executions(
             failures, ticket_store, code, control, admission_reason
         )
+        admission_failures = failed_executions
         if isinstance(failures, dict):
+            admission_failures = tuple(
+                failure for failure in admission_failures
+                if not self._failure_superseded(
+                    failure.ticket_id, failures.get(failure.ticket_id), state,
+                    control, code,
+                )
+            )
             failed_executions = tuple(
                 failure for failure in failed_executions
                 if not self._failure_superseded(
                     failure.ticket_id, failures.get(failure.ticket_id), state,
-                    control, code,
+                    control, code, for_status=True,
                 )
             )
         live_evidence = self.live_execution_evidence()
@@ -11121,11 +11184,15 @@ class ServiceEngine:
                 failure
                 for failure in failed_executions
                 if failure.ticket_id != active_ticket_id
+                or not isinstance(failures, dict)
+                or not isinstance(failures.get(failure.ticket_id), dict)
+                or failures[failure.ticket_id].get("execution_id")
+                == live_evidence.get("execution_id")
             )
         selected_failure = None
         if plan.action == "run-worker" and not plan.bound:
             selected_failure = next(
-                (failure for failure in failed_executions
+                (failure for failure in admission_failures
                  if failure.ticket_id == plan.ticket_id), None
             )
             if selected_failure is not None:
