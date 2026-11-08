@@ -1,0 +1,39 @@
+{
+  "code_base_head": "41657a6817f7558f923a0c15019e2f236bd0e0af",
+  "conclusion": "incomplete",
+  "control_head": "89305e24951deb1b1240b9dd12fdf6943650114e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-151",
+  "execution_id": "ff4c318177934f9d97bd9b63a7827a55",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-151",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement independently authorized upstream ticket-ref and exclusive code-pin retirement, including identity proofs and safe restart/replay; current implementation conservatively blocks these resources before local deletion.",
+    "Implement supported owner recovery for the uncertain analysis launch window and conflicting control-publication parent, without retrying a possibly live analyst or silently changing admitted identities.",
+    "Complete end-to-end validation of successful remote/code-pin retirement and associated owner/IPC recovery paths.",
+    "Complete configured full coverage and the network-dependent packaging tests, then obtain owner-run hosted CI on the exact checkpoint."
+  ],
+  "report_artifact": "executions/TASK-151/ff4c318177934f9d97bd9b63a7827a55.md",
+  "report_sha256": "4f4a07bc2eba1339b852d0936024537754a3c82197d3d940202aee6f9b862fe9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-151",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement independently authorized upstream ticket-ref and exclusive code-pin retirement, including identity proofs and safe restart/replay; current implementation conservatively blocks these resources before local deletion.",
+      "Implement supported owner recovery for the uncertain analysis launch window and conflicting control-publication parent, without retrying a possibly live analyst or silently changing admitted identities.",
+      "Complete end-to-end validation of successful remote/code-pin retirement and associated owner/IPC recovery paths.",
+      "Complete configured full coverage and the network-dependent packaging tests, then obtain owner-run hosted CI on the exact checkpoint."
+    ],
+    "report": "This invocation exhausted its implementation and validation budget with concrete implementation work still unfinished; the canonical ticket is not complete. Final-source focused validation passed 192 tests across abandonment, reviewer provenance/templates, workspace submodules and owner IPC; Ruff and git diff --check passed. An earlier offline full-suite run passed 1824 tests with 2 skipped, excluding three network-dependent packaging tests, before the final transaction-digest and sidecar-location refinements. Full coverage attempts did not complete within 600-second command limits. A broader run observed HTTP 504 downloading standalone packaging inputs. Hosted CI was not triggered. All destructive validation used disposable real-Git fixtures; no hosted tickets or operator resources were abandoned or retired. Existing upstream branches and code-pinning refs remain explicitly blocked rather than treating matching names/SHAs as ownership proof.",
+    "summary": "Added immutable abandonment analysis publication, exact independent curator review and rework generations, and a replayable atomic terminal control transition. Added abandonment-authorized dirty owned-worktree and local-ref retirement with separate per-target cleanup journals, explicit retry, and generation revalidation. Updated reviewer instructions and operator documentation."
+  },
+  "workspace_head": "1e58e8a464951cf5c94906de38c9e2c6fcbc6162"
+}
