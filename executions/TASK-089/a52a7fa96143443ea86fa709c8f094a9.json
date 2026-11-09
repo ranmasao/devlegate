@@ -1,0 +1,39 @@
+{
+  "code_base_head": "6d74487e018a9d302605684429b015ce8f9071c4",
+  "conclusion": "blocked",
+  "control_head": "50324bcc457141284bddc5f47cf4d03e0c9c7476",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-089",
+  "execution_id": "a52a7fa96143443ea86fa709c8f094a9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-089",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can the Devlegate owner arrange the clean-tree final package builds and execute the documented release-gate checks on the real Arch dogfooding host? This workspace has Arch and Debian containers, but no access to that host."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Rebuild both final native packages from a clean tree containing these implementation changes using ./dev package arch and ./dev package deb.",
+    "Run the resulting Arch package on the real dogfooding host: inspect metadata, install, verify integrity and version, perform a basic Git-backed project operation, remove cleanly, and reinstall."
+  ],
+  "report_artifact": "executions/TASK-089/a52a7fa96143443ea86fa709c8f094a9.md",
+  "report_sha256": "af9d6baf09693de6f0ca0597f32152114781321535b866b7007d0647f1287888",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-089",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can the Devlegate owner arrange the clean-tree final package builds and execute the documented release-gate checks on the real Arch dogfooding host? This workspace has Arch and Debian containers, but no access to that host."
+    ],
+    "remaining": [
+      "Rebuild both final native packages from a clean tree containing these implementation changes using ./dev package arch and ./dev package deb.",
+      "Run the resulting Arch package on the real dogfooding host: inspect metadata, install, verify integrity and version, perform a basic Git-backed project operation, remove cleanly, and reinstall."
+    ],
+    "report": "Local implementation and available target validation are finished. The packaging/standalone suite passed 143 tests before the final Git-minimum and removed-requirement cases; the final affected native-package suite passed 50 tests. Ruff, shell syntax, and git diff --check passed. readelf/ldd inspection covered the packaged launcher and extracted PBS interpreter and libraries; native provider ownership was checked using pacman and dpkg-query. Both updated native generators produced byte-identical repeated smoke packages using the exact standalone payload validated by a clean-tree build before edits. Final Arch and Debian 12 container checks passed metadata inspection, dependency resolution, installed Git-adapter/capability checks, no-host-Python execution, integrity, removal, and reinstallation. Arch additionally rejected installation while mandatory Git was absent. These smoke packages reused validated payload bytes through a local test harness; they are not claimed as final clean-tree release builds. ./dev package arch correctly refuses the edited worktree, and the worker contract prohibits committing or integrating the changes to satisfy that precondition. The real Arch dogfooding-host acceptance check cannot be performed from this workspace.",
+    "summary": "Added one declarative logical runtime inventory with explicit Arch and Debian provider/ABI mappings, consumed by both package generators and metadata validators. Added archive-level regression coverage, a disposable target installation smoke test, and distribution documentation covering verified linkage, Git capability constraints, optional components, and checksum handling."
+  },
+  "workspace_head": "c6ba12902612540d9bb78e68fc47fde17ca675d8"
+}
