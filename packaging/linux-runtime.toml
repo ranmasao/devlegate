@@ -1,0 +1,55 @@
+# Packaging-only authority for the pinned Linux x86_64 GNU standalone.
+# Linkage evidence and provider checks: docs/RELEASE_PACKAGING.md.
+schema = 1
+
+[requirements.git-tool]
+kind = "application"
+capabilities = ["repository discovery", "worktree porcelain", "worktree add/remove", "rev-parse --path-format=absolute"]
+
+[requirements.gnu-libc]
+kind = "elf"
+abi = "GLIBC_2.17"
+objects = ["ld-linux-x86-64.so.2", "libc.so.6", "libdl.so.2", "libm.so.6", "libpthread.so.0", "librt.so.1", "libutil.so.1"]
+
+[requirements.gcc-unwind]
+kind = "elf"
+abi = "GCC_4.2.0"
+objects = ["libgcc_s.so.1"]
+
+# These categories are explanatory, never native runtime dependencies.
+[excluded]
+bundled = ["CPython", "PEX", "OpenSSL", "SQLite", "zlib", "Tcl/Tk"]
+optional = ["OpenCode", "systemd user services", "PBS _crypt extension (libcrypt.so.1)"]
+build = ["Python", "pip", "venv", "Science", "setuptools", "wheel", "pytest", "readelf"]
+
+[families.arch.git-tool]
+package = "git"
+# --path-format=absolute is used by resource binding (Git 2.31+).
+minimum = "2.31"
+
+[families.arch.gnu-libc]
+package = "glibc"
+abi = "GLIBC_2.17"
+minimum = "2.17"
+
+[families.arch.gcc-unwind]
+package = "gcc-libs"
+abi = "GCC_4.2.0"
+minimum = "4.2.0"
+
+[families.debian.git-tool]
+package = "git"
+# Debian's Git package uses epoch 1; omitting it would accept older Git.
+minimum = "1:2.31"
+
+[families.debian.gnu-libc]
+package = "libc6"
+abi = "GLIBC_2.17"
+minimum = "2.17"
+
+[families.debian.gcc-unwind]
+package = "libgcc-s1"
+abi = "GCC_4.2.0"
+# libgcc-s1 is the GCC 10+ Debian/Ubuntu provider, not historical libgcc1.
+# All its releases export the required GCC_3.0, GCC_3.3 and GCC_4.2.0 symbols.
+minimum = "10"

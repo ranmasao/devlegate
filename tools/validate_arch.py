@@ -17,6 +17,7 @@ try:
         members,
         validate_mtree,
     )
+    from native_dependencies import dependencies
     from native_payload import PackageError
     from native_payload import validate as validate_payload
     from package_standalone import COMPLIANCE_DIR
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
         members,
         validate_mtree,
     )
+    from tools.native_dependencies import dependencies
     from tools.native_payload import PackageError
     from tools.native_payload import validate as validate_payload
     from tools.package_standalone import COMPLIANCE_DIR
@@ -59,13 +61,19 @@ def validate_package(
     except UnicodeDecodeError as error:
         raise PackageError("Arch metadata is not valid ASCII") from error
     fields: dict[str, str] = {}
+    declared_dependencies = []
     for line in pkginfo.splitlines():
         if " = " not in line:
             continue
         name, value = line.split(" = ", 1)
+        if name == "depend":
+            declared_dependencies.append(value)
+            continue
         if not name or name in fields:
             raise PackageError("Arch metadata contains an invalid or duplicate field")
         fields[name] = value
+    if tuple(declared_dependencies) != dependencies("arch"):
+        raise PackageError("Arch runtime dependencies differ from canonical inventory")
     report = json.loads(build_report.read_text(encoding="utf-8"))
     required_fields = {
         "pkgname",

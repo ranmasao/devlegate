@@ -37,12 +37,13 @@ DEB = load_tool("deb_format")
 ARCH_BUILDER = load_tool("package_arch")
 ARCH = load_tool("arch_format")
 ARCH_VALIDATOR = load_tool("validate_arch")
+DEPENDENCIES = sys.modules["native_dependencies"]
 
 
 def make_package(
     tmp_path: Path,
     *,
-    depends: str | None = None,
+    depends: str | None = ", ".join(DEPENDENCIES.dependencies("debian")),
     maintainer_script: bool = False,
     installed_size: int | None = None,
     include_installed_size: bool = True,
@@ -270,7 +271,9 @@ def make_verified_package(
     size = VALIDATOR.installed_size_kib(root)
     (control / "control").write_text(
         "Package: devlegate\nVersion: 0.5.7.dev0\nArchitecture: amd64\n"
-        f"Installed-Size: {size}\nDescription: test\n test\n",
+        f"Installed-Size: {size}\n"
+        f"Depends: {', '.join(DEPENDENCIES.dependencies('debian'))}\n"
+        "Description: test\n test\n",
         encoding="ascii",
     )
     package = tmp_path / "verified.deb"
@@ -331,6 +334,10 @@ def test_production_deb_builder_sets_maintainer_and_passes_validator(
     )
 
     fields = VALIDATOR.fields(package)
+    assert fields["Depends"] == "libgcc-s1 (>= 10), git (>= 1:2.31), libc6 (>= 2.17)"
+    assert subprocess.check_output(
+        ["dpkg-deb", "-f", str(package), "Depends"], text=True
+    ).strip() == fields["Depends"]
     assert fields["Maintainer"] == "Daniil Romanov <romanov.at.bg@gmail.com>"
     assert "devlegate.invalid" not in subprocess.run(
         ["dpkg-deb", "--info", str(package)],
@@ -388,7 +395,8 @@ def test_deb_and_arch_preserve_one_verified_payload_and_reject_tampering(
         "packager = Devlegate maintainers\n"
         "arch = x86_64\n"
         "license = EUPL-1.2\n"
-        "xdata = pkgtype=pkg\n",
+        "xdata = pkgtype=pkg\n"
+        + "".join(f"depend = {item}\n" for item in DEPENDENCIES.dependencies("arch")),
         encoding="ascii",
     )
     arch_package = tmp_path / "verified.pkg.tar.zst"
@@ -499,7 +507,7 @@ def test_owned_deb_builder_is_byte_reproducible_without_package_manager(tmp_path
     assert first.read_bytes() == second.read_bytes()
 
 
-def test_deb_validator_accepts_dependency_free_payload(tmp_path, monkeypatch):
+def test_deb_validator_accepts_standalone_with_host_dependencies(tmp_path, monkeypatch):
     package, report, repo, manifest, _extracted = make_verified_package(
         tmp_path, monkeypatch
     )
@@ -649,6 +657,96 @@ def test_deb_validator_rejects_invalid_installed_size(tmp_path):
 
 def test_deb_validator_rejects_runtime_dependencies(tmp_path):
     package, report = make_package(tmp_path, depends="python3")
+    with pytest.raises(VALIDATOR.PackageError, match="runtime dependencies"):
+        VALIDATOR.validate(package, report, tmp_path / "extract")
+
+
+@pytest.mark.parametrize("family", ("arch", "debian"))
+@pytest.mark.parametrize(
+    "change", ("inventory", "provider", "remove", "unmapped", "abi")
+)
+def test_generators_consume_shared_runtime_authority(
+    tmp_path, monkeypatch, family, change
+):
+    inventory = tmp_path / "runtime.toml"
+    source = DEPENDENCIES.INVENTORY.read_text(encoding="ascii")
+    if change == "inventory":
+        source = source.replace(
+            '[requirements.git-tool]\nkind = "application"\n',
+            '[requirements.new-tool]\nkind = "application"\n',
+        ).replace(".git-tool]", ".new-tool]")
+        source = source.replace('package = "git"', 'package = "new-tool-provider"')
+    elif change == "provider":
+        source = source.replace('package = "git"', 'package = "other-git-provider"')
+    elif change == "remove":
+        before, rest = source.split("[requirements.git-tool]", 1)
+        source = before + "[requirements.gnu-libc]" + rest.split(
+            "[requirements.gnu-libc]", 1
+        )[1]
+    elif change == "unmapped":
+        source += '\n[requirements.unmapped-tool]\nkind = "application"\n'
+    else:
+        source = source.replace('abi = "GLIBC_2.17"', 'abi = "GLIBC_9.99"', 1)
+    inventory.write_text(source, encoding="ascii")
+    monkeypatch.setattr(DEPENDENCIES, "INVENTORY", inventory)
+    builder = ARCH_BUILDER if family == "arch" else BUILDER
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps({"wheel": {"version": "0.5.7.dev0"}, "source_commit": "a" * 40}),
+        encoding="ascii",
+    )
+    extracted = make_standalone_payload(tmp_path)
+    monkeypatch.setattr(builder, "validate", lambda *_args: extracted)
+    monkeypatch.setattr(builder, "git_timestamp", lambda *_args: 123)
+
+    def assemble(_extracted, root, **_kwargs):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "payload").write_bytes(b"payload")
+
+    monkeypatch.setattr(builder, "assemble", assemble)
+
+    def build(output):
+        return builder.package(
+            repo=ROOT, archive=tmp_path / "archive", sidecar=tmp_path / "sidecar",
+            build_report=report, output_dir=output,
+        )
+
+    if change in {"unmapped", "abi"}:
+        with pytest.raises(
+            DEPENDENCIES.PackageError, match="unmapped|unrepresentable"
+        ):
+            build(tmp_path / "failed")
+        assert not list((tmp_path / "failed").glob("*"))
+        return
+    first = build(tmp_path / "first")
+    second = build(tmp_path / "second")
+    assert first.read_bytes() == second.read_bytes()
+    if family == "arch":
+        metadata = ARCH.members(first)[".PKGINFO"].decode("ascii")
+        actual = tuple(
+            line.removeprefix("depend = ") for line in metadata.splitlines()
+            if line.startswith("depend = ")
+        )
+    else:
+        actual = tuple(DEB.control(first)["Depends"].split(", "))
+        control_root = tmp_path / "control"
+        DEB.extract(first, control_root, control_only=True)
+        assert f"Depends: {', '.join(actual)}\n" in (
+            control_root / "control"
+        ).read_text(encoding="ascii")
+    assert actual == DEPENDENCIES.dependencies(family)
+    if change != "remove":
+        assert any("provider" in item for item in actual)
+    assert "git" not in actual
+
+
+@pytest.mark.parametrize(
+    "depends",
+    (None, "git", "git, libc6, libgcc-s1, python3",
+     "git (>= 1:2.31), libgcc-s1 (>= 10), libc6 (>= 2.17)"),
+)
+def test_deb_rejects_missing_extra_or_reordered_requirements(tmp_path, depends):
+    package, report = make_package(tmp_path, depends=depends)
     with pytest.raises(VALIDATOR.PackageError, match="runtime dependencies"):
         VALIDATOR.validate(package, report, tmp_path / "extract")
 
