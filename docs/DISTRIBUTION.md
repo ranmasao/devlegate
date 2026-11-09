@@ -52,6 +52,8 @@ devlegate_<version>_amd64.deb
 
 The package targets x86_64 / amd64 Debian-family Linux. It has no Python or
 systemd package dependencies, no maintainer scripts, and no systemd unit.
+Its mandatory host requirements are Git, glibc, and the GCC unwind library:
+`libgcc-s1 (>= 10), git (>= 1:2.31), libc6 (>= 2.17)` on Debian-family systems.
 
 The same validated standalone payload can also produce the native Arch package:
 
@@ -63,6 +65,12 @@ It targets Arch-family Linux on x86_64, has no Python or systemd package
 dependencies, and does not install a systemd unit. Its package metadata and
 mtree are validated without requiring `pacman`; the extracted executable is
 then smoke-tested.
+Arch metadata declares `gcc-libs>=4.2.0`, `git>=2.31`, and `glibc>=2.17`.
+Both adapters consume the same logical inventory in
+`packaging/linux-runtime.toml`; native names and ABI translations live in its
+family mappings. Missing mappings or unrepresentable ABIs stop packaging.
+See [release packaging](RELEASE_PACKAGING.md#native-runtime-dependency-evidence)
+for linkage evidence, exclusions, and disposable-container installation checks.
 
 The full-source pair remains separate:
 

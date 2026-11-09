@@ -15,9 +15,11 @@ import tempfile
 from pathlib import Path
 
 try:
+    from native_dependencies import dependencies
     from native_payload import PackageError
     from native_payload import validate as validate_payload
 except ModuleNotFoundError:
+    from tools.native_dependencies import dependencies
     from tools.native_payload import PackageError
     from tools.native_payload import validate as validate_payload
 try:
@@ -67,8 +69,13 @@ def validate(
     for key, expected in required.items():
         if metadata.get(key) != expected:
             raise PackageError(f"unexpected Debian control field {key}")
-    if "Depends" in metadata or "Pre-Depends" in metadata:
-        raise PackageError("portable Debian package declares runtime dependencies")
+    if (
+        metadata.get("Depends") != ", ".join(dependencies("debian"))
+        or "Pre-Depends" in metadata
+    ):
+        raise PackageError(
+            "Debian runtime dependencies differ from canonical inventory"
+        )
     try:
         installed_size = int(metadata["Installed-Size"])
     except (KeyError, ValueError) as error:
