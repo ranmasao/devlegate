@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-"""Build a dependency-free Debian package from a validated standalone archive."""
+"""Build a Debian package from a validated standalone archive."""
 
 from __future__ import annotations
 
@@ -26,8 +26,10 @@ except ModuleNotFoundError:  # Imported as tools.package_deb by test clients.
     from tools.validate_deb import installed_size_kib
     from tools.validate_standalone_package import validate
 try:
+    from native_dependencies import dependencies
     from native_payload import assemble
 except ModuleNotFoundError:
+    from tools.native_dependencies import dependencies
     from tools.native_payload import assemble
 try:
     from build_progress import ComponentEvent, ComponentPlan, ComponentStep
@@ -108,6 +110,7 @@ def package(
     report = json.loads(build_report.read_text(encoding="utf-8"))
     version = report["wheel"]["version"]
     source_commit = report["source_commit"]
+    runtime_dependencies = ", ".join(dependencies("debian"))
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / f"devlegate_{version}_amd64.deb"
 
@@ -142,10 +145,11 @@ def package(
                 "Section: devel\n"
                 "Priority: optional\n"
                 "Architecture: amd64\n"
+                f"Depends: {runtime_dependencies}\n"
                 f"Installed-Size: {installed_size}\n"
                 "Maintainer: Daniil Romanov <romanov.at.bg@gmail.com>\n"
                 "Description: deterministic local agent orchestrator\n"
-                " Dependency-free standalone Devlegate executable.\n",
+                " Standalone Devlegate executable with bundled Python.\n",
                 encoding="ascii",
             )
         timestamp = git_timestamp(repo, source_commit)

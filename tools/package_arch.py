@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-"""Build a dependency-free Arch package from the standalone payload."""
+"""Build an Arch package from the standalone payload."""
 
 from __future__ import annotations
 
@@ -28,8 +28,10 @@ except ModuleNotFoundError:
     from tools.package_standalone import run as package_run
     from tools.validate_standalone_package import validate
 try:
+    from native_dependencies import dependencies
     from native_payload import assemble
 except ModuleNotFoundError:
+    from tools.native_dependencies import dependencies
     from tools.native_payload import assemble
 
 
@@ -70,6 +72,7 @@ def _package(
     report = json.loads(build_report.read_text(encoding="utf-8"))
     version = report["wheel"]["version"]
     source_commit = report["source_commit"]
+    runtime_dependencies = dependencies("arch")
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / f"devlegate-{version}-1-x86_64.pkg.tar.zst"
     with tempfile.TemporaryDirectory(prefix="devlegate-arch-") as temporary:
@@ -100,7 +103,8 @@ def _package(
             "packager = Devlegate maintainers\n"
             "arch = x86_64\n"
             "license = EUPL-1.2\n"
-            "xdata = pkgtype=pkg\n",
+            "xdata = pkgtype=pkg\n"
+            + "".join(f"depend = {item}\n" for item in runtime_dependencies),
             encoding="ascii",
         )
         (root / ".PKGINFO").chmod(0o644)

@@ -134,6 +134,10 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     validated = tmp_path / "validated"
     validate_arch.validate(output, report, validated, ROOT, manifest_path)
     members = ARCH.members(output)
+    assert [
+        line for line in members[".PKGINFO"].decode("ascii").splitlines()
+        if line.startswith("depend = ")
+    ] == ["depend = gcc-libs>=4.2.0", "depend = git>=2.31", "depend = glibc>=2.17"]
     extracted_package = tmp_path / "package-root"
     ARCH.extract(output, extracted_package)
     assert (extracted_package / ".PKGINFO").stat().st_mode & 0o7777 == 0o644
@@ -178,7 +182,7 @@ def test_real_arch_assembly_retains_manifest_license_tree_and_rejects_extra(
     )
     dependency_package = tmp_path / "dependency.pkg.tar.zst"
     ARCH.build(dependency_root, dependency_package, timestamp=0)
-    with pytest.raises(validate_arch.PackageError, match="mandatory PKGINFO"):
+    with pytest.raises(validate_arch.PackageError, match="runtime dependencies"):
         validate_arch.validate(
             dependency_package,
             report,
