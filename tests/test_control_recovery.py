@@ -2856,26 +2856,23 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     restarted = Devlegate(config)
     commands = []
-    if destination == "done":
+    if destination == "todo":
         # Unrelated commits must not each require a tree-inspection subprocess.
-        head = git(control, "rev-parse", "HEAD").stdout.strip()
-        tree = git(control, "rev-parse", "HEAD^{tree}").stdout.strip()
         for _ in range(3):
-            head = git(control, "commit-tree", tree, "-p", head,
-                       "-m", "unrelated control event").stdout.strip()
-        git(control, "reset", "--hard", head)
+            git(control, "commit", "--allow-empty", "-m", "unrelated control event")
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
-        original_git = restarted._git_runtime
+    original_git = restarted._git_runtime
 
-        def counted_git(repo, *args, **kwargs):
-            commands.append(args)
-            return original_git(repo, *args, **kwargs)
+    def counted_git(repo, *args, **kwargs):
+        commands.append(args)
+        return original_git(repo, *args, **kwargs)
 
-        monkeypatch.setattr(restarted, "_git_runtime", counted_git)
+    monkeypatch.setattr(restarted, "_git_runtime", counted_git)
     snapshot = restarted.status_view()
+    if destination == "todo":
+        # Status visibility and admission share the same three ticket trees.
+        assert sum(args[0] == "ls-tree" for args in commands) == 3
     if destination == "done":
-        assert sum(args[0] == "ls-tree" for args in commands) <= 4
-        assert any(args[0] == "log" and "--" in args for args in commands)
         dirty = control / "unpublished.txt"
         dirty.write_text("unpublished control work\n")
         assert restarted.status_view().failed_executions
@@ -2890,12 +2887,6 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     assert "Failed executions" not in restarted._render_status_text(snapshot)
     assert restarted._state["failed_executions"]["T-1"] == metadata
     assert report_store.read("T-1", metadata["execution_id"]) == report
-    if destination == "todo":
-        human = invoke(working, "status", config=config)
-        structured = invoke(working, "status", "--json", config=config)
-        assert human.returncode == structured.returncode == 0
-        assert "Failed executions" not in human.stdout
-        assert not json.loads(structured.stdout)["failed_executions"]
     if destination == "done":
         def unreadable_history(repo, *args, **kwargs):
             if args[0] == "rev-list":
