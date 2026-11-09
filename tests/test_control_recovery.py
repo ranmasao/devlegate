@@ -2848,6 +2848,53 @@ def test_published_ticket_transition_supersedes_only_current_failure(
         ]] == ["T-1"]
 
 
+def test_invalid_external_todo_deletion_keeps_failure_visible(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    calls = []
+
+    def worker(*_args, **_kwargs):
+        calls.append(1)
+        return WorkerRunResult(1, None, None, None)
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 1
+    metadata = dict(engine._state["failed_executions"]["T-1"])
+    control = engine.control_worktree
+    report_store = ExecutionReportStore(control)
+    report = report_store.read("T-1", metadata["execution_id"])
+
+    # Raw deletion is an invalid external edit, not a supported lifecycle move.
+    (control / "kanban/todo/T-1.md").unlink()
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "externally delete failed todo ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+
+    for observed in (engine, Devlegate(config)):
+        monkeypatch.setattr(observed._workers, "run", worker)
+        snapshot = observed.status_view()
+        assert [failure.ticket_id for failure in snapshot.failed_executions] == ["T-1"]
+        assert not snapshot.failed_executions[0].retryable
+        assert snapshot.plan.action != "run-worker"
+        assert observed._retry_candidates() == ()
+        with pytest.raises(DevlegateError, match="not currently retryable"):
+            observed.retry("T-1")
+        run_test_iteration(observed)
+        assert observed._state["failed_executions"]["T-1"] == metadata
+        assert report_store.read("T-1", metadata["execution_id"]) == report
+    assert len(calls) == 1
+
+    human = invoke(working, "status", config=config)
+    structured = invoke(working, "status", "--json", config=config)
+    assert human.returncode == structured.returncode == 0
+    assert "Failed executions" in human.stdout and "T-1" in human.stdout
+    failures = json.loads(structured.stdout)["failed_executions"]
+    assert [failure["id"] for failure in failures] == ["T-1"]
+    assert failures[0]["retryable"] is False
+
+
 def test_uncertain_control_observation_keeps_deferred_failure_visible(
     tmp_path, monkeypatch
 ):

@@ -10075,8 +10075,10 @@ class ServiceEngine:
         # retire the old warning, but deletion followed by recreation is ambiguous.
         for path, blob in history[1:]:
             if not path:
+                # Absence alone does not prove a supported lifecycle transition.
+                if not transitioned:
+                    return False
                 removed = True
-                transitioned = True
                 continue
             if removed or (not transitioned and blob != history[0][1]):
                 return False
