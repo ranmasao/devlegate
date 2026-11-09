@@ -9945,12 +9945,6 @@ class ServiceEngine:
                     return False
             except WorkflowBlockedError:
                 return False
-        if (
-            control.detached or control.branch != self.control_branch
-            or not control.working_tree_clean or not control.remote_head
-            or control.local_head != control.remote_head
-        ):
-            return False
         for key in ("reconciliation", "accepted_integration", "automatic_retry",
                     "manual_retry_required", "resume_required", "operator_recovery",
                     "force_retry_authorization", "execution_ref_retirement"):
@@ -9970,18 +9964,32 @@ class ServiceEngine:
             and state.get("selected_ticket_id") == ticket_id
         ):
             return False
+        history = self._failed_ticket_history(ticket_id, metadata, control)
+        return bool(history) and all(
+            blob == history[0][1] for _path, blob in history
+        ) and any(path != history[0][0] for path, _blob in history)
+
+    def _failed_ticket_history(
+        self, ticket_id: str, metadata: dict[str, object],
+        control: GitObservation | None,
+    ) -> list[tuple[str, str]]:
+        """Observe published first-parent ticket events; absence is ("", "").
+
+        An empty result means no proof. Consumers decide whether an observed
+        transition retires a warning or authorizes admission. Inspect only ticket
+        events, so unrelated control commits do not each require a tree scan.
+        """
+        if control is None or (
+            control.detached or control.branch != self.control_branch
+            or not control.working_tree_clean or not control.remote_head
+            or control.local_head != control.remote_head
+        ):
+            return []
         base = metadata.get("control_head")
         if not isinstance(base, str) or not _is_git_identity(base):
-            return False
+            return []
         if base == control.local_head:
-            return False
-        try:
-            if not self._is_ancestor_runtime(
-                self.control_worktree, base, control.local_head
-            ):
-                return False
-        except WorkflowBlockedError:
-            return False
+            return []
         paths = [f"{path}/{ticket_id}.md" for path in self._workflow_paths().values()]
         # A side branch may delete a ticket even though the published mainline
         # retains it at the merge. Only transitions of the observed first-parent
@@ -9991,37 +9999,34 @@ class ServiceEngine:
             check=False,
         )
         if lineage.returncode != 0 or base not in lineage.stdout.splitlines():
-            return False
-        commits = lineage.stdout.splitlines()
-        commits = list(reversed(commits[:commits.index(base) + 1]))
-        original_blob = None
-        previous_path = None
-        transitioned = False
-        todo_path = f"{self.todo_path}/{ticket_id}.md"
-        for commit in commits:
+            return []
+        events = self._git_runtime(
+            self.control_worktree, "log", "--first-parent", "--full-history",
+            "--format=%H", "--reverse", f"{base}..{control.local_head}", "--", *paths,
+            check=False,
+        )
+        if events.returncode != 0:
+            return []
+        history = []
+        for commit in [base, *events.stdout.splitlines()]:
             tree = self._git_runtime(
                 self.control_worktree, "ls-tree", "--full-tree", commit, "--", *paths,
                 check=False,
             )
             if tree.returncode != 0:
-                return False
+                return []
             entries = tree.stdout.splitlines()
+            if not entries:
+                history.append(("", ""))
+                continue
             if len(entries) != 1 or "\t" not in entries[0]:
-                return False
+                return []
             descriptor, path = entries[0].split("\t", 1)
             fields = descriptor.split()
             if len(fields) != 3 or fields[1] != "blob" or path not in paths:
-                return False
-            if original_blob is None:
-                if path != todo_path:
-                    return False
-                original_blob = fields[2]
-            elif fields[2] != original_blob:
-                return False
-            if previous_path == todo_path and path != todo_path:
-                transitioned = True
-            previous_path = path
-        return transitioned
+                return []
+            history.append((path, fields[2]))
+        return history if history[0][0] == f"{self.todo_path}/{ticket_id}.md" else []
 
     def _historical_failure_retired(
         self, ticket_id: str, metadata: object, state: dict[str, object],
@@ -10032,13 +10037,7 @@ class ServiceEngine:
         This is not retry or admission authority. Only matching or unidentifiable
         ownership/intents keep an otherwise retired failure current.
         """
-        if not isinstance(metadata, dict) or control is None:
-            return False
-        if (
-            control.detached or control.branch != self.control_branch
-            or not control.working_tree_clean or not control.remote_head
-            or control.local_head != control.remote_head
-        ):
+        if not isinstance(metadata, dict):
             return False
 
         for key in ("reconciliation", "accepted_integration", "automatic_retry",
@@ -10067,66 +10066,20 @@ class ServiceEngine:
         live = self.live_execution_evidence()
         if live is not None and live.get("ticket_id", ticket_id) == ticket_id:
             return False
-        base = metadata.get("control_head")
-        if not isinstance(base, str) or not _is_git_identity(base):
+        history = self._failed_ticket_history(ticket_id, metadata, control)
+        if not history:
             return False
-        head = control.local_head
-        paths = [f"{path}/{ticket_id}.md" for path in self._workflow_paths().values()]
-        # A side branch may delete a ticket even though the published mainline
-        # retains it at the merge. Only transitions of the observed first-parent
-        # history can supersede this failure.
-        lineage = self._git_runtime(
-            self.control_worktree, "rev-list", "--first-parent", head,
-            check=False,
-        )
-        if (base == head or lineage.returncode != 0
-                or base not in lineage.stdout.splitlines()):
-            return False
-        # Inspect ticket events, not every unrelated control commit. Include all
-        # workflow paths so edits and deletion/recreation cannot masquerade as
-        # an intact lifecycle move. First-parent merge diffs describe mainline.
-        events = self._git_runtime(
-            self.control_worktree, "log", "--first-parent", "--full-history",
-            "--format=%H", "--reverse", f"{base}..{head}", "--", *paths,
-            check=False,
-        )
-        if events.returncode != 0:
-            return False
-        commits = [base, *events.stdout.splitlines()]
-        original_blob = None
-        previous_path = None
         transitioned = False
         removed = False
-        todo_path = f"{self.todo_path}/{ticket_id}.md"
-        for commit in commits:
-            tree = self._git_runtime(
-                self.control_worktree, "ls-tree", "--full-tree", commit, "--", *paths,
-                check=False,
-            )
-            if tree.returncode != 0:
-                return False
-            entries = tree.stdout.splitlines()
-            if not entries and original_blob is not None:
+        for path, blob in history[1:]:
+            if not path:
                 removed = True
                 transitioned = True
                 continue
-            if len(entries) != 1 or "\t" not in entries[0]:
+            if removed or (not transitioned and blob != history[0][1]):
                 return False
-            if removed:
-                return False
-            descriptor, path = entries[0].split("\t", 1)
-            fields = descriptor.split()
-            if len(fields) != 3 or fields[1] != "blob" or path not in paths:
-                return False
-            if original_blob is None:
-                if path != todo_path:
-                    return False
-                original_blob = fields[2]
-            elif fields[2] != original_blob and not transitioned:
-                return False
-            if previous_path == todo_path and path != todo_path:
+            if path != history[0][0]:
                 transitioned = True
-            previous_path = path
         return transitioned
 
     def _collect_status_attempt(

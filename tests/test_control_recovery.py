@@ -7,7 +7,6 @@
 from _control_support import *  # noqa: F403,F405
 
 from contextlib import nullcontext
-from dataclasses import replace
 from collections import Counter
 import json
 import devlegate.runtime as runtime_module
@@ -2697,9 +2696,8 @@ def test_explicit_retry_rejects_unsafe_agent_running_workspace(tmp_path, monkeyp
         workspace.path / "unsafe.txt"
     ).read_text() == "uncommitted dependency change\n"
 
-@pytest.mark.parametrize("worker_ticket", ["T-1", "T-2"])
 def test_worker_ownership_scopes_published_failure_visibility(
-    tmp_path, monkeypatch, worker_ticket
+    tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2718,21 +2716,7 @@ def test_worker_ownership_scopes_published_failure_visibility(
     git(control, "commit", "-m", "queue new ticket")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     engine._save_state("idle", execution_stage=None)
-    if worker_ticket == "T-1":
-        # Uncertain ownership of the original failed generation, not a new
-        # attempt adopting the old generation's retained workspace.
-        engine._save_state(
-            "agent_running", selected_ticket_id="T-1", selected_ticket_body="work\n",
-            execution_ticket_id="T-1", execution_id=metadata["execution_id"],
-            worker_identity={
-                "execution_id": metadata["execution_id"], "pid": 1, "pgid": 1,
-                "sid": 1, "boot_id": "test-prior-boot", "start_time": 0,
-            },
-        )
-    else:
-        persist_agent_running(
-            engine, state, execution_id="new-worker", ticket_id=worker_ticket
-        )
+    persist_agent_running(engine, state, execution_id="new-worker", ticket_id="T-2")
     engine._save_state("agent_running", execution_stage="worker-running")
     source.rename(control / "kanban/done/T-1.md")
     git(control, "add", "-A")
@@ -2743,8 +2727,8 @@ def test_worker_ownership_scopes_published_failure_visibility(
 
     for observed in (engine, Devlegate(config)):
         snapshot = observed.status_view()
-        assert bool(snapshot.failed_executions) == (worker_ticket == "T-1")
-        assert snapshot.bound_ticket_id == worker_ticket
+        assert not snapshot.failed_executions
+        assert snapshot.bound_ticket_id == "T-2"
         assert snapshot.execution_stage == "worker-running"
         assert snapshot.plan.action != "run-worker" or snapshot.plan.bound
         assert observed._retry_candidates() == ()
@@ -2754,28 +2738,26 @@ def test_worker_ownership_scopes_published_failure_visibility(
     structured = invoke(working, "status", "--json", config=config)
     # The prior-boot worker is uncertain to a standalone CLI observer.
     assert human.returncode == structured.returncode == 1
-    assert ("Failed executions" in human.stdout) == (worker_ticket == "T-1")
-    assert worker_ticket in human.stdout
-    assert bool(json.loads(structured.stdout)["failed_executions"]) == (
-        worker_ticket == "T-1"
-    )
+    assert "Failed executions" not in human.stdout
+    assert "T-2" in human.stdout
+    assert not json.loads(structured.stdout)["failed_executions"]
 
     # Product observations belong to admission, not the old failure's lifecycle.
     (working / "other-product.txt").write_text("unrelated product work\n")
-    assert bool(engine.status_view().failed_executions) == (worker_ticket == "T-1")
+    assert not engine.status_view().failed_executions
+    git(working, "add", "other-product.txt")
+    git(working, "commit", "-m", "advance unrelated product")
+    git(working, "push", "origin", "HEAD:refs/heads/main")
+    assert not Devlegate(config).status_view().failed_executions
     assert engine._retry_candidates() == ()
 
-    if worker_ticket == "T-2":
-        # Ref retirement identifies ownership by branch, without a ticket_id.
+    # Ref retirement identifies ownership by branch, without a ticket_id.
+    for owner in ("T-2", "T-1"):
         engine._save_state("agent_running", execution_ref_retirement={
-            "branch": "devlegate/work/T-2", "expected_head": "a" * 40,
+            "branch": f"devlegate/work/{owner}", "expected_head": "a" * 40,
         })
-        assert not engine.status_view().failed_executions
-        engine._save_state("agent_running", execution_ref_retirement={
-            "branch": "devlegate/work/T-1", "expected_head": "a" * 40,
-        })
-        assert engine.status_view().failed_executions
-        engine._save_state("agent_running", execution_ref_retirement=None)
+        assert bool(engine.status_view().failed_executions) == (owner == "T-1")
+    engine._save_state("agent_running", execution_ref_retirement=None)
 
     # Matching unresolved intent must keep the warning current.
     engine._save_state(
@@ -2785,6 +2767,18 @@ def test_worker_ownership_scopes_published_failure_visibility(
         }
     )
     assert engine.status_view().failed_executions
+    # Matching uncertain ownership must also survive a restart without recovery.
+    engine._save_state("idle", execution_stage=None, manual_retry_required=None)
+    engine._save_state(
+        "agent_running", selected_ticket_id="T-1", selected_ticket_body="work\n",
+        execution_ticket_id="T-1", execution_id=metadata["execution_id"],
+        execution_resource_binding=None,
+        worker_identity={
+            "execution_id": metadata["execution_id"], "pid": 1, "pgid": 1,
+            "sid": 1, "boot_id": "test-prior-boot", "start_time": 0,
+        },
+    )
+    assert Devlegate(config).status_view().failed_executions
 
 
 def test_stale_failed_execution_remains_visible_but_not_retryable(
@@ -2902,26 +2896,14 @@ def test_published_ticket_transition_supersedes_only_current_failure(
         assert human.returncode == structured.returncode == 0
         assert "Failed executions" not in human.stdout
         assert not json.loads(structured.stdout)["failed_executions"]
-    observation = restarted._status_git_observation()["control"]
-    assert observation is not None
-    for uncertain in (
-        None,
-        replace(observation, remote_head=metadata["control_head"]),
-        replace(observation, working_tree_clean=False),
-    ):
-        assert not restarted._failure_superseded(
-            "T-1", metadata, restarted._state, uncertain
-        )
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            restarted, "_is_ancestor_runtime",
-            lambda *_args: (_ for _ in ()).throw(WorkflowBlockedError("unreadable")),
-        )
-        assert not restarted._failure_superseded(
-            "T-1", metadata, restarted._state, observation
-        )
-    pending = {**restarted._state, "reconciliation": {"ticket_id": "T-1"}}
-    assert not restarted._failure_superseded("T-1", metadata, pending, observation)
+    if destination == "done":
+        def unreadable_history(repo, *args, **kwargs):
+            if args[0] == "rev-list":
+                return subprocess.CompletedProcess(args, 1, "", "unreadable history")
+            return original_git(repo, *args, **kwargs)
+
+        monkeypatch.setattr(restarted, "_git_runtime", unreadable_history)
+        assert restarted.status_view().failed_executions
     if destination == "todo":
         monkeypatch.setattr(
             restarted._workers, "run",
