@@ -1,0 +1,29 @@
+{
+  "code_base_head": "90de39375177b34923e2c81df8e2e06158323a4e",
+  "conclusion": "completed",
+  "control_head": "c90633e14cdbe9152ef74e7d7b424671c735c217",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-153",
+  "execution_id": "7b925ad6bda9455fb9e04cb17a340693",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-153",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-153/7b925ad6bda9455fb9e04cb17a340693.md",
+  "report_sha256": "035232506b4d4e618151fa27497ce3788969aa00d0492ab5ceb53c3e998a4794",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-153",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Preserved existing workspace cleanup and production implementation. Focused tests: 160 passed. After installing the declared development environment with ./dev setup, the CI-equivalent ./dev coverage -n 4 --dist=worksteal passed with 1840 passed and 2 skipped; ./dev lint and git diff --check passed. The initial system-Python full run had missing-environment failures and one service restart lock failure; all passed in the configured rerun. Exact cumulative diff against 90de39375177b34923e2c81df8e2e06158323a4e: production +124/-56 (net +68); tests/support +131/-48 (net +83). Current uncommitted cleanup is confined to tests/test_control_recovery.py (+47/-85). Hosted exact-checkpoint CI was not run because checkpoint creation/publication belongs to Devlegate under the worker contract.",
+    "summary": "Narrowed the lifecycle regression fixtures to supported backlog deferral and requeue transitions while preserving unrelated-worker status suppression, restart behavior, immutable audit evidence, and matching-intent warnings. Removed invalid positive transitions and redundant product, ownership, and subprocess-count scenarios; retained focused fail-closed observation and ambiguous-identity coverage."
+  },
+  "workspace_head": "4ea5251157c4a0477996b23ded9cdef05ee0c8da"
+}
