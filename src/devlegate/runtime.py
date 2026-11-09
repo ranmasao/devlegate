@@ -9916,12 +9916,12 @@ class ServiceEngine:
         self, ticket_id: str, metadata: object, state: dict[str, object],
         control: GitObservation | None,
         code: GitObservation | None = None,
+        *, history: list[tuple[str, str]] | None = None,
     ) -> bool:
-        """Require published descendant history proving a ticket left its state.
+        """Authorize supersession under the strict retry/admission rules.
 
-        A changed ticket body or a different checkout is not a transition. An
-        unreadable, dirty, divergent, or unfetched observation cannot prove one.
-        The retained failure and reports are never modified by this projection.
+        Status can supply its read-only history observation, but product lineage,
+        resource guards and immutable ticket content are still required here.
         """
         if not isinstance(metadata, dict) or control is None:
             return False
@@ -9964,13 +9964,14 @@ class ServiceEngine:
             and state.get("selected_ticket_id") == ticket_id
         ):
             return False
-        history = self._failed_ticket_history(ticket_id, metadata, control)
+        if history is None:
+            history = self._failed_ticket_history(ticket_id, metadata, control)
         return bool(history) and all(
             blob == history[0][1] for _path, blob in history
         ) and any(path != history[0][0] for path, _blob in history)
 
     def _failed_ticket_history(
-        self, ticket_id: str, metadata: dict[str, object],
+        self, ticket_id: str, metadata: object,
         control: GitObservation | None,
     ) -> list[tuple[str, str]]:
         """Observe published first-parent ticket events; absence is ("", "").
@@ -9979,7 +9980,7 @@ class ServiceEngine:
         transition retires a warning or authorizes admission. Inspect only ticket
         events, so unrelated control commits do not each require a tree scan.
         """
-        if control is None or (
+        if not isinstance(metadata, dict) or control is None or (
             control.detached or control.branch != self.control_branch
             or not control.working_tree_clean or not control.remote_head
             or control.local_head != control.remote_head
@@ -10030,35 +10031,37 @@ class ServiceEngine:
 
     def _historical_failure_retired(
         self, ticket_id: str, metadata: object, state: dict[str, object],
-        control: GitObservation | None,
+        history: list[tuple[str, str]],
     ) -> bool:
         """Project published ticket lifecycle history, independent of product Git.
 
         This is not retry or admission authority. Only matching or unidentifiable
         ownership/intents keep an otherwise retired failure current.
         """
-        if not isinstance(metadata, dict):
+        if not history or not isinstance(metadata, dict):
             return False
-
         for key in ("reconciliation", "accepted_integration", "automatic_retry",
                     "manual_retry_required", "resume_required", "operator_recovery",
                     "force_retry_authorization", "execution_ref_retirement"):
             marker = state.get(key)
-            if marker is None:
-                continue
-            if not isinstance(marker, dict):
+            if marker is not None and not isinstance(marker, dict):
                 return False
-            owner = marker.get("ticket_id")
-            if key == "execution_ref_retirement":
-                branch = marker.get("branch")
-                owner = branch.removeprefix("devlegate/work/") if isinstance(
-                    branch, str
-                ) and branch.startswith("devlegate/work/") else None
-            if not owner or owner == ticket_id or (
-                metadata.get("execution_id") is not None
-                and marker.get("execution_id") == metadata["execution_id"]
-            ):
-                return False
+            if isinstance(marker, dict):
+                owner = marker.get("ticket_id")
+                if key == "execution_ref_retirement":
+                    owner = marker.get("branch")
+                    if not isinstance(owner, str) or not owner.startswith(
+                        "devlegate/work/"
+                    ):
+                        return False
+                    ticket_owner = f"devlegate/work/{ticket_id}"
+                else:
+                    ticket_owner = ticket_id
+                if not owner or owner == ticket_owner or (
+                    metadata.get("execution_id") is not None
+                    and marker.get("execution_id") == metadata["execution_id"]
+                ):
+                    return False
         if state.get("worker_identity") is not None or state.get("phase") != "idle":
             owners = (state.get("selected_ticket_id"), state.get("execution_ticket_id"))
             if not any(owners) or ticket_id in owners:
@@ -10066,11 +10069,10 @@ class ServiceEngine:
         live = self.live_execution_evidence()
         if live is not None and live.get("ticket_id", ticket_id) == ticket_id:
             return False
-        history = self._failed_ticket_history(ticket_id, metadata, control)
-        if not history:
-            return False
         transitioned = False
         removed = False
+        # Require original identity through the first transition. Later edits
+        # retire the old warning, but deletion followed by recreation is ambiguous.
         for path, blob in history[1:]:
             if not path:
                 removed = True
@@ -11165,15 +11167,23 @@ class ServiceEngine:
         failed_executions = self._evaluate_failed_executions(
             failures, ticket_store, code, control, admission_reason
         )
-        admission_failures = failed_executions
-        if isinstance(failures, dict):
-            failed_executions = tuple(
-                failure for failure in failed_executions
-                if not self._historical_failure_retired(
-                    failure.ticket_id, failures.get(failure.ticket_id), state,
-                    control,
-                )
-            )
+        selected_failure = None
+        current_failures = []
+        for failure in failed_executions:
+            metadata = failures.get(failure.ticket_id)
+            history = self._failed_ticket_history(failure.ticket_id, metadata, control)
+            if (plan.action == "run-worker" and not plan.bound
+                    and failure.ticket_id == plan.ticket_id
+                    and not self._failure_superseded(
+                        failure.ticket_id, metadata, state, control, code,
+                        history=history,
+                    )):
+                selected_failure = failure
+            if not self._historical_failure_retired(
+                failure.ticket_id, metadata, state, history
+            ):
+                current_failures.append(failure)
+        failed_executions = tuple(current_failures)
         live_evidence = self.live_execution_evidence()
         if isinstance(live_evidence, dict):
             active_ticket_id = live_evidence.get("ticket_id")
@@ -11186,24 +11196,13 @@ class ServiceEngine:
                 or failures[failure.ticket_id].get("execution_id")
                 == live_evidence.get("execution_id")
             )
-        selected_failure = None
-        if plan.action == "run-worker" and not plan.bound:
-            selected_failure = next(
-                (failure for failure in admission_failures
-                 if failure.ticket_id == plan.ticket_id
-                 and isinstance(failures, dict)
-                 and not self._failure_superseded(
-                     failure.ticket_id, failures.get(failure.ticket_id), state,
-                     control, code,
-                 )), None
+        if selected_failure is not None:
+            reason = selected_failure.nonretryable_reason
+            plan = dataclasses.replace(
+                plan, action="none",
+                reason=("failed execution requires explicit retry" if reason is None
+                        else f"failed execution blocks admission: {reason}"),
             )
-            if selected_failure is not None:
-                reason = selected_failure.nonretryable_reason
-                plan = dataclasses.replace(
-                    plan, action="none",
-                    reason=("failed execution requires explicit retry" if reason is None
-                            else f"failed execution blocks admission: {reason}"),
-                )
         next_ticket = (
             (
                 ticket_store.by_id[plan.ticket_id].id,
