@@ -1,0 +1,29 @@
+{
+  "code_base_head": "90de39375177b34923e2c81df8e2e06158323a4e",
+  "conclusion": "completed",
+  "control_head": "2e6a9010b24d6269e513eb0585532f1288f24fb0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-153",
+  "execution_id": "0ca2da945c4f404fbec036e0d1fefc66",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-153",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-153/0ca2da945c4f404fbec036e0d1fefc66.md",
+  "report_sha256": "1107af3bda977f327651f8372477d33f4a8e3258102e66e64551471faeee99ea",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-153",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The new regression reproduced the failure before the fix. All 131 control-recovery tests passed. Full configured coverage run passed with 1841 tests passed and 2 skipped; Ruff and git diff --check passed. Hosted exact-checkpoint CI was not run by this worker: checkpoint creation/publication and CI validation belong to Devlegate under the worker contract.",
+    "summary": "Status lifecycle proof now retains historical failure warnings for direct todo-ticket deletion unless a supported transition was already proven. Added a real-Git regression covering human/JSON visibility, restart, preserved audit evidence, and blocked retry and worker admission."
+  },
+  "workspace_head": "6d74487e018a9d302605684429b015ce8f9071c4"
+}
