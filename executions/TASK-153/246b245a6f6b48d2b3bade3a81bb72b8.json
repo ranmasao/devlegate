@@ -1,0 +1,29 @@
+{
+  "code_base_head": "90de39375177b34923e2c81df8e2e06158323a4e",
+  "conclusion": "completed",
+  "control_head": "bb9e7883c641358d2356e1c64e1c605e7bb23aa2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-153",
+  "execution_id": "246b245a6f6b48d2b3bade3a81bb72b8",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-153",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-153/246b245a6f6b48d2b3bade3a81bb72b8.md",
+  "report_sha256": "074f2f0e14257a11d04e2c75b778f468ecf0427ddf9e542dd284bd325f8303fe",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-153",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Against 90de39375177b34923e2c81df8e2e06158323a4e: production +124/-56 (net +68); tests/support +161/-40 (net +121). The shared observer inspects only ticket-changing first-parent commits, and status reuses its observed trees for the selected ticket's strict admission check without durable caching. TASK-102 visibility is independent of unrelated workers/product changes; TASK-137 product-lineage, ownership and immutable-content admission requirements remain enforced. Real-Git regressions cover the incident across restart and human/JSON CLI, matching uncertain ownership/recovery, terminal transitions/removal/requeue, changed/recreated identity, dirty/unpublished/divergent/inaccessible control observations, retained reports, and actual admission. Focused suite: 164 passed. Final full configured parallel suite: 1844 passed, 2 skipped. Ruff and git diff --check passed. Combined statement/branch coverage: 79%; four transient download/timing failures in the initial coverage run passed on focused rerun, followed by the clean full suite. Hosted exact-checkpoint CI was not initiated because checkpoint publication and Git lifecycle belong to Devlegate.",
+    "summary": "Consolidated failure lifecycle proof into one read-only first-parent ticket-history observation shared by separate status-visibility and strict admission policies. Published obsolete failures stay hidden during unrelated activity, while matching ownership, ambiguous ticket identity and unsafe admission remain fail-closed. Reduced cumulative production and test changes while preserving historical evidence."
+  },
+  "workspace_head": "c48dc761803b3aba18abc84e86942f5c67bd5025"
+}
