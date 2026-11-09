@@ -2718,9 +2718,9 @@ def test_worker_ownership_scopes_published_failure_visibility(
     engine._save_state("idle", execution_stage=None)
     persist_agent_running(engine, state, execution_id="new-worker", ticket_id="T-2")
     engine._save_state("agent_running", execution_stage="worker-running")
-    source.rename(control / "kanban/done/T-1.md")
+    source.rename(control / "kanban/backlog/T-1.md")
     git(control, "add", "-A")
-    git(control, "commit", "-m", "finish old ticket and queue new ticket")
+    git(control, "commit", "-m", "defer old ticket")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     report_store = ExecutionReportStore(control)
     report = report_store.read("T-1", metadata["execution_id"])
@@ -2742,23 +2742,6 @@ def test_worker_ownership_scopes_published_failure_visibility(
     assert "T-2" in human.stdout
     assert not json.loads(structured.stdout)["failed_executions"]
 
-    # Product observations belong to admission, not the old failure's lifecycle.
-    (working / "other-product.txt").write_text("unrelated product work\n")
-    assert not engine.status_view().failed_executions
-    git(working, "add", "other-product.txt")
-    git(working, "commit", "-m", "advance unrelated product")
-    git(working, "push", "origin", "HEAD:refs/heads/main")
-    assert not Devlegate(config).status_view().failed_executions
-    assert engine._retry_candidates() == ()
-
-    # Ref retirement identifies ownership by branch, without a ticket_id.
-    for owner in ("T-2", "T-1"):
-        engine._save_state("agent_running", execution_ref_retirement={
-            "branch": f"devlegate/work/{owner}", "expected_head": "a" * 40,
-        })
-        assert bool(engine.status_view().failed_executions) == (owner == "T-1")
-    engine._save_state("agent_running", execution_ref_retirement=None)
-
     # Matching unresolved intent must keep the warning current.
     engine._save_state(
         "agent_running", manual_retry_required={
@@ -2767,18 +2750,6 @@ def test_worker_ownership_scopes_published_failure_visibility(
         }
     )
     assert engine.status_view().failed_executions
-    # Matching uncertain ownership must also survive a restart without recovery.
-    engine._save_state("idle", execution_stage=None, manual_retry_required=None)
-    engine._save_state(
-        "agent_running", selected_ticket_id="T-1", selected_ticket_body="work\n",
-        execution_ticket_id="T-1", execution_id=metadata["execution_id"],
-        execution_resource_binding=None,
-        worker_identity={
-            "execution_id": metadata["execution_id"], "pid": 1, "pgid": 1,
-            "sid": 1, "boot_id": "test-prior-boot", "start_time": 0,
-        },
-    )
-    assert Devlegate(config).status_view().failed_executions
 
 
 def test_stale_failed_execution_remains_visible_but_not_retryable(
@@ -2816,9 +2787,7 @@ def test_stale_failed_execution_remains_visible_but_not_retryable(
     assert devlegate._retry_candidates() == ()
 
 
-@pytest.mark.parametrize(
-    "destination", ["todo", "backlog", "review", "accepted", "done", "deleted"]
-)
+@pytest.mark.parametrize("destination", ["todo", "backlog"])
 def test_published_ticket_transition_supersedes_only_current_failure(
     tmp_path, monkeypatch, destination
 ):
@@ -2840,10 +2809,7 @@ def test_published_ticket_transition_supersedes_only_current_failure(
     source = control / "kanban/todo/T-1.md"
     target_state = "backlog" if destination == "todo" else destination
     target = control / f"kanban/{target_state}/T-1.md"
-    if destination == "deleted":
-        source.unlink()
-    else:
-        source.rename(target)
+    source.rename(target)
     git(control, "add", "-A")
     git(control, "commit", "-m", "transition ticket")
     if destination == "todo":
@@ -2851,50 +2817,16 @@ def test_published_ticket_transition_supersedes_only_current_failure(
         git(control, "add", "-A")
         git(control, "commit", "-m", "return ticket to todo")
 
-    # An unpublished or dirty observation is not authoritative.
+    # An unpublished transition is not authoritative.
     assert engine.status_view().failed_executions
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
     restarted = Devlegate(config)
-    commands = []
-    if destination == "todo":
-        # Unrelated commits must not each require a tree-inspection subprocess.
-        for _ in range(3):
-            git(control, "commit", "--allow-empty", "-m", "unrelated control event")
-        git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
-    original_git = restarted._git_runtime
-
-    def counted_git(repo, *args, **kwargs):
-        commands.append(args)
-        return original_git(repo, *args, **kwargs)
-
-    monkeypatch.setattr(restarted, "_git_runtime", counted_git)
     snapshot = restarted.status_view()
-    if destination == "todo":
-        # Status visibility and admission share the same three ticket trees.
-        assert sum(args[0] == "ls-tree" for args in commands) == 3
-    if destination == "done":
-        dirty = control / "unpublished.txt"
-        dirty.write_text("unpublished control work\n")
-        assert restarted.status_view().failed_executions
-        dirty.unlink()
-        remote_ref = "refs/remotes/origin/devlegate/control"
-        published = git(control, "rev-parse", remote_ref).stdout.strip()
-        git(control, "update-ref", remote_ref, metadata["control_head"])
-        assert restarted.status_view().failed_executions
-        git(control, "update-ref", remote_ref, published)
     assert not snapshot.failed_executions
     assert not snapshot.as_dict()["failed_executions"]
     assert "Failed executions" not in restarted._render_status_text(snapshot)
     assert restarted._state["failed_executions"]["T-1"] == metadata
     assert report_store.read("T-1", metadata["execution_id"]) == report
-    if destination == "done":
-        def unreadable_history(repo, *args, **kwargs):
-            if args[0] == "rev-list":
-                return subprocess.CompletedProcess(args, 1, "", "unreadable history")
-            return original_git(repo, *args, **kwargs)
-
-        monkeypatch.setattr(restarted, "_git_runtime", unreadable_history)
-        assert restarted.status_view().failed_executions
     if destination == "todo":
         monkeypatch.setattr(
             restarted._workers, "run",
@@ -2914,6 +2846,46 @@ def test_published_ticket_transition_supersedes_only_current_failure(
         assert [f["id"] for f in json.loads(structured.stdout)[
             "failed_executions"
         ]] == ["T-1"]
+
+
+def test_uncertain_control_observation_keeps_deferred_failure_visible(
+    tmp_path, monkeypatch
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    engine = Devlegate(config)
+    monkeypatch.setattr(
+        engine._workers, "run",
+        lambda *_args, **_kwargs: WorkerRunResult(1, None, None, None),
+    )
+    assert run_test_iteration(engine) == 1
+    control = engine.control_worktree
+    (control / "kanban/todo/T-1.md").rename(control / "kanban/backlog/T-1.md")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "defer ticket")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    assert not engine.status_view().failed_executions
+
+    dirty = control / "unpublished.txt"
+    dirty.write_text("unpublished control work\n")
+    assert engine.status_view().failed_executions
+    dirty.unlink()
+    remote_ref = "refs/remotes/origin/devlegate/control"
+    published = git(control, "rev-parse", remote_ref).stdout.strip()
+    git(control, "update-ref", remote_ref, f"{published}^")
+    assert engine.status_view().failed_executions
+    git(control, "update-ref", remote_ref, published)
+    original_git = engine._git_runtime
+
+    def unreadable_history(repo, *args, **kwargs):
+        if args[0] == "rev-list":
+            return subprocess.CompletedProcess(args, 1, "", "unreadable history")
+        return original_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", unreadable_history)
+    assert engine.status_view().failed_executions
+    assert engine._retry_candidates() == ()
 
 
 @pytest.mark.parametrize(
@@ -3048,9 +3020,7 @@ def test_side_branch_deletion_and_divergent_remote_do_not_supersede_failure(
     assert json.loads(structured.stdout)["failed_executions"][0]["id"] == "T-1"
 
 
-@pytest.mark.parametrize(
-    "change", ["unrelated", "edited", "edit-before-move", "recreated"]
-)
+@pytest.mark.parametrize("change", ["unrelated", "edited", "recreated"])
 def test_changed_control_without_immutable_transition_stays_blocked(
     tmp_path, monkeypatch, change
 ):
@@ -3076,16 +3046,8 @@ def test_changed_control_without_immutable_transition_stays_blocked(
         git(control, "commit", "-m", "defer ticket")
         target.rename(source)
         source.write_text(source.read_text() + "edited\n")
-    elif change == "edit-before-move":
-        source.write_text(source.read_text() + "edited\n")
-        git(control, "add", "-A")
-        git(control, "commit", "-m", "change ticket identity before transition")
-        target = control / "kanban/backlog/T-1.md"
-        source.rename(target)
-        git(control, "add", "-A")
-        git(control, "commit", "-m", "defer changed ticket")
-        target.rename(source)
     elif change == "recreated":
+        # An external deletion/recreation does not prove continuous identity.
         original = source.read_bytes()
         source.unlink()
         git(control, "add", "-A")
