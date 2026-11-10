@@ -534,6 +534,52 @@ def add_submodule(ticket, tmp_path):
     return pin
 
 
+@pytest.mark.parametrize("staged", ["blob", "deletion"])
+def test_staged_changes_with_head_working_bytes_are_refused_without_mutation(
+    ticket, tmp_path, staged,
+):
+    pin = add_submodule(ticket, tmp_path)
+    repo, _config, _locator, binding = ticket
+    live = binding.manager.path
+    path = live / "source.py"
+    original = path.read_bytes()
+    if staged == "blob":
+        path.write_text("staged bytes absent from working tree\n")
+        run_git(live, "add", "source.py")
+        assert source.text(live, "rev-parse", ":source.py") != source.text(
+            live, "rev-parse", "HEAD:source.py"
+        )
+    else:
+        run_git(live, "rm", "source.py")
+        assert not source.git(live, "ls-files", "--stage", "source.py").stdout
+    path.write_bytes(original)
+    before = unchanged(binding)
+    before_file = (path.read_bytes(), path.stat().st_mode)
+    sub = live / "vendor/module"
+
+    def submodule_state():
+        return (
+            source.text(sub, "rev-parse", "HEAD"),
+            source.git(sub, "show-ref").stdout,
+            source.git(sub, "status", "--porcelain=v1").stdout,
+            Path(source.text(sub, "rev-parse", "--path-format=absolute",
+                             "--git-path", "index")).read_bytes(),
+            (sub / "module.py").read_bytes(),
+        )
+
+    before_sub = submodule_state()
+    assert before_sub[0] == pin
+    args = argparse.Namespace(ticket="TASK-001", target="arch", output_dir=None,
+                              keep_work=False, python=sys.executable)
+    with pytest.raises(source.TicketSourceError,
+                       match="align the index and working files"):
+        source.package_ticket(args, repo)
+    assert unchanged(binding) == before
+    assert (path.read_bytes(), path.stat().st_mode) == before_file
+    assert submodule_state() == before_sub
+    assert not (repo / "dist").exists()
+
+
 def test_staged_only_gitlink_change_is_refused_without_mutation(ticket, tmp_path):
     pin = add_submodule(ticket, tmp_path)
     repo, _config, _locator, binding = ticket

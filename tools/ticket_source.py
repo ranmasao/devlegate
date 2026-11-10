@@ -427,6 +427,7 @@ def capture(selection: Selection, target: Path) -> dict[str, object]:
     live = selection.live
     index_path = None
     index_before = None
+    staged_changes = False
     if live:
         validate_source_submodules(live, selection.head)
         if git(live, "ls-files", "--unmerged").stdout:
@@ -435,6 +436,10 @@ def capture(selection: Selection, target: Path) -> dict[str, object]:
                                "--git-path", "index"))
         index_before = file_bytes(index_path.parent, index_path.name)
         validate_index_metadata(live, selection.head)
+        staged_changes = bool(git(
+            live, "diff", "--cached", "--raw", "--no-ext-diff",
+            "--ignore-submodules=none", selection.head, "--",
+        ).stdout)
     clone_at(selection.repo, target, selection.head)
     prepare_submodules(
         live or selection.repo, target, selection.head, live=live is not None
@@ -510,6 +515,15 @@ def capture(selection: Selection, target: Path) -> dict[str, object]:
                 },
             ).stdout.strip()
             git(target, "update-ref", "HEAD", commit)
+        elif staged_changes:
+            # A clean filesystem capture does not prove a clean live index:
+            # staged bytes (or a deletion) may have been undone only on disk.
+            # Never label that omitted staged state as a committed source.
+            raise TicketSourceError(
+                "staged changes differ from HEAD but captured working files "
+                "match HEAD; "
+                "align the index and working files before packaging"
+            )
     validate_source_submodules(target, text(target, "rev-parse", "HEAD"))
     if git(target, "status", "--porcelain", "--untracked-files=all").stdout:
         raise TicketSourceError("private snapshot failed clean-source preflight")
