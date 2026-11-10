@@ -8,7 +8,10 @@ import dataclasses
 import fcntl
 import hashlib
 import json
+import os
+import shlex
 import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -21,7 +24,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
 )
 from devlegate.git import run_git
-from devlegate.resource_binding import ResourceBinding
+from devlegate.resource_binding import ResourceBinding, UnprovenResource
 from devlegate.runtime_locator import RuntimeAuthorityPresent, RuntimeLocator
 from devlegate.worker_egress import WorkerClaim
 from devlegate.worker_supervisor import WorkerRunResult
@@ -37,7 +40,32 @@ def commit(repo, message):
 
 
 @pytest.fixture
-def ticket(tmp_path, monkeypatch):
+def isolated_git(tmp_path, monkeypatch):
+    # source.git intentionally strips inherited GIT_* variables. Isolate at
+    # the executable boundary so its resource manager and selected builders,
+    # as well as run_git, all execute real Git without host config policy.
+    real_git = shutil.which("git")
+    assert real_git is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        "export GIT_CONFIG_NOSYSTEM=1\n"
+        "export GIT_CONFIG_SYSTEM=/dev/null\n"
+        "export GIT_CONFIG_GLOBAL=/dev/null\n"
+        f"exec {shlex.quote(real_git)} \"$@\"\n"
+    )
+    wrapper.chmod(0o755)
+    for name in tuple(os.environ):
+        if name.startswith("GIT_CONFIG_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return real_git
+
+
+@pytest.fixture
+def ticket(tmp_path, monkeypatch, isolated_git):
     # Selected builders execute a separate (and potentially older) source
     # identity which is deleted after capture. Do not attribute their lines to
     # this checkout's coverage or retain references to removed private sources.
@@ -136,6 +164,56 @@ def unchanged(binding):
         {path.name: path.read_bytes() for path in binding.directory.iterdir()
          if path.is_file()},
     )
+
+
+@pytest.mark.parametrize("scope", ["global", "system", "xdg"])
+@pytest.mark.parametrize("driver", ["clean", "process"])
+def test_real_git_fixture_ignores_host_filters(
+    ticket, isolated_git, tmp_path, monkeypatch, scope, driver,
+):
+    repo, _config, _locator, binding = ticket
+    home = tmp_path / "host-home"
+    home.mkdir()
+    xdg = home / "config"
+    (xdg / "git").mkdir(parents=True)
+    config = {
+        "global": home / ".gitconfig",
+        "system": home / "system.gitconfig",
+        "xdg": xdg / "git/config",
+    }[scope]
+    config.write_text(f'[filter "host"]\n\t{driver} = false\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(home / "system.gitconfig"))
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    # Prove the real host configuration is hostile, then query both actual
+    # runners. Merely setting GIT_CONFIG_* in pytest would fail this check for
+    # source.git, which discards those variables before starting Git.
+    host = subprocess.run(
+        [isolated_git, "-C", str(repo), "config", "--get", f"filter.host.{driver}"],
+        capture_output=True, text=True, check=True,
+    )
+    assert host.stdout.strip() == "false"
+    for runner in (run_git, source.git, binding.manager._runner):
+        result = runner(repo, "config", "--get-regexp",
+                        r"^filter\..*\.(clean|process)$", check=False)
+        assert result.returncode == 1
+        assert result.stdout == ""
+    before = unchanged(binding)
+    selected = select(ticket)
+    assert selected.live == binding.manager.path
+    assert unchanged(binding) == before
+
+
+@pytest.mark.parametrize("driver", ["clean", "process"])
+def test_project_filter_policy_still_fails_closed(ticket, driver):
+    binding = ticket[-1]
+    run_git(binding.manager.path, "config", f"filter.project.{driver}", "false")
+    before = unchanged(binding)
+    with pytest.raises(UnprovenResource, match="configured Git clean/process filters"):
+        select(ticket)
+    assert unchanged(binding) == before
 
 
 def test_clean_ticket_dispatches_selected_legacy_toolchain(ticket, tmp_path):
