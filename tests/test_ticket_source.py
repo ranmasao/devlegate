@@ -264,6 +264,45 @@ def test_unresolved_index_is_not_silently_resolved_for_packaging(ticket, tmp_pat
     assert unchanged(ticket[-1]) == before
 
 
+@pytest.mark.parametrize("executable", [False, True])
+def test_staged_only_executable_mode_is_refused_without_mutation(ticket, executable):
+    repo, _config, _locator, binding = ticket
+    live = binding.manager.path
+    path = live / "source.py"
+    if executable:
+        binding.begin_operation("checkpoint", {"before": select(ticket).head})
+        path.chmod(0o755)
+        head = commit(live, "executable source")
+        binding.finish_operation("checkpoint", {"after": head})
+    run_git(live, "update-index", "--chmod=-x" if executable else "--chmod=+x",
+            "source.py")
+    before = unchanged(binding)
+    before_file = (path.read_bytes(), path.stat().st_mode)
+    args = argparse.Namespace(ticket="TASK-001", target="arch", output_dir=None,
+                              keep_work=False, python=sys.executable)
+    with pytest.raises(source.TicketSourceError, match="align the index.*executable"):
+        source.package_ticket(args, repo)
+    assert unchanged(binding) == before
+    assert (path.read_bytes(), path.stat().st_mode) == before_file
+    assert not (repo / "dist").exists()
+
+
+def test_staged_executable_mode_matching_working_file_is_wip(ticket, tmp_path):
+    binding = ticket[-1]
+    live = binding.manager.path
+    (live / "source.py").chmod(0o755)
+    run_git(live, "add", "source.py")
+    before = unchanged(binding)
+    target = tmp_path / "private"
+    report = source.capture(select(ticket), target)
+    assert report["source_kind"] == "wip-snapshot"
+    assert report["synthetic_build_only"] is True
+    assert report["wip_digest"]
+    assert source.text(target, "ls-files", "--stage", "source.py").startswith("100755 ")
+    assert (target / "source.py").stat().st_mode & 0o111
+    assert unchanged(binding) == before
+
+
 def test_unsafe_symlink_fails_capture(ticket, tmp_path):
     (ticket[-1].manager.path / "new.py").symlink_to(tmp_path / "outside-secret")
     with pytest.raises((ExecutionWorkspaceError, ValueError)):
@@ -493,6 +532,40 @@ def add_submodule(ticket, tmp_path):
     head = commit(live, "pinned submodule")
     binding.finish_operation("checkpoint", {"after": head})
     return pin
+
+
+def test_staged_only_gitlink_change_is_refused_without_mutation(ticket, tmp_path):
+    pin = add_submodule(ticket, tmp_path)
+    repo, _config, _locator, binding = ticket
+    live = binding.manager.path
+    sub = live / "vendor/module"
+    (sub / "module.py").write_text("new pin\n")
+    next_pin = commit(sub, "next submodule pin")
+    run_git(sub, "checkout", "--detach", pin)
+    run_git(live, "update-index", "--cacheinfo", f"160000,{next_pin},vendor/module")
+    before = unchanged(binding)
+    before_sub = (
+        source.text(sub, "rev-parse", "HEAD"),
+        source.git(sub, "show-ref").stdout,
+        source.git(sub, "status", "--porcelain=v1").stdout,
+        Path(source.text(sub, "rev-parse", "--path-format=absolute",
+                         "--git-path", "index")).read_bytes(),
+        (sub / "module.py").read_bytes(),
+    )
+    args = argparse.Namespace(ticket="TASK-001", target="arch", output_dir=None,
+                              keep_work=False, python=sys.executable)
+    with pytest.raises(source.TicketSourceError, match="restore the index.*HEAD pins"):
+        source.package_ticket(args, repo)
+    assert unchanged(binding) == before
+    assert (
+        source.text(sub, "rev-parse", "HEAD"),
+        source.git(sub, "show-ref").stdout,
+        source.git(sub, "status", "--porcelain=v1").stdout,
+        Path(source.text(sub, "rev-parse", "--path-format=absolute",
+                         "--git-path", "index")).read_bytes(),
+        (sub / "module.py").read_bytes(),
+    ) == before_sub
+    assert not (repo / "dist").exists()
 
 
 def test_snapshot_preserves_exact_pinned_submodule(ticket, tmp_path, monkeypatch):
