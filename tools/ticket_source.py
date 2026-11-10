@@ -385,6 +385,44 @@ def prepare_submodules(origin: Path, target: Path, head: str, *, live: bool) -> 
         prepare_submodules(source, destination, pinned, live=live)
 
 
+def validate_index_metadata(live: Path, head: str) -> None:
+    """Refuse staged metadata that a filesystem capture would silently omit."""
+    committed = {}
+    for entry in git(live, "ls-tree", "-r", "-z", head).stdout.split("\0"):
+        if entry:
+            metadata, path = entry.split("\t", 1)
+            mode, _kind, object_id = metadata.split()
+            committed[path] = (mode, object_id)
+    staged = {}
+    for entry in git(live, "ls-files", "--stage", "-z").stdout.split("\0"):
+        if entry:
+            metadata, path = entry.split("\t", 1)
+            mode, object_id, _stage = metadata.split()
+            staged[path] = (mode, object_id)
+    committed_links = {path: value for path, value in committed.items()
+                       if value[0] == "160000"}
+    staged_links = {path: value for path, value in staged.items()
+                    if value[0] == "160000"}
+    if staged_links != committed_links:
+        raise TicketSourceError(
+            "staged submodule gitlink changes cannot be captured; "
+            "restore the index to the verified HEAD pins before packaging"
+        )
+    for path, (mode, _object_id) in staged.items():
+        if (mode not in {"100644", "100755"}
+                or committed.get(path, (None, None))[0] == mode):
+            continue
+        # Working bytes take precedence over staged bytes, but an index-only
+        # executable-bit change must not disappear into a committed artifact.
+        working = live / path
+        if (not working.exists()
+                or file_bytes(live, path)[1] != (int(mode, 8) & 0o777)):
+            raise TicketSourceError(
+                f"staged executable mode differs from working file: {path}; "
+                "align the index and working-file executable mode before packaging"
+            )
+
+
 def capture(selection: Selection, target: Path) -> dict[str, object]:
     live = selection.live
     index_path = None
@@ -396,6 +434,7 @@ def capture(selection: Selection, target: Path) -> dict[str, object]:
         index_path = Path(text(live, "rev-parse", "--path-format=absolute",
                                "--git-path", "index"))
         index_before = file_bytes(index_path.parent, index_path.name)
+        validate_index_metadata(live, selection.head)
     clone_at(selection.repo, target, selection.head)
     prepare_submodules(
         live or selection.repo, target, selection.head, live=live is not None
