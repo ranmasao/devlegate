@@ -1469,9 +1469,14 @@ def package(args: argparse.Namespace) -> int:
         _ACTIVE_EVIDENCE = previous_evidence
 
 
+class ExplicitRepoAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        namespace.repo = values
+        namespace.repo_explicit = True
+
+
 def parser() -> argparse.ArgumentParser:
     repo = Path(__file__).parents[1].resolve()
-
     def add_common_options(target, *, defaults: bool) -> None:
         target.add_argument(
             "--output-dir",
@@ -1481,8 +1486,15 @@ def parser() -> argparse.ArgumentParser:
             help="write final validated artifacts to PATH instead of <repo>/dist",
         )
         target.add_argument(
+            "--ticket",
+            default=None if defaults else argparse.SUPPRESS,
+            metavar="ID",
+            help="build a verified local ticket source using its own packaging tools",
+        )
+        target.add_argument(
             "--repo",
             type=Path,
+            action=ExplicitRepoAction,
             default=repo if defaults else argparse.SUPPRESS,
             metavar="PATH",
             help=(
@@ -1514,6 +1526,7 @@ def parser() -> argparse.ArgumentParser:
     )
     command._optionals.title = "Options"
     add_common_options(command, defaults=True)
+    command.set_defaults(repo_explicit=False)
     commands = command.add_subparsers(
         dest="target", required=True, parser_class=ConciseArgumentParser
     )
@@ -1555,6 +1568,14 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.ticket is not None:
+            if args.repo_explicit:
+                raise DistributionError("--repo and --ticket are mutually exclusive")
+            try:
+                from ticket_source import package_ticket
+            except ModuleNotFoundError:
+                from tools.ticket_source import package_ticket
+            return package_ticket(args, Path(__file__).parents[1].resolve())
         return package(args)
     except Exception as error:
         if not getattr(sys.stdout, "isatty", lambda: False)():
