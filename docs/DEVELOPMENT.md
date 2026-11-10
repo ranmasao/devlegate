@@ -131,6 +131,43 @@ containing `./dev`. The selected repository supplies the source HEAD, version,
 must satisfy the same clean-worktree rules as the default checkout. This is
 useful for intentionally packaging another worktree or source tree.
 
+For local dogfooding before product integration, select a ticket in the invoking
+Devlegate project:
+
+```sh
+./dev package arch --ticket TASK-089
+```
+
+`--ticket ID` also works with the other package targets. It conflicts with an
+explicit `--repo`. Resolution uses committed control/execution evidence and
+independent local resource-generation receipts, without fetching or opening
+runtime SQLite. Stop the project service before capturing source: the command
+holds a read-only absence guard during resolution and capture, and refuses an
+active owner, an unretired worker, uncertain operations or ambiguous identities.
+
+A verified live ticket worktree supplies its current files, including staged,
+unstaged and non-ignored new source files. Dirty source is captured into a private
+clean Git snapshot; the original worktree, index and refs are preserved. Ignored
+caches are excluded. Symlinks, dirty or unavailable pinned submodules, changing
+files and untracked environment/runtime paths are refused. If the worktree has
+been retired, the latest independently attributable checkpoint is used. Missing
+latest evidence or objects cause refusal, never substitution of product HEAD.
+
+The selected snapshot's packaging graph, version, templates and compliance files
+perform the build using the existing development Python. No installation into
+the selected worktree is needed. An incompatible source graph must be updated in
+the ticket source before it can be packaged.
+
+Ticket artifacts default to the primary project checkout's
+`dist/tickets/ID/<checkpoint-or-WIP-digest>/`, separate from release artifacts.
+`--output-dir` overrides this destination, outside execution resources.
+The retained `devlegate-TARGET-ticket-source.json` and build log record the
+ticket, execution, generation, original checkpoint, WIP digest, selected toolchain
+digest and artifact digests. A synthetic snapshot commit is explicitly
+**build-only** development evidence, not a worker checkpoint, release-tag proof,
+product integration or permission to retry/rebase. `--keep-work` also retains the
+private source snapshot. This command does not upload, deploy or install packages.
+
 `--keep-work` preserves the new temporary workspace on both success and
 failure. Its exact path is written to the build log and printed for
 non-interactive runs. It is useful for inspecting intermediate artifacts, build
