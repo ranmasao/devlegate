@@ -1,0 +1,37 @@
+{
+  "code_base_head": "57702be8b82841d139b0e0264d560e9ab907d9e8",
+  "conclusion": "blocked",
+  "control_head": "1af90ccc59d6a34ba0893bf696e2333c9342456d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-155",
+  "execution_id": "abc34ca2c7f64c7684bef5675855a9d6",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-155",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must create and publish the revised immutable checkpoint, then run and confirm its exact-checkpoint hosted CI; the worker contract prohibits committing or pushing."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Confirm that the full hosted workflow on the revised exact checkpoint completes with all tests and Ruff passing."
+  ],
+  "report_artifact": "executions/TASK-155/abc34ca2c7f64c7684bef5675855a9d6.md",
+  "report_sha256": "c282d674302df7035fc23efebc969fe22d51bb0ca7caf0056c2d7738e25e957e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-155",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must create and publish the revised immutable checkpoint, then run and confirm its exact-checkpoint hosted CI; the worker contract prohibits committing or pushing."
+    ],
+    "remaining": [
+      "Confirm that the full hosted workflow on the revised exact checkpoint completes with all tests and Ruff passing."
+    ],
+    "report": "Implementation and local validation are complete. The focused ticket-source suite passed (44 tests). After preparing the expected local development venv, ./dev coverage -n 4 --dist=worksteal passed with 1900 passed and 2 skipped; ./dev lint and git diff --check passed. Only tests/test_ticket_source.py has tracked changes. Hosted success is not claimed: the revised edits have no published immutable checkpoint, and publishing one requires Devlegate-owned Git lifecycle actions.",
+    "summary": "Isolated disposable ticket-source Git fixtures from system, global and XDG Git configuration at the executable boundary. Added real-Git regressions proving host clean/process filters are excluded while repository-local filter policy still fails closed, preserving the existing staged-change regressions."
+  },
+  "workspace_head": "17adb2d2afbc14269e56a2d593cb2db7ae53f6a4"
+}
