@@ -157,9 +157,10 @@ def select(ticket):
 
 def unchanged(binding):
     repo = binding.manager.repo
+    status = source.git(binding.manager.path, "status", "--porcelain=v1", check=False)
     return (
         source.git(repo, "show-ref").stdout,
-        source.git(binding.manager.path, "status", "--porcelain=v1").stdout,
+        (status.returncode, status.stdout, status.stderr),
         (binding._admin() / "index").read_bytes(),
         {path.name: path.read_bytes() for path in binding.directory.iterdir()
          if path.is_file()},
@@ -717,6 +718,8 @@ def test_snapshot_preserves_exact_pinned_submodule(ticket, tmp_path, monkeypatch
 @pytest.mark.parametrize("fault", ["dirty", "missing", "stale", "symlink"])
 def test_unsafe_submodule_is_preserved_and_refused(ticket, tmp_path, fault):
     add_submodule(ticket, tmp_path)
+    # Resolve a valid source first so each malformed dependency reaches capture.
+    selection = select(ticket)
     sub = ticket[-1].manager.path / "vendor/module"
     if fault == "dirty":
         (sub / "module.py").write_text("dirty module\n")
@@ -730,6 +733,23 @@ def test_unsafe_submodule_is_preserved_and_refused(ticket, tmp_path, fault):
         sub.rename(original)
         sub.symlink_to(original, target_is_directory=True)
     before = unchanged(ticket[-1])
-    with pytest.raises((ValueError, ExecutionWorkspaceError, OSError)):
-        source.capture(select(ticket), tmp_path / "private")
+
+    def path_identities():
+        identities = {}
+        for path in sub.parent.iterdir():
+            stat = path.lstat()
+            identities[path.name] = (
+                stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
+                stat.st_mtime_ns, stat.st_ctime_ns,
+                path.readlink() if path.is_symlink() else None,
+            )
+        return identities
+
+    paths_before = path_identities()
+    with pytest.raises(
+        (ValueError, RuntimeError),
+        match=r"(?s)submodule.*vendor/module",
+    ):
+        source.capture(selection, tmp_path / "private")
     assert unchanged(ticket[-1]) == before
+    assert path_identities() == paths_before
