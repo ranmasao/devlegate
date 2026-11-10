@@ -1,0 +1,29 @@
+{
+  "code_base_head": "57702be8b82841d139b0e0264d560e9ab907d9e8",
+  "conclusion": "completed",
+  "control_head": "8d218a6e1c8ee9218c59a84f109eab3dbd24b093",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-155",
+  "execution_id": "d589a5845df742b1a539fda28f6f9b28",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-155",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-155/d589a5845df742b1a539fda28f6f9b28.md",
+  "report_sha256": "72bc8fdc0b9e607a8be5fbe3bc8c826ab7c98a531954569f3305ee028e3a116b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-155",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "TASK-096 is present in the base history. Focused packaging/source regressions passed, and Ruff plus git diff --check passed. A full test run passed 1886 tests with 2 skipped. After fixing disposable-source coverage attribution, the full coverage run passed 1884 tests with 2 skipped and encountered two timing-sensitive daemon-test failures; both failures passed on an isolated coverage rerun together with all 30 ticket-source tests. Coverage combination, reporting, and JSON generation then passed. No remote CI was invoked; Git lifecycle and integration remain with Devlegate.",
+    "summary": "Added developer package --ticket selection with verified project/execution ownership, quiescent live-source capture, and exact checkpoint fallback. Builds execute the selected source's packaging toolchain from isolated clean snapshots, with explicitly build-only WIP identities, separate artifact destinations, and retained source/toolchain/package provenance. Added disposable real-Git regressions and development documentation."
+  },
+  "workspace_head": "08b824a4fbc48f4ade97e170649d8ea2817106bd"
+}
