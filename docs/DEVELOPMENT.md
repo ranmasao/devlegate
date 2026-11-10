@@ -14,9 +14,28 @@ From the repository root:
 ./dev setup
 ```
 
-This creates and owns the repository-local `.venv`, then installs Devlegate and
-its development tools into it. Set `PYTHON_BIN` to choose the Python executable
-used to create the environment:
+In a Git source checkout, setup first initializes and recursively synchronizes
+submodules (including NanoYAML) to the exact commits recorded by the currently
+checked-out superproject. This works in linked and detached worktrees. It does
+not follow submodule branch tips. After a manual pull, fast-forward, or checkout
+of the superproject, rerun `./dev setup` to repair clean stale submodule checkouts.
+
+Setup refuses local modifications, untracked content, ignored files that would
+be overwritten, and divergent/unpublished submodule commits. Save or move local
+files and preserve local commits on a branch, then manually check out the pinned
+commit before retrying. Setup never force-resets submodules. Staged gitlink or
+local `.gitmodules` changes must also be resolved first. If a pinned commit
+cannot be fetched, restore repository access and rerun setup. A synchronization
+failure stops setup before environment creation or installation.
+
+After successful synchronization, setup creates and owns the repository-local
+`.venv`, then installs Devlegate and its development tools into it. Repeated
+setup is safe; already-correct submodules need no fetch. This synchronization is
+source-checkout tooling only; installed Devlegate does not perform it.
+Full-source archives use their already-materialized vendored sources without Git
+or fetching.
+Set `PYTHON_BIN` to choose the Python executable used for source preparation and
+to create the environment:
 
 ```sh
 PYTHON_BIN=python3.12 ./dev setup

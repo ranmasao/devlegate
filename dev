@@ -50,6 +50,7 @@ require_devlegate() {
 }
 
 setup() {
+  "${PYTHON_BIN:-python3}" "$ROOT/tools/setup_submodules.py" "$ROOT"
   if [[ ! -x "$PYTHON" ]]; then
     "${PYTHON_BIN:-python3}" -m venv "$VENV"
   fi
