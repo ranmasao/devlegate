@@ -1,0 +1,29 @@
+{
+  "code_base_head": "57702be8b82841d139b0e0264d560e9ab907d9e8",
+  "conclusion": "completed",
+  "control_head": "39940940135a42732f3f02e481ff38b38b315732",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-155",
+  "execution_id": "a4be932c444948e98beb5ee4447f6fca",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-155",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-155/a4be932c444948e98beb5ee4447f6fca.md",
+  "report_sha256": "62da280a6dc3aa1c2e2441df0530240b5c46f468cfeb627c816421ee111ff98f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-155",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused source/build validation passed: 74 tests across test_ticket_source.py, test_distribution_graph.py and test_source_preflight.py. Repository-wide Ruff and git diff --check passed. The first test run used system Python without the build module; rerunning with the existing validation venv passed. Successful hosted CI for the exact new checkpoint remains an acceptance gate owned by Devlegate's checkpoint/publication flow; no hosted CI success is claimed.",
+    "summary": "Ticket source capture now rejects staged changes hidden by working files that match HEAD, preventing false committed-source provenance. Added real-Git regressions for staged blob changes and restored staged deletions, including preservation of worktree, index, refs, pinned submodule and generation receipts."
+  },
+  "workspace_head": "af6669b96f7fc2308003406da1b3ba00cf573558"
+}
