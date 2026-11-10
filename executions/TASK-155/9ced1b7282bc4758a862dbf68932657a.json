@@ -1,0 +1,41 @@
+{
+  "code_base_head": "57702be8b82841d139b0e0264d560e9ab907d9e8",
+  "conclusion": "blocked",
+  "control_head": "96d716e167d9e0f7245f7025ccc5b7f53b89b924",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-155",
+  "execution_id": "9ced1b7282bc4758a862dbf68932657a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-155",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must publish the implementation checkpoint and run exact-checkpoint GitHub Actions CI, including repeated targeted topology evidence, then provide any failure diagnostics for further correction. Worker authority does not permit checkpoint publication or hosted CI dispatch."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Diagnose the original auto-resume Git commit failure from exposed stderr under hosted CI; it did not reproduce locally.",
+    "Obtain successful GitHub Actions CI at the exact newly published checkpoint.",
+    "Establish repeatably passing full-suite validation; a second local coverage run failed in test_real_service_observers_succeed_during_owner_retry with a service-busy admission rejection."
+  ],
+  "report_artifact": "executions/TASK-155/9ced1b7282bc4758a862dbf68932657a.md",
+  "report_sha256": "8af4247037bb9fe2d397f1771b398dae2062c1ab64f608ed4aef61e62ffac466",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-155",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must publish the implementation checkpoint and run exact-checkpoint GitHub Actions CI, including repeated targeted topology evidence, then provide any failure diagnostics for further correction. Worker authority does not permit checkpoint publication or hosted CI dispatch."
+    ],
+    "remaining": [
+      "Diagnose the original auto-resume Git commit failure from exposed stderr under hosted CI; it did not reproduce locally.",
+      "Obtain successful GitHub Actions CI at the exact newly published checkpoint.",
+      "Establish repeatably passing full-suite validation; a second local coverage run failed in test_real_service_observers_succeed_during_owner_retry with a service-busy admission rejection."
+    ],
+    "report": "Focused ticket-source validation passed all 44 tests. The reviewed topology test passed 20 consecutive targeted local invocations with four worksteal workers and also passed in both complete coverage runs. ./dev lint and git diff --check pass. The first completed ./dev coverage -n 4 --dist=worksteal run passed with 1900 passed and 2 skipped; the second completed run had 1899 passed, 2 skipped and one different failure: tests/test_cli_ipc.py::test_real_service_observers_succeed_during_owner_retry received 'service busy; mutable request was not admitted'. No evidence establishes the cause of the reviewed hosted Git commit 128, and no runtime workaround was introduced. Only tests/_cli_support.py and tests/test_ticket_source.py were edited. Mandatory hosted acceptance and the original failure diagnosis remain unresolved.",
+    "summary": "Updated malformed-submodule regressions to reach capture and compare failed Git-status observations, raw index bytes, refs, resource receipts and path identities without mutating the source. Updated the shared CLI Git test helper to expose command, working directory, exit status, stdout and stderr on failure."
+  },
+  "workspace_head": "efd357942dc8b73812e3ecefa1e66ce4c661323e"
+}
