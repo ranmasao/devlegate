@@ -1,0 +1,29 @@
+{
+  "code_base_head": "6d74487e018a9d302605684429b015ce8f9071c4",
+  "conclusion": "completed",
+  "control_head": "ecf5158d61c8482259c55f87e293739c529712b8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-096",
+  "execution_id": "bbb139c4af564ffea1ad85d17e309700",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-096",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-096",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated source-tree setup to recursively synchronize submodules to the checked-out superproject's exact pins before environment preparation, with final pin verification and clear failures that protect local content and unpublished commits. Added real-Git regression coverage and development documentation, while preserving offline materialized-source setup and keeping synchronization outside the installed runtime."
+  },
+  "workspace_head": "57702be8b82841d139b0e0264d560e9ab907d9e8"
+}
