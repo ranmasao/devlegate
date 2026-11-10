@@ -1,0 +1,29 @@
+{
+  "code_base_head": "57702be8b82841d139b0e0264d560e9ab907d9e8",
+  "conclusion": "completed",
+  "control_head": "682a8408028af7368745ae03e9e4582a104fedb6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-155",
+  "execution_id": "8198baf3d2714b1f80478629893ea9d5",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-155",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-155/8198baf3d2714b1f80478629893ea9d5.md",
+  "report_sha256": "fecd2d60e8701200170619be0daa7f5e77555aa354acbbfb38d6760600b91ef4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-155",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused validation passed: 72 tests across test_ticket_source.py, test_distribution_graph.py and test_source_preflight.py; repository-wide Ruff and git diff --check passed. A temporary validation venv supplied missing build dependencies without changing repository dependencies. Hosted exact-new-checkpoint CI was not run or claimed; publishing the checkpoint and running hosted CI belong to Devlegate's Git lifecycle.",
+    "summary": "Added pre-capture index metadata validation that refuses staged submodule pin changes and executable-mode changes inconsistent with working files. Added disposable real-Git regressions proving refusal preserves source resources and matching executable-mode changes remain explicitly WIP-marked."
+  },
+  "workspace_head": "92c0b037f40a6b6d69a09ea1c853e3e8903d78ec"
+}
