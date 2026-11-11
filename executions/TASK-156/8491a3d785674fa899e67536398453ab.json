@@ -1,0 +1,42 @@
+{
+  "code_base_head": "efd357942dc8b73812e3ecefa1e66ce4c661323e",
+  "conclusion": "blocked",
+  "control_head": "0f488ac9112f07dde17c246ec90c31e597e5ca5c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-156",
+  "execution_id": "8491a3d785674fa899e67536398453ab",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-156",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can the operator provide the installed-artifact build provenance/source commit for the runtime that produced the specified TASK-089 and TASK-155 reports? Workspace permissions deny access to the installed build-provenance file, and the current version string cannot establish historical producer identity.",
+    "Can Devlegate create the implementation checkpoint and arrange exact-checkpoint GitHub Actions CI? The worker contract prohibits committing or pushing the changes needed for that check."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Attribute the supplied historical report omissions using the producing runtime's independently recorded installed-artifact/source provenance.",
+    "Run complete GitHub Actions CI against the exact implementation checkpoint after the owner commits and publishes it."
+  ],
+  "report_artifact": "executions/TASK-156/8491a3d785674fa899e67536398453ab.md",
+  "report_sha256": "dfcb1b6df942e9b365e77ad3048963bc5c0351b93571dee48ff147c808c2ec71",
+  "resource_generation": "f58589e232d028fcc4b0f1fb23aeb018b65abe0f4d549521639e771d77c65727",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-156",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can the operator provide the installed-artifact build provenance/source commit for the runtime that produced the specified TASK-089 and TASK-155 reports? Workspace permissions deny access to the installed build-provenance file, and the current version string cannot establish historical producer identity.",
+      "Can Devlegate create the implementation checkpoint and arrange exact-checkpoint GitHub Actions CI? The worker contract prohibits committing or pushing the changes needed for that check."
+    ],
+    "remaining": [
+      "Attribute the supplied historical report omissions using the producing runtime's independently recorded installed-artifact/source provenance.",
+      "Run complete GitHub Actions CI against the exact implementation checkpoint after the owner commits and publishes it."
+    ],
+    "report": "All implementation edits and local validation are complete. ./dev coverage -n 4 --dist=worksteal passed with 1917 passed and 2 skipped; Ruff and git diff --check passed. The current normal producer records the generation before checkpointing. A reachable deficient-report recovery/publication gap was reproduced and closed, but that does not establish which executable produced the supplied historical omissions. Current /usr/bin/devlegate reports standalone Debian 0.5.7.dev0; its source provenance was unavailable under workspace permissions. No real ticket runtime resources or historical reports were changed.",
+    "summary": "Enforced independent generation-intent matching before immutable execution report publication, including recovered reports. Made package failures visible on stderr, added explicit latest-execution provenance refusals and real owner lifecycle regressions, and documented clean exact-checkpoint --repo recovery."
+  },
+  "workspace_head": "f6a61185ec4c08c8d4985509e663458ca1c36b63"
+}
