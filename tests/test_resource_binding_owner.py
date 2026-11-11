@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Admission and effect receipts under the real serialized service owner."""
 
+import json
+
 import pytest
 from _control_support import (
     Devlegate,
@@ -108,6 +110,46 @@ def test_effect_receipt_crashes_recover_exactly_or_block(
             assert operation == "worker"
     assert not launches
     assert git(owner.repo, "rev-parse", "HEAD").stdout == before_head
+    if receipt_written and operation != "worker":
+        intent = owner._state["execution_resource_binding"]
+        payload = json.loads(git(
+            owner.repo, "show",
+            f"devlegate/control:executions/{intent['ticket_id']}/{intent['execution_id']}.json",
+        ).stdout)
+        assert payload["resource_generation"] == intent["generation"]
+        binding = restarted._execution_generation_binding()
+        assert payload["workspace_head"] == binding._expected_head()
+
+
+@pytest.mark.parametrize("token", [None, "f" * 64])
+@pytest.mark.parametrize("stage", ["checkpointing", "post-checkpoint", "lifecycle"])
+def test_recovery_refuses_missing_or_altered_report_generation(
+    engine, monkeypatch, token, stage,
+):
+    owner, config = engine
+    original = owner._save_state
+
+    def crash(phase, **fields):
+        original(phase, **fields)
+        if fields.get("execution_stage") == stage:
+            raise InjectedCrash()
+
+    monkeypatch.setattr(owner, "_save_state", crash)
+    with pytest.raises(InjectedCrash):
+        run_test_iteration(owner)
+    pending = dict(owner._state["pending_execution_report"])
+    if token is None:
+        pending.pop("resource_generation")
+    else:
+        pending["resource_generation"] = token
+    with owner._lock():
+        original("agent_running", pending_execution_report=pending)
+    before = git(owner.repo, "rev-parse", "devlegate/control").stdout
+    restarted = Devlegate(config)
+    with pytest.raises(DevlegateError,
+                       match="resource generation.*independent admission"):
+        run_test_iteration(restarted)
+    assert git(owner.repo, "rev-parse", "devlegate/control").stdout == before
 
 
 def test_admission_crash_before_independent_intent_replays_only_absent_resources(

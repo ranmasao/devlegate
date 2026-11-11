@@ -8853,6 +8853,18 @@ class ServiceEngine:
                 "published execution checkpoint does not match the execution branch"
             )
 
+    def _require_report_generation_identity(self, report: ExecutionReport) -> None:
+        # Recovery must preserve the admitted token, never infer one from the
+        # checkpoint or execution name. Check the independent intent as well as
+        # the WAL before allowing a new immutable lifecycle publication.
+        binding = self._execution_generation_binding()
+        binding._validate_intent()
+        if report.resource_generation != binding.intent["generation"]:
+            raise WorkflowBlockedError(
+                "execution report resource generation is missing or differs "
+                "from independent admission intent"
+            )
+
     def _report_matches_execution_binding(self, report: ExecutionReport) -> None:
         state = self._state
         expected = {
@@ -9259,6 +9271,7 @@ class ServiceEngine:
         allow_unpublished: bool = False,
         apply_conclusion: bool = True,
     ) -> str:
+        self._require_report_generation_identity(report)
         if allow_unpublished:
             self._report_matches_execution_binding(report)
             if not isinstance(report.workspace_head, str) or not report.workspace_head:

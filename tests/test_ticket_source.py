@@ -144,7 +144,8 @@ def ticket(tmp_path, monkeypatch, isolated_git):
     (manager.path / "tools/package_arch.py").write_text(
         builder.replace("caller-old", "ticket-new")
     )
-    head = commit(manager.path, "ticket code and builder")
+    head = commit(manager.path,
+                  "ticket code and builder\n\nDevlegate-Execution: execution-one")
     binding.finish_operation("checkpoint", {"after": head})
     monkeypatch.chdir(repo)
     return repo, config, locator, binding
@@ -413,7 +414,7 @@ def test_wrong_project_and_ticket_are_rejected(ticket, tmp_path, monkeypatch):
         source.project(repo)
 
 
-def publish_report(ticket):
+def publish_report(ticket, *, generation: bool | str = True):
     repo, _config, _locator, binding = ticket
     report = build_execution_report(
         execution_id=str(binding.intent["execution_id"]), ticket_id="TASK-001",
@@ -424,7 +425,9 @@ def publish_report(ticket):
         run=WorkerRunResult(0, None, WorkerClaim("completed", "fixture", (), ()), None),
     )
     report = dataclasses.replace(
-        report, resource_generation=str(binding.intent["generation"])
+        report, resource_generation=(generation if isinstance(generation, str)
+                                     else str(binding.intent["generation"])
+                                     if generation else None)
     )
     control = repo.parent / "control"
     run_git(repo, "worktree", "add", str(control), "devlegate/control")
@@ -529,6 +532,194 @@ def test_explicit_repo_conflicts_with_ticket_before_resolution(monkeypatch, caps
     assert "mutually exclusive" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("tty", [False, True])
+def test_cli_ticket_refusal_is_visible_on_stderr(tty):
+    program = (
+        "import sys; from tools import build_distribution as b; "
+        "from tools import ticket_source as t; "
+        f"sys.stdout.isatty=lambda: {tty!r}; "
+        "sys.argv=['package','arch','--ticket','TASK-001']; "
+        "\n"
+        "def refuse(*a):\n"
+        " raise t.TicketSourceError('latest execution newest lacks checkpoint '"
+        "'identity')"
+        "\n"
+        "t.package_ticket=refuse\n"
+        "raise SystemExit(b.main())\n"
+    )
+    result = subprocess.run([sys.executable, "-c", program],
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "dev: package: ticket source refused: latest execution newest "
+        "lacks checkpoint identity\n"
+    )
+
+
+@pytest.mark.parametrize("older", [False, True])
+def test_legacy_latest_without_witness_refuses_even_with_forged_trailer(ticket, older):
+    report, control = publish_report(ticket, generation=older)
+    binding = ticket[-1]
+    if older:
+        # A subsequent, independently admitted execution reused the checkpoint.
+        # The old trailer cannot attribute it to this new generation.
+        (control / "kanban/review/TASK-001.md").rename(
+            control / "kanban/todo/TASK-001.md"
+        )
+        admitted = commit(control, "new admission")
+        report = dataclasses.replace(report, execution_id="newest-execution",
+                                     control_head=admitted)
+        (control / "kanban/todo/TASK-001.md").rename(
+            control / "kanban/review/TASK-001.md"
+        )
+    legacy = dataclasses.replace(report, resource_generation=None)
+    if older:
+        (control / f"executions/TASK-001/{legacy.execution_id}.json").write_text(
+            legacy.to_json()
+        )
+        commit(control, "legacy publication fixture")
+    retire(ticket)
+    shutil.rmtree(binding.directory)
+    assert "Devlegate-Execution: execution-one" in source.text(
+        ticket[0], "show", "-s", "--format=%B", legacy.workspace_head
+    )
+    before = source.git(ticket[0], "show-ref").stdout
+    files = {p: p.read_bytes() for p in ticket[2].state_dir.rglob("*") if p.is_file()}
+    with pytest.raises(source.TicketSourceError, match=(
+        f"latest execution {legacy.execution_id}.*resource_generation.*--repo"
+    )):
+        select(ticket)
+    assert source.git(ticket[0], "show-ref").stdout == before
+    assert {p: p.read_bytes() for p in ticket[2].state_dir.rglob("*")
+            if p.is_file()} == files
+
+
+def test_mismatched_report_generation_is_refused(ticket):
+    # The independent creation receipt, rather than a plausible report token,
+    # must be authoritative.
+    publish_report(ticket, generation="f" * 64)
+    before = unchanged(ticket[-1])
+    with pytest.raises(source.TicketSourceError, match="checkpoint disagree"):
+        select(ticket)
+    assert unchanged(ticket[-1]) == before
+
+
+@pytest.mark.parametrize("tty", [False, True])
+def test_no_selector_deb_cli_preserves_success_output(monkeypatch, capsys, tty):
+    from tools import build_distribution as distribution
+
+    def package(args):
+        assert args.target == "deb" and args.ticket is None
+        print("ordinary package output")
+        return 0
+
+    monkeypatch.setattr(distribution, "package", package)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+    monkeypatch.setattr(sys, "argv", ["package", "deb"])
+    assert distribution.main() == 0
+    output = capsys.readouterr()
+    assert output.out == "ordinary package output\n"
+    assert output.err == ""
+
+
+def test_ticket_resource_error_hides_private_paths(monkeypatch, capsys):
+    from tools import build_distribution as distribution
+
+    def refuse(*_args):
+        raise UnprovenResource("missing private evidence /private/state/secret.json")
+
+    monkeypatch.setattr(source, "package_ticket", refuse)
+    monkeypatch.setattr(sys, "argv", ["package", "arch", "--ticket", "TASK-001"])
+    assert distribution.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "ticket source refused" in output.err
+    assert "generation receipts" in output.err
+    assert "/private" not in output.err
+
+
+@pytest.mark.parametrize("outcome", ["completed", "incomplete", "blocked"])
+def test_real_owner_publication_and_normal_retirement(
+    ticket, tmp_path, monkeypatch, outcome,
+):
+    from _control_support import Devlegate, control_fixture, invoke
+    from runtime_helpers import run_test_iteration
+
+    from devlegate.runtime_locator import read_env
+
+    fixture = tmp_path / "owner-project"
+    fixture.mkdir()
+    repo, config_path, _state = control_fixture(fixture)
+    assert invoke(repo, "control", "init", config=config_path).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config_path)
+
+    def worker(workspace, _prompt, **_kwargs):
+        # Use the selected fixture's real native builder with the real owner
+        # admission/checkpoint/publication path, not a fabricated report.
+        shutil.copytree(ticket[0] / "tools", workspace.path / "tools")
+        shutil.copy2(ticket[0] / "pyproject.toml", workspace.path / "pyproject.toml")
+        (workspace.path / "source.py").write_text("owner checkpoint\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim(outcome, "owner result", (), ()), None,
+        )
+
+    monkeypatch.setattr(owner._workers, "run", worker)
+    assert run_test_iteration(owner) == 0
+    binding = owner._execution_generation_binding()
+    intent = json.loads((binding.directory / "intent.json").read_text())
+    receipt = json.loads((binding.directory / "receipt.json").read_text())
+    execution = intent["execution_id"]
+    committed = json.loads(source.git(
+        repo, "show", f"devlegate/control:executions/T-1/{execution}.json"
+    ).stdout)
+    assert committed["resource_generation"] == intent["generation"]
+    assert receipt["generation"] == intent["generation"]
+    assert len(intent["generation"]) == 64
+    config = read_env(config_path)
+    locator = RuntimeLocator.from_config(config_path, repo, config)
+    selected = source.resolve(repo, config, locator, "T-1")
+    assert selected.live == binding.manager.path
+    assert selected.head == committed["workspace_head"] == binding._expected_head()
+    assert selected.execution == execution
+    assert selected.generation == intent["generation"]
+    args = argparse.Namespace(
+        ticket="T-1", target="arch", output_dir=tmp_path / "packages",
+        keep_work=False, python=sys.executable,
+    )
+    assert source.package_ticket(args, repo) == 0
+
+    # Curator acceptance and owner integration/cleanup are the normal resource
+    # retirement protocol, even when the worker's semantic claim was blocked.
+    control = owner.control_worktree
+    (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
+    commit(control, "accept disposable checkpoint")
+    run_git(control, "push", "origin", "devlegate/control")
+    restarted = Devlegate(config_path)
+    assert run_test_iteration(restarted) == 0
+    with restarted._lock():
+        restarted.cleanup_workspaces(apply=True)
+    assert not binding.manager.path.exists()
+    assert not binding.manager._branch_exists()
+    # Local receipts are host-local and need not survive later housekeeping.
+    # Only remove them after normal owner retirement, never to bypass a live
+    # resource ownership or worker-retirement check.
+    shutil.rmtree(binding.directory)
+    retired = source.resolve(repo, config, locator, "T-1")
+    assert retired.live is None
+    assert (retired.execution, retired.head, retired.generation) == (
+        selected.execution, selected.head, selected.generation
+    )
+    assert source.package_ticket(args, repo) == 0
+    provenance = json.loads(
+        (args.output_dir / "devlegate-arch-ticket-source.json").read_text()
+    )
+    assert provenance["selection"] == "checkpoint-history"
+    assert provenance["execution_id"] == execution
+    assert provenance["generation"] == intent["generation"]
+
+
 def test_owner_authority_prevents_capture(ticket):
     repo, _config, locator, binding = ticket
     locator.lock_path.parent.mkdir(parents=True)
@@ -568,8 +759,10 @@ def test_selected_real_wheel_graph_captures_wip_and_validates_payload(ticket, tm
     live = binding.manager.path
     root = Path(__file__).parents[1]
     for directory in ("src", "tools", "LICENSES", "packaging"):
-        shutil.copytree(root / directory, live / directory, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(
+            root / directory, live / directory, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.egg-info"),
+        )
     for name in ("pyproject.toml", "README.md", "LICENSE", "NOTICE", "LICENSING.md"):
         shutil.copy2(root / name, live / name)
     (live / ".gitignore").write_text("cache/\n.env\ndist/\n__pycache__/\n")

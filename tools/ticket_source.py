@@ -57,7 +57,8 @@ def git(
     )
     if check and result.returncode:
         raise TicketSourceError(
-            f"Git observation failed ({args[0]}): {result.stderr.strip()}"
+            f"Git observation failed ({args[0]}); verify required local Git objects "
+            "and repository access"
         )
     return result
 
@@ -272,7 +273,14 @@ def resolve(
         base = str(intent["base"])
     elif latest_report:
         if not latest_report.resource_generation or not latest_report.workspace_head:
-            raise TicketSourceError("latest execution lacks checkpoint identity")
+            missing = ("resource_generation" if not latest_report.resource_generation
+                       else "workspace_head")
+            raise TicketSourceError(
+                f"latest execution {latest_report.execution_id} lacks checkpoint "
+                f"identity ({missing}); no independent generation binding remains; "
+                "use --repo with an independently verified clean exact-checkpoint "
+                "checkout for manual testing"
+            )
         if manager.path.exists() or any(item.get("branch") == manager.branch
                 for item in manager._registrations().values()):
             raise TicketSourceError("live resources lack ownership evidence")

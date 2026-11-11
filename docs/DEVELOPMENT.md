@@ -168,6 +168,72 @@ digest and artifact digests. A synthetic snapshot commit is explicitly
 product integration or permission to retry/rebase. `--keep-work` also retains the
 private source snapshot. This command does not upload, deploy or install packages.
 
+### Missing historical generation identity
+
+After worktree, branch and local receipt retirement, the newest immutable report
+must contain both `workspace_head` and `resource_generation`. The generation is
+the random 64-hex admission token from the independently recorded resource
+intent, not a hash of the checkpoint or branch. A checkpoint SHA, ticket status,
+or `Devlegate-Execution` commit trailer cannot replace that proof. Reused
+checkpoints can retain an earlier execution's trailer. Missing latest proof is
+an error identifying the selected execution; an older successful report is not
+selected instead. Packaging errors are printed to stderr in terminals and when
+redirected, without a default traceback.
+
+Upgrading the installed runtime does not repair an old immutable report.
+Do not edit reports, create replacement receipts, or disturb the ticket's real
+runtime resources to make packaging succeed. For manually authorized dogfooding,
+independently check the exact checkpoint object and its contents, then create an
+isolated checkout outside all execution resources. For example, with `CHECKPOINT`
+set to that independently verified full commit ID and `SOURCE` to a local clone
+containing its objects, run these commands in a separate scratch directory:
+
+```sh
+git clone --no-hardlinks --no-checkout "$SOURCE" dogfood-source
+git -C dogfood-source checkout --detach "$CHECKPOINT"
+git -C dogfood-source submodule update --init --recursive
+git -C dogfood-source rev-parse HEAD
+git -C dogfood-source status --porcelain --untracked-files=all
+/path/to/developer/checkout/dev package arch --repo "$PWD/dogfood-source"
+```
+
+Compare the full printed HEAD with the authorized checkpoint and require empty
+status output before building; verify recursive submodule pins too. The package
+command enforces its normal clean-source preflight. Keep build output outside
+that checkout, or in its ignored output directory. This manual `--repo` package
+does not prove ticket ownership and does not make `--ticket` evidence valid.
+
+### Producer and installed-source identity
+
+The owner records the generation intent before creating execution resources.
+After worker group retirement, `runtime.py` adds that exact token to the report
+before saving the `checkpointing` WAL stage. Adding `workspace_head` preserves
+the token. Recovery (`recovery_workflow.py`) deserializes and replaces only the
+checkpoint field; the owner verifies the token against the independent intent
+before immutable lifecycle publication, including recovered reports. Missing or mismatched
+tokens are refused, not synthesized. This applies equally to completed,
+incomplete and blocked claims. Normal owner integration and cleanup retire
+resources without changing the committed report.
+
+For a suspected stale runtime, distinguish the executable used by the service
+from the developer checkout: record its executable hash, `devlegate version`,
+and the installed package's `BUILD-PROVENANCE.json` source commit and artifact
+hashes. Compare that source commit's producer code, not just its version string,
+with the checkout. A running service may still hold the previous executable
+after a package upgrade; use the normal owner restart procedure for future
+executions. `./dev package` itself uses the invoking checkout's `.venv` and
+`tools/build_distribution.py`, so installing a Debian package does not update
+that command.
+
+The supplied TASK-089 and TASK-155 historical omissions do not, by themselves,
+identify their producing executable. The current source's normal producer sets
+the token; recovery previously checked execution metadata without comparing the
+generation, which allowed deficient pending reports through that gate. Tests
+exercise actual owner publications, crash replay and retirement. Attributing
+those historical omissions specifically to version skew still requires the
+producing service's independently recorded installed-artifact identity; neither
+the current installed version nor a checkpoint trailer establishes it.
+
 `--keep-work` preserves the new temporary workspace on both success and
 failure. Its exact path is written to the build log and printed for
 non-interactive runs. It is useful for inspecting intermediate artifacts, build

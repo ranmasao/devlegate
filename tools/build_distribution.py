@@ -1567,19 +1567,35 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    ticket_errors = ()
     try:
         if args.ticket is not None:
             if args.repo_explicit:
                 raise DistributionError("--repo and --ticket are mutually exclusive")
             try:
-                from ticket_source import package_ticket
+                from ticket_source import TicketSourceError, package_ticket
             except ModuleNotFoundError:
-                from tools.ticket_source import package_ticket
+                from tools.ticket_source import TicketSourceError, package_ticket
+            from devlegate.execution_result import ExecutionReportError
+            from devlegate.execution_workspace import ExecutionWorkspaceError
+            from devlegate.runtime_locator import RuntimeLocatorError
+
+            ticket_errors = (TicketSourceError, ExecutionReportError,
+                             ExecutionWorkspaceError, RuntimeLocatorError)
             return package_ticket(args, Path(__file__).parents[1].resolve())
         return package(args)
     except Exception as error:
-        if not getattr(sys.stdout, "isatty", lambda: False)():
-            print(f"dev: package: {error}", file=sys.stderr)
+        category = ("ticket source refused" if isinstance(error, ticket_errors)
+                    else "build failed")
+        detail = str(error)
+        if isinstance(error, OSError):
+            detail = (f"{error.strerror or type(error).__name__}; "
+                      "check local file access and build tools")
+        elif (isinstance(error, ticket_errors)
+              and not isinstance(error, TicketSourceError)):
+            detail = ("independent execution/resource evidence could not be verified; "
+                      "check owner retirement and generation receipts")
+        print(f"dev: package: {category}: {detail}", file=sys.stderr)
         return 1
 
 
