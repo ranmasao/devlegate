@@ -1,0 +1,98 @@
+# Read-only clean inspection
+
+`devlegate clean inspect <ticket-id> --json` asks the running service owner for
+an informational snapshot. Table and YAML use the normal CLI output options.
+The command does not reset, retire, publish, adopt, or resume anything. A missing
+service is an error; inspection never starts another runtime or worker.
+
+## Structured interface
+
+The reusable owner-side entry point is
+`devlegate.clean_preview.inspect_clean(owner, ticket_id)`. Repository access must
+be on the service owner thread. IPC `clean-inspect` accepts only `ticket_id` and
+queues a non-durable observation through the existing operator admission slot.
+Busy, draining, and unavailable owners can refuse admission. No SQLite receipt
+is written for inspection, including refusals. Inspection bypasses the normal
+post-command status refresh, which has broader Git observation capabilities.
+
+The versioned result has these fields:
+
+- `schema`: `devlegate.clean-preview.v1`.
+- `informational`: always true; `mutation_authorized`: always false.
+- `snapshot_complete`: whether all required local/provenance/authority and exact
+  upstream observations were supported and free of conflicts. This does not
+  assert upstream continuity or eligibility to reset.
+- `identity`: the confirmation-bound snapshot described below.
+- `digest`: lowercase SHA-256, or null on incomplete/conflicting observations.
+- `blockers`: actionable refusal reasons and the remote continuity limitation.
+  These are presentation text, outside the digest.
+
+`identity` includes the exact canonical ticket ID, state, path, blob, control
+commit, configured workflow paths, dependency/workflow blob graph, and ticket
+transition history. `control_resource` binds the actual canonical checkout's
+registration, branch, common directory, and administrative directory; a matching
+HEAD in another repository is insufficient. Execution entries identify report blobs and
+publications, complete report contents, review/checkpoint attribution where
+available, independent generation intent, receipt/operation evidence hashes and
+filesystem identities, and the TASK-150 `ResourceProof`. Current inventory
+reports the configured path, registration, HEAD, dirty/locked/submodule state,
+local ref value, symbolic target, administrative conflicts, and upstream
+`observed`/`absent`/`unavailable` with the exact observed SHA when present.
+Unknown cleanliness or submodule integrity is explicit, never equivalent to
+clean. The runtime authority snapshot includes persisted pending ownership,
+worker identity, active worker count, owned execution ID, and lifecycle intent.
+Only cleanup presentation and rotating scan cursor fields are omitted.
+
+Immutable report history must have one unchanged publication and an exact
+lifecycle transition. Review attribution uses the existing review provenance
+boundary. Current working evidence must match its committed bytes; staged or
+untracked control evidence prevents a complete preview. Multiple executions are
+listed explicitly. There is no latest-filename/SHA fallback for missing,
+contradictory, or historical unbound generations. A legacy report can describe a
+checkpoint without proving resource ownership. Older superseded generations may
+therefore leave a preview incomplete and require an independent disposition.
+Accepted/abandoned state and retained disposition authority are visible; a
+review decision by itself does not prove product integration or retirement.
+Accepted/done tickets require a proven accepted review. Deleted historical
+artifacts and orphan reviews are blockers. For abandoned targets,
+`abandoned_disposition` includes canonical terminal artifact blobs and reuses the
+existing independent terminal proof against the retained abandonment journal.
+A missing journal is explicitly unsupported; inspection never recreates it.
+
+## Read-only boundary
+
+Git observations disable optional locks, fsmonitor, untracked cache writes,
+hooks, replace objects, and lazy fetching. No fetch is issued. Status is used
+only after independent local generation identity checks and after refusing
+configured clean/process filters. Recursive submodules pass the same gate;
+parent status does not implicitly inspect submodules first. Symlink substitution,
+foreign registrations, replaced same-SHA resources, changed/missing refs, locks,
+and interrupted Git administrative operations fail closed. No index, reflog,
+resource receipt, worker evidence, or runtime state is changed by inspection.
+The trusted local filesystem and configured remote transport have the same
+external-administrator boundary as the existing Git observation APIs.
+
+## Canonical digest and follow-on confirmation
+
+`canonical_digest(identity)` hashes ASCII JSON encoded with sorted object keys,
+compact separators, ASCII escaping, and no NaN values. Array order is meaningful.
+The schema is inside `identity` as well as the result envelope. Timing, request
+IDs, and display text are not added to this identity. An unchanged snapshot
+reproduces its digest. Identity/authority changes either change the digest or
+make inspection incomplete (null digest). Control and owner authority are
+checked again before returning. This is a point-in-time observation, not a
+lease against external writers.
+
+Plain Git can observe an exact upstream ref SHA or absence but cannot distinguish
+delete/recreate at the same name and SHA (remote ABA). `ResourceProof` therefore
+retains `state: unproven` for upstream continuity even when `local_state: proved`
+and `upstream_exact: true`. A complete preview still lists this limitation.
+
+TASK-130 confirmation must bind the schema and complete `identity` digest, exact
+ticket/control/blob, execution/report/generation, filesystem/resource identities,
+exact local and upstream ref values, and pending authority. It must reacquire the
+existing owner authority, reobserve these preconditions, reject stale or
+unsupported evidence, and apply its own WAL/CAS/lease guards and explicit remote
+continuity policy. TASK-131 must do the same for its own operations. The preview
+digest alone is never authorization to mutate, including when a caller can
+compute a valid digest for arbitrary JSON.

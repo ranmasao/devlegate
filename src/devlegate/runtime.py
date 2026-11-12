@@ -1192,6 +1192,16 @@ class ServiceEngine:
             mutable=apply,
         )
 
+    def submit_clean_inspect(self, ticket_id: str, *, request_id: str) -> dict:
+        """Queue a read-only owner observation, without a durable admission."""
+        return self._submit_operator_command(
+            method="clean-inspect", ticket_id=ticket_id, request_id=request_id,
+            fingerprint=_mutation_fingerprint(
+                "clean-inspect", {"ticket_id": ticket_id},
+            ),
+            mutable=False,
+        )
+
     def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
         """Return the last owner-published cleanup inventory.
 
@@ -2572,6 +2582,19 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
+                if command.method == "clean-inspect":
+                    from devlegate.clean_preview import inspect_clean
+
+                    try:
+                        command.admission_result = inspect_clean(
+                            self, command.ticket_id,
+                        )
+                    except (
+                        ValueError, RuntimeError, OSError, subprocess.SubprocessError,
+                        ExecutionWorkspaceError,
+                    ) as error:
+                        raise DevlegateError(str(error)) from error
+                    return
                 if self._lifecycle_drain_pending():
                     raise DevlegateError(
                         "service is draining; runtime command was not admitted"
@@ -9620,7 +9643,9 @@ class ServiceEngine:
                         self._admit_operator_command(operator_command)
                         status = (
                             0
-                            if operator_command.method == "cleanup-workspaces"
+                            if operator_command.method in {
+                                "cleanup-workspaces", "clean-inspect",
+                            }
                             else self._dispatch_operator_command(
                                 operator_command, stop_event
                             )
@@ -9743,7 +9768,9 @@ class ServiceEngine:
                         self._release_operator_command()
                     elif scheduler_active:
                         self._release_scheduler_iteration()
-                if operator_command is not None or scheduler_active:
+                if (operator_command is not None and operator_command.method != (
+                    "clean-inspect"
+                )) or scheduler_active:
                     try:
                         self.status_view()
                     except DevlegateError:

@@ -315,19 +315,23 @@ def _retry_daemon(
     return 0
 
 
-def _clean_daemon(env_file: Path, *, output_format: str) -> int:
+def _clean_daemon(
+    env_file: Path, *, output_format: str, ticket_id: str | None = None,
+) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         result = request(
             locator.socket_path,
-            "clean-status",
+            "clean-inspect" if ticket_id is not None else "clean-status",
+            {"ticket_id": ticket_id} if ticket_id is not None else {},
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     emit(
         result,
         output_format,
-        "workspace cleanup status",
+        (f"informational clean preview: {ticket_id}; no mutation authorized"
+         if ticket_id is not None else "workspace cleanup status"),
     )
     return 0
 
@@ -2711,6 +2715,11 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="show cleanup inventory without changing state"
     )
     add_output_arguments(clean_status_parser)
+    clean_inspect_parser = clean_commands.add_parser(
+        "inspect", help="read-only identity-bound ticket resource preview",
+    )
+    clean_inspect_parser.add_argument("ticket_id")
+    add_output_arguments(clean_inspect_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3182,6 +3191,7 @@ def main() -> int:
             return _clean_daemon(
                 env_file,
                 output_format=args.output_format,
+                ticket_id=getattr(args, "ticket_id", None),
             )
         if args.command == "abandonment-recover":
             return _abandonment_recover_daemon(
