@@ -123,3 +123,8 @@ operations retain their existing trusted Git capability and configuration.
 No historical binding is synthesized. An operator must investigate uncertain
 resources without deleting preserved evidence. There is no reset command,
 non-done retirement, generic replay, or new deletion authority here.
+
+# Operator preview
+
+See [clean inspection](clean-preview.md) for the owner-serialized CLI snapshot,
+canonical digest, refusal semantics, and follow-on confirmation contract.

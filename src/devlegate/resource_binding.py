@@ -1008,6 +1008,9 @@ class ResourceBinding:
                         "read-only cleanliness proof unsupported with configured "
                         "Git clean/process filters"
                     )
+                # Inspect each submodule through this same conversion gate
+                # before asking Git to read its worktree contents.
+                args = (*args, "--ignore-submodules=all")
             result = self.manager._runner(
                 repo, "--no-optional-locks", "-c", "core.fsmonitor=false",
                 "-c", "core.untrackedCache=false", *args, **kwargs,
