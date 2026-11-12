@@ -1,0 +1,30 @@
+{
+  "code_base_head": "0815412edf81d68a2c4c87be93b59306c2fbd676",
+  "conclusion": "completed",
+  "control_head": "511036b6688a4b470c3cf4c5b7f5f3284bf558d6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-160",
+  "execution_id": "a7d0ba57ac144e7781d7d256d5fdf813",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-160",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-160/a7d0ba57ac144e7781d7d256d5fdf813.md",
+  "report_sha256": "f790da6f6afe50a256647f891c55979a11535800e4504dbd033e6534922449e0",
+  "resource_generation": "4e976132d3658ab304f7903ebf6d193914985a1555b5e579ad5656e28021b4f9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-160",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Validation completed with ./dev coverage -n 4 --dist=worksteal: 1996 passed, 2 skipped. ./dev lint and git diff --check passed. Disposable real-Git tests cover supported fresh generations, resource and authority conflicts, historical unbound evidence, deterministic digests, submodules, disposition gaps, owner/IPC admission and filesystem/SQLite non-mutation.",
+    "summary": "Implemented owner-serialized `devlegate clean inspect <ticket-id> --json` with a versioned, identity-bound preview and canonical SHA-256 digest. The read-only interface correlates canonical ticket, report, review and abandonment provenance with independent ResourceBinding proof, exact resource/ref observations and pending owner authority, and documents the follow-on confirmation contract and remote ABA limitation."
+  },
+  "workspace_head": "a26f7256e0c569291a8c509336b533db74ff2e63"
+}
