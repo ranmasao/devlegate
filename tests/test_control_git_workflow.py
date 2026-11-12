@@ -253,6 +253,16 @@ def test_bootstrap_control_preserves_publish_and_refresh_order(
 
     monkeypatch.setattr(control_git_workflow, "add_worktree", add_worktree)
     monkeypatch.setattr(
+        control_git_workflow, "commit_parents", lambda *_args, **_kwargs: ()
+    )
+    monkeypatch.setattr(
+        control_git_workflow, "_validate_bootstrap_index",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        control_git_workflow, "working_tree_status", lambda *_args, **_kwargs: ""
+    )
+    monkeypatch.setattr(
         control_git_workflow,
         "add_all",
         lambda *_args, **_kwargs: trace.append("add") or result,

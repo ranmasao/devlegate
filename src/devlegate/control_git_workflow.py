@@ -31,6 +31,7 @@ from devlegate.git import (
     resolve_commit,
     working_tree_status,
     worktree_paths,
+    worktree_root,
 )
 from devlegate.git import (
     commit as git_commit,
@@ -258,13 +259,24 @@ def bootstrap_control(
                 raise ControlGitWorkflowError(
                     "partial control worktree belongs to another repository"
                 )
+            root = worktree_root(control_worktree, runner=runner)
+            if root != control_worktree.resolve():
+                raise ControlGitWorkflowError(
+                    "partial control worktree root is ambiguous"
+                )
             if branch_name(control_worktree, runner=runner) != control_branch:
                 raise ControlGitWorkflowError(
-                    "partial control worktree is on the wrong branch"
+                    "partial control worktree is on the wrong branch or detached; "
+                    "inspect its registration, HEAD and index before manual recovery; "
+                    "no existing evidence was removed"
                 )
             _validate_bootstrap_files(
                 control_worktree,
                 workflow_paths,
+                require_complete=local_branch,
+            )
+            _validate_bootstrap_index(
+                control_worktree, workflow_paths, runner=runner,
                 require_complete=local_branch,
             )
             if local_branch:
@@ -307,8 +319,10 @@ def bootstrap_control(
             runner=runner,
         )
         if created.returncode:
-            raise ControlGitWorkflowError(
-                f"cannot create fresh control worktree: {created.stderr.strip()}"
+            _fallback_orphan_worktree(
+                repo=repo, control_worktree=control_worktree,
+                branch_ref=branch_ref, remote_name=remote_name,
+                runner=runner, native_error=created.stderr.strip(),
             )
     for configured_path in workflow_paths.values():
         directory = control_worktree / configured_path
@@ -330,6 +344,16 @@ def bootstrap_control(
     published_head = resolve_commit(control_worktree, branch_ref, runner=runner)
     if published_head is None:
         raise ControlGitWorkflowError("initial control branch HEAD is unavailable")
+    if commit_parents(control_worktree, published_head, runner=runner) != ():
+        raise ControlGitWorkflowError("initial control branch is not a root commit")
+    _validate_bootstrap_files(control_worktree, workflow_paths, require_complete=True)
+    _validate_bootstrap_index(
+        control_worktree, workflow_paths, runner=runner, require_complete=True,
+    )
+    if working_tree_status(control_worktree, include_all_untracked=True, runner=runner):
+        raise ControlGitWorkflowError(
+            "initial control worktree has uncommitted changes"
+        )
     pushed = push_refs(
         control_worktree,
         remote_name,
@@ -367,6 +391,99 @@ def bootstrap_control(
         "result": "initialized_new_control_plane",
         "control_worktree": str(control_worktree),
     }
+
+
+def _fallback_orphan_worktree(
+    *, repo: Path, control_worktree: Path, branch_ref: str, remote_name: str,
+    runner: Callable[..., Any], native_error: str,
+) -> None:
+    """Isolated pre-2.42 bootstrap fallback, never an ordinary execution probe."""
+    usage = runner(repo, "worktree", "-h", check=False)
+    options = usage.stdout + usage.stderr
+    # Observe the command's actual option grammar, not versions or diagnostics.
+    if (
+        usage.returncode not in (0, 129)
+        or "worktree add " not in options
+        or "[--detach]" not in options
+        or "[--checkout]" not in options
+        or "--orphan" in options
+    ):
+        raise ControlGitWorkflowError(
+            f"cannot create fresh control worktree: {native_error}; "
+            "orphan option unavailable support was not proven"
+        )
+    try:
+        registered = set(worktree_paths(repo, runner=runner))
+        # lstat distinguishes absence from permission/IO failures and dangling links.
+        try:
+            control_worktree.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ControlGitWorkflowError(
+                "native worktree attempt left an existing target; inspect the path "
+                "and registration before manual recovery"
+            )
+        if control_worktree.resolve() in registered:
+            raise ControlGitWorkflowError(
+                "native worktree attempt left a registration; inspect it before "
+                "manual recovery"
+            )
+        if ref_exists(repo, branch_ref, runner=runner) or remote_ref(
+            repo, remote_name, branch_ref, runner=runner
+        ) is not None:
+            raise ControlGitWorkflowError("control ref appeared before fallback")
+    except (OSError, GitObservationError) as error:
+        raise ControlGitWorkflowError(
+            f"cannot prove fallback target is untouched: {error}"
+        ) from error
+    for cwd, args in (
+        (repo, ("worktree", "add", "--detach", "--no-checkout",
+                str(control_worktree), "HEAD")),
+        (control_worktree, ("symbolic-ref", "HEAD", branch_ref)),
+        (control_worktree, ("read-tree", "--empty")),
+    ):
+        result = runner(cwd, *args, check=False)
+        if result.returncode:
+            raise ControlGitWorkflowError(
+                f"control bootstrap fallback failed at {args[0]}: "
+                f"{result.stderr.strip()}; preserve and inspect the worktree, "
+                "HEAD and index before retrying"
+            )
+
+
+def _validate_bootstrap_index(
+    worktree: Path, workflow_paths: Mapping[str, str], *,
+    runner: Callable[..., Any], require_complete: bool,
+) -> None:
+    """Never overwrite an interrupted or foreign index with add-all."""
+    result = runner(worktree, "ls-files", "--stage", "-z", check=False)
+    if result.returncode:
+        raise ControlGitWorkflowError(
+            "cannot observe partial control index; inspect it"
+        )
+    expected = {str(Path(path) / ".gitkeep") for path in workflow_paths.values()}
+    observed: set[str] = set()
+    entries = result.stdout.split("\0")
+    if entries.pop() != "":
+        raise ControlGitWorkflowError("malformed partial control index")
+    for entry in entries:
+        metadata, separator, path = entry.partition("\t")
+        fields = metadata.split()
+        if (
+            not separator or len(fields) != 3 or fields[0] != "100644"
+            or fields[2] != "0" or path not in expected or path in observed
+        ):
+            raise ControlGitWorkflowError(
+                "partial control index is not the workflow skeleton; "
+                "inspect HEAD and index before manual recovery"
+            )
+        size = runner(worktree, "cat-file", "-s", fields[1], check=False)
+        if size.returncode or size.stdout.strip() != "0":
+            raise ControlGitWorkflowError("partial control index has nonempty blobs")
+        observed.add(path)
+    if require_complete and observed != expected:
+        raise ControlGitWorkflowError("partial control index has incomplete skeleton")
 
 
 def _validate_bootstrap_files(

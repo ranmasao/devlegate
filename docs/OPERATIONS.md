@@ -42,6 +42,23 @@ devlegate check
 `init` prepares project-owned setup; it does not start execution. The project
 owns its documentation and decides how generated changes are accepted.
 
+First control bootstrap uses `git worktree add --orphan` when available. With
+older Git (including stock Debian 12 Git 2.39), only a failed native attempt
+followed by usage-option proof of missing support can select the isolated
+fallback: `worktree add --detach --no-checkout`, `symbolic-ref HEAD` to the exact
+control ref, then `read-tree --empty`. Both paths create the same root workflow
+skeleton and publish with an absent-ref lease. The declared Git >=2.31 dependency
+is unchanged; this is not acceptance evidence for every distribution.
+
+The fallback never checks out product files. After interruption, a registered
+unborn control worktree with an empty or exact partial skeleton index can resume;
+an exact committed skeleton can retry publication. After publication, normal
+remote attach applies. A detached intermediate, foreign files/index, uncertain
+registration or failed observation stops initialization and preserves evidence.
+Inspect the reported path, Git worktree registration, HEAD and index before
+manual recovery; do not blindly remove or prune them. Capability probing is
+limited to failed first bootstrap, never existing attach or execution polls.
+
 ## Runtime Upgrades
 
 A package install does not replace code already loaded by a running service.
