@@ -1,0 +1,38 @@
+{
+  "code_base_head": "0815412edf81d68a2c4c87be93b59306c2fbd676",
+  "conclusion": "blocked",
+  "control_head": "c186968a6fa92539059bada8fdd0db2640ecb987",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-160",
+  "execution_id": "ef8148d722924587b553cfbd312e54dc",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-160",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must publish the revised checkpoint and trigger its GitHub CI check; can the owning lifecycle perform that required validation?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run GitHub CI, including Ruff, against the revised exact checkpoint and verify success."
+  ],
+  "report_artifact": "executions/TASK-160/ef8148d722924587b553cfbd312e54dc.md",
+  "report_sha256": "4d4c65d44c224e78b5efd655fb45a7422a99bb747be55978c3cada4e428e275e",
+  "resource_generation": "a217835a4b1ee12e3ead0fc3c4d22c9b0571b89c2da027b69e44df609eddcfcd",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-160",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must publish the revised checkpoint and trigger its GitHub CI check; can the owning lifecycle perform that required validation?"
+    ],
+    "remaining": [
+      "Run GitHub CI, including Ruff, against the revised exact checkpoint and verify success."
+    ],
+    "report": "Implementation and local validation are finished: ./dev coverage -n 4 --dist=worksteal passed with 2053 passed and 2 skipped; ./dev lint and git diff --check passed. The review additionally requires successful exact-checkpoint GitHub CI. This worker cannot create or publish that checkpoint under the Core Worker Contract, so that external validation remains pending.",
+    "summary": "Replaced blanket filter rejection with effective tracked-path attribute checks, allowing unused configured drivers while refusing active or ambiguous clean/process filters without invoking them. Added inherited-configuration and nested-submodule adversarial coverage, preserved configuration-location semantics, and documented the CI cause and read-only proof boundary."
+  },
+  "workspace_head": "54ca0a65bcb7cdf8bb3d0b7d1ae6caab704a782c"
+}
