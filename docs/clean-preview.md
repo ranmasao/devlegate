@@ -1,6 +1,6 @@
-# Read-only clean inspection
+# Read-only workspace inspection
 
-`devlegate clean inspect <ticket-id> --json` asks the running service owner for
+`devlegate inspect workspace <ticket-id> --json` asks the running service owner for
 an informational snapshot. Table and YAML use the normal CLI output options.
 The command does not reset, retire, publish, adopt, or resume anything. A missing
 service is an error; inspection never starts another runtime or worker.
@@ -9,7 +9,8 @@ service is an error; inspection never starts another runtime or worker.
 
 The reusable owner-side entry point is
 `devlegate.clean_preview.inspect_clean(owner, ticket_id)`. Repository access must
-be on the service owner thread. IPC `clean-inspect` accepts only `ticket_id` and
+be on the service owner thread. IPC `inspect` accepts exactly `object_type` and
+`object_id` (here `workspace` and the exact ticket ID) and
 queues a non-durable observation through the existing operator admission slot.
 Busy, draining, and unavailable owners can refuse admission. No SQLite receipt
 is written for inspection, including refusals. Inspection bypasses the normal
@@ -17,7 +18,7 @@ post-command status refresh, which has broader Git observation capabilities.
 
 The versioned result has these fields:
 
-- `schema`: `devlegate.clean-preview.v1`.
+- `schema`: `devlegate.inspect-workspace.v2`.
 - `informational`: always true; `mutation_authorized`: always false.
 - `snapshot_complete`: whether all required local/provenance/authority and exact
   upstream observations were supported and free of conflicts. This does not
@@ -39,9 +40,16 @@ reports the configured path, registration, HEAD, dirty/locked/submodule state,
 local ref value, symbolic target, administrative conflicts, and upstream
 `observed`/`absent`/`unavailable` with the exact observed SHA when present.
 Unknown cleanliness or submodule integrity is explicit, never equivalent to
-clean. The runtime authority snapshot includes persisted pending ownership,
-worker identity, active worker count, owned execution ID, and lifecycle intent.
-Only cleanup presentation and rotating scan cursor fields are omitted.
+clean. The runtime authority identity binds persisted pending ownership,
+worker identity, active worker count, owned execution ID, and lifecycle intent
+by canonical SHA-256, without publishing private runtime state. Only cleanup
+presentation and rotating scan cursor fields are omitted. The authority object
+contains `sha256` and `mutable_receipts_present`; the latter preserves the exact
+absent/empty receipt distinction during reset reobservation. This explicit v2
+schema change is shared by inspection and reset admission/replay. Independent
+intents likewise expose `remote_urls_sha256` instead of credential-bearing URL
+contents, binding the exact URL array without disclosing it. Previous-schema
+digests and retained intents are refused rather than migrated or adopted.
 
 Immutable report history must have one unchanged publication and an exact
 lifecycle transition. Review attribution uses the existing review provenance
@@ -121,7 +129,7 @@ and `upstream_exact: true`. A complete preview still lists this limitation.
 TASK-130 introduces an explicit operator request:
 
 ```sh
-devlegate clean inspect T-1 --json
+devlegate inspect workspace T-1 --json
 devlegate clean apply T-1 --plan-digest <digest> --generation <generation> \
   --request-id <unique-operator-request-id> --json
 ```

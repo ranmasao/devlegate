@@ -85,7 +85,8 @@ def test_owner_ipc_admission_does_not_persist_or_launch(owner, monkeypatch):
 
     def client():
         result.append(dispatch_request(owner, IPCRequest(
-            1, "preview-one", "clean-inspect", {"ticket_id": "T-1"},
+            1, "preview-one", "inspect",
+            {"object_type": "workspace", "object_id": "T-1"},
         )))
 
     thread = threading.Thread(target=client)
@@ -278,7 +279,7 @@ def test_absent_unexecuted_ticket_has_no_invented_binding(owner):
     assert snapshot(owner.repo.parent) == before
 
 
-def test_cli_clean_inspect_uses_existing_read_only_ipc(owner, monkeypatch, capsys):
+def test_cli_workspace_inspect_uses_existing_read_only_ipc(owner, monkeypatch, capsys):
     import devlegate.cli as cli
 
     expected = inspect_clean(owner, "T-1")
@@ -290,10 +291,10 @@ def test_cli_clean_inspect_uses_existing_read_only_ipc(owner, monkeypatch, capsy
 
     monkeypatch.setattr(cli, "request", request)
     monkeypatch.setattr(sys, "argv", [
-        "devlegate", "clean", "inspect", "T-1", "--json",
+        "devlegate", "inspect", "workspace", "T-1", "--json",
     ])
     assert cli.main() == 0
-    assert calls == [("clean-inspect", {"ticket_id": "T-1"})]
+    assert calls == [("inspect", {"object_type": "workspace", "object_id": "T-1"})]
     assert json.loads(capsys.readouterr().out) == expected
 
 
@@ -480,7 +481,7 @@ def test_unknown_ticket_refusal_on_owner_ipc_has_no_effect(owner):
     from devlegate.runtime import DevlegateError, OperatorCommand
 
     command = OperatorCommand(
-        request_id="missing", method="clean-inspect", fingerprint="fixture",
+        request_id="missing", method="inspect", onto="workspace", fingerprint="fixture",
         ticket_id="missing-ticket", mutable=False,
     )
     before = snapshot(owner.repo.parent)
@@ -547,7 +548,8 @@ def test_owner_run_loop_preview_avoids_status_refresh(owner, monkeypatch):
     from devlegate.runtime import OperatorCommand
 
     command = OperatorCommand(
-        request_id="loop-preview", method="clean-inspect", fingerprint="fixture",
+        request_id="loop-preview", method="inspect", onto="workspace",
+        fingerprint="fixture",
         ticket_id="T-1", mutable=False,
     )
     owner._operator_command = command

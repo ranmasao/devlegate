@@ -30,7 +30,7 @@ from devlegate.git import remote_ref, resolve_ref_commit
 from devlegate.resource_binding import ResourceBinding, _safe_path
 from devlegate.tickets import load_ticket_store, parse_ticket_text
 
-SCHEMA = "devlegate.clean-preview.v1"
+SCHEMA = "devlegate.inspect-workspace.v2"
 
 
 def canonical_digest(identity: dict) -> str:
@@ -108,6 +108,38 @@ def _authority(owner) -> dict:
         "active_workers": owner._workers.active_count,
         "lifecycle": owner._lifecycle_intent,
     }
+
+
+def authority_identity(authority: dict) -> dict:
+    """Bind private owner state without publishing runtime internals or secrets."""
+    return {
+        "sha256": canonical_digest(authority),
+        "mutable_receipts_present": "mutable_receipts" in authority["runtime"],
+    }
+
+
+def binding_identity(intent: dict) -> dict:
+    """Keep exact transport identity bound without disclosing URL credentials."""
+    identity = dict(intent)
+    urls = identity.pop("remote_urls", None)
+    identity["remote_urls_sha256"] = canonical_digest({"remote_urls": urls})
+    return identity
+
+
+def _working_evidence_blockers(control: Path, tree: dict[str, str]) -> list[str]:
+    """Missing/unsafe working copies cannot hide immutable committed evidence."""
+    blockers = []
+    for relative, oid in tree.items():
+        candidate = control / relative
+        try:
+            _safe_path(candidate)
+            if not stat.S_ISREG(candidate.stat().st_mode):
+                raise EvidenceError("not a regular working evidence file")
+            if candidate.read_bytes() != _blob(control, oid).encode("utf-8"):
+                blockers.append(f"working evidence differs: {relative}")
+        except (ValueError, RuntimeError, OSError, ExecutionWorkspaceError) as error:
+            blockers.append(f"working evidence unavailable: {relative}: {error}")
+    return blockers
 
 
 def _control_identity(owner, control: Path, head: str) -> dict:
@@ -231,7 +263,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         "workflow": dict(sorted(workflow.items())),
         "control_resource": control_identity,
         "dependency_graph": tree,
-        "authority": _authority(owner),
+        "authority": authority_identity(_authority(owner)),
         "executions": [],
     }
     index = observe_git(
@@ -248,15 +280,12 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         "--", *(f"{p}/{ticket_id}.md" for p in workflow.values()),
     ).stdout
     # Observe working control bytes with no Git conversion. Never follow links.
-    for relative, oid in tree.items():
-        candidate = control / relative
-        _safe_path(candidate)
-        if not stat.S_ISREG(candidate.stat().st_mode):
-            raise EvidenceError(f"non-regular working control evidence: {relative}")
-        if candidate.read_bytes() != _blob(control, oid).encode("utf-8"):
-            blockers.append(f"control working evidence differs: {relative}")
-    load_ticket_store(control, workflow)
-    runtime = identity["authority"]["runtime"]
+    blockers.extend(_working_evidence_blockers(control, tree))
+    try:
+        load_ticket_store(control, workflow)
+    except (ValueError, OSError) as error:
+        blockers.append(f"working ticket graph unavailable: {error}")
+    runtime = _authority(owner)["runtime"]
     if state == "abandoned":
         disposition = _abandoned_disposition(owner, head, ticket_id)
         identity["abandoned_disposition"] = disposition
@@ -362,13 +391,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
     reports = _tree(control, head, f"executions/{ticket_id}")
     artifacts = _tree(control, head, f"executions/{ticket_id}", f"reviews/{ticket_id}")
     identity["artifacts"] = artifacts
-    for relative, oid in artifacts.items():
-        candidate = control / relative
-        _safe_path(candidate)
-        if not stat.S_ISREG(candidate.stat().st_mode):
-            raise EvidenceError(f"non-regular working execution evidence: {relative}")
-        if candidate.read_bytes() != _blob(control, oid).encode("utf-8"):
-            blockers.append(f"working report/review evidence differs: {relative}")
+    blockers.extend(_working_evidence_blockers(control, artifacts))
     historical_paths = observe_git(
         control, "log", "--format=", "--name-only", head, "--",
         f"executions/{ticket_id}", f"reviews/{ticket_id}",
@@ -433,7 +456,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
                     binding.intent["ticket_blob"]
                 ):
                     raise EvidenceError("generation ticket blob differs from admission")
-                entry["intent"] = binding.intent
+                entry["intent"] = binding_identity(binding.intent)
                 evidence = {}
                 for evidence_path in sorted(binding.directory.rglob("*")):
                     _safe_path(evidence_path)
@@ -515,7 +538,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         resolve_ref_commit(
             owner.repo, f"refs/heads/{owner.control_branch}", runner=observe_git,
         ) != head
-    ) or _authority(owner) != identity["authority"]:
+    ) or authority_identity(_authority(owner)) != identity["authority"]:
         raise EvidenceError("control or owner authority changed during preview")
     if _control_identity(owner, control, head) != control_identity:
         raise EvidenceError("control registration changed during preview")

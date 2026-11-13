@@ -9,7 +9,15 @@ import json
 import re
 from pathlib import Path
 
-from devlegate.clean_preview import SCHEMA, canonical_digest, inspect_clean, observe_git
+from devlegate.clean_preview import (
+    SCHEMA,
+    _authority,
+    authority_identity,
+    binding_identity,
+    canonical_digest,
+    inspect_clean,
+    observe_git,
+)
 from devlegate.execution_workspace import ExecutionWorkspaceManager
 from devlegate.git import remote_ref, resolve_ref_commit
 from devlegate.resource_binding import ResourceBinding, _identity, _read, _safe_path
@@ -175,16 +183,17 @@ def _reobserve(owner, intent):
     runtime.pop("clean_reset_intent")
     receipts = runtime["mutable_receipts"]
     receipts.pop(intent["request_id"])
-    old_runtime = expected["authority"]["runtime"]
-    if "mutable_receipts" not in old_runtime and not receipts:
+    if not expected["authority"]["mutable_receipts_present"] and not receipts:
         runtime.pop("mutable_receipts")
     for key in ("workspace_cleanup", "workspace_cleanup_cursor"):
         runtime.pop(key, None)
-    if runtime != old_runtime:
+    authority = _authority(owner)
+    authority["runtime"] = runtime
+    if authority_identity(authority) != expected["authority"]:
         raise ValueError("clean reset owner authority changed")
     preview = inspect_clean(owner, expected["ticket"]["id"], _evidence_only=True)
     observed = preview["identity"]
-    observed["authority"]["runtime"] = runtime
+    observed["authority"] = authority_identity(authority)
     if not preview["snapshot_complete"] or (
         _stable_identity(observed) != _stable_identity(expected)
     ):
@@ -196,7 +205,7 @@ def _reobserve(owner, intent):
         runner=observe_git,
     )
     binding = ResourceBinding.for_execution(manager, entry["intent"]["execution_id"])
-    if binding.intent != entry["intent"]:
+    if binding_identity(binding.intent) != entry["intent"]:
         raise ValueError("clean reset generation changed")
     binding._validate_intent()
     binding._require_settled()

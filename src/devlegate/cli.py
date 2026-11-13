@@ -316,23 +316,37 @@ def _retry_daemon(
 
 
 def _clean_daemon(
-    env_file: Path, *, output_format: str, ticket_id: str | None = None,
+    env_file: Path, *, output_format: str,
 ) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         result = request(
             locator.socket_path,
-            "clean-inspect" if ticket_id is not None else "clean-status",
-            {"ticket_id": ticket_id} if ticket_id is not None else {},
+            "clean-status", {},
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     emit(
         result,
         output_format,
-        (f"informational clean preview: {ticket_id}; no mutation authorized"
-         if ticket_id is not None else "workspace cleanup status"),
+        "workspace cleanup status",
     )
+    return 0
+
+
+def _inspect_daemon(env_file: Path, args) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        result = request(locator.socket_path, "inspect", {
+            "object_type": args.object_type,
+            "object_id": getattr(args, "object_id", None),
+        })
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    rows = [(key, json.dumps(value, sort_keys=True))
+            for key, value in result.items()]
+    emit(result, args.output_format,
+         render_grid("Read-only inspection", ("Field", "Observation"), rows))
     return 0
 
 
@@ -2734,11 +2748,16 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="show cleanup inventory without changing state"
     )
     add_output_arguments(clean_status_parser)
-    clean_inspect_parser = clean_commands.add_parser(
-        "inspect", help="read-only identity-bound ticket resource preview",
+    inspect_parser = commands.add_parser("inspect", help="inspect an exact object")
+    add_output_arguments(inspect_parser)
+    inspect_commands = inspect_parser.add_subparsers(
+        dest="object_type", required=True, parser_class=DevlegateArgumentParser,
     )
-    clean_inspect_parser.add_argument("ticket_id")
-    add_output_arguments(clean_inspect_parser)
+    for object_type in ("ticket", "execution", "workspace", "service"):
+        object_parser = inspect_commands.add_parser(object_type)
+        if object_type != "service":
+            object_parser.add_argument("object_id")
+        add_output_arguments(object_parser)
     clean_apply_parser = clean_commands.add_parser(
         "apply", help="confirm an exact preview and persist pre-effect reset intent",
     )
@@ -3220,8 +3239,9 @@ def main() -> int:
             return _clean_daemon(
                 env_file,
                 output_format=args.output_format,
-                ticket_id=getattr(args, "ticket_id", None),
             )
+        if args.command == "inspect":
+            return _inspect_daemon(env_file, args)
         if args.command == "abandonment-recover":
             return _abandonment_recover_daemon(
                 env_file, args.ticket_id, args.execution_id, args.observed_head,

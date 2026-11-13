@@ -74,13 +74,17 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
                 "invalid_request", "clean status does not accept options"
             )
         return engine.workspace_cleanup_status()
-    if request.method == "clean-inspect":
-        if set(request.payload) != {"ticket_id"} or not isinstance(
-            request.payload["ticket_id"], str
-        ) or not request.payload["ticket_id"]:
-            raise IPCProtocolError("invalid_request", "invalid clean inspect ticket ID")
-        return engine.submit_clean_inspect(
-            request.payload["ticket_id"], request_id=request.request_id,
+    if request.method == "inspect":
+        from devlegate.inspection import validate_identity
+
+        if set(request.payload) != {"object_type", "object_id"}:
+            raise IPCProtocolError("invalid_request", "invalid inspection fields")
+        try:
+            validate_identity(**request.payload)
+        except ValueError as error:
+            raise IPCProtocolError("invalid_request", str(error)) from error
+        return engine.submit_inspect(
+            **request.payload, request_id=request.request_id,
         )
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 

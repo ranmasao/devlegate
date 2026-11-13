@@ -125,7 +125,7 @@ own preflight, with parent status ignoring submodules. No filter is invoked to
 establish applicability, and no conversion configuration is disabled to obtain
 a clean result. The earlier blanket configuration guard falsely rejected
 pristine GitHub CI worktrees with inherited unused filter configuration; see
-[clean inspection](clean-preview.md) for the corrected semantics. Ordinary owner
+[workspace inspection](clean-preview.md) for the corrected semantics. Ordinary owner
 operations retain their existing trusted Git capability and configuration.
 
 No historical binding is synthesized. An operator must investigate uncertain
@@ -134,5 +134,5 @@ non-done retirement, generic replay, or new deletion authority here.
 
 # Operator preview
 
-See [clean inspection](clean-preview.md) for the owner-serialized CLI snapshot,
+See [workspace inspection](clean-preview.md) for the owner-serialized CLI snapshot,
 canonical digest, refusal semantics, and follow-on confirmation contract.

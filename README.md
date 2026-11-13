@@ -163,6 +163,8 @@ Current limits:
 
 - [Project Setup](docs/PROJECT_SETUP.md): attach Devlegate to an existing project.
 - [Operations](docs/OPERATIONS.md): addressing, services, status, logs, and recovery.
+- [Object Inspection](docs/inspect.md): read-only ticket, execution, workspace,
+  and service views.
 - [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
 - [Abandonment foundations](docs/abandonment.md): request schema, bounded evidence,
   and the current execution/finalization limitation.
