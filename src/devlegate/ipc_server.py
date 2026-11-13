@@ -92,6 +92,18 @@ def dispatch_mutation(
     lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
+    if request.method == "clean-apply":
+        fields = {"ticket_id", "plan_digest", "generation"}
+        if set(request.payload) != fields or not all(
+            isinstance(request.payload[k], str) and request.payload[k] for k in fields
+        ):
+            raise IPCProtocolError(
+                "invalid_request", "clean apply confirmation is incomplete"
+            )
+        return engine.submit_clean_apply(
+            request.payload["ticket_id"], request.payload["plan_digest"],
+            request.payload["generation"], request_id=request.request_id,
+        )
     if request.method in {"stop", "restart"}:
         allowed = {"force"}
         if set(request.payload) - allowed:

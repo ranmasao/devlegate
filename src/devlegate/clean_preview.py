@@ -268,7 +268,7 @@ def inspect_clean(owner, ticket_id: str) -> dict:
             any(token in key for token in (
                 "pending", "reconciliation", "recovery", "retry", "retirement",
                 "integration", "resume_required", "abandonment", "publication",
-                "drop_intent",
+                "drop_intent", "reset_intent",
             ))
         ) and value not in ({}, [], False):
             blockers.append(f"resolve or verify retained runtime authority: {key}")

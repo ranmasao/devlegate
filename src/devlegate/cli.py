@@ -336,6 +336,25 @@ def _clean_daemon(
     return 0
 
 
+def _clean_apply_daemon(env_file: Path, args) -> int:
+    try:
+        locator = RuntimeLocator.from_env(env_file)
+        result = request(
+            locator.socket_path, "clean-apply", {
+                "ticket_id": args.ticket_id, "plan_digest": args.plan_digest,
+                "generation": args.generation,
+            }, mutable=True, request_id=args.request_id,
+        )
+    except (RuntimeLocatorError, IPCClientError) as error:
+        raise DevlegateError(str(error)) from error
+    emit(
+        result, args.output_format,
+        f"reset authorized at pre-effect boundary: {args.ticket_id}; "
+        "no resources deleted",
+    )
+    return 0
+
+
 def _drop_daemon(env_file: Path, ticket_id: str | None, output_format: str) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -2720,6 +2739,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     clean_inspect_parser.add_argument("ticket_id")
     add_output_arguments(clean_inspect_parser)
+    clean_apply_parser = clean_commands.add_parser(
+        "apply", help="confirm an exact preview and persist pre-effect reset intent",
+    )
+    clean_apply_parser.add_argument("ticket_id")
+    clean_apply_parser.add_argument("--plan-digest", required=True)
+    clean_apply_parser.add_argument("--generation", required=True)
+    clean_apply_parser.add_argument("--request-id", required=True)
+    add_output_arguments(clean_apply_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3188,6 +3215,8 @@ def main() -> int:
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "clean":
+            if args.clean_command == "apply":
+                return _clean_apply_daemon(env_file, args)
             return _clean_daemon(
                 env_file,
                 output_format=args.output_format,

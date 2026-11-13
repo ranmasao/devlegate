@@ -28,7 +28,9 @@ class RuntimeStore(Protocol):
 
     def observe(self) -> tuple[object, str]: ...
 
-    def replace(self, state: dict[str, object]) -> None: ...
+    def replace(
+        self, state: dict[str, object], *, expected_revision: str | None = None,
+    ) -> None: ...
 
 
 class SQLiteRuntimeStore:
@@ -190,7 +192,9 @@ class SQLiteRuntimeStore:
     def _commit(self, connection: sqlite3.Connection) -> None:
         connection.commit()
 
-    def replace(self, state: dict[str, object]) -> None:
+    def replace(
+        self, state: dict[str, object], *, expected_revision: str | None = None,
+    ) -> None:
         payload = json.dumps(state, sort_keys=True)
         connection = None
         try:
@@ -200,6 +204,11 @@ class SQLiteRuntimeStore:
             row = connection.execute(
                 "SELECT revision FROM runtime_state WHERE id = 1"
             ).fetchone()
+            observed_revision = "missing" if row is None else f"sqlite:{row[0]}"
+            if expected_revision is not None and expected_revision != observed_revision:
+                raise RuntimeStoreError(
+                    "runtime state generation changed before intent commit"
+                )
             revision = 1 if row is None else row[0] + 1
             if row is None:
                 connection.execute(

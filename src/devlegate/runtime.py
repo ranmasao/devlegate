@@ -526,6 +526,9 @@ class OperatorCommand:
     force: bool = False
     mutable: bool = True
     resolution_class: str | None = None
+    plan_digest: str | None = None
+    generation: str | None = None
+    reset_intent: dict[str, object] | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -1202,6 +1205,19 @@ class ServiceEngine:
             mutable=False,
         )
 
+    def submit_clean_apply(
+        self, ticket_id: str, plan_digest: str, generation: str, *, request_id: str,
+    ) -> dict:
+        """Explicit operator confirmation, serialized with scheduler admission."""
+        return self._submit_operator_command(
+            method="clean-apply", ticket_id=ticket_id, request_id=request_id,
+            plan_digest=plan_digest, generation=generation,
+            fingerprint=_mutation_fingerprint("clean-apply", {
+                "ticket_id": ticket_id, "plan_digest": plan_digest,
+                "generation": generation,
+            }),
+        )
+
     def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
         """Return the last owner-published cleanup inventory.
 
@@ -1236,9 +1252,15 @@ class ServiceEngine:
         rewrite_published: bool = False,
         force: bool = False,
         mutable: bool = True,
+        plan_digest: str | None = None,
+        generation: str | None = None,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
+            if mutable and self._state_write_uncertain:
+                raise DevlegateError(
+                    "runtime state write outcome uncertain; restart required"
+                )
             if self._service_shutdown.is_set() or (
                 self._stop_event is not None and self._stop_event.is_set()
             ):
@@ -1259,7 +1281,7 @@ class ServiceEngine:
                     raise DevlegateError(
                         f"request id collision: {method} request semantics differ"
                     )
-                if method == "cleanup-workspaces" and isinstance(
+                if method in {"cleanup-workspaces", "clean-apply"} and isinstance(
                     receipt.get("result"), dict
                 ):
                     return dict(receipt["result"])
@@ -1303,6 +1325,8 @@ class ServiceEngine:
                     rewrite_published=rewrite_published,
                     force=force,
                     mutable=mutable,
+                    plan_digest=plan_digest,
+                    generation=generation,
                 )
                 self._operator_command = command
                 new_command = True
@@ -2137,6 +2161,25 @@ class ServiceEngine:
             )
 
     def _validate_operator_admission(self, command: OperatorCommand) -> None:
+        if self._state_write_uncertain:
+            raise DevlegateError(
+                "runtime state write outcome uncertain; restart required"
+            )
+        if self._state.get("clean_reset_intent") is not None:
+            raise DevlegateError(
+                "clean reset intent is held at the pre-effect boundary"
+            )
+        if command.method == "clean-apply":
+            from devlegate.clean_reset import prepare_reset
+
+            try:
+                command.reset_intent = prepare_reset(
+                    self, command.ticket_id, command.plan_digest, command.generation,
+                )
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError,
+                    ExecutionWorkspaceError) as error:
+                raise DevlegateError(str(error)) from error
+            return
         if command.method == "abandonment-recover":
             try:
                 self._validate_abandonment_recovery(command)
@@ -2317,6 +2360,31 @@ class ServiceEngine:
 
     def _record_operator_admission(self, command: OperatorCommand) -> None:
         if not command.mutable:
+            return
+        if command.method == "clean-apply":
+            from devlegate.clean_reset import reset_ack
+
+            if command.reset_intent is None:
+                raise DevlegateError("clean reset authorization is missing")
+            intent = {
+                **command.reset_intent, "request_id": command.request_id,
+                "fingerprint": command.fingerprint,
+            }
+            result = reset_ack(intent)
+            with self._receipt_lock:
+                receipts = self._state.get("mutable_receipts", {})
+                if not isinstance(receipts, dict):
+                    raise DevlegateError("invalid mutable request receipt state")
+                updated = {**receipts, command.request_id: {
+                    "method": command.method, "fingerprint": command.fingerprint,
+                    "ticket_id": command.ticket_id, "accepted": True,
+                    "result": result,
+                }}
+                self._save_state(
+                    "idle", clean_reset_intent=intent, mutable_receipts=updated,
+                    expected_store_revision=intent["runtime_revision"],
+                )
+            command.admission_result = result
             return
         if command.method == "drop":
             self._drop_owned(command.ticket_id, command.execution_id)
@@ -2606,6 +2674,8 @@ class ServiceEngine:
                     )
                 recording = True
                 self._record_operator_admission(command)
+                if command.method == "clean-apply":
+                    return
                 if command.method == "cleanup-workspaces":
                     assert command.onto is not None
                     result = self.cleanup_workspaces(
@@ -3439,6 +3509,7 @@ class ServiceEngine:
         preserve_resume_required: bool,
         clear_pre_worker_generation: bool,
         clear_operator_recovery: bool,
+        expected_store_revision: str | None = None,
         **fields: object,
     ) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -3526,7 +3597,12 @@ class ServiceEngine:
                 raise DevlegateError("forced lifecycle interruption requires recovery")
         self._validate_state_invariant(state)
         try:
-            self._runtime_store.replace(state)
+            if expected_store_revision is None:
+                self._runtime_store.replace(state)
+            else:
+                self._runtime_store.replace(
+                    state, expected_revision=expected_store_revision,
+                )
         except RuntimeStoreError as error:
             self._state_write_uncertain = True
             raise DevlegateError(str(error)) from error
@@ -3629,6 +3705,10 @@ class ServiceEngine:
 
     def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""
+        if self._state.get("clean_reset_intent") is not None:
+            raise WorkflowBlockedError(
+                "clean reset intent is held at the pre-effect boundary"
+            )
         intent = intent or IterationIntent()
         authorization = (
             ExecutionAuthorization(
@@ -7476,6 +7556,10 @@ class ServiceEngine:
         historical: bool = False,
     ) -> dict[str, object]:
         """List, or apply, a bounded cleanup of proven done-ticket worktrees."""
+        if apply and self._state.get("clean_reset_intent") is not None:
+            raise WorkflowBlockedError(
+                "clean reset intent is held at the pre-effect boundary"
+            )
         if limit < 1:
             raise ValueError("workspace cleanup limit must be positive")
         registrations = ExecutionWorkspaceManager(
@@ -9644,7 +9728,7 @@ class ServiceEngine:
                         status = (
                             0
                             if operator_command.method in {
-                                "cleanup-workspaces", "clean-inspect",
+                                "cleanup-workspaces", "clean-inspect", "clean-apply",
                             }
                             else self._dispatch_operator_command(
                                 operator_command, stop_event

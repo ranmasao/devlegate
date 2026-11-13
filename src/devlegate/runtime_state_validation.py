@@ -5,6 +5,7 @@
 
 from devlegate.abandonment_admission import AbandonmentAdmission
 from devlegate.abandonment_evidence import EvidenceError
+from devlegate.clean_reset import validate_reset_intent
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
 from devlegate.worker_supervisor import WorkerProcessIdentity
@@ -86,6 +87,10 @@ def _worker_identity_from_value(
 
 
 def validate_state_invariant(state: dict[str, object]) -> None:
+    try:
+        validate_reset_intent(state)
+    except ValueError as error:
+        raise DevlegateError(str(error)) from error
     phase = state["phase"]
     admission = state.get("abandonment_admission")
     if admission is not None:

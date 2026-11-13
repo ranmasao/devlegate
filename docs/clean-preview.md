@@ -116,11 +116,57 @@ delete/recreate at the same name and SHA (remote ABA). `ResourceProof` therefore
 retains `state: unproven` for upstream continuity even when `local_state: proved`
 and `upstream_exact: true`. A complete preview still lists this limitation.
 
-TASK-130 confirmation must bind the schema and complete `identity` digest, exact
-ticket/control/blob, execution/report/generation, filesystem/resource identities,
-exact local and upstream ref values, and pending authority. It must reacquire the
-existing owner authority, reobserve these preconditions, reject stale or
-unsupported evidence, and apply its own WAL/CAS/lease guards and explicit remote
-continuity policy. TASK-131 must do the same for its own operations. The preview
-digest alone is never authorization to mutate, including when a caller can
-compute a valid digest for arbitrary JSON.
+## Operator confirmation (authorization and intent only)
+
+TASK-130 introduces an explicit operator request:
+
+```sh
+devlegate clean inspect T-1 --json
+devlegate clean apply T-1 --plan-digest <digest> --generation <generation> \
+  --request-id <unique-operator-request-id> --json
+```
+
+Copy `digest` from a complete preview and `generation` from the unique execution
+whose `proof.local_state` is `proved` (`identity.executions[].intent.generation`).
+The CLI requires both values and a caller-retained request ID; there is no
+implicit confirmation or worker-facing apply capability. The operator IPC
+method is `clean-apply`, with exactly `ticket_id`, `plan_digest`, and `generation`.
+
+The request enters the existing ServiceEngine owner/admission queue. Scheduler
+contention and other request IDs receive a not-admitted busy response; duplicate
+in-flight IDs share the admission result. Reusing an ID with different arguments
+is rejected. The owner observes the complete identity again, including schema,
+ticket state/blob/control HEAD, execution/report/generation, worktree identity,
+exact local/upstream refs and owner authority. Mutable admission also captures
+the durable runtime revision and checks it against the live owner state. A null
+digest, stale identity, unavailable evidence, active worker, non-idle phase, or
+pending integration/retry/recovery/reconciliation/retirement/lifecycle authority
+refuses authorization. Only inactive `backlog`, `done`, or proved `abandoned`
+states are eligible; `todo`, `review`, and `accepted` remain active. Backlog state
+or age alone grants no authority, and an unexecuted ticket has no proved resource.
+
+The owner atomically persists the full identity-bound `clean_reset_intent` and
+its accepted mutable receipt in the existing SQLite WAL/FULL state transaction.
+The write compares the observed runtime revision inside `BEGIN IMMEDIATE`;
+intervening writes cannot be overwritten by this intent. In-memory acceptance
+and the acknowledgement follow successful commit. Any uncertain write outcome
+requires restart before another mutable request. Retry the **same request ID
+and exact arguments** after restart to recover a committed acknowledgement or
+attempt admission again if nothing committed. A stale uncommitted request must
+be replaced by a fresh inspection and a new confirmation ID.
+
+The response is `status: authorized-pre-effect`, `effects_performed: false`.
+This implementation performs no deletion, reset, ticket movement, or publication.
+The retained intent blocks scheduler work, other operator mutations, and applying
+workspace cleanup. Restart validates the identity digest, generation, fingerprint,
+and matching durable receipt and restores this hold; it never replays effects.
+Missing or inconsistent authorization/receipt evidence fails closed. This is an
+intentional pre-effect endpoint pending independently reviewed TASK-131 support.
+TASK-130 changes require independent review before downstream reset work proceeds.
+
+The persisted remote policy is
+`exact-observation-only-no-continuity-claim`: confirmation binds the currently
+observed remote SHA and URL evidence but does not assert remote ABA continuity
+or grant remote deletion authority. TASK-131 must revalidate all identities and
+introduce its own pre-effect lease/CAS guards and remote disposal policy before
+any effects. No preview or stored confirmation is a perpetual resource lease.
