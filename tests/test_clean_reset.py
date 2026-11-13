@@ -53,7 +53,7 @@ def admit(engine, payload):
     return cmd.admission_result
 
 
-def test_durable_intent_has_no_resource_effect_and_restart_holds(owner):
+def test_durable_intent_has_no_resource_effect_until_scheduler_replay(owner):
     payload = confirmation(owner)
     before = snapshot(owner.execution_worktree_root / "work")
     remote = git(owner.repo, "ls-remote", "origin").stdout
@@ -71,11 +71,11 @@ def test_durable_intent_has_no_resource_effect_and_restart_holds(owner):
             **{**payload, "generation": "f" * 64}, request_id="reset-one",
         )
     with pytest.raises(DevlegateError, match="pre-effect"):
-        restored.run_iteration()
-    with pytest.raises(DevlegateError, match="pre-effect"):
         restored.cleanup_workspaces(apply=True)
     assert snapshot(owner.execution_worktree_root / "work") == before
     assert git(owner.repo, "ls-remote", "origin").stdout == remote
+    assert restored.run_iteration() == 0
+    assert restored._state["clean_reset_intent"]["status"] == "completed"
 
 
 @pytest.mark.parametrize("change", ["digest", "generation", "ticket", "control",

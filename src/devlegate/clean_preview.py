@@ -185,8 +185,13 @@ def _abandoned_disposition(owner, head: str, ticket_id: str) -> dict:
     return result
 
 
-def inspect_clean(owner, ticket_id: str) -> dict:
-    """Observe one exact canonical ticket under the existing service owner."""
+def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dict:
+    """Observe one exact canonical ticket under the existing service owner.
+
+    Internal evidence-only snapshots support the reset journal after resource
+    retirement. They omit resource proofs and are never admission authority;
+    clean_reset must independently prove each stage's exact resource state.
+    """
     owner._assert_repository_owner()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", ticket_id):
         raise EvidenceError("invalid canonical ticket ID")
@@ -264,6 +269,8 @@ def inspect_clean(owner, ticket_id: str) -> dict:
     ) is not None or "worker_identity" not in runtime:
         blockers.append("worker ownership is present or not proven absent")
     for key, value in runtime.items():
+        if _evidence_only and key == "clean_reset_intent":
+            continue
         if value is not None and (
             any(token in key for token in (
                 "pending", "reconciliation", "recovery", "retry", "retirement",
@@ -444,6 +451,8 @@ def inspect_clean(owner, ticket_id: str) -> dict:
                     elif not stat.S_ISDIR(metadata.st_mode):
                         raise EvidenceError("non-regular independent resource evidence")
                 entry["generation_evidence"] = evidence
+                if _evidence_only:
+                    continue
                 try:
                     workspace = binding.require_local(clean=False, read_only=True)
                     entry["current"] = dataclasses.asdict(workspace)
@@ -493,7 +502,7 @@ def inspect_clean(owner, ticket_id: str) -> dict:
     # selecting disposal scope is a separate future owner-authorized operation.
     proved = [entry for entry in identity["executions"]
               if entry.get("proof", {}).get("local_state") == "proved"]
-    if len(proved) != 1:
+    if not _evidence_only and len(proved) != 1:
         blockers.append("current resource has no unique proved report generation")
     if state in {"accepted", "done"} and not any(
         entry.get("review", {}).get("decision") == "accepted"

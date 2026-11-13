@@ -3706,9 +3706,14 @@ class ServiceEngine:
     def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""
         if self._state.get("clean_reset_intent") is not None:
-            raise WorkflowBlockedError(
-                "clean reset intent is held at the pre-effect boundary"
-            )
+            from devlegate.clean_reset import advance_reset
+
+            try:
+                advance_reset(self)
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError,
+                    ExecutionWorkspaceError) as error:
+                raise WorkflowBlockedError(f"clean reset blocked: {error}") from error
+            return 0
         intent = intent or IterationIntent()
         authorization = (
             ExecutionAuthorization(
