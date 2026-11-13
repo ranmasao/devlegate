@@ -1,0 +1,30 @@
+{
+  "code_base_head": "5934d154e876c81d07a59331d99a07353767ff3e",
+  "conclusion": "completed",
+  "control_head": "6a5f3f3c6f480ee8b302f51080f031146bdb04c1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-161",
+  "execution_id": "0b7111695e954a029dbffcafb99620a4",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-161",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-161/0b7111695e954a029dbffcafb99620a4.md",
+  "report_sha256": "cdb7a649c7b77051fe89f83864c50182eff931df93c63cc242478431938573a1",
+  "resource_generation": "33d55d0c4dcb28d5a5d558ccd5bc387fd0cdf5b4fee693f4adc22fdabb8290bf",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-161",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Configured coverage run passed with 2175 tests passed and 2 skipped. After the final missing/unsafe working-evidence handling improvement, all 225 focused inspection, preview, reset authorization, and reset effect tests passed. Final Ruff and git diff --check passed. No Git lifecycle operations or actual managed ticket resources were modified.",
+    "summary": "Added universal read-only ticket, execution, workspace, and service inspection through the existing owner-serialized IPC path, replacing the public clean inspect command. Introduced a coordinated workspace v2 identity contract that hashes private authority and remote URL evidence while preserving reset identity binding, and added exact-object history, explicit unproven states, regression coverage, and operator documentation."
+  },
+  "workspace_head": "b8e477ecad66dbe3bb085c221d57186b70404324"
+}
