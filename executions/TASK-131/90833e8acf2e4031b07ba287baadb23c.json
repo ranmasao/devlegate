@@ -1,0 +1,30 @@
+{
+  "code_base_head": "33da3ed6e38ca61896ca0b997b19039d1e37c64b",
+  "conclusion": "completed",
+  "control_head": "00f1442bb1704a7699076517e450bf0a965df51e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-131",
+  "execution_id": "90833e8acf2e4031b07ba287baadb23c",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-131",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-131/90833e8acf2e4031b07ba287baadb23c.md",
+  "report_sha256": "39c2a9c7dd56cfaba14f2891d997266883ce42755668d97a9b8e3edb1a27b167",
+  "resource_generation": "84e0ce5ab6ce826e31352189ac936392b575e471ea93efe5df9a864d9bd692ed",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-131",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused validation passed: 192 tests across clean preview, reset authorization, reset effects, and cleanup dependency suites. Ruff checks and git diff --check passed. All destructive test operations used disposable repositories. Independent review is required before downstream tasks proceed.",
+    "summary": "Implemented durable, identity-bound reset retirement stages for the authorized execution worktree and exact local and remote refs. Each stage reobserves authority and resource evidence, uses exact CAS or lease protection, and journals confirmed effects for safe restart and duplicate replay. Added isolated real-Git coverage for stale identities, local data safety, locks, submodules, failures, and interrupted stages."
+  },
+  "workspace_head": "5934d154e876c81d07a59331d99a07353767ff3e"
+}
