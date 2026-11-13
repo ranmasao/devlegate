@@ -6,41 +6,46 @@
 
 ## Design decision
 
-The current `devlegate clean` domain conflates two unrelated operations:
-automatic resource cleanup of already-integrated done tickets, and human-
-authorized reset of unsuccessful executions to begin a new generation.
-Rename the interface by responsibility, without creating permanent
-compatibility aliases or migration scaffolding (no external customer base).
+The old `devlegate clean` domain conflated normal cleanup and an explicit operator
+request to start a ticket again. The CLI uses responsibility-specific domains,
+without compatibility aliases or migrations.
 
-- `devlegate inspect ticket|execution|workspace|service ...` is a universal,
-  detailed **read-only** object observation domain. Inspection never grants
-  authority to mutate. The existing TASK-160 identity-bound digest is
-  exposed through `inspect workspace <ticket-id>` for future reset confirmation.
-- `devlegate workspace ls` and `devlegate workspace prune` manage resource
-  inventory and normal proven **done-ticket** cleanup, reusing existing owner
-  cleanup policy. Prune is read-only by default; effects require `--apply`.
-  There is no generic `gc` or `system prune` at this stage.
-- `devlegate reset <ticket-id>` is a separate explicit operator action for
-  a backlogged ticket with a proved prior generation: safely retire old
-  execution resources and requeue the same ticket into a fresh execution
-  from **current** product/model configuration, with no old checkpoint,
-  worker conversation or previous rework as inherited implementation.
-  Historical reports/reviews remain immutable.
+- `devlegate inspect ticket|execution|workspace|service ...` is a **read-only**
+  exact-object observation domain. A workspace view may contain evidence/digest,
+  but inspecting is not an authorization to mutate.
+- `devlegate workspace ls` and `devlegate workspace prune` manage inventory
+  and routine disposal of proven **done-ticket** resources. Prune remains
+  separate from execution reset. There is no generic `gc` domain.
+- `devlegate reset <ticket-id>` is the **one-argument operator action to start
+  the same ticket again from a clean execution**. It does not require the operator
+  to obtain/pass a digest, generation, execution ID or request ID. The owner derives
+  all identity/transaction information, stops any managed worker for that ticket,
+  proves retirement/isolation, handles resources safely, and makes the ticket
+  runnable in `todo` with a new execution generation from current product/model.
+  Only standard optional output formatting may affect presentation.
 
-An authorization-only pre-effect acknowledgement is not reset completion.
-No `reset inspect`, implicit force-delete, unbound resource adoption or
-fresh execution admission before proven retirement.
+**Reset eligibility:** the ticket is in `todo`, or its canonical workflow
+permits requeue to `todo`. Other statuses are not rejected by an extra
+reset-specific hard-coded list. An illegal transition is a workflow refusal;
+uncertain authority, failed worker retirement or unsafe resource state is an
+operational blocker and must never be bypassed. The one-argument interface
+does **not** remove exact owner/provenance/CAS/lease guarantees. Never report
+fresh execution started until that has been proved. Historical reports/reviews
+remain evidence; prior worker code, conversation and rework context do not
+continue into the new attempt. Reset does not undo previously merged product
+changes.
 
-## Ticket plan
+## Ticket plan and history
 
-TASK-131 has already published a completed worker report and is in review;
-do **not** edit or requeue its historical reviewed ticket merely for CLI
-semantics. Keep its exact checkpoint and review boundary unchanged.
+TASK-160/130/131 established inspect evidence, owner-serialized durable reset
+authorization and staged CAS/lease retirement. TASK-161 established read-only
+`inspect`. TASK-162 provides `workspace ls/prune`. TASK-132 completes
+the operator-facing one-argument fresh-execution reset and its end-to-end
+active-worker cancellation, control transition, crash recovery and scheduling
+semantics.
 
-Create independently reviewable `todo/TASK-161` for the universal read-only
-inspect domain (depends on TASK-131), `todo/TASK-162` for workspace list/prune
-(depends on TASK-161), and update still-unexecuted `todo/TASK-132` to depend
-on TASK-131 and TASK-162 and own the final reset CLI and full-cycle fresh
-execution validation. These new tickets can remain todo but are not runnable
-until TASK-131 is integrated. No production code, runtime state, immutable
-execution report/review, live Git ref or worktree is changed by this decision.
+The original TASK-132 draft contained a manual
+`--plan-digest --generation --request-id` command and backlog-only eligibility;
+**these are explicitly superseded** by the one-argument product decision above.
+Do not change historical accepted worker/checkpoint reviews. No production code,
+runtime/owner state or live Git resources are modified by this planning update.
