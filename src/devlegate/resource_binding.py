@@ -993,20 +993,61 @@ class ResourceBinding:
     ) -> ExecutionWorkspace:
         """Identity gate in addition to existing operation-specific authority."""
         self._validate_local_identity()
-        def observe(repo: Path, *args: str, **kwargs):
-            if read_only and args[0] == "status":
-                filters = self.manager._runner(
-                    repo, "--no-optional-locks", "config", "--get-regexp",
-                    r"^filter\..*\.(clean|process)$", check=False,
-                )
-                if filters.returncode not in {0, 1}:
+
+        def conversion_config(repo: Path) -> str:
+            result = self.manager._runner(
+                repo, "--no-optional-locks", "config", "--includes", "--null",
+                "--list", check=False,
+            )
+            if result.returncode:
+                raise UnprovenResource("cannot observe Git conversion configuration")
+            return result.stdout
+
+        def require_safe_filters(repo: Path, config: str) -> None:
+            # Configured drivers (notably global Git LFS) are harmless unless
+            # effective attributes select them on a path status could convert.
+            drivers = set()
+            for entry in config.split("\0"):
+                key, _, _value = entry.partition("\n")
+                if key.startswith("filter.") and key.endswith((".clean", ".process")):
+                    drivers.add(key[len("filter."):key.rfind(".")])
+            if not drivers:
+                return
+            paths = self.manager._runner(
+                repo, "--no-optional-locks", "ls-files", "--cached", "-z", check=False,
+            )
+            if paths.returncode or (paths.stdout and not paths.stdout.endswith("\0")):
+                raise UnprovenResource("cannot enumerate Git conversion paths")
+            attributes = self.manager._runner(
+                repo, "--no-optional-locks", "check-attr", "-z", "--stdin", "filter",
+                input_text=paths.stdout, check=False,
+            )
+            fields = attributes.stdout.split("\0")
+            expected = paths.stdout.split("\0")[:-1]
+            if (
+                attributes.returncode or fields[-1] != ""
+                or len(fields) != 3 * len(expected) + 1
+                or fields[:-1:3] != expected
+                or any(name != "filter" for name in fields[1::3])
+            ):
+                raise UnprovenResource("cannot prove effective Git filter attributes")
+            for path, value in zip(expected, fields[2::3], strict=True):
+                # check-attr renders boolean/unset states using these same
+                # strings. A driver with a colliding name cannot be ruled out.
+                if value in drivers:
                     raise UnprovenResource(
-                        "cannot observe Git conversion configuration"
+                        "read-only cleanliness proof unsupported with active Git "
+                        f"clean/process filter {value!r} on {path!r} in {repo}"
                     )
-                if filters.returncode == 0:
+
+        def observe(repo: Path, *args: str, **kwargs):
+            config = None
+            if read_only and args[0] == "status":
+                config = conversion_config(repo)
+                require_safe_filters(repo, config)
+                if conversion_config(repo) != config:
                     raise UnprovenResource(
-                        "read-only cleanliness proof unsupported with configured "
-                        "Git clean/process filters"
+                        "Git configuration changed during filter preflight"
                     )
                 # Inspect each submodule through this same conversion gate
                 # before asking Git to read its worktree contents.
@@ -1015,6 +1056,8 @@ class ResourceBinding:
                 repo, "--no-optional-locks", "-c", "core.fsmonitor=false",
                 "-c", "core.untrackedCache=false", *args, **kwargs,
             )
+            if config is not None and conversion_config(repo) != config:
+                raise UnprovenResource("Git configuration changed during observation")
             if result.returncode and args[0] in {
                 "worktree", "rev-parse", "status", "ls-tree", "submodule",
             }:

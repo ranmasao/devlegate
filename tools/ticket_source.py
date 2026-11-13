@@ -43,13 +43,14 @@ class TicketSourceError(ValueError):
 def git(
     repo: Path, *args: str, check: bool = True,
     environment: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "--no-optional-locks", "-c", "core.hooksPath=/dev/null",
          "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false",
          "-c", "core.untrackedCache=false", "-c", "core.filemode=true",
          "-C", str(repo), *args],
-        capture_output=True, text=True, check=False,
+        input=input_text, capture_output=True, text=True, check=False,
         env={**{key: value for key, value in os.environ.items()
                 if not key.startswith("GIT_")},
              "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0",

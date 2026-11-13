@@ -21,7 +21,7 @@ from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 @pytest.fixture
 def owner(tmp_path, monkeypatch, request):
     repo, config, _state = control_fixture(tmp_path)
-    if getattr(request, "param", None) == "submodule":
+    if getattr(request, "param", None) in {"submodule", "nested"}:
         dependency = tmp_path / "dependency"
         dependency.mkdir()
         git(dependency, "init", "-b", "main")
@@ -31,6 +31,11 @@ def owner(tmp_path, monkeypatch, request):
         git(dependency, "add", ".")
         git(dependency, "commit", "-m", "dependency fixture")
         monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+        if request.param == "nested":
+            leaf = tmp_path / "leaf"
+            git(tmp_path, "clone", str(dependency), str(leaf))
+            git(dependency, "submodule", "add", str(leaf), "nested")
+            git(dependency, "commit", "-am", "nested fixture")
         git(repo, "submodule", "add", str(dependency), "dependency")
         git(repo, "commit", "-am", "submodule fixture")
         git(repo, "push", "origin", "main")
@@ -244,7 +249,15 @@ def test_evidence_and_unsafe_configuration_refuse_without_effect(owner, change):
         (binding._admin() / "CHERRY_PICK_HEAD").write_text(str(binding.intent["base"]))
     else:
         # Would write into the worktree if status invoked it.
+        from pathlib import Path
+
         git(binding.manager.path, "config", "filter.fixture.clean", "touch FILTER-RAN")
+        attributes = Path(git(
+            binding.manager.path, "rev-parse", "--path-format=absolute",
+            "--git-path", "info/attributes",
+        ).stdout.strip())
+        attributes.parent.mkdir(exist_ok=True)
+        attributes.write_text("* filter=fixture\n")
     before = snapshot(owner.repo.parent)
     result = inspect_clean(owner, "T-1")
     assert result["digest"] is None
@@ -295,11 +308,155 @@ def test_recursive_submodule_observation_is_read_only(owner, change):
         (dependency / "data").write_text("changed\n")
     elif change == "filter":
         git(dependency, "config", "filter.fixture.clean", "touch FILTER-RAN")
+        from pathlib import Path
+
+        admin = Path(git(dependency, "rev-parse", "--absolute-git-dir").stdout.strip())
+        (admin / "info").mkdir(exist_ok=True)
+        (admin / "info/attributes").write_text("* filter=fixture\n")
     before = snapshot(owner.repo.parent)
     result = inspect_clean(owner, "T-1")
     assert (result["digest"] is not None) == (change == "pristine")
     assert snapshot(owner.repo.parent) == before
     assert not (dependency / "FILTER-RAN").exists()
+
+
+@pytest.mark.parametrize("owner", [None, "submodule", "nested"], indirect=True)
+@pytest.mark.parametrize("driver", ["clean", "process"])
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("scope", ["local", "global", "system", "include"])
+def test_effective_filter_gate(owner, tmp_path, monkeypatch, driver, active, scope):
+    from pathlib import Path
+
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    target = binding.manager.path
+    if (target / "dependency").exists():
+        target /= "dependency"
+        if (target / "nested").exists():
+            target /= "nested"
+    sentinel = tmp_path / "FILTER-RAN"
+    command = f'touch "{sentinel}"; cat'
+    if scope == "local":
+        git(target, "config", f"filter.fixture.{driver}", command)
+    else:
+        config = tmp_path / "filter-config"
+        git(tmp_path, "config", "--file", str(config),
+            f"filter.fixture.{driver}", command)
+        if scope == "include":
+            git(target, "config", "include.path", str(config))
+        else:
+            monkeypatch.setenv(f"GIT_CONFIG_{scope.upper()}", str(config))
+            if scope == "system":
+                monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    # info/attributes exercises effective attributes without dirtying a tracked
+    # file or running a filter during fixture setup. Inactive driver stays set.
+    attributes = Path(git(
+        target, "rev-parse", "--path-format=absolute", "--git-path", "info/attributes",
+    ).stdout.strip())
+    attributes.parent.mkdir(exist_ok=True)
+    attributes.write_text(
+        "* filter=fixture\n" if active else "nonexistent/** filter=fixture\n",
+    )
+    before_store = owner._runtime_store.observe()
+    before = snapshot(owner.repo.parent)
+    first = inspect_clean(owner, "T-1")
+    assert (first["digest"] is not None) == (not active), first["blockers"]
+    if active:
+        assert any("active Git clean/process filter" in b for b in first["blockers"])
+    else:
+        assert inspect_clean(owner, "T-1")["digest"] == first["digest"]
+    assert not sentinel.exists()
+    assert snapshot(owner.repo.parent) == before
+    assert owner._runtime_store.observe() == before_store
+
+
+@pytest.mark.parametrize("source", ["worktree", "global", "index"])
+def test_effective_attribute_sources_refuse_without_running_filter(
+    owner, tmp_path, source,
+):
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    target = binding.manager.path
+    sentinel = tmp_path / "FILTER-RAN"
+    attributes = target / ".gitattributes"
+    attributes.write_text("[attr]danger filter=fixture\n*.txt danger\n")
+    if source == "global":
+        global_attributes = tmp_path / "global-attributes"
+        attributes.rename(global_attributes)
+        git(target, "config", "core.attributesFile", str(global_attributes))
+    elif source == "index":
+        git(target, "add", ".gitattributes")
+        attributes.unlink()  # Git falls back to the indexed attributes.
+    git(target, "config", "filter.fixture.clean", f'touch "{sentinel}"; cat')
+    before_store = owner._runtime_store.observe()
+    before = snapshot(owner.repo.parent)
+    result = inspect_clean(owner, "T-1")
+    assert result["digest"] is None
+    assert any("active Git clean/process filter" in b for b in result["blockers"])
+    assert not sentinel.exists()
+    assert snapshot(owner.repo.parent) == before
+    assert owner._runtime_store.observe() == before_store
+
+
+@pytest.mark.parametrize("failure", ["config", "attributes", "drift"])
+def test_unknown_conversion_observation_is_unproven(owner, monkeypatch, failure):
+    import subprocess
+
+    import devlegate.clean_preview as preview
+
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    git(binding.manager.path, "config", "filter.fixture.clean", "false")
+    original = preview.observe_git
+    configs = 0
+
+    def observe(repo, *args, **kwargs):
+        nonlocal configs
+        if repo == binding.manager.path:
+            if "config" in args and "--list" in args:
+                configs += 1
+                if failure == "config":
+                    return subprocess.CompletedProcess(args, 128, "", "unreadable")
+                if failure == "drift" and configs % 2 == 0:
+                    result = original(repo, *args, **kwargs)
+                    result.stdout += "filter.changed.clean\nfalse\0"
+                    return result
+            if "check-attr" in args and failure == "attributes":
+                return subprocess.CompletedProcess(args, 0, "malformed", "")
+            if "status" in args:
+                pytest.fail("unsafe status observation")
+        return original(repo, *args, **kwargs)
+
+    monkeypatch.setattr(preview, "observe_git", observe)
+    before_store = owner._runtime_store.observe()
+    before = snapshot(owner.repo.parent)
+    result = inspect_clean(owner, "T-1")
+    assert result["digest"] is None
+    assert result["identity"]["executions"][0]["proof"]["state"] == "unproven"
+    assert snapshot(owner.repo.parent) == before
+    assert owner._runtime_store.observe() == before_store
+
+
+@pytest.mark.parametrize("driver", ["set", "unset", "unspecified"])
+def test_filter_names_colliding_with_attribute_states_fail_closed(
+    owner, tmp_path, driver,
+):
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    target = binding.manager.path
+    sentinel = tmp_path / "FILTER-RAN"
+    (target / ".gitattributes").write_text(f"*.txt filter={driver}\n")
+    git(target, "config", f"filter.{driver}.clean", f'touch "{sentinel}"; cat')
+    before = snapshot(owner.repo.parent)
+    result = inspect_clean(owner, "T-1")
+    assert result["digest"] is None
+    assert any("active Git clean/process filter" in b for b in result["blockers"])
+    assert not sentinel.exists()
+    assert snapshot(owner.repo.parent) == before
 
 
 def test_multiple_historical_reports_never_select_by_name_or_sha(owner):

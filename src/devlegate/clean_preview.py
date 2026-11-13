@@ -41,12 +41,17 @@ def canonical_digest(identity: dict) -> str:
     ).encode("ascii")).hexdigest()
 
 
-def observe_git(repo: Path, *args: str, check: bool = True, **kwargs):
+def observe_git(
+    repo: Path, *args: str, check: bool = True,
+    input_text: str | None = None, **kwargs,
+):
     """No index refresh, lazy fetch, hooks, fsmonitor, or ambient Git injection."""
     _safe_path(repo)
     environment = {
         key: value for key, value in os.environ.items()
-        if not key.startswith("GIT_")
+        if not key.startswith("GIT_") or key in {
+            "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
+        }
     }
     environment.update({
         "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
@@ -56,7 +61,8 @@ def observe_git(repo: Path, *args: str, check: bool = True, **kwargs):
         ["git", "--no-optional-locks", "--no-replace-objects", "--no-pager",
          "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
          "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
-        text=True, capture_output=True, check=check, env=environment, timeout=30,
+        input=input_text, text=True, capture_output=True, check=check,
+        env=environment, timeout=30,
         **kwargs,
     )
 

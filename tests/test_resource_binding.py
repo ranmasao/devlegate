@@ -460,7 +460,8 @@ def test_read_only_proof_does_not_run_configured_clean_filters(resources):
     (workspace.path / ".gitattributes").write_text("source filter=effect\n")
     before = snapshot(binding.manager.root.parent)
     result = proof(binding)
-    assert result.state == "unproven" and "clean/process filters" in result.reason
+    assert result.state == "unproven"
+    assert "active Git clean/process filter" in result.reason
     assert not output.exists()
     assert snapshot(binding.manager.root.parent) == before
 

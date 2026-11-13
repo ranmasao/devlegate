@@ -115,9 +115,17 @@ for the existing non-destructive admission policy; neither grants reset or
 deletion authority. A future destructive apply must obtain its own authority
 and repeat every applicable observation.
 Read-only status observations disable optional index writes, filesystem-monitor
-hooks and the untracked cache. Configured clean/process filters can execute
-arbitrary conversion programs during status; the read-only API reports that
-cleanliness proof as unsupported instead of running them. Ordinary owner
+hooks and the untracked cache. Clean/process filters can execute arbitrary
+conversion programs during status. The read-only API checks effective `filter`
+attributes on every indexed path against configured drivers, including inherited
+configuration and includes, before status. Unused configured drivers are safe;
+an active driver, unavailable/malformed observation, or observed configuration
+drift leaves cleanliness unproven. Every initialized nested submodule passes its
+own preflight, with parent status ignoring submodules. No filter is invoked to
+establish applicability, and no conversion configuration is disabled to obtain
+a clean result. The earlier blanket configuration guard falsely rejected
+pristine GitHub CI worktrees with inherited unused filter configuration; see
+[clean inspection](clean-preview.md) for the corrected semantics. Ordinary owner
 operations retain their existing trusted Git capability and configuration.
 
 No historical binding is synthesized. An operator must investigate uncertain

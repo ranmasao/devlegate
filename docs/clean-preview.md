@@ -63,14 +63,42 @@ A missing journal is explicitly unsupported; inspection never recreates it.
 
 Git observations disable optional locks, fsmonitor, untracked cache writes,
 hooks, replace objects, and lazy fetching. No fetch is issued. Status is used
-only after independent local generation identity checks and after refusing
-configured clean/process filters. Recursive submodules pass the same gate;
+only after independent local generation identity checks and a filter applicability
+preflight. Recursive submodules pass the same gate;
 parent status does not implicitly inspect submodules first. Symlink substitution,
 foreign registrations, replaced same-SHA resources, changed/missing refs, locks,
 and interrupted Git administrative operations fail closed. No index, reflog,
 resource receipt, worker evidence, or runtime state is changed by inspection.
 The trusted local filesystem and configured remote transport have the same
 external-administrator boundary as the existing Git observation APIs.
+
+The original preflight rejected any configured `filter.*.clean` or
+`filter.*.process` entry. GitHub CI exposed the false rejection: an inherited
+driver configuration (such as Git LFS installed on the runner) does not imply
+that any tracked path selects that driver. This prevented otherwise pristine
+fresh generations, including initialized submodules, from producing a digest.
+
+The preflight now reads effective configuration with includes enabled and uses
+NUL-delimited `ls-files --cached` and `check-attr --stdin filter` observations.
+Git resolves attribute macros, worktree/index fallback, info attributes, and
+configured global/system attribute sources itself; these queries do not run
+conversion filters. A driver is unsafe when an effective string-valued `filter`
+attribute on a tracked path names a configured clean/process driver. Inspection
+refuses before status, reports the driver/path/repository, and leaves the digest
+null. Driver names `set`, `unset`, and `unspecified` collide with `check-attr`
+state labels and are conservatively refused when the output matches: their
+applicability cannot be disproved from that output. Unused configured drivers
+with unambiguous names are permitted without disabling or replacing
+their configuration. Each initialized nested submodule is checked independently.
+Global/system configuration location environment variables are retained so the
+preflight and status use the same configured interpretation. Repository-location
+environment injection remains excluded by the existing observation boundary.
+
+Failed/malformed path or attribute observations and unavailable configuration
+remain unproven. Configuration is read again before and after status; observed
+drift invalidates the preview. These reads are not a filesystem lease: external
+administrators must not change configuration or attributes concurrently, and a
+future confirmation must repeat the preflight under its own guards.
 
 ## Canonical digest and follow-on confirmation
 

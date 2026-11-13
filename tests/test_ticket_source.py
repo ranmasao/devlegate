@@ -212,8 +212,14 @@ def test_real_git_fixture_ignores_host_filters(
 def test_project_filter_policy_still_fails_closed(ticket, driver):
     binding = ticket[-1]
     run_git(binding.manager.path, "config", f"filter.project.{driver}", "false")
+    attributes = Path(run_git(
+        binding.manager.path, "rev-parse", "--path-format=absolute",
+        "--git-path", "info/attributes",
+    ).stdout.strip())
+    attributes.parent.mkdir(exist_ok=True)
+    attributes.write_text("*.py filter=project\n")
     before = unchanged(binding)
-    with pytest.raises(UnprovenResource, match="configured Git clean/process filters"):
+    with pytest.raises(UnprovenResource, match="active Git clean/process filter"):
         select(ticket)
     assert unchanged(binding) == before
 
