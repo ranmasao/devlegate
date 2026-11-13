@@ -6,6 +6,11 @@ covers ownership and implementation boundaries.
 
 ## Historical Workspace Cleanup Inventory
 
+Use `devlegate workspace ls --json` for a fresh owner-serialized inventory,
+`devlegate workspace prune --dry-run --json` for a bounded preview, and
+`devlegate workspace prune --apply --limit 20 --request-id <id> --json` to apply.
+See [workspace inventory and prune](workspace.md) for eligibility and receipts.
+
 The owner attempts historical cleanup on its first idle iteration after startup
 or restart, then no more often than every 300 monotonic seconds. A pass runs on
 the next idle scheduler iteration after it is due; scheduler activity can delay

@@ -1199,7 +1199,7 @@ def test_reconcile_resume_admission_persists_receipt_with_resolving_state(
     assert restarted._state["reconciliation"]["status"] == "resolving"
 
 
-def test_clean_status_uses_live_owner_without_receipt_or_git_mutation(
+def test_workspace_ls_uses_live_owner_without_receipt_or_git_mutation(
     tmp_path, monkeypatch
 ):
     engine, state = make_engine(tmp_path, monkeypatch)
@@ -1231,11 +1231,11 @@ def test_clean_status_uses_live_owner_without_receipt_or_git_mutation(
     try:
         response = request(
             server.path,
-            "clean-status-request",
-            "clean-status",
+            "workspace-ls-request",
+            "workspace-ls",
         )
         assert response.ok
-        assert response.result["status"] in {"clean", "reconciled", "blocked"}
+        assert response.result["dry_run"] is True
     finally:
         stop_event.set()
         engine.wake()

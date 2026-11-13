@@ -144,14 +144,18 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
     assert build_parser().parse_args(["drop", "T-1"]).ticket_id == "T-1"
 
 
-def test_clean_is_read_only_and_has_no_public_sweep_options():
+def test_workspace_commands_require_explicit_apply_and_remove_clean_status():
     parser = build_parser()
-    assert parser.parse_args(["clean"]).clean_command is None
-    assert parser.parse_args(["clean", "status"]).clean_command == "status"
-    with pytest.raises(SystemExit):
-        parser.parse_args(["clean", "sweep"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(["clean", "--limit", "1"])
+    assert parser.parse_args(["workspace", "ls", "--json"]).workspace_command == "ls"
+    assert not parser.parse_args(["workspace", "prune"]).apply
+    args = parser.parse_args([
+        "workspace", "prune", "--apply", "--limit", "20", "--request-id", "prune-1",
+    ])
+    assert args.apply and args.limit == 20 and args.request_id == "prune-1"
+    for argv in (["clean"], ["clean", "status"], ["workspace", "prune", "--force"],
+                 ["workspace", "prune", "--apply", "--dry-run"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
 
 def test_bare_invocation_prints_help_without_starting_or_resolving(
     monkeypatch, capsys

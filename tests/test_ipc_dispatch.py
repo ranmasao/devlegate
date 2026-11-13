@@ -81,24 +81,40 @@ def test_clean_sweep_is_not_a_public_mutation(running_server):
         dispatch_mutation(engine, _request("clean-sweep", {}))
 
 
-def test_clean_status_is_read_only_and_unbounded(running_server):
+def test_workspace_ls_is_owner_serialized_and_unbounded(running_server):
     engine, _state, _server = running_server
-    engine.workspace_cleanup_status = lambda: {
+    engine.submit_workspace_ls = lambda **_kwargs: {
         "status": "blocked",
         "decisions": [{"ticket_id": "T-1", "status": "blocked"}],
     }
 
-    response = dispatch_read_only(engine, _request("clean-status", {}))
+    response = dispatch_read_only(engine, _request("workspace-ls", {}))
 
     assert response["status"] == "blocked"
     assert response["decisions"][0]["ticket_id"] == "T-1"
 
 
-def test_clean_status_rejects_options(running_server):
+def test_workspace_ls_rejects_options(running_server):
     engine, _state, _server = running_server
 
     with pytest.raises(IPCProtocolError, match="does not accept options"):
-        dispatch_read_only(engine, _request("clean-status", {"limit": 4}))
+        dispatch_read_only(engine, _request("workspace-ls", {"limit": 4}))
+
+
+@pytest.mark.parametrize("payload", [
+    {"force": True}, {"apply": "yes"}, {"limit": True}, {"limit": 0},
+    {"limit": 10001},
+])
+def test_prune_rejects_invalid_admission(running_server, payload):
+    engine, _state, _server = running_server
+    with pytest.raises(IPCProtocolError, match="prune"):
+        dispatch_mutation(engine, _request("cleanup-workspaces", payload))
+
+
+def test_clean_status_is_removed(running_server):
+    engine, _state, _server = running_server
+    with pytest.raises(IPCProtocolError, match="unsupported method"):
+        dispatch_read_only(engine, _request("clean-status"))
 
 def test_dispatch_uses_service_views_without_persistence_access():
     class View:

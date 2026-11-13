@@ -315,21 +315,36 @@ def _retry_daemon(
     return 0
 
 
-def _clean_daemon(
-    env_file: Path, *, output_format: str,
-) -> int:
+def _workspace_daemon(env_file: Path, args) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
+        apply = args.workspace_command == "prune" and args.apply
+        payload = (
+            {"apply": apply, "limit": args.limit}
+            if args.workspace_command == "prune" else {}
+        )
         result = request(
             locator.socket_path,
-            "clean-status", {},
+            ("cleanup-workspaces" if args.workspace_command == "prune"
+             else "workspace-ls"),
+            payload, mutable=apply,
+            request_id=getattr(args, "request_id", None),
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     emit(
         result,
-        output_format,
-        "workspace cleanup status",
+        args.output_format,
+        render_grid(
+            (f"Workspace prune ({'apply' if apply else 'dry-run'})"
+             if args.workspace_command == "prune" else "Workspaces"),
+            ("Ticket", "Status", "Worktree", "Local ref", "Upstream ref", "Reason"),
+            [(item["ticket_id"], item["status"],
+              *(item.get("resources", {}).get(resource, "-") for resource in (
+                  "worktree", "local_ref", "upstream_ref",
+              )), item["reason"])
+             for item in result.get("decisions", [])],
+        ),
     )
     return 0
 
@@ -2737,17 +2752,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="ticket to drop; omit it to choose from current candidates",
     )
     add_output_arguments(drop_parser)
-    clean_parser = commands.add_parser(
-        "clean", help="show completed execution resource inventory"
+    workspace_parser = commands.add_parser(
+        "workspace", help="inventory and prune workspaces",
     )
+    workspace_commands = workspace_parser.add_subparsers(
+        dest="workspace_command", required=True, parser_class=DevlegateArgumentParser,
+    )
+    add_output_arguments(workspace_commands.add_parser(
+        "ls", help="list resource inventory",
+    ))
+    prune_parser = workspace_commands.add_parser(
+        "prune", help="prune proven done resources",
+    )
+    mode = prune_parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    prune_parser.add_argument("--limit", type=int, default=100)
+    prune_parser.add_argument("--request-id")
+    add_output_arguments(prune_parser)
+    clean_parser = commands.add_parser("clean", help="confirm an execution reset")
     add_output_arguments(clean_parser)
     clean_commands = clean_parser.add_subparsers(
-        dest="clean_command", parser_class=DevlegateArgumentParser
+        dest="clean_command", required=True, parser_class=DevlegateArgumentParser
     )
-    clean_status_parser = clean_commands.add_parser(
-        "status", help="show cleanup inventory without changing state"
-    )
-    add_output_arguments(clean_status_parser)
     inspect_parser = commands.add_parser("inspect", help="inspect an exact object")
     add_output_arguments(inspect_parser)
     inspect_commands = inspect_parser.add_subparsers(
@@ -3234,12 +3261,9 @@ def main() -> int:
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
         if args.command == "clean":
-            if args.clean_command == "apply":
-                return _clean_apply_daemon(env_file, args)
-            return _clean_daemon(
-                env_file,
-                output_format=args.output_format,
-            )
+            return _clean_apply_daemon(env_file, args)
+        if args.command == "workspace":
+            return _workspace_daemon(env_file, args)
         if args.command == "inspect":
             return _inspect_daemon(env_file, args)
         if args.command == "abandonment-recover":

@@ -281,8 +281,8 @@ post-action observation or failure, status and actionable reason. It is separate
 admission, so terminal publication releases the scheduler reservation even if
 cleanup is blocked. Partial worktree/local deletion resumes after process loss.
 Blocked cleanup is not repeatedly polled by scheduler ticks. Inspect it with
-`devlegate clean`; `devlegate clean --apply` explicitly retries the bounded
-cleanup cohort using the retained terminal authority. Terminal board state and
+`devlegate workspace ls`. Done-ticket `workspace prune` does not retry abandonment
+retirement or grant terminal cleanup authority. Terminal board state and
 immutable text history survive any cleanup failure.
 
 Safe local worktree removal and local-branch CAS deletion proceed even if an
@@ -309,9 +309,10 @@ lease provide operational authority, not proof of uninterrupted remote identity.
 For a remote where that residual risk is unacceptable, set the local Git policy
 `devlegate.abandonmentRemoteAuthority` to `manual`. Cleanup then retains remote
 resources with a manual-authority diagnostic while allowing safe local progress.
-The default policy is `leased`; unknown policy values fail closed. After an
-independent authorized remote disposition, `devlegate clean --apply` reobserves
-the resource using the retained journal. It never adopts a newly appeared ref.
+The default policy is `leased`; unknown policy values fail closed. Independent
+authorized remote disposition does not make these resources done-ticket prune
+candidates. The retained journal remains the abandonment authority; a newly
+appeared ref must never be adopted.
 
 Code pins are indexed at admission and bound to individual immutable execution
 reports and independent creation receipts. Newly created generation-bound pins

@@ -1183,8 +1183,8 @@ class ServiceEngine:
         self, *, apply: bool, limit: int, request_id: str
     ) -> dict[str, object]:
         """Submit bounded workspace cleanup to the serialized service owner."""
-        if limit < 1:
-            raise DevlegateError("workspace cleanup limit must be positive")
+        if type(limit) is not int or not 1 <= limit <= 10000:
+            raise DevlegateError("workspace cleanup limit must be 1..10000")
         return self._submit_operator_command(
             method="cleanup-workspaces",
             ticket_id="__workspaces__",
@@ -1194,6 +1194,48 @@ class ServiceEngine:
             force=apply,
             mutable=apply,
         )
+
+    def submit_workspace_ls(self, *, request_id: str) -> dict[str, object]:
+        return self._submit_operator_command(
+            method="workspace-ls", ticket_id="__workspaces__",
+            request_id=request_id, fingerprint="workspace-ls", mutable=False,
+        )
+
+    def workspace_inventory(self, *, limit: int = 10000) -> dict[str, object]:
+        """Observe without fetch, index refresh, receipts, or cursor writes."""
+        import copy
+
+        from devlegate.clean_preview import (
+            _tree,
+            _working_evidence_blockers,
+            observe_git,
+        )
+
+        self._assert_repository_owner()
+        # Isolate observation-only capabilities and transient discovery errors.
+        # Shared durable state is read, never saved, by this projection.
+        observer = copy.copy(self)
+        observer._git_runtime = observe_git
+        observer._workspace_preview = True
+        head = observe_git(self.control_worktree, "rev-parse", "HEAD").stdout.strip()
+        tree = _tree(self.control_worktree, head)
+        index = observe_git(
+            self.control_worktree, "diff-index", "--cached", "--quiet",
+            "--no-ext-diff", "--no-textconv", head, "--", check=False,
+        )
+        if index.returncode or _working_evidence_blockers(self.control_worktree, tree):
+            raise WorkflowBlockedError(
+                "control evidence differs from committed history",
+            )
+        targets = observer._workspace_cleanup_cohort(limit, rotate=False)
+        result = observer.cleanup_workspaces(
+            limit=limit, targets=targets, completed_only=True,
+        )
+        result["scan_complete"] = (
+            observer._workspace_cleanup_observation_error is None
+            and len(targets) < limit
+        )
+        return result
 
     def submit_inspect(
         self, object_type: str, object_id: str | None, *, request_id: str,
@@ -2656,6 +2698,13 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
+                if command.method == "workspace-ls" or (
+                    command.method == "cleanup-workspaces" and not command.mutable
+                ):
+                    command.admission_result = self.workspace_inventory(
+                        limit=int(command.onto) if command.onto is not None else 10000,
+                    )
+                    return
                 if command.method == "inspect":
                     from devlegate.inspection import inspect_object
 
@@ -2691,6 +2740,7 @@ class ServiceEngine:
                         targets=(self._mutable_receipt(command.request_id) or {}).get(
                             "cohort"
                         ),
+                        completed_only=True,
                     )
                     command.admission_result = result
                     if command.mutable:
@@ -5135,6 +5185,7 @@ class ServiceEngine:
                 limit=max(1, len(cohort)),
                 targets=cohort,
                 historical=True,
+                completed_only=True,
             )
             eligible = next(
                 (
@@ -5157,12 +5208,14 @@ class ServiceEngine:
                     limit=1,
                     targets=selected,
                     historical=True,
+                    completed_only=True,
                 )
             else:
                 # Preserve one blocked/absent diagnostic and advance the
                 # durable cursor when no candidate is currently eligible.
                 result = self.cleanup_workspaces(
-                    apply=True, limit=1, targets=cohort[:1], historical=True
+                    apply=True, limit=1, targets=cohort[:1], historical=True,
+                    completed_only=True,
                 )
         except ShutdownInterrupted as error:
             reason = _cleanup_log_text(str(error) or error.__class__.__name__)
@@ -5244,6 +5297,7 @@ class ServiceEngine:
                 limit=max(1, len(targets)),
                 targets=targets,
                 historical=True,
+                completed_only=True,
             )
             decisions = result.get("decisions", [])
             blocked = [
@@ -5256,7 +5310,7 @@ class ServiceEngine:
                         and item.get("reason") != "ticket is not durably done"
                     )
                     or (
-                        item.get("status") == "skipped"
+                        item.get("status") in {"skipped", "unproven"}
                         and item.get("reason")
                         not in {
                             "ticket is not durably done",
@@ -6515,7 +6569,9 @@ class ServiceEngine:
         except GitObservationError as error:
             raise DevlegateError(str(error)) from error
 
-    def _accepted_execution_report(self, ticket_id: str) -> ExecutionReport:
+    def _accepted_execution_report(
+        self, ticket_id: str, *, cleanup_head: str | None = None,
+    ) -> ExecutionReport:
         root = self.control_worktree / "executions" / ticket_id
         if not root.is_dir() or root.is_symlink():
             raise WorkflowBlockedError(
@@ -6571,7 +6627,15 @@ class ServiceEngine:
         if remote_head is None:
             # A local-only interrupted removal is still provable from its exact
             # branch SHA; absence of the upstream ref is not absence of evidence.
-            remote_head = self._resolve_commit_runtime(self.repo, expected_branch)
+            remote_head = resolve_ref_commit(
+                self.repo, f"refs/heads/{expected_branch}", runner=self._git_runtime,
+            )
+            if remote_head is None and cleanup_head is not None:
+                # A retained cleanup cohort can outlive all physical refs.
+                # This is only a provenance lookup coordinate: the caller still
+                # proves the done integration, generation, publication, current
+                # absence and execution dependencies before declaring retirement.
+                remote_head = cleanup_head
         try:
             report = resolve_accepted_execution_report(
                 self.control_worktree,
@@ -6898,7 +6962,9 @@ class ServiceEngine:
         binding = ResourceBinding.for_execution(manager, report.execution_id)
         if binding.intent["generation"] != report.resource_generation:
             raise WorkflowBlockedError("report names a different resource generation")
-        workspace = binding.require_local(clean=True)
+        workspace = binding.require_local(
+            clean=True, read_only=getattr(self, "_workspace_preview", False),
+        )
         if workspace.head != report.workspace_head:
             raise WorkflowBlockedError(
                 "resource generation differs from report checkpoint"
@@ -6908,6 +6974,8 @@ class ServiceEngine:
         self, ticket_id: str, report: ExecutionReport, integration_head: str
     ) -> None:
         """Retire only the checkout proven by the accepted-to-done commit."""
+        if report.resource_generation is None:
+            raise WorkflowBlockedError("execution resource generation is unproven")
         if report.ticket_id != ticket_id or report.workspace_head is None:
             raise WorkflowBlockedError(
                 "accepted execution workspace provenance is incomplete"
@@ -7023,6 +7091,7 @@ class ServiceEngine:
         report: ExecutionReport | None = None,
         candidate: dict[str, str] | None = None,
         abandonment=None,
+        completed_only: bool = False,
     ) -> None:
         """Release only exact, already-published disposable execution refs."""
         self._assert_repository_owner()
@@ -7095,7 +7164,9 @@ class ServiceEngine:
                 # A worktree can already be absent after an interrupted pass.
                 # Re-prove durable ownership, ref identity, dependencies, and
                 # product ancestry immediately before deleting its local ref.
-                self._observe_cleanup_candidate(candidate, manager._registrations())
+                self._observe_cleanup_candidate(
+                    candidate, manager._registrations(), completed_only=completed_only,
+                )
             elif abandonment is not None:
                 abandonment()
             # Recheck the exact observed head before the helper's compare-
@@ -7176,7 +7247,9 @@ class ServiceEngine:
         elif candidate is not None:
             # Repeat the unified current-state proof after local-ref retirement;
             # the upstream lease alone cannot establish lifecycle safety.
-            self._observe_cleanup_candidate(candidate, manager._registrations())
+            self._observe_cleanup_candidate(
+                candidate, manager._registrations(), completed_only=completed_only,
+            )
             remote_head = remote_ref(
                 self.repo,
                 self.remote_name,
@@ -7472,9 +7545,10 @@ class ServiceEngine:
                 )
 
     def _observe_cleanup_candidate(
-        self, target: dict[str, str], registrations: dict[Path, dict[str, str | None]]
+        self, target: dict[str, str], registrations: dict[Path, dict[str, str | None]],
+        *, completed_only: bool = False,
     ) -> tuple[ExecutionWorkspaceManager, ExecutionWorkspace | None, SimpleNamespace]:
-        """Prove a disposable resource from its current Git identity, not history."""
+        """Prove current Git identity and the required done execution authority."""
         ticket_id = target["ticket_id"]
         expected_head = target["head"]
         manager = ExecutionWorkspaceManager(
@@ -7489,6 +7563,30 @@ class ServiceEngine:
         ticket = self._ticket_store().by_id.get(ticket_id)
         if ticket is None or ticket.state != "done":
             raise WorkflowBlockedError("ticket is not durably done")
+        if completed_only:
+            if not getattr(self, "_workspace_preview", False) and self._status_runtime(
+                self.control_worktree
+            ):
+                raise WorkflowBlockedError("control working tree is dirty")
+            report = self._accepted_execution_report(
+                ticket_id, cleanup_head=expected_head,
+            )
+            if report.resource_generation is None:
+                raise WorkflowBlockedError("execution resource generation is unproven")
+            if report.workspace_head != expected_head:
+                raise WorkflowBlockedError("resource differs from integrated execution")
+            integration = self._find_accepted_integration_commit(ticket_id, report)
+            if integration is None:
+                raise WorkflowBlockedError("done integration provenance is unproven")
+            self._prove_published_product_checkpoint(
+                expected_head, integration=integration,
+            )
+            resource = ResourceBinding.for_execution(manager, report.execution_id)
+            if resource.intent["generation"] != report.resource_generation:
+                raise WorkflowBlockedError(
+                    "cleanup resource generation differs from report",
+                )
+            resource.require_ref(expected_head)
         registration = registrations.get(manager.path.resolve())
         workspace: ExecutionWorkspace | None = None
         if registration is None:
@@ -7506,13 +7604,20 @@ class ServiceEngine:
                 raise WorkflowBlockedError(
                     "workspace registration does not match execution SHA"
                 )
-            workspace = manager._validate_existing(registration, expected_head)
+            workspace = (
+                resource.require_local(clean=True, read_only=True)
+                if completed_only and getattr(self, "_workspace_preview", False)
+                else manager._validate_existing(registration, expected_head)
+            )
             if workspace.head != expected_head or workspace.dirty:
                 raise WorkflowBlockedError("execution worktree is dirty or changed")
-            manager.verify_submodules(workspace)
+            if not (completed_only and getattr(self, "_workspace_preview", False)):
+                manager.verify_submodules(workspace)
         reports = ExecutionReportStore(self.control_worktree).list(ticket_id)
         if any(report.resource_generation is not None for report in reports):
-            report = self._accepted_execution_report(ticket_id)
+            report = self._accepted_execution_report(
+                ticket_id, cleanup_head=expected_head,
+            )
             binding = ResourceBinding.for_execution(manager, report.execution_id)
             if binding.intent["generation"] != report.resource_generation:
                 raise WorkflowBlockedError(
@@ -7537,6 +7642,9 @@ class ServiceEngine:
         """Require the observed execution SHA in a freshly fetched product tip."""
         if not _is_git_identity(head):
             raise WorkflowBlockedError("execution workspace SHA is invalid")
+        if getattr(self, "_workspace_preview", False):
+            self._prove_published_product_checkpoint(head)
+            return
         fetched = fetch_ref(
             self.repo, self.remote_name, self.remote_branch, runner=self._git_runtime
         )
@@ -7566,6 +7674,7 @@ class ServiceEngine:
         limit: int = 100,
         targets: list[dict[str, str]] | None = None,
         historical: bool = False,
+        completed_only: bool = False,
     ) -> dict[str, object]:
         """List, or apply, a bounded cleanup of proven done-ticket worktrees."""
         if apply and self._state.get("clean_reset_intent") is not None:
@@ -7614,6 +7723,13 @@ class ServiceEngine:
                 target.get("ticket_id")
             )
             if retained is not None:
+                if completed_only:
+                    decisions.append({
+                        "ticket_id": target["ticket_id"], "status": "blocked",
+                        "reason": "abandonment resources are outside done-ticket "
+                                  "prune policy",
+                    })
+                    continue
                 if retained["cleanup"]["status"] == "retired":
                     decisions.append({
                         "ticket_id": target["ticket_id"], "status": "blocked",
@@ -7636,7 +7752,7 @@ class ServiceEngine:
                 decisions.append(
                     {
                         "ticket_id": target["ticket_id"],
-                        "status": "skipped",
+                        "status": "unproven" if completed_only else "skipped",
                         "reason": (
                             "workspace has no Git registration; execution "
                             "generation is unproven"
@@ -7688,7 +7804,7 @@ class ServiceEngine:
                 continue
             try:
                 manager, workspace, _binding = self._observe_cleanup_candidate(
-                    target, registrations
+                    target, registrations, completed_only=completed_only,
                 )
                 decision = {
                     "ticket_id": ticket_id,
@@ -7699,13 +7815,16 @@ class ServiceEngine:
                     # Repeat every safety observation after inspection and before
                     # each destructive stage, so interrupted cleanup converges.
                     manager, current, _binding = self._observe_cleanup_candidate(
-                        target, manager._registrations()
+                        target, manager._registrations(), completed_only=completed_only,
                     )
                     if current is not None:
                         manager.retire(current, target["head"])
-                    self._observe_cleanup_candidate(target, manager._registrations())
+                    self._observe_cleanup_candidate(
+                        target, manager._registrations(), completed_only=completed_only,
+                    )
                     self._retire_execution_refs(
-                        manager.branch, target["head"], candidate=target
+                        manager.branch, target["head"], candidate=target,
+                        completed_only=completed_only,
                     )
                     decision["resources"] = {
                         "worktree": "absent",
@@ -7713,6 +7832,8 @@ class ServiceEngine:
                         "upstream_ref": "absent",
                     }
                     decision["status"] = "retired"
+                    if completed_only:
+                        decision["reason"] = "proven done execution resources retired"
                 decisions.append(decision)
             except (
                 ExecutionWorkspaceError,
@@ -7783,9 +7904,23 @@ class ServiceEngine:
                         }
                     )
                     continue
-                decisions.append(
-                    {"ticket_id": ticket_id, "status": "skipped", "reason": str(error)}
-                )
+                status = "skipped"
+                if completed_only:
+                    status = "blocked" if any(
+                        word in str(error) for word in (
+                            "dirty", "locked", "not durably done", "published",
+                            "remote", "observe",
+                        )
+                    ) else "unproven"
+                decisions.append({
+                    "ticket_id": ticket_id, "status": status, "reason": str(error),
+                })
+        if completed_only:
+            identities = {target["ticket_id"]: target for target in targets}
+            for decision in decisions:
+                target = identities.get(decision["ticket_id"])
+                if target is not None:
+                    decision["identity"] = dict(target)
         return {"dry_run": not apply, "limit": limit, "decisions": decisions}
 
     def _prove_published_product_checkpoint(
@@ -9740,7 +9875,8 @@ class ServiceEngine:
                         status = (
                             0
                             if operator_command.method in {
-                                "cleanup-workspaces", "inspect", "clean-apply",
+                                "cleanup-workspaces", "workspace-ls", "inspect",
+                                "clean-apply",
                             }
                             else self._dispatch_operator_command(
                                 operator_command, stop_event
@@ -9864,9 +10000,9 @@ class ServiceEngine:
                         self._release_operator_command()
                     elif scheduler_active:
                         self._release_scheduler_iteration()
-                if (operator_command is not None and operator_command.method != (
-                    "inspect"
-                )) or scheduler_active:
+                if (
+                    operator_command is not None and operator_command.mutable
+                ) or scheduler_active:
                     try:
                         self.status_view()
                     except DevlegateError:

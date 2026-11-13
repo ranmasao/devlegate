@@ -17,15 +17,29 @@ import devlegate.execution_workspace as execution_workspace_module
 import devlegate.runtime as runtime_module
 from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
+from devlegate.resource_binding import ResourceBinding
+
+
+def _bound_cleanup_workspace(manager, control, base, execution_id):
+    binding = ResourceBinding.plan(
+        manager, execution_id=execution_id, base=base,
+        control=git(control, "rev-parse", "HEAD").stdout.strip(),
+        ticket_blob=git(
+            control, "rev-parse", f"HEAD:kanban/todo/{manager.ticket_id}.md",
+        ).stdout.strip(), remote="origin", remote_head=None,
+    )
+    binding.record_intent()
+    return binding.prepare(remote_head=None), binding.intent["generation"]
 
 
 def _publish_done_execution(
-    control, workspace, ticket_id, checkpoint, execution_id, *, trailers=True
+    control, workspace, ticket_id, checkpoint, execution_id, *, trailers=True,
+    generation=None,
 ):
     """Publish one completed execution through the normal admission history."""
     control_head = git(control, "rev-parse", "HEAD").stdout.strip()
     ExecutionReportStore(control).write(
-        build_execution_report(
+        _cleanup_report(
             execution_id=execution_id,
             ticket_id=ticket_id,
             code_base_head=checkpoint,
@@ -33,6 +47,7 @@ def _publish_done_execution(
             execution_branch=workspace.branch,
             execution_path=str(workspace.path),
             workspace_head=workspace.head,
+            resource_generation=generation,
             run=WorkerRunResult(
                 0, None, WorkerClaim("completed", "done", (), ()), None
             ),
@@ -59,6 +74,12 @@ def _publish_done_execution(
             f"Devlegate-Checkpoint: {checkpoint}"
         )
     git(control, "commit", "-m", message)
+
+
+def _cleanup_report(*, resource_generation=None, **kwargs):
+    return dataclasses.replace(
+        build_execution_report(**kwargs), resource_generation=resource_generation,
+    )
 
 
 def test_dirty_control_worktree_blocks_run_before_product_sync(tmp_path):
@@ -1197,7 +1218,9 @@ def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_p
             state / "worktrees" / next(state.glob("worktrees/*")).name,
             ticket_id,
         )
-        workspace = manager.prepare(base)
+        workspace, generation = _bound_cleanup_workspace(
+            manager, control, base, f"cleanup-{ticket_id}",
+        )
         workspaces[ticket_id] = workspace
         assert (
             git(
@@ -1209,8 +1232,9 @@ def test_hosted_cleanup_retires_later_proven_execution_after_blocked_first(tmp_p
             == 0
         )
         ExecutionReportStore(control).write(
-            build_execution_report(
+            _cleanup_report(
                 execution_id=f"cleanup-{ticket_id}",
+                resource_generation=generation,
                 ticket_id=ticket_id,
                 code_base_head=base,
                 control_head=git(control, "rev-parse", "HEAD").stdout.strip(),
@@ -1301,7 +1325,9 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
             state / "worktrees" / next(state.glob("worktrees/*")).name,
             ticket_id,
         )
-        workspace = manager.prepare(checkpoint)
+        workspace, generation = _bound_cleanup_workspace(
+            manager, control, checkpoint, f"recovery-{ticket_id}",
+        )
         workspaces[ticket_id] = workspace
         assert (
             git(
@@ -1313,7 +1339,8 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
             == 0
         )
         _publish_done_execution(
-            control, workspace, ticket_id, checkpoint, f"recovery-{ticket_id}"
+            control, workspace, ticket_id, checkpoint, f"recovery-{ticket_id}",
+            generation=generation,
         )
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
@@ -1368,10 +1395,10 @@ def test_hosted_cleanup_recovers_partial_stages_after_remote_outage(tmp_path):
     assert (control / "kanban/done/T-1.md").is_file()
 
 
-def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
+def test_hosted_cleanup_preserves_unbound_trailerless_history(
     tmp_path,
 ):
-    """Legacy exact-parent proof is eligible; an unrelated generation is not."""
+    """Historical unbound resources remain visible without deletion authority."""
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
@@ -1428,33 +1455,19 @@ def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
     )
 
     with LiveService(working, config) as service:
-        service.wait_for(
-            lambda: (
-                not workspaces["T-1"].path.exists()
-                and resolve_commit(working, f"refs/heads/{workspaces['T-1'].branch}")
-                is None
-                and not git(
-                    working,
-                    "ls-remote",
-                    "origin",
-                    f"refs/heads/{workspaces['T-1'].branch}",
-                ).stdout
-            )
-        )
+        service.wait_ready()
+        assert workspaces["T-1"].path.is_dir()
         assert workspaces["T-2"].path.is_dir()
         assert (
             resolve_commit(working, f"refs/heads/{workspaces['T-2'].branch}")
             == checkpoint
         )
-        # Physical retirement precedes publication of the complete inventory.
-        # An IPC read between those owner-side stages still returns the prior
-        # snapshot. Wait for publication, not just disappearance of T-1's ref.
         def inventory_published():
-            status = service.cli("clean", "--json")
+            status = service.cli("workspace", "ls", "--json")
             assert status.returncode == 0
             return any(
                 item["ticket_id"] == "T-2"
-                and item["reason"] == "done execution is published and disposable"
+                and item["status"] == "unproven"
                 for item in json.loads(status.stdout)["decisions"]
             )
 
@@ -1466,8 +1479,8 @@ def test_hosted_cleanup_retires_trailerless_history_without_report_adjudication(
         )
 
 
-def test_hosted_cleanup_retires_requeued_done_generation_without_report(tmp_path):
-    """A currently done, published generation does not need legacy report proof."""
+def test_hosted_cleanup_preserves_requeued_done_generation_without_report(tmp_path):
+    """A done path and published SHA do not prove an execution generation."""
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     config.write_text(config.read_text() + "POLL_INTERVAL=0\n")
@@ -1510,13 +1523,15 @@ def test_hosted_cleanup_retires_requeued_done_generation_without_report(tmp_path
         service.wait_ready()
         service.wait_for(
             lambda: (
-                json.loads(service.cli("clean", "--json").stdout).get("scan_complete")
+                json.loads(service.cli("workspace", "ls", "--json").stdout).get(
+                    "scan_complete"
+                )
                 is True
             )
         )
-        assert not workspace.path.exists()
-        assert resolve_commit(working, f"refs/heads/{workspace.branch}") is None
-        assert not git(
+        assert workspace.path.exists()
+        assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+        assert git(
             working, "ls-remote", "origin", f"refs/heads/{workspace.branch}"
         ).stdout
 
@@ -1708,15 +1723,19 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
     assert invoke(working, "control", "init", config=config).returncode == 0
     engine = Devlegate(config)
     base = git(working, "rev-parse", "HEAD").stdout.strip()
-    workspace = ExecutionWorkspaceManager(
+    manager = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
-    ).prepare(base)
+    )
+    workspace, generation = _bound_cleanup_workspace(
+        manager, engine.control_worktree, base, "partial-cleanup",
+    )
     report = SimpleNamespace(
         ticket_id="T-1",
         execution_id="partial-cleanup",
         execution_branch=workspace.branch,
         execution_path=str(workspace.path),
         workspace_head=workspace.head,
+        resource_generation=generation,
     )
     target = {
         "ticket_id": "T-1",
@@ -1730,7 +1749,9 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
         "_ticket_store",
         lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
-    monkeypatch.setattr(engine, "_accepted_execution_report", lambda _ticket_id: report)
+    monkeypatch.setattr(
+        engine, "_accepted_execution_report", lambda _ticket_id, **_kwargs: report,
+    )
     monkeypatch.setattr(
         engine,
         "_find_accepted_integration_commit",
@@ -1753,6 +1774,8 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
     engine._reconcile_workspace_backlog()
     result = {"decisions": engine._state["workspace_cleanup"]["last_pass"]}
 
+    decision = result["decisions"][0]
+    assert decision.pop("identity") == target
     assert result["decisions"] == [
         {
             "ticket_id": "T-1",
@@ -1850,9 +1873,12 @@ def test_historical_cadence_excludes_non_done_and_reconsiders_done(
     engine = Devlegate(config)
     control = next((state / "worktrees").glob("*/control"))
     base = git(working, "rev-parse", "HEAD").stdout.strip()
-    workspace = ExecutionWorkspaceManager(
+    manager = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
-    ).prepare(base)
+    )
+    workspace, generation = _bound_cleanup_workspace(
+        manager, control, base, "done-execution",
+    )
     clock = [1000.0]
     monkeypatch.setattr(runtime_module.time, "monotonic", lambda: clock[0])
     logs = []
@@ -1897,7 +1923,9 @@ def test_historical_cadence_excludes_non_done_and_reconsiders_done(
     )
     assert not logs
 
-    _publish_done_execution(control, workspace, "T-1", base, "done-execution")
+    _publish_done_execution(
+        control, workspace, "T-1", base, "done-execution", generation=generation,
+    )
     clock[0] += 300
     commands.clear()
     engine._reconcile_workspace_backlog()
@@ -2071,9 +2099,12 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
     engine = Devlegate(config)
     control = next((state / "worktrees").glob("*/control"))
     checkpoint = git(working, "rev-parse", "HEAD").stdout.strip()
-    workspace = ExecutionWorkspaceManager(
+    manager = ExecutionWorkspaceManager(
         engine.repo, engine.execution_worktree_root, "T-1"
-    ).prepare(checkpoint)
+    )
+    workspace, generation = _bound_cleanup_workspace(
+        manager, control, checkpoint, "done-execution",
+    )
     assert (
         git(
             working,
@@ -2083,7 +2114,9 @@ def test_immediate_workspace_retirement_ignores_unrelated_runtime_state(tmp_path
         ).returncode
         == 0
     )
-    _publish_done_execution(control, workspace, "T-1", checkpoint, "done-execution")
+    _publish_done_execution(
+        control, workspace, "T-1", checkpoint, "done-execution", generation=generation,
+    )
     assert (
         git(control, "push", "origin", "HEAD:refs/heads/devlegate/control").returncode
         == 0

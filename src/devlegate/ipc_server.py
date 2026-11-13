@@ -68,12 +68,21 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
         return {"candidates": list(engine.published_retry_candidates_view())}
     if request.method == "drop-candidates":
         return {"candidates": list(engine.published_drop_candidates_view())}
-    if request.method == "clean-status":
+    if request.method == "workspace-ls":
         if request.payload:
             raise IPCProtocolError(
-                "invalid_request", "clean status does not accept options"
+                "invalid_request", "workspace ls does not accept options"
             )
-        return engine.workspace_cleanup_status()
+        return engine.submit_workspace_ls(request_id=request.request_id)
+    if request.method == "cleanup-workspaces":
+        apply, limit = _cleanup_options(request)
+        if apply:
+            raise IPCProtocolError(
+                "invalid_request", "apply requires mutable admission",
+            )
+        return engine.submit_cleanup_workspaces(
+            apply=False, limit=limit, request_id=request.request_id,
+        )
     if request.method == "inspect":
         from devlegate.inspection import validate_identity
 
@@ -89,6 +98,18 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     raise IPCProtocolError("unknown_method", f"unsupported method: {request.method}")
 
 
+def _cleanup_options(request: IPCRequest) -> tuple[bool, int]:
+    if set(request.payload) - {"apply", "limit"}:
+        raise IPCProtocolError("invalid_request", "invalid workspace prune fields")
+    apply = request.payload.get("apply", False)
+    limit = request.payload.get("limit", 100)
+    if type(apply) is not bool or type(limit) is not int or not 1 <= limit <= 10000:
+        raise IPCProtocolError(
+            "invalid_request", "prune requires boolean apply and limit 1..10000",
+        )
+    return apply, limit
+
+
 def dispatch_mutation(
     engine: object,
     request: IPCRequest,
@@ -96,6 +117,11 @@ def dispatch_mutation(
     lifecycle: Callable[[str, str, bool], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate and submit a mutation without executing it on the IPC thread."""
+    if request.method == "cleanup-workspaces":
+        apply, limit = _cleanup_options(request)
+        return engine.submit_cleanup_workspaces(
+            apply=apply, limit=limit, request_id=request.request_id,
+        )
     if request.method == "clean-apply":
         fields = {"ticket_id", "plan_digest", "generation"}
         if set(request.payload) != fields or not all(
