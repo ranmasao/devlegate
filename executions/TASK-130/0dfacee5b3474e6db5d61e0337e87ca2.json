@@ -1,0 +1,30 @@
+{
+  "code_base_head": "54ca0a65bcb7cdf8bb3d0b7d1ae6caab704a782c",
+  "conclusion": "completed",
+  "control_head": "192dea7d84448ed1b36c70036cd289b224d2d561",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-130",
+  "execution_id": "0dfacee5b3474e6db5d61e0337e87ca2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-130",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "45cd644366c078f60102d04a3b2444b12e1b3d5f7e95f6da0218a10d20f1792a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-130",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added explicit operator clean-apply confirmation bound to the current preview digest and resource generation, serialized through ServiceEngine admission. Persisted reset authorization and its receipt atomically with a revision-checked WAL write, fail-closed restart restoration, and a pre-effect hold that prevents resource effects. Documented the confirmation contract, retry semantics, remote continuity policy, and independent review requirement."
+  },
+  "workspace_head": "33da3ed6e38ca61896ca0b997b19039d1e37c64b"
+}
