@@ -78,7 +78,8 @@ def proposal_files(admission: dict, report: ExecutionReport, manifest: str,
 
 
 def make_transaction(repo: Path, parent: str, changes: dict[str, str | None],
-                     message: str, runner) -> dict:
+                     message: str, runner, *, blob_sources: dict[str, str] | None = None
+                     ) -> dict:
     """Build an isolated tree, leaving the live index/worktree untouched."""
     def git(*args, input_text=None):
         result = runner(repo, *args, input_text=input_text, check=False)
@@ -86,6 +87,17 @@ def make_transaction(repo: Path, parent: str, changes: dict[str, str | None],
             raise EvidenceError(result.stderr.strip() or "control tree creation failed")
         return result.stdout.strip()
 
+    blob_sources = blob_sources or {}
+    if not set(blob_sources).issubset(changes):
+        raise EvidenceError("preserved blob is outside publication changes")
+    preserved = {}
+    for destination, source in blob_sources.items():
+        oid = path_object(repo, parent, source, runner=runner)
+        if changes.get(source, "not-deleted") is not None or oid is None or (
+            changes[destination] != read_path(repo, parent, source, runner=runner)
+        ):
+            raise EvidenceError("preserved blob is not an exact publication move")
+        preserved[destination] = oid
     edits: dict = {}
     for path, content in changes.items():
         parts = PurePosixPath(path).parts
@@ -99,7 +111,7 @@ def make_transaction(repo: Path, parent: str, changes: dict[str, str | None],
             node = node.setdefault(part, {})
         node[parts[-1]] = content
 
-    def tree(original: str | None, node: dict) -> str:
+    def tree(original: str | None, node: dict, prefix: str = "") -> str:
         entries = {}
         if original is not None:
             output = runner(repo, "ls-tree", "-z", original, check=False)
@@ -114,7 +126,8 @@ def make_transaction(repo: Path, parent: str, changes: dict[str, str | None],
             if isinstance(value, dict):
                 if previous is not None and not previous.startswith("040000 tree "):
                     raise EvidenceError("publication parent is not a directory")
-                oid = tree(previous.split()[2] if previous else None, value)
+                oid = tree(previous.split()[2] if previous else None, value,
+                           prefix + name + "/")
                 entries[name] = f"040000 tree {oid}"
             elif value is None:
                 if previous is None:
@@ -123,7 +136,9 @@ def make_transaction(repo: Path, parent: str, changes: dict[str, str | None],
             else:
                 if previous is not None:
                     raise EvidenceError("immutable publication destination exists")
-                oid = git("hash-object", "-w", "--stdin", input_text=value)
+                oid = preserved.get(prefix + name)
+                if oid is None:
+                    oid = git("hash-object", "-w", "--stdin", input_text=value)
                 entries[name] = f"100644 blob {oid}"
         material = "".join(f"{identity}\t{name}\0"
                            for name, identity in sorted(entries.items()))

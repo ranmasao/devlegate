@@ -139,7 +139,7 @@ def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runtime, "history_changes", lambda *a, **kw: (("b" * 40, (f"A\t{path}",)),)
     )
-    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git, _state={})
     assert (
         runtime.ServiceEngine._latest_reviewed_rework_report(engine, (report,)) is None
     )
@@ -248,7 +248,9 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
                 todo_path="todo", review_path="review", backlog_path="backlog",
                 runner=run_git,
             )
-        engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+        engine = SimpleNamespace(
+            control_worktree=tmp_path, _git_runtime=run_git, _state={},
+        )
         with pytest.raises(
             runtime.WorkflowBlockedError, match="continuation ownership"
         ):
@@ -277,7 +279,7 @@ def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_pa
             for commit, report in (("c", failed), ("d", older))
         ),
     )
-    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git)
+    engine = SimpleNamespace(control_worktree=tmp_path, _git_runtime=run_git, _state={})
     with pytest.raises(runtime.WorkflowBlockedError, match="continuation ownership"):
         runtime.ServiceEngine._latest_reviewed_rework_report(engine, (failed, older))
 

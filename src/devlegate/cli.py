@@ -365,21 +365,18 @@ def _inspect_daemon(env_file: Path, args) -> int:
     return 0
 
 
-def _clean_apply_daemon(env_file: Path, args) -> int:
+def _reset_daemon(env_file: Path, args) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
         result = request(
-            locator.socket_path, "clean-apply", {
-                "ticket_id": args.ticket_id, "plan_digest": args.plan_digest,
-                "generation": args.generation,
-            }, mutable=True, request_id=args.request_id,
+            locator.socket_path, "reset", {"ticket_id": args.ticket_id}, mutable=True,
         )
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     emit(
         result, args.output_format,
-        f"reset authorized at pre-effect boundary: {args.ticket_id}; "
-        "no resources deleted",
+        f"reset {args.ticket_id}: {result['status']}"
+        + (f"; {result['reason']}" if result.get("reason") else ""),
     )
     return 0
 
@@ -2423,6 +2420,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
         (
             "Recovery",
             (
+                ("reset", "start the same ticket anew"),
                 ("retry", "retry a failed or recoverable execution"),
                 ("drop", "retire a blocked execution without applying it"),
                 ("reconcile", "perform explicit reconciliation"),
@@ -2770,11 +2768,9 @@ def build_parser() -> argparse.ArgumentParser:
     prune_parser.add_argument("--limit", type=int, default=100)
     prune_parser.add_argument("--request-id")
     add_output_arguments(prune_parser)
-    clean_parser = commands.add_parser("clean", help="confirm an execution reset")
-    add_output_arguments(clean_parser)
-    clean_commands = clean_parser.add_subparsers(
-        dest="clean_command", required=True, parser_class=DevlegateArgumentParser
-    )
+    reset_parser = commands.add_parser("reset", help="start the same ticket anew")
+    reset_parser.add_argument("ticket_id")
+    add_output_arguments(reset_parser)
     inspect_parser = commands.add_parser("inspect", help="inspect an exact object")
     add_output_arguments(inspect_parser)
     inspect_commands = inspect_parser.add_subparsers(
@@ -2785,14 +2781,6 @@ def build_parser() -> argparse.ArgumentParser:
         if object_type != "service":
             object_parser.add_argument("object_id")
         add_output_arguments(object_parser)
-    clean_apply_parser = clean_commands.add_parser(
-        "apply", help="confirm an exact preview and persist pre-effect reset intent",
-    )
-    clean_apply_parser.add_argument("ticket_id")
-    clean_apply_parser.add_argument("--plan-digest", required=True)
-    clean_apply_parser.add_argument("--generation", required=True)
-    clean_apply_parser.add_argument("--request-id", required=True)
-    add_output_arguments(clean_apply_parser)
     recover_parser = commands.add_parser(
         "recover",
         help="recover an unsafe pre-worker execution workspace",
@@ -3260,8 +3248,8 @@ def main() -> int:
             )
         if args.command == "drop":
             return _drop_daemon(env_file, args.ticket_id, args.output_format)
-        if args.command == "clean":
-            return _clean_apply_daemon(env_file, args)
+        if args.command == "reset":
+            return _reset_daemon(env_file, args)
         if args.command == "workspace":
             return _workspace_daemon(env_file, args)
         if args.command == "inspect":

@@ -193,9 +193,7 @@ def test_contended_requests_and_duplicate_receipt(owner):
 
     def client(request_id):
         try:
-            results.append(dispatch_request(owner, IPCRequest(
-                1, request_id, "clean-apply", payload,
-            )))
+            results.append(owner.submit_clean_apply(**payload, request_id=request_id))
         except DevlegateError as error:
             errors.append(str(error))
 
@@ -281,11 +279,10 @@ def test_restoration_rejects_damaged_authorization(owner, damage):
         validate_state_invariant(state)
 
 
-def test_confirmation_ipc_and_cli_contract(owner, monkeypatch, capsys):
+def test_replaced_public_reset_ipc_and_cli_contract(owner, monkeypatch, capsys):
     import devlegate.cli as cli
 
-    payload = confirmation(owner)
-    with pytest.raises(IPCProtocolError, match="incomplete"):
+    with pytest.raises(IPCProtocolError, match="unsupported method"):
         dispatch_request(owner, IPCRequest(
             1, "bad", "clean-apply", {"ticket_id": "T-1"},
         ))
@@ -293,15 +290,14 @@ def test_confirmation_ipc_and_cli_contract(owner, monkeypatch, capsys):
 
     def request(_socket, method, data, **kwargs):
         calls.append((method, data, kwargs))
-        return {"accepted": True, "effects_performed": False}
+        return {"accepted": True, "status": "queued", "reason": None}
 
     monkeypatch.setattr(cli, "request", request)
     monkeypatch.setattr(sys, "argv", [
-        "devlegate", "clean", "apply", "T-1", "--plan-digest", payload["plan_digest"],
-        "--generation", payload["generation"], "--request-id", "reset-one", "--json",
+        "devlegate", "reset", "T-1", "--json",
     ])
     assert cli.main() == 0
     assert calls == [(
-        "clean-apply", payload, {"mutable": True, "request_id": "reset-one"},
+        "reset", {"ticket_id": "T-1"}, {"mutable": True},
     )]
-    assert json.loads(capsys.readouterr().out)["effects_performed"] is False
+    assert json.loads(capsys.readouterr().out)["status"] == "queued"

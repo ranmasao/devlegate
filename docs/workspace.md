@@ -44,5 +44,7 @@ evidence, and other audit history are retained.
 
 Prune never resets execution continuity or makes a backlog ticket runnable.
 `inspect workspace <ticket-id>` remains the detailed read-only identity view.
-Reset confirmation (`clean apply`) is an independent domain. The old public
-`clean status` and bare `clean` inventory spellings have been removed.
+Use `devlegate reset T-1` to request a fresh attempt of the same ticket.
+Reset is an owner-managed lifecycle operation; workspace pruning remains an
+independent resource maintenance operation. The public `clean` domain is removed.
+See [reset and recovery](reset.md).

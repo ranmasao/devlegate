@@ -157,6 +157,21 @@ def test_workspace_commands_require_explicit_apply_and_remove_clean_status():
         with pytest.raises(SystemExit):
             parser.parse_args(argv)
 
+
+def test_reset_accepts_only_ticket_identity_and_output_options():
+    parser = build_parser()
+    assert parser.parse_args(["reset", "TASK-132"]).ticket_id == "TASK-132"
+    assert parser.parse_args(["reset", "TASK-132", "--json"]).output_format == "json"
+    for arguments in (
+        ["reset"], ["reset", "inspect", "TASK-132"], ["clean", "apply", "TASK-132"],
+        ["reset", "TASK-132", "--generation", "old"],
+        ["reset", "TASK-132", "--plan-digest", "old"],
+        ["reset", "TASK-132", "--request-id", "operator-id"],
+        ["reset", "TASK-132", "--yes"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(arguments)
+
 def test_bare_invocation_prints_help_without_starting_or_resolving(
     monkeypatch, capsys
 ):

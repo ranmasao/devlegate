@@ -190,6 +190,7 @@ from devlegate.tickets import (
     TicketStore,
     is_canonical_ticket_name,
     load_ticket_store,
+    validate_workflow_transition,
 )
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
@@ -203,6 +204,7 @@ from devlegate.worker_prompt import (
 from devlegate.worker_supervisor import (
     WorkerAdmissionClosed,
     WorkerProcessIdentity,
+    WorkerSupervisionError,
     WorkerSupervisor,
 )
 
@@ -1266,6 +1268,25 @@ class ServiceEngine:
             }),
         )
 
+    def submit_reset(self, ticket_id: str, *, request_id: str) -> dict:
+        """Submit a canonical ticket identity; transport IDs confer no authority."""
+        return self._submit_operator_command(
+            method="reset", ticket_id=ticket_id, request_id=request_id,
+            fingerprint=_mutation_fingerprint("reset", {"ticket_id": ticket_id}),
+        )
+
+    def reset_worker_configuration(self) -> dict[str, str]:
+        """Read the current worker-only settings under the existing owner."""
+        config = _read_env(self.env_file)
+        return {
+            attribute: config.get(setting, os.environ.get(setting, default))
+            for setting, attribute, default in (
+                ("OPENCODE_BIN", "opencode_bin", "opencode"),
+                ("OPENCODE_MODEL", "opencode_model", ""),
+                ("OPENCODE_AGENT", "opencode_agent", ""),
+            )
+        }
+
     def workspace_cleanup_status(self, *, limit: int = 100) -> dict[str, object]:
         """Return the last owner-published cleanup inventory.
 
@@ -1347,8 +1368,19 @@ class ServiceEngine:
                         receipt.get("resolution_class"),
                     )
             existing = self._operator_command or self._operator_active_command
+            if method == "reset" and self._operator_command is None and (
+                existing is not None and existing.method != "reset"
+                and self.service_snapshot().worker_running
+            ):
+                # A worker launched by retry/recovery still polls its owner for
+                # reset admission. Preserve that operator command's ownership
+                # while allowing the cancellation request into the owner queue.
+                existing = None
             if existing is not None:
-                if existing.request_id == request_id:
+                if existing.request_id == request_id or (
+                    method == existing.method == "reset"
+                    and fingerprint == existing.fingerprint
+                ):
                     if existing.method != method or existing.fingerprint != fingerprint:
                         raise DevlegateError(
                             f"request id collision: {method} request semantics differ"
@@ -1359,7 +1391,7 @@ class ServiceEngine:
                         "service busy; mutable request was not admitted"
                     )
             else:
-                if self._scheduler_active:
+                if self._scheduler_active and method != "reset":
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
@@ -1402,7 +1434,8 @@ class ServiceEngine:
                 # not yet published its completion or error.
                 raise DevlegateError(
                     "service admission outcome is unknown; "
-                    "retry with the same request id"
+                    + (f"repeat devlegate reset {ticket_id}" if method == "reset"
+                       else "retry with the same request id")
                 )
         return self._admission_result(command)
 
@@ -2213,6 +2246,12 @@ class ServiceEngine:
             raise DevlegateError(
                 "runtime state write outcome uncertain; restart required"
             )
+        if command.method == "reset":
+            return
+        from devlegate.ticket_reset import active as reset_active
+
+        if reset_active(self):
+            raise DevlegateError("ticket reset is in progress")
         if self._state.get("clean_reset_intent") is not None:
             raise DevlegateError(
                 "clean reset intent is held at the pre-effect boundary"
@@ -2723,6 +2762,15 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service is draining; runtime command was not admitted"
                     )
+                if command.method == "reset":
+                    from devlegate.ticket_reset import admit
+
+                    try:
+                        command.admission_result = admit(self, command.ticket_id)
+                    except (ValueError, RuntimeError, OSError,
+                            ExecutionWorkspaceError) as error:
+                        raise DevlegateError(str(error)) from error
+                    return
                 self._validate_operator_admission(command)
                 if command.cancelled.is_set():
                     raise DevlegateError(
@@ -3058,10 +3106,19 @@ class ServiceEngine:
         if self._state.get("execution_resource_binding") is not None:
             binding = self._execution_generation_binding()
             binding.finish_operation("worker", {"identity": identity.as_dict()})
+        reset = self._state.get("ticket_reset")
+        reset_fields = {}
+        if isinstance(reset, dict) and reset.get("status") == "queued" and (
+            reset.get("ticket_id") == self._state.get("execution_ticket_id")
+        ):
+            reset_fields["ticket_reset"] = {
+                **reset, "status": "started", "blocker": None,
+            }
         self._save_state(
             "agent_running",
             execution_stage="worker-running",
             worker_identity=identity.as_dict(),
+            **reset_fields,
         )
         self._refresh_published_status()
 
@@ -3762,6 +3819,16 @@ class ServiceEngine:
 
     def run_iteration(self, intent: IterationIntent | None = None) -> int:
         """Execute exactly one scheduler iteration under host authority."""
+        from devlegate.ticket_reset import active as reset_active
+        from devlegate.ticket_reset import advance as advance_ticket_reset
+
+        if reset_active(self):
+            try:
+                advance_ticket_reset(self)
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError,
+                    ExecutionWorkspaceError, WorkerSupervisionError) as error:
+                raise WorkflowBlockedError(f"ticket reset blocked: {error}") from error
+            return 0
         if self._state.get("clean_reset_intent") is not None:
             from devlegate.clean_reset import advance_reset
 
@@ -4777,6 +4844,26 @@ class ServiceEngine:
             self._owned_execution_id = execution_id
             self._publish_service_snapshot(worker_running=False)
 
+        reset = self._state.get("ticket_reset")
+        if isinstance(reset, dict) and reset.get("status") == "queued" and (
+            reset.get("ticket_id") == selected_ticket.id
+        ):
+            # Reset uses the configuration effective at fresh admission, including
+            # model changes made while the discarded worker was running.
+            config = self.reset_worker_configuration()
+            for attribute, value in config.items():
+                setattr(self, attribute, value)
+                setattr(self._workers, attribute, value)
+            self._save_state(
+                str(self._state["phase"]), ticket_reset={
+                    **reset, "fresh_execution_id": execution_id,
+                    "fresh_generation": self._state["execution_resource_binding"][
+                        "generation"
+                    ],
+                    "fresh_configuration": config,
+                },
+            )
+
         try:
             workspace = self._prepare_execution_workspace(execution_plan)
         except ExecutionWorkspaceError as error:
@@ -4919,11 +5006,14 @@ class ServiceEngine:
         )
         try:
             try:
+                from devlegate.ticket_reset import ResetStop, poll_worker
+
                 worker_run = self._workers.run(
                     workspace,
                     prompt,
                     execution_id=execution_id,
-                    stop_request=self._stop_event,
+                    stop_request=ResetStop(self, selected_ticket.id),
+                    owner_poll=lambda: poll_worker(self),
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -4961,9 +5051,47 @@ class ServiceEngine:
             self._publish_service_snapshot(lifecycle="processing", worker_running=False)
             self._refresh_published_status()
         if not worker_run.worker_group_retired:
+            reset = self._state.get("ticket_reset")
+            if isinstance(reset, dict) and reset.get("ticket_id") == selected_ticket.id:
+                self._save_state(
+                    str(self._state["phase"]),
+                    ticket_reset={**reset, "blocker": "worker retirement is unproven"},
+                )
             raise DevlegateError(
                 "execution cgroup remains populated; worker retirement is unproven"
             )
+        reset = self._state.get("ticket_reset")
+        if isinstance(reset, dict) and reset.get("status") == "queued" and (
+            reset.get("ticket_id") == selected_ticket.id
+        ) and not worker_run.process_started:
+            # No conversation or worker exists yet. Keep ordinary pending
+            # admission resumable instead of turning launch failure into rework.
+            self._save_state(
+                "agent_pending", execution_stage=None, execution_start_head=None,
+                pending_execution_report=None,
+                ticket_reset={
+                    **reset,
+                    "blocker": worker_run.transport_error or "worker launch failed",
+                },
+            )
+            return 0
+        if isinstance(reset, dict) and reset.get("status") == "queued" and (
+            reset.get("ticket_id") == selected_ticket.id
+        ) and worker_run.process_started:
+            # A fast process can exit before PID capture. The supervisor's
+            # completed lifetime proof still establishes that fresh work ran.
+            self._save_state(
+                "agent_running",
+                ticket_reset={**reset, "status": "started", "blocker": None},
+            )
+        from devlegate.ticket_reset import active as reset_active
+
+        if reset_active(self) and self._state["ticket_reset"]["ticket_id"] == (
+            selected_ticket.id
+        ):
+            # The durable cancellation wins even if worker completion raced the
+            # signal. Never checkpoint or publish the discarded attempt.
+            return 0
         try:
             self._require_execution_generation(clean=False, remote=True)
             manager = ExecutionWorkspaceManager(
@@ -6345,6 +6473,11 @@ class ServiceEngine:
         Report filenames are opaque IDs.  A newer failed or retry report must
         not fall back to an older review publication and become a rework.
         """
+        if not reports:
+            return None
+        from devlegate.ticket_reset import report_is_discarded
+
+        reports = tuple(r for r in reports if not report_is_discarded(self, r))
         if not reports:
             return None
         by_path = {
@@ -8183,6 +8316,7 @@ class ServiceEngine:
                 "control branch changed during accepted integration"
             )
         target = self.control_worktree / self.done_path / f"{ticket_id}.md"
+        validate_workflow_transition(ticket, "done")
         ticket.path.rename(target)
         add_all(self.control_worktree, option="-A", runner=self._git_runtime)
         commit = git_commit(
@@ -9489,6 +9623,7 @@ class ServiceEngine:
             review = self.control_worktree / self.review_path / f"{ticket.id}.md"
             if review.exists() or review.is_symlink():
                 raise WorkflowBlockedError("review ticket already exists")
+            validate_workflow_transition(ticket, "review")
             ticket.path.rename(review)
         try:
             load_ticket_store(self.control_worktree, self._workflow_paths())
@@ -9877,6 +10012,7 @@ class ServiceEngine:
                             if operator_command.method in {
                                 "cleanup-workspaces", "workspace-ls", "inspect",
                                 "clean-apply",
+                                "reset",
                             }
                             else self._dispatch_operator_command(
                                 operator_command, stop_event
@@ -11213,6 +11349,14 @@ class ServiceEngine:
             if code.detached:
                 reason = "detached HEAD is not supported"
             return AdmissionBarrier("blocked", "repository", reason)
+        reset = state.get("ticket_reset")
+        if isinstance(reset, dict) and reset.get("status") not in {"queued", "started"}:
+            return AdmissionBarrier(
+                "blocked", "reset",
+                f"ticket reset {reset['status']}: "
+                f"{reset.get('blocker') or 'in progress'}",
+                reset.get("ticket_id"),
+            )
         reconciliation = state.get("reconciliation")
         if isinstance(reconciliation, dict) and reconciliation.get("status") in {
             "pending",
@@ -11749,6 +11893,11 @@ class ServiceEngine:
                 **identity,
             )
         selected = ticket_store.selected()
+        reset = state.get("ticket_reset")
+        if isinstance(reset, dict) and reset.get("status") == "queued":
+            requested = ticket_store.by_id.get(reset.get("ticket_id"))
+            if requested is not None and requested in ticket_store.runnable:
+                selected = requested
         if selected is None:
             return ExecutionPlan("none", "no runnable tickets", **identity)
         return ExecutionPlan(

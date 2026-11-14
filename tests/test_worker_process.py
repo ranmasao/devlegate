@@ -16,7 +16,7 @@ import pytest
 from devlegate.worker_supervisor import _run_opencode
 
 
-@pytest.mark.parametrize("kind", ["operator_abort"])
+@pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
     marker = tmp_path / "processes.json"
@@ -61,12 +61,13 @@ def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_stubborn_worker_group_is_force_killed():
+@pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])
+def test_stubborn_worker_group_is_force_killed(kind):
     class Request:
         kind = None
 
     request = Request()
-    timer = threading.Timer(0.2, setattr, args=(request, "kind", "operator_abort"))
+    timer = threading.Timer(0.2, setattr, args=(request, "kind", kind))
     timer.start()
     started = time.monotonic()
     result = _run_opencode(
@@ -74,8 +75,10 @@ def test_stubborn_worker_group_is_force_killed():
     )
     timer.cancel()
     assert time.monotonic() - started < 2.5
-    assert result.interruption_kind == "operator_abort"
-    assert result.process_returncode == -signal.SIGINT
+    assert result.interruption_kind == kind
+    assert result.process_returncode == (
+        -signal.SIGINT if kind == "operator_abort" else -signal.SIGKILL
+    )
 
 
 def test_worker_prompt_is_delivered_over_stdin_without_argv_pollution(tmp_path):

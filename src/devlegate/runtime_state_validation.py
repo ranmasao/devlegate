@@ -8,6 +8,7 @@ from devlegate.abandonment_evidence import EvidenceError
 from devlegate.clean_reset import validate_reset_intent
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
+from devlegate.ticket_reset import validate as validate_ticket_reset
 from devlegate.worker_supervisor import WorkerProcessIdentity
 
 
@@ -89,6 +90,7 @@ def _worker_identity_from_value(
 def validate_state_invariant(state: dict[str, object]) -> None:
     try:
         validate_reset_intent(state)
+        validate_ticket_reset(state)
     except ValueError as error:
         raise DevlegateError(str(error)) from error
     phase = state["phase"]
@@ -463,6 +465,7 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             "operator_abort",
             "service_shutdown",
             "process_loss",
+            "ticket_reset",
         }
     ):
         raise DevlegateError("invalid execution interruption kind")

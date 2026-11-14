@@ -357,6 +357,14 @@ def inspect_object(owner, object_type: ObjectType, object_id: str | None) -> dic
         )
         if _head(owner) != (head, identity):
             raise EvidenceError("canonical control changed during inspection")
+    reset = owner._state.get("ticket_reset")
+    if isinstance(reset, dict) and (
+        object_type == "service"
+        or object_type == "ticket" and reset["ticket_id"] == object_id
+    ):
+        from devlegate.ticket_reset import response
+
+        observation["reset"] = response(reset)
     return InspectionView(
         f"devlegate.inspect-{object_type}.v1", object_type, object_id,
         observation, tuple(sorted(set(blockers))),
