@@ -48,7 +48,8 @@ checks. This view does not contact the remote or claim remote continuity.
 
 ## Workspace
 
-See [the workspace schema and reset digest contract](clean-preview.md).
+See [the workspace observation schema](clean-preview.md). Inspection is never a
+precondition for [reset](reset.md); its digest supplies no mutation authority.
 `devlegate.inspect-workspace.v2` exposes registered path/ref/remote observations,
 dirty/locked/submodule state, independent resource generations, and blockers.
 It preserves the canonical digest algorithm and all identity bindings while

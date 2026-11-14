@@ -434,8 +434,8 @@ def _run_opencode(
         while raw_chunk := process.stderr.read(4096):
             write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
 
-    stdout_thread = threading.Thread(target=consume_stdout)
-    stderr_thread = threading.Thread(target=consume_stderr)
+    stdout_thread = threading.Thread(target=consume_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
     stdout_thread.start()
     stderr_thread.start()
     stdin = getattr(process, "stdin", None)
@@ -496,6 +496,7 @@ def _run_opencode(
                 interruption_error = f"interruption persistence failed: {error}"
 
     def finish_interrupted() -> int:
+        nonlocal transport_error
         try:
             returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
         except subprocess.TimeoutExpired:
@@ -506,7 +507,11 @@ def _run_opencode(
                     os.killpg(worker_process_group, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
-            returncode = _wait_process(process)
+            try:
+                returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                transport_error = "worker did not exit after bounded forced retirement"
+                return -1
         if containment is not None:
             containment.force_terminate()
         return returncode
@@ -553,7 +558,7 @@ def _run_opencode(
                 break
             except subprocess.TimeoutExpired:
                 kind = getattr(stop_request, "kind", None)
-                if kind == "operator_abort":
+                if kind in {"operator_abort", "ticket_reset"}:
                     interrupt(kind)
                     returncode = finish_interrupted()
                     break
@@ -570,9 +575,12 @@ def _run_opencode(
                 interrupt("operator_abort")
                 returncode = finish_interrupted()
                 break
-    stdout_thread.join()
-    stderr_thread.join()
-    if prompt_thread.is_alive() and stdin is not None:
+    join_timeout = WORKER_TERMINATION_TIMEOUT if interruption_kind is not None else None
+    stdout_thread.join(join_timeout)
+    stderr_thread.join(join_timeout)
+    if stdout_thread.is_alive() or stderr_thread.is_alive():
+        transport_error = transport_error or "worker output pipes remain owned"
+    if prompt_thread.is_alive() and stdin is not None and interruption_kind is None:
         try:
             stdin.close()
         except (OSError, ValueError):
@@ -697,6 +705,19 @@ class WorkerSupervisor:
             return self.containment_provider.observe(identity.containment_id)
         return observe_worker_identity(identity)
 
+    def retire(self, identity: WorkerProcessIdentity, *, evidence=None) -> None:
+        """Retire only an exactly identified managed containment after restart."""
+        if not identity.containment_id:
+            raise WorkerSupervisionError("worker retirement cannot be proved")
+        if evidence is None:
+            raise WorkerSupervisionError("worker launch-root evidence is unavailable")
+        if evidence["containment"] != identity.containment_id:
+            raise WorkerSupervisionError("worker containment identity changed")
+        if self.containment_provider.recover_launch(
+            identity.execution_id, evidence, pid=identity.pid, terminate=True,
+        ) != "absent":
+            raise WorkerSupervisionError("worker containment remains populated")
+
     def run(
         self,
         workspace: ExecutionWorkspace | EvidenceWorkspace,
@@ -708,6 +729,7 @@ class WorkerSupervisor:
         interruption_handler: Callable[[str], None] | None = None,
         prompt_delivered_handler: Callable[[], None] | None = None,
         evidence: EvidenceSocket | None = None,
+        owner_poll: Callable[[], None] | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -831,7 +853,7 @@ export default tool({
                 worker_started_handler=mark_worker_started,
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
-                owner_poll=evidence.poll if evidence is not None else None,
+                owner_poll=evidence.poll if evidence is not None else owner_poll,
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:
@@ -857,7 +879,11 @@ export default tool({
                 completion_logged = True
             return result
         except (ContainmentError, OSError) as error:
-            return WorkerRunResult(-1, str(error), None, None, process_started=False)
+            return WorkerRunResult(
+                -1, str(error), None, None,
+                worker_group_retired=not worker_started,
+                process_started=worker_started,
+            )
         finally:
             if execution_log is not None and worker_started and not completion_logged:
                 service_log(

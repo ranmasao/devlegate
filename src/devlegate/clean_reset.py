@@ -168,6 +168,32 @@ def _require_no_hidden_changes(manager, repo):
         _require_no_hidden_changes(manager, repo / relative)
 
 
+def _apply_retirement_effect(owner, binding, operation, expected=None):
+    """The shared exact Git effects, reached only after a caller's WAL gate."""
+    if operation == "worktree":
+        manager = binding.manager
+        # Git needs one force for initialized, recursively proved submodules.
+        # Never override a lock, double-force, prune, or remove an unknown path.
+        submodules = manager._gitlink_paths(manager.path)
+        observe_git(
+            owner.repo, "worktree", "remove", *(("--force",) if submodules else ()),
+            "--", str(manager.path),
+        )
+    elif operation == "local":
+        observe_git(owner.repo, "update-ref", "--no-deref", "-d",
+                    str(binding.intent["ref"]), expected)
+    elif operation == "remote":
+        ref = str(binding.intent["remote_ref"])
+        observe_git(
+            owner.repo, "-c", "push.followTags=false", "push", "--porcelain",
+            "--no-verify", "--recurse-submodules=no",
+            f"--force-with-lease={ref}:{expected}",
+            str(binding.intent["remote"]), f":{ref}",
+        )
+    else:
+        raise ValueError("unknown exact retirement effect")
+
+
 def _reobserve(owner, intent):
     owner._assert_repository_owner()
     if owner._state_write_uncertain:
@@ -286,29 +312,12 @@ def advance_reset(owner):
                 expected_store_revision=revision,
             )
             continue
-        manager = binding.manager
         if stage == 1 and not absent:
-            # Native Git requires one force for even clean initialized submodules.
-            # The recursive safety gate has just proved them; never double-force
-            # (override a lock), unlock, prune, or remove an unregistered path.
-            submodules = manager._gitlink_paths(manager.path)
-            observe_git(
-                owner.repo, "worktree", "remove", *(("--force",) if submodules else ()),
-                "--", str(manager.path),
-            )
+            _apply_retirement_effect(owner, binding, "worktree")
         elif stage == 3 and local is not None:
-            observe_git(
-                owner.repo, "update-ref", "--no-deref", "-d",
-                str(binding.intent["ref"]), local,
-            )
+            _apply_retirement_effect(owner, binding, "local", local)
         elif stage == 5 and upstream is not None:
-            ref = str(binding.intent["remote_ref"])
-            observe_git(
-                owner.repo, "-c", "push.followTags=false", "push", "--porcelain",
-                "--no-verify", "--recurse-submodules=no",
-                f"--force-with-lease={ref}:{upstream}",
-                str(binding.intent["remote"]), f":{ref}",
-            )
+            _apply_retirement_effect(owner, binding, "remote", upstream)
         # Recheck all authority and exact postconditions before recording success.
         _, revision, absent, local, upstream = _reobserve(owner, intent)
         if (stage == 1 and not absent) or (stage == 3 and local is not None) or (
@@ -324,3 +333,103 @@ def advance_reset(owner):
             },
             expected_store_revision=revision,
         )
+
+
+def retire_ticket_generation(owner, binding):
+    """Use the same staged WAL and exact-ref leases for an internal ticket reset.
+
+    This entry point receives an owner-derived immutable binding, not operator
+    confirmation. It never infers authority from a matching branch name or SHA.
+    """
+    from devlegate.ticket_reset import _save, require_control
+
+    while True:
+        owner._assert_repository_owner()
+        require_control(owner)
+        intent = owner._state["ticket_reset"]
+        journal = intent["retirement"]
+        binding._validate_intent()
+        binding._require_settled()
+        binding.require_worker_retirement()
+        manager = binding.manager
+        receipt = _read(binding.directory / "receipt.json")
+        if _identity(Path(str(binding.intent["common"]))) != receipt["common_identity"]:
+            raise ValueError("reset Git common directory identity changed")
+        if not journal:
+            workspace = binding.require_local(clean=True, read_only=True)
+            _require_no_hidden_changes(manager, manager.path)
+            binding.require_ref(workspace.head)
+            upstream = remote_ref(
+                owner.repo, str(binding.intent["remote"]),
+                str(binding.intent["remote_ref"]), runner=observe_git,
+            )
+            if upstream not in {None, workspace.head}:
+                raise ValueError("reset remote ref does not match the exact generation")
+            journal = {"status": "worktree-pending", "head": workspace.head,
+                       "upstream": upstream,
+                       "registration": manager._registrations()[manager.path.resolve()]}
+            _save(owner, intent, retirement=journal)
+            continue
+        if journal["status"] == "completed":
+            return
+        registrations = manager._registrations()
+        admin = Path(str(receipt["admin"]))
+        _safe_path(manager.path)
+        _safe_path(admin)
+        absent = not manager.path.exists() and not admin.exists() and not any(
+            p == manager.path.resolve() or r.get("branch") == manager.branch
+            for p, r in registrations.items()
+        )
+        local = resolve_ref_commit(
+            owner.repo, str(binding.intent["ref"]), runner=observe_git,
+        )
+        symbolic = observe_git(owner.repo, "symbolic-ref", "--quiet",
+                               str(binding.intent["ref"]), check=False)
+        if symbolic.returncode != 1:
+            raise ValueError("reset local ref is symbolic or unavailable")
+        upstream = remote_ref(
+            owner.repo, str(binding.intent["remote"]),
+            str(binding.intent["remote_ref"]), runner=observe_git,
+        )
+        stage = journal["status"]
+        if local != journal["head"] and not (
+            local is None and stage in {"local-pending", "remote-pending"}
+        ):
+            raise ValueError("reset local ref changed")
+        if upstream != journal["upstream"] and not (
+            upstream is None and stage == "remote-pending"
+        ):
+            raise ValueError("reset remote ref changed")
+        if stage == "worktree-pending":
+            owner._receipt_code_pin(
+                binding,
+                f"refs/devlegate/executions/{intent['ticket_id']}/"
+                f"{binding.intent['execution_id']}",
+                journal["head"],
+            )
+            if not absent:
+                workspace = binding.require_local(clean=True, read_only=True)
+                _require_no_hidden_changes(manager, manager.path)
+                if workspace.head != journal["head"] or registrations.get(
+                    manager.path.resolve()
+                ) != journal["registration"]:
+                    raise ValueError("reset worktree identity changed")
+                _apply_retirement_effect(owner, binding, "worktree")
+                continue
+            following = "local-pending"
+        elif not absent:
+            raise ValueError("reset retired worktree reappeared")
+        elif stage == "local-pending":
+            if local is not None:
+                binding.require_ref(local)
+                _apply_retirement_effect(owner, binding, "local", local)
+                continue
+            following = "remote-pending"
+        elif stage == "remote-pending":
+            if upstream is not None:
+                _apply_retirement_effect(owner, binding, "remote", upstream)
+                continue
+            following = "completed"
+        else:
+            raise ValueError("invalid reset retirement journal")
+        _save(owner, intent, retirement={**journal, "status": following})

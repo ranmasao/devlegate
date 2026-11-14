@@ -122,18 +122,17 @@ def dispatch_mutation(
         return engine.submit_cleanup_workspaces(
             apply=apply, limit=limit, request_id=request.request_id,
         )
-    if request.method == "clean-apply":
-        fields = {"ticket_id", "plan_digest", "generation"}
-        if set(request.payload) != fields or not all(
-            isinstance(request.payload[k], str) and request.payload[k] for k in fields
+    if request.method == "reset":
+        from devlegate.tickets import is_canonical_ticket_name
+
+        ticket_id = request.payload.get("ticket_id")
+        if set(request.payload) != {"ticket_id"} or not isinstance(ticket_id, str) or (
+            not is_canonical_ticket_name(f"{ticket_id}.md")
         ):
             raise IPCProtocolError(
-                "invalid_request", "clean apply confirmation is incomplete"
+                "invalid_request", "reset requires one canonical ticket ID"
             )
-        return engine.submit_clean_apply(
-            request.payload["ticket_id"], request.payload["plan_digest"],
-            request.payload["generation"], request_id=request.request_id,
-        )
+        return engine.submit_reset(ticket_id, request_id=request.request_id)
     if request.method in {"stop", "restart"}:
         allowed = {"force"}
         if set(request.payload) - allowed:

@@ -20,6 +20,14 @@ class TicketError(ValueError):
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 WORKFLOW_STATES = ("backlog", "todo", "review", "accepted", "done", "abandoned")
+WORKFLOW_TRANSITIONS = {
+    "backlog": frozenset({"todo"}),
+    "todo": frozenset({"review", "abandoned"}),
+    "review": frozenset({"todo", "backlog", "accepted", "abandoned"}),
+    "accepted": frozenset({"done", "abandoned"}),
+    "done": frozenset(),
+    "abandoned": frozenset(),
+}
 _METADATA_KEYS = {"type", "title", "depends_on"}
 _ABANDONMENT_KEYS = _METADATA_KEYS | {"target", "start_head"}
 _HEAD = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -28,6 +36,21 @@ _HEAD = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 def is_canonical_ticket_name(name: str) -> bool:
     """Return whether a managed-directory entry claims canonical ticket identity."""
     return name.endswith(".md") and bool(_ID.fullmatch(name[:-3]))
+
+
+def validate_workflow_transition(ticket: Ticket, target: str) -> None:
+    """Validate a canonical edge; its owner must also publish the required audit."""
+    if target not in WORKFLOW_TRANSITIONS.get(ticket.state, frozenset()):
+        raise TicketError(
+            f"workflow prohibits {ticket.state} -> {target} for {ticket.id}; "
+            "acceptance and terminal disposition have no reverse requeue edge"
+        )
+
+
+def requeue_transition(ticket: Ticket) -> None:
+    """Preserving todo is a no-op; all moves use the canonical workflow edges."""
+    if ticket.state != "todo":
+        validate_workflow_transition(ticket, "todo")
 
 
 @dataclass(frozen=True)
