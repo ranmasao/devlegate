@@ -1,0 +1,30 @@
+{
+  "code_base_head": "05103891dd59bdbaadc0f8b55f31f354dbd05777",
+  "conclusion": "completed",
+  "control_head": "2f8b44b855ecee435ba3dc492b47df721316f221",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-132",
+  "execution_id": "e7bd25b2c145464aa2a44b486dd085b2",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-132",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-132/e7bd25b2c145464aa2a44b486dd085b2.md",
+  "report_sha256": "8a319997f344649bdfa24ff808b46874551dda7c2306184b01b3413c6e5726fd",
+  "resource_generation": "67746aa904659862a2a310bfc951825edd01b49f1ad339f34813e6ee64652aeb",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-132",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Validation: ./dev lint passed; ./dev coverage -n 4 --dist=worksteal passed with 2238 passed and 2 skipped; git diff --check passed. Disposable real-Git and real-process fixtures cover cancellation before checkpoint, stubborn descendants, owner loss during cancellation, unproved retirement, competing requests, lost acknowledgements, exact resource replacement and locks, nested submodules, raw ticket-blob preservation, and current product/model selection without old feedback. Effects are bounded to one bound worktree, one local ticket ref, one exact leased remote ref, at most one immutable local code pin, and an audited control transaction; observation cost scales with history, reports, and worktree/submodule size. Dirty or unproved namespaces remain durably blocked rather than forcibly cleaned or allocated an alternative namespace. Operator recovery and these bounds are documented in docs/reset.md.",
+    "summary": "Implemented single-ticket reset with internally derived durable identities, owner-managed worker cancellation, exact staged resource retirement, audited requeue, and ordinary fresh scheduling on current product and worker configuration. Removed the legacy public clean domain and added reset progress, replay protection, recovery documentation, and lifecycle regression coverage."
+  },
+  "workspace_head": "3154861fce42d2e75872b6ab76af8584672a363f"
+}
