@@ -860,9 +860,11 @@ class ResourceBinding:
         }
 
     def require_local(
-        self, *, clean: bool, read_only: bool = False
+        self, *, clean: bool, read_only: bool = False, dirty_submodules: bool = False
     ) -> ExecutionWorkspace:
-        workspace = self._observe_local(clean=clean, read_only=read_only)
+        workspace = self._observe_local(
+            clean=clean, read_only=read_only, dirty_submodules=dirty_submodules,
+        )
         self._require_settled()
         expected = self._expected_head()
         if workspace.head != expected:
@@ -989,7 +991,7 @@ class ResourceBinding:
             raise ExecutionWorkspaceError("native rebase stage has no exact receipt")
 
     def _observe_local(
-        self, *, clean: bool, read_only: bool = False
+        self, *, clean: bool, read_only: bool = False, dirty_submodules: bool = False
     ) -> ExecutionWorkspace:
         """Identity gate in addition to existing operation-specific authority."""
         self._validate_local_identity()
@@ -1085,7 +1087,10 @@ class ResourceBinding:
                 "registered worktree path differs from binding"
             )
         workspace = manager._validate_existing(registration, str(self.intent["base"]))
-        manager.verify_submodules(workspace)
+        if dirty_submodules:
+            manager.verify_submodules(workspace, clean=False)
+        else:
+            manager.verify_submodules(workspace)
         if clean and workspace.dirty:
             raise ExecutionWorkspaceError("execution worktree is dirty")
         return workspace

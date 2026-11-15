@@ -46,7 +46,9 @@ While the just-established fresh worker is still executing with unchanged
 configuration, repeating reset returns that operation's `started` receipt. It
 does not cancel the replacement after a lost acknowledgement. Changing the
 worker configuration, or subsequent durable attempt progress, permits a new
-reset operation. A worker for another ticket is never cancelled; contention
+reset operation. With only a ticket ID, an intentional second reset during that
+interval is indistinguishable from duplicate delivery and receives the same
+receipt. A worker for another ticket is never cancelled; contention
 with that worker is reported as a temporary owner blocker before admission.
 
 Workflow refusal is different from an execution blocker. Canonical backlog and
@@ -72,8 +74,20 @@ observation cost scales with repository history, report count and worktree size;
 it is not a constant-time garbage collector. There is no namespace sweep, bulk
 ref deletion, automatic lock override, or double-force worktree removal.
 
-Dirty/untracked/ignored files, hidden index flags, uncertain creation/publication,
-and ambiguous resource bindings currently hold retirement closed. A separate
-historical worktree namespace is not allocated to bypass those blockers. Repair
-must preserve the evidence and the exact admitted resource identity. These
-checks are runtime safety blockers, not additional workflow eligibility rules.
+After retirement of the old worker is proved, reset deliberately discards ordinary
+tracked edits, untracked and ignored files, and hidden-index content in the exact
+independently bound generation. Initialized nested submodules may have ordinary
+source edits too; their HEAD, checkout root and Git administration must still be
+proved. Content symlinks are unlinked without following their targets. No old
+content is copied into the fresh attempt. Uncommitted edits are not historical
+execution evidence; committed code pins and immutable records are preserved.
+
+Unknown nested repositories, special files (such as sockets and FIFOs), mount
+boundaries, symlinked Git administration, Git administrative locks, changed
+submodule HEAD or foreign module administration remain specific blockers.
+Uncertain creation/publication and ambiguous resource bindings also hold
+retirement closed. A separate historical worktree namespace is not allocated to
+bypass those blockers. Repair must preserve evidence and the exact admitted
+resource identity, then repeat the same reset command. These are runtime safety
+blockers, not additional workflow eligibility rules. File validation is linear
+in checkout and generation-admin entries and never follows content symlinks.

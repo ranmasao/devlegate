@@ -409,13 +409,13 @@ class ExecutionWorkspaceManager:
         except (ExecutionWorkspaceError, OSError, subprocess.SubprocessError) as error:
             return WorkspaceInspection("UNSAFE", str(error))
 
-    def verify_submodules(self, workspace: ExecutionWorkspace) -> None:
-        """Verify immutable submodules after worker execution."""
+    def verify_submodules(self, workspace: ExecutionWorkspace, *, clean=True) -> None:
+        """Verify submodule identity, normally including immutable source content."""
         # A worker normally leaves intentional superproject edits. Validate its
         # identity here without duplicating the caller's checkpoint cleanliness
-        # decision; submodule verification itself is still strict.
+        # decision. Only bound reset retirement permits dirty module content.
         self._validate_workspace(workspace, verify_status=False)
-        self._verify_submodules(workspace.path)
+        self._verify_submodules(workspace.path, clean=clean)
 
     def retire(self, workspace: ExecutionWorkspace, expected_head: str) -> None:
         """Remove one validated, clean execution worktree registration."""
@@ -590,7 +590,9 @@ class ExecutionWorkspaceManager:
                 paths.append(path)
         return paths
 
-    def _verify_submodules(self, repo: Path) -> None:
+    def _verify_submodules(self, repo: Path, *, clean=True) -> None:
+        if not clean:
+            self._validate_submodule_paths(repo)
         for path in self._gitlink_paths(repo):
             candidate = repo / path
             if candidate.is_symlink() or not candidate.is_dir():
@@ -615,11 +617,11 @@ class ExecutionWorkspaceManager:
                 raise ExecutionWorkspaceError(
                     f"submodule {path} has unexpected HEAD; expected {expected_sha}"
                 )
-            if status.stdout:
+            if clean and status.stdout:
                 raise ExecutionWorkspaceError(
                     f"submodule {path} is dirty; dependency integrity cannot be proven"
                 )
-            self._verify_submodules(candidate)
+            self._verify_submodules(candidate, clean=clean)
 
     def _expected_gitlink(self, repo: Path, path: Path) -> str:
         output = self._runner(repo, "ls-tree", "-r", "-z", "HEAD").stdout

@@ -6,7 +6,9 @@
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
 from pathlib import Path
 
 from devlegate.clean_preview import (
@@ -168,7 +170,80 @@ def _require_no_hidden_changes(manager, repo):
         _require_no_hidden_changes(manager, repo / relative)
 
 
-def _apply_retirement_effect(owner, binding, operation, expected=None):
+def _require_discardable_generation(binding):
+    """Bound dirty discard to this checkout and its proved module admin tree.
+
+    Do not follow content symlinks. Unknown repositories, special files, mount
+    boundaries and Git admin locks are uncertainties, not ordinary source edits.
+    """
+    manager = binding.manager
+    workspace = binding.require_local(
+        clean=False, read_only=True, dirty_submodules=True,
+    )
+    admin = binding._validate_local_identity()
+    allowed_gitfiles = {manager.path / ".git"}
+
+    def modules(repo, parent_admin):
+        manager._validate_submodule_paths(repo)
+        for relative in manager._gitlink_paths(repo):
+            path = repo / relative
+            gitfile = path / ".git"
+            _safe_path(gitfile)
+            if not gitfile.is_file():
+                raise ValueError("reset submodule has unproved Git administration")
+            target = Path(observe_git(
+                path, "rev-parse", "--absolute-git-dir",
+            ).stdout.strip())
+            _safe_path(target)
+            if target != parent_admin / "modules" / relative:
+                raise ValueError("reset submodule Git directory is outside generation")
+            allowed_gitfiles.add(gitfile)
+            modules(path, target)
+
+    modules(manager.path, admin)
+
+    def scan(root, *, administration=False):
+        device = root.stat().st_dev
+
+        def unavailable(error):
+            raise error
+
+        for directory, dirs, files in os.walk(
+            root, followlinks=False, onerror=unavailable,
+        ):
+            if not administration and (
+                "HEAD" in files and "objects" in dirs and "refs" in dirs
+            ):
+                # A bare repository has no .git entry. Treat its recognizable
+                # administration as foreign evidence too, without opening it or
+                # running Git in an unproved repository.
+                raise ValueError(
+                    "reset generation contains an unproved bare repository"
+                )
+            for name in [*dirs, *files]:
+                path = Path(directory) / name
+                mode = path.lstat()
+                if name == ".git" and path not in allowed_gitfiles:
+                    raise ValueError("reset generation contains an unproved repository")
+                if stat.S_ISLNK(mode.st_mode):
+                    if administration:
+                        raise ValueError("reset Git administration contains a symlink")
+                    continue  # Git unlinks content symlinks; never follows them.
+                if mode.st_dev != device or path.is_mount():
+                    raise ValueError("reset generation contains a mount boundary")
+                if not (stat.S_ISREG(mode.st_mode) or stat.S_ISDIR(mode.st_mode)):
+                    raise ValueError("reset generation contains a special file")
+                if administration and name.endswith(".lock"):
+                    raise ValueError("reset Git administration is locked")
+
+    scan(manager.path)
+    scan(admin, administration=True)
+    return workspace
+
+
+def _apply_retirement_effect(
+    owner, binding, operation, expected=None, *, discard_dirty=False,
+):
     """The shared exact Git effects, reached only after a caller's WAL gate."""
     if operation == "worktree":
         manager = binding.manager
@@ -176,7 +251,8 @@ def _apply_retirement_effect(owner, binding, operation, expected=None):
         # Never override a lock, double-force, prune, or remove an unknown path.
         submodules = manager._gitlink_paths(manager.path)
         observe_git(
-            owner.repo, "worktree", "remove", *(("--force",) if submodules else ()),
+            owner.repo, "worktree", "remove",
+            *(("--force",) if submodules or discard_dirty else ()),
             "--", str(manager.path),
         )
     elif operation == "local":
@@ -356,8 +432,7 @@ def retire_ticket_generation(owner, binding):
         if _identity(Path(str(binding.intent["common"]))) != receipt["common_identity"]:
             raise ValueError("reset Git common directory identity changed")
         if not journal:
-            workspace = binding.require_local(clean=True, read_only=True)
-            _require_no_hidden_changes(manager, manager.path)
+            workspace = _require_discardable_generation(binding)
             binding.require_ref(workspace.head)
             upstream = remote_ref(
                 owner.repo, str(binding.intent["remote"]),
@@ -408,13 +483,12 @@ def retire_ticket_generation(owner, binding):
                 journal["head"],
             )
             if not absent:
-                workspace = binding.require_local(clean=True, read_only=True)
-                _require_no_hidden_changes(manager, manager.path)
+                workspace = _require_discardable_generation(binding)
                 if workspace.head != journal["head"] or registrations.get(
                     manager.path.resolve()
                 ) != journal["registration"]:
                     raise ValueError("reset worktree identity changed")
-                _apply_retirement_effect(owner, binding, "worktree")
+                _apply_retirement_effect(owner, binding, "worktree", discard_dirty=True)
                 continue
             following = "local-pending"
         elif not absent:

@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Single-argument reset lifecycle on disposable real Git repositories."""
 
+import json
 import os
 import signal
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from _control_support import Devlegate, control_fixture, git, invoke
@@ -17,6 +19,7 @@ from test_clean_preview import owner as owner  # noqa: F401
 
 from devlegate.execution_containment import DurableDeterministicContainmentProvider
 from devlegate.execution_workspace import ExecutionWorkspaceError
+from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import DevlegateError, WorkflowBlockedError
 from devlegate.ticket_reset import admit, advance, validate
 from devlegate.tickets import TicketError
@@ -103,16 +106,33 @@ def test_reset_forbidden_workflow_does_not_admit(owner, state):
     assert "ticket_reset" not in owner._state
 
 
-def test_reset_dirty_generation_is_blocked_and_resumable(owner):
+def test_reset_stopped_dirty_generation_restarts_without_old_content(
+    owner, monkeypatch,
+):
     path = owner.recovery_workspace_manager("T-1").path
-    (path / "untracked").write_text("preserve me\n")
-    ack = admit(owner, "T-1")
-    with pytest.raises((ExecutionWorkspaceError, ValueError, OSError)):
-        advance(owner)
-    assert path.exists()
-    assert admit(owner, "T-1")["status"] == "blocked"
+    (path / "implementation.txt").write_text("discard tracked edits\n")
+    (path / "untracked").write_text("discard new source\n")
+    (path / ".gitignore").write_text("ignored\n")
+    (path / "ignored").write_text("discard ignored source\n")
+    git(path, "update-index", "--assume-unchanged", "implementation.txt")
+    outside = path.parent / "preserved"
+    outside.write_text("outside generation\n")
+    (path / "link").symlink_to(outside)
+    admit(owner, "T-1")
+    advance(owner)
+    assert not path.exists()
+    assert outside.read_text() == "outside generation\n"
     restored = Devlegate(owner.env_file)
-    assert admit(restored, "T-1")["operation_id"] == ack["operation_id"]
+    original = owner._workers.run
+
+    def worker(workspace, prompt, **kwargs):
+        for name in ("implementation.txt", "untracked", "ignored", "link"):
+            assert not (workspace.path / name).exists()
+        assert git(workspace.path, "status", "--porcelain").stdout == ""
+        return original(workspace, prompt, **kwargs)
+
+    monkeypatch.setattr(restored._workers, "run", worker)
+    assert run_test_iteration(restored) == 0
 
 
 @pytest.mark.parametrize("retirement_proved", [True, False])
@@ -135,10 +155,14 @@ def test_live_reset_cancels_before_checkpoint_and_restarts_fresh(
 
     def worker(workspace, prompt, **kwargs):
         runs.append((workspace, prompt, kwargs["execution_id"]))
+        tracked = git(workspace.path, "ls-files").stdout.splitlines()[0]
         result = _run_opencode(
             [sys.executable, "-c",
-             "import pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text('live'); "
-             "time.sleep(60)", str(marker)],
+             "import pathlib,sys,time; root=pathlib.Path(sys.argv[2]); "
+             "(root/sys.argv[3]).write_text('OLD_TRACKED_CODE'); "
+             "(root/'old-source.py').write_text('OLD_UNTRACKED_CODE'); "
+             "pathlib.Path(sys.argv[1]).write_text('live'); time.sleep(60)",
+             str(marker), str(workspace.path), tracked],
             prompt, execution_id=kwargs["execution_id"],
             worker_identity_handler=kwargs["identity_handler"],
             interruption_handler=kwargs["interruption_handler"],
@@ -167,12 +191,23 @@ def test_live_reset_cancels_before_checkpoint_and_restarts_fresh(
     while not marker.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert marker.exists()
+    old_path = runs[0][0].path
+    assert (old_path / "old-source.py").exists()
+    blob = git(engine.control_worktree, "rev-parse",
+               f"HEAD:{engine.todo_path}/T-1.md").stdout.strip()
     with pytest.raises(DevlegateError, match="unknown or ambiguous"):
         engine.submit_reset("UNKNOWN", request_id="unrelated-ticket")
     with pytest.raises(DevlegateError, match="another ticket's worker"):
         engine.submit_reset("T-2", request_id="known-unrelated-ticket")
     assert thread.is_alive()
-    ack = engine.submit_reset("T-1", request_id="transport-only")
+    server = UnixIPCServer(engine, engine.ipc_socket_path)
+    server.start()
+    try:
+        response = invoke(repo, "reset", "T-1", "--json", config=config)
+        assert response.returncode == 0, response.stderr
+        ack = json.loads(response.stdout)
+    finally:
+        server.stop()
     thread.join(10)
     assert not thread.is_alive()
     if not retirement_proved:
@@ -197,7 +232,30 @@ def test_live_reset_cancels_before_checkpoint_and_restarts_fresh(
     restarted = Devlegate(config)
     assert run_test_iteration(restarted) == 0
     assert restarted._state["ticket_reset"]["status"] == "queued"
-    monkeypatch.setattr(restarted._workers, "run", worker)
+    assert not old_path.exists()
+    assert git(restarted.control_worktree, "rev-parse",
+               f"HEAD:{restarted.todo_path}/T-1.md").stdout.strip() == blob
+    (repo / "current-product.txt").write_text("current product\n")
+    git(repo, "add", "current-product.txt")
+    git(repo, "commit", "-m", "current product after reset")
+    git(repo, "push", "origin", "main")
+    current = git(repo, "rev-parse", "HEAD").stdout.strip()
+    config.write_text(config.read_text() + "\nOPENCODE_MODEL=fresh-model\n")
+
+    def fresh_worker(workspace, prompt, **kwargs):
+        assert kwargs["execution_id"] != runs[0][2]
+        assert workspace.head == current
+        assert restarted._workers.opencode_model == "fresh-model"
+        assert git(workspace.path, "status", "--porcelain").stdout == ""
+        assert not (workspace.path / "old-source.py").exists()
+        assert "OLD_TRACKED_CODE" not in prompt
+        assert "OLD_UNTRACKED_CODE" not in prompt
+        assert restarted._state["execution_resource_binding"]["generation"] != (
+            restarted._state["ticket_reset"]["binding"]["generation"]
+        )
+        return worker(workspace, prompt, **kwargs)
+
+    monkeypatch.setattr(restarted._workers, "run", fresh_worker)
     marker.unlink()
     fresh_thread = threading.Thread(target=owner_thread, args=(restarted,))
     fresh_thread.start()
@@ -267,6 +325,9 @@ def test_reset_effect_ack_loss_replays_exact_namespace(
 ):
     import devlegate.clean_reset as retirement
 
+    path = owner.recovery_workspace_manager("T-1").path
+    (path / "implementation.txt").write_text("discard tracked changes on replay\n")
+    (path / "new-source").write_text("discard untracked changes on replay\n")
     ack = admit(owner, "T-1")
     original = retirement.observe_git
     interrupted = []
@@ -351,6 +412,62 @@ def test_reset_competing_transport_requests_share_one_owner_intent(owner):
     assert results[0]["operation_id"] == results[1]["operation_id"]
 
 
+@pytest.mark.parametrize("unsafe", ["nested-repo", "bare-repo", "fifo", "admin-lock"])
+def test_dirty_discard_does_not_override_safety_uncertainty(owner, unsafe):
+    from devlegate.resource_binding import ResourceBinding
+
+    manager = owner.recovery_workspace_manager("T-1")
+    binding = ResourceBinding.for_execution(manager, owner._state["execution_id"])
+    (manager.path / "implementation.txt").write_text("ordinary dirty source\n")
+    if unsafe in {"nested-repo", "bare-repo"}:
+        foreign = manager.path / "foreign"
+        foreign.mkdir()
+        git(foreign, "init", *(("--bare",) if unsafe == "bare-repo" else ()))
+    elif unsafe == "fifo":
+        os.mkfifo(manager.path / "pipe")
+    else:
+        (binding._admin() / "index.lock").write_text("held\n")
+    admit(owner, "T-1")
+    with pytest.raises((ExecutionWorkspaceError, ValueError)):
+        advance(owner)
+    assert manager.path.exists()
+    assert (manager.path / "implementation.txt").read_text() == (
+        "ordinary dirty source\n"
+    )
+    assert admit(owner, "T-1")["status"] == "blocked"
+
+
+@pytest.mark.parametrize("owner", ["nested"], indirect=True)
+@pytest.mark.parametrize("unsafe", ["lock", "foreign-admin", "head", "symlink"])
+def test_dirty_submodule_discard_requires_proved_administration(
+    owner, unsafe, tmp_path,
+):
+    manager = owner.recovery_workspace_manager("T-1")
+    module = manager.path / "dependency" / "nested"
+    (module / "data").write_text("ordinary dirty dependency\n")
+    if unsafe == "lock":
+        admin = git(module, "rev-parse", "--absolute-git-dir").stdout.strip()
+        (Path(admin) / "index.lock").write_text("held\n")
+    elif unsafe == "foreign-admin":
+        foreign = tmp_path / "foreign"
+        git(tmp_path, "clone", str(module), str(foreign))
+        (module / ".git").write_text(f"gitdir: {foreign / '.git'}\n")
+        git(foreign, "config", "core.worktree", str(module))
+    elif unsafe == "head":
+        git(module, "add", "data")
+        git(module, "-c", "user.name=Fixture", "-c", "user.email=f@example.com",
+            "commit", "-m", "unreceipted dependency commit")
+    else:
+        moved = module.with_name("preserved")
+        module.rename(moved)
+        module.symlink_to(moved, target_is_directory=True)
+    admit(owner, "T-1")
+    with pytest.raises((ExecutionWorkspaceError, ValueError)):
+        advance(owner)
+    assert manager.path.exists()
+    assert admit(owner, "T-1")["status"] == "blocked"
+
+
 def test_reset_launch_failure_retries_pending_fresh_admission(owner, monkeypatch):
     admit(owner, "T-1")
     advance(owner)
@@ -392,23 +509,33 @@ def test_reset_requeue_preserves_raw_ticket_blob(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("owner", ["submodule", "nested"], indirect=True)
 @pytest.mark.parametrize("dirty", [False, True])
-def test_reset_recursive_submodule_safety(owner, dirty):
+def test_reset_recursive_submodule_safety(owner, dirty, monkeypatch):
     manager = owner.recovery_workspace_manager("T-1")
+    old_execution = owner._state["execution_id"]
     if dirty:
         dependency = manager.path / "dependency"
         target = (dependency / "nested"
                   if (dependency / "nested").exists() else dependency)
-        (target / "data").write_text("preserve dirty submodule\n")
+        (target / "data").write_text("discard dirty submodule\n")
+        (target / "new-source").write_text("discard untracked submodule source\n")
     admit(owner, "T-1")
-    if dirty:
-        with pytest.raises(ExecutionWorkspaceError):
-            advance(owner)
-        assert manager.path.exists()
-        assert admit(owner, "T-1")["status"] == "blocked"
-    else:
-        advance(owner)
-        assert not manager.path.exists()
-        assert owner._state["ticket_reset"]["status"] == "queued"
+    advance(owner)
+    assert not manager.path.exists()
+    assert owner._state["ticket_reset"]["status"] == "queued"
+    original = owner._workers.run
+
+    def fresh(workspace, prompt, **kwargs):
+        assert kwargs["execution_id"] != old_execution
+        dependency = workspace.path / "dependency"
+        target = (dependency / "nested"
+                  if (dependency / "nested").exists() else dependency)
+        assert (target / "data").read_text() == "dependency\n"
+        assert not (target / "new-source").exists()
+        assert git(workspace.path, "status", "--porcelain").stdout == ""
+        return original(workspace, prompt, **kwargs)
+
+    monkeypatch.setattr(owner._workers, "run", fresh)
+    assert run_test_iteration(owner) == 0
 
 
 def test_restart_during_cancellation_retires_live_managed_group(tmp_path, monkeypatch):
@@ -451,7 +578,9 @@ def test_restart_during_cancellation_retires_live_managed_group(tmp_path, monkey
     running, acknowledgements = [], []
     marker = tmp_path / "descendant"
 
-    def interrupted_owner(_workspace, _prompt, **kwargs):
+    def interrupted_owner(workspace, _prompt, **kwargs):
+        (workspace.path / "README.md").write_text("interrupted dirty source\n")
+        (workspace.path / "new-source.py").write_text("interrupted new source\n")
         execution_id = kwargs["execution_id"]
         boundary = provider.create(execution_id)
         script = (
