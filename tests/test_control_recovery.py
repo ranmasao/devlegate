@@ -3771,6 +3771,104 @@ def test_operator_recovery_rejects_remote_drift_after_observation(
         )
     assert devlegate._state.get("execution_remote_head") != drift_head
 
+def _wait_for_published_recovery(service):
+    """Recovery admission and durable normalization precede view publication."""
+    latest = {}
+
+    def resumed():
+        for command in ("status", "plan"):
+            result = service.cli(command, "--json")
+            latest[command] = {
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        try:
+            status = json.loads(latest["status"]["stdout"])
+            plan = json.loads(latest["plan"]["stdout"])
+        except (ValueError, TypeError):
+            return False
+        return (
+            latest["status"]["returncode"] in {0, 1}
+            and latest["plan"]["returncode"] == 0
+            and plan.get("action") == "run-worker"
+            and plan.get("bound") is True
+            and (plan.get("ticket") or {}).get("id") == "T-1"
+            and status.get("plan") == plan
+            and status.get("execution", {}).get("phase") == "agent_pending"
+            and status["execution"].get("execution_id") == "current"
+            and status["execution"].get("bound_ticket") == "T-1"
+            and status["execution"].get("state") == "preparing"
+            and status.get("service", {}).get("state") == "running"
+        )
+
+    try:
+        service.wait_for(resumed)
+    except AssertionError as error:
+        raise AssertionError(
+            f"recovery did not publish a coherent resumed plan/status; "
+            f"last CLI views (including action/reason): {latest!r}\n{error}"
+        ) from error
+
+
+@pytest.mark.parametrize("outcome", ["settled", "blocked", "unavailable", "incoherent"])
+def test_published_recovery_wait_requires_coherent_admission(outcome):
+    blocked = {"action": "blocked", "reason": "workspace identity cannot be proven"}
+    runnable = {
+        "action": "run-worker",
+        "reason": "resume bound pending execution",
+        "bound": True,
+        "ticket": {"id": "T-1"},
+    }
+
+    class PublishedViews:
+        attempts = 0
+
+        def cli(self, command, _json):
+            plan = runnable if self.attempts > 1 else blocked
+            if outcome == "blocked":
+                plan = blocked
+            if outcome == "unavailable":
+                return subprocess.CompletedProcess(
+                    [], 1, "", "service plan view is not ready"
+                )
+            value = plan if command == "plan" else {
+                "plan": blocked if outcome == "incoherent" else plan,
+                "execution": {
+                    "phase": "agent_pending",
+                    "execution_id": "current",
+                    "bound_ticket": "T-1",
+                    "state": "recovery-required" if plan == blocked else "preparing",
+                },
+                "service": {"state": "running"},
+            }
+            return subprocess.CompletedProcess([], 0, json.dumps(value), "")
+
+        def wait_for(self, predicate):
+            # Deterministic bounded sampling: first stale, then settled (or
+            # persistently refused/unavailable/incoherent). No elapsed-time race.
+            for self.attempts in range(1, 4):
+                if predicate():
+                    return
+            raise AssertionError("bounded wait expired")
+
+    service = PublishedViews()
+    if outcome == "settled":
+        _wait_for_published_recovery(service)
+        assert service.attempts == 2
+    else:
+        with pytest.raises(AssertionError) as caught:
+            _wait_for_published_recovery(service)
+        diagnostic = str(caught.value)
+        assert "last CLI views" in diagnostic
+        assert "bounded wait expired" in diagnostic
+        if outcome == "unavailable":
+            assert "service plan view is not ready" in diagnostic
+        else:
+            assert "blocked" in diagnostic
+            assert "workspace identity cannot be proven" in diagnostic
+
+
 def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3788,7 +3886,11 @@ def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkey
 
     with LiveService(working, config) as service:
         service.wait_ready()
-        time.sleep(1.2)
+        service.wait_for(
+            lambda: json.loads(service.cli("status", "--json").stdout)["execution"][
+                "state"
+            ] == "recovery-required"
+        )
         assert service.process is not None and service.process.poll() is None
         status = service.cli("status", "--json")
         assert status.returncode in {0, 1}
@@ -3798,26 +3900,130 @@ def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkey
         assert status_payload["execution"]["state"] == "recovery-required"
         blocked_plan = service.cli("plan", "--json")
         assert blocked_plan.returncode in {0, 1}
-        assert json.loads(blocked_plan.stdout)["action"] == "blocked"
-        recovered = service.cli(
-            "recover", "T-1", "current", "--observed-head", observed
+        assert json.loads(blocked_plan.stdout)["action"] == "blocked", (
+            blocked_plan.stdout
         )
-        assert recovered.returncode == 0, recovered.stderr
-        assert "recovery accepted: T-1" in recovered.stdout
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            payload = state_payload(state)
-            if "operator_recovery" not in payload:
-                break
-            time.sleep(0.05)
+        recovered = None
+
+        def admit_recovery():
+            nonlocal recovered
+            recovered = service.cli(
+                "recover", "T-1", "current", "--observed-head", observed
+            )
+            # The initial published blocked view can precede the first
+            # scheduler iteration. Only an explicit non-admission is safe to
+            # resubmit; never retry an admitted or refused recovery effect.
+            if (
+                recovered.returncode == 1
+                and recovered.stderr.strip() == "devlegate: service error: "
+                "service busy; mutable request was not admitted"
+            ):
+                return False
+            assert recovered.returncode == 0, recovered
+            assert "recovery accepted: T-1" in recovered.stdout, recovered
+            return True
+
+        try:
+            service.wait_for(admit_recovery)
+        except AssertionError as error:
+            raise AssertionError(
+                f"recovery admission failed; last CLI result: {recovered!r}\n{error}"
+            ) from error
+        # SQLite normalization is not a publication barrier: the owner may
+        # still be recovering, or released but collecting its next snapshot.
+        _wait_for_published_recovery(service)
+        payload = state_payload(state)
         assert "operator_recovery" not in payload
         assert payload["execution_id"] == "current"
-        resumed = service.cli("plan", "--json")
-        assert resumed.returncode == 0, resumed.stderr
-        assert json.loads(resumed.stdout)["action"] == "run-worker"
-        resumed_status = service.cli("status", "--json")
-        assert resumed_status.returncode in {0, 1}
-        resumed_payload = json.loads(resumed_status.stdout)
-        assert resumed_payload["plan"]["action"] == "run-worker"
-        assert resumed_payload["execution"]["state"] != "recovery-required"
+        assert payload["phase"] == "agent_pending"
+        assert payload.get("worker_identity") is None
         assert service.process is not None and service.process.poll() is None
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_recovery_owner_publishes_after_admission_and_release(
+    tmp_path, monkeypatch, refused
+):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    base = git(working, "rev-parse", "HEAD").stdout.strip()
+    manager = ExecutionWorkspaceManager(
+        working, state / "worktrees" / next(state.glob("worktrees/*")).name, "T-1"
+    )
+    workspace = manager.prepare(base)
+    _persist_pending_execution(
+        devlegate, state, workspace, base, "current", start_head="f" * 40
+    )
+    old_plan = devlegate.status_view().plan
+    assert old_plan.action == "blocked", old_plan
+    command = runtime.OperatorCommand(
+        request_id="publication-boundary",
+        method="recover",
+        fingerprint=runtime._recover_request_fingerprint("T-1", "current", base),
+        ticket_id="T-1",
+        execution_id="current",
+        onto=base,
+    )
+    devlegate._operator_command = command
+    boundaries = []
+    real_dispatch = devlegate._dispatch_operator_command
+    real_release = devlegate._release_operator_command
+    real_save = devlegate._save_state
+
+    def assert_old_view(boundary):
+        before = state_payload(state)
+        assert devlegate.published_plan_view() == old_plan
+        assert devlegate.published_status_payload()["plan"] == old_plan.as_dict()
+        assert state_payload(state) == before  # Published reads never repair.
+        boundaries.append(boundary)
+
+    def dispatch(admitted, stop):
+        assert admitted.admission_event.is_set()
+        assert admitted.admission_error is None
+        assert_old_view("admitted")
+        if refused:
+            # Drift after successful admission must still refuse the reset.
+            (workspace.path / "unowned.txt").write_text("must survive\n")
+        return real_dispatch(admitted, stop)
+
+    def save(phase, **kwargs):
+        result = real_save(phase, **kwargs)
+        if kwargs.get("clear_operator_recovery"):
+            assert devlegate._operator_active
+            assert "operator_recovery" not in state_payload(state)
+            assert_old_view("normalized-but-active")
+        return result
+
+    def release():
+        real_release()
+        assert not devlegate._operator_active
+        assert_old_view("released-before-publication")
+
+    monkeypatch.setattr(devlegate, "_dispatch_operator_command", dispatch)
+    monkeypatch.setattr(devlegate, "_save_state", save)
+    monkeypatch.setattr(devlegate, "_release_operator_command", release)
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_a, **_kw: pytest.fail("premature worker")
+    )
+    assert devlegate._run_polling(once=True) == (1 if refused else 0)
+    plan = devlegate.published_plan_view()
+    assert devlegate.published_status_payload()["plan"] == plan.as_dict()
+    assert boundaries == (
+        ["admitted", "released-before-publication"] if refused else
+        ["admitted", "normalized-but-active", "released-before-publication"]
+    )
+    if refused:
+        assert plan.action == "blocked", plan
+        assert "not clean" in devlegate._iteration_diagnostic
+        assert (workspace.path / "unowned.txt").read_text() == "must survive\n"
+        assert devlegate._state.get("operator_recovery") is not None
+        assert devlegate._state["execution_start_head"] == "f" * 40
+    else:
+        assert plan.action == "run-worker", plan
+        assert "operator_recovery" not in devlegate._state
+    assert devlegate._state["execution_id"] == "current"
+    assert devlegate._state["phase"] == "agent_pending"
+    assert devlegate._state.get("worker_identity") is None
+    assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == base
