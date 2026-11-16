@@ -263,6 +263,39 @@ Product-lineage rewrite remains ServiceEngine-coordinated because its lease,
 CAS, rebase, and displaced-history operations share the existing reconciliation
 state machine and must remain under the single owner lock.
 
+Reconciliation receives detached pending-state snapshots from the engine.
+Local-pending intent precedes rebase, and remote-pending intent precedes evidence
+pinning and leased publication. The execution base changes only on resolution;
+replay re-observes workspace, refs, and exact heads before resolving or aborting.
+
+### Git Command Authority
+
+`git.py` constructs commands and distinguishes proven absence or false ancestry
+from observation failure using exit status and structured output, not diagnostic
+text. Mutation primitives return process outcomes to the transaction owner. A
+failed push can have succeeded remotely: the owner must re-observe the exact ref
+before retrying, with the admitted predecessor preserved in its lease. Evidence
+pins use create-only or expected-old CAS and exact post-effect observations.
+Fetch is a remote read that also writes local objects and tracking refs.
+
+Runtime workflow commands use the owner-checked `_git_runtime` transport or an
+explicit owner-held capability. The transport has no generic retry policy.
+Reconciliation checks stop intent before fresh commands; admitted retirement can
+finish required post-delete proof and create-only restoration. The standalone
+`_remote_exists_for_status` local read is presentation only and grants no workflow
+authority. Product fast-forward interruption recovery has its own exact-target
+WAL proof; control synchronization does not inherit that retry policy.
+
+### Cleanup Dependencies
+
+Cleanup reads current worker, active execution, reconciliation, automatic retry,
+and accepted-integration dependencies. Malformed records cannot prove that they
+are unrelated and block retirement. Resolved reconciliation records can still
+retain a dependency. The pure accepted-integration identity comparison in
+`cleanup_dependency.py` grants no deletion authority. The engine repeats the
+dependency gate and reloads ticket, report, ref, and integration evidence before
+retirement; inventory and prior proof are not a cleanup lease.
+
 ## Runtime State
 
 SQLite stores local operational runtime state. This state records active
@@ -273,6 +306,20 @@ By default the state is under `$XDG_STATE_HOME/devlegate`, or
 `~/.local/state/devlegate` when `XDG_STATE_HOME` is unset. `STATE_DIR` can
 override the location. State and Git observations are used together when the
 service must establish whether a previous operation took effect.
+
+The engine state-write lock covers replacement construction, validation, SQLite
+commit, and in-memory reference replacement. Forced-stop eligibility and abort
+markers use the same lock so a stale save cannot erase an admitted abort.
+Internal lock order is operator -> lifecycle -> state -> SQLite, or receipt ->
+state -> SQLite. Stop callbacks run outside the state lock. Reentrant saves are
+refused. A store exception can follow a successful commit; subsequent saves and
+forced signals are refused until restart reloads the durable row.
+
+`runtime_state_validation.py` validates ordinary JSON-shaped state without I/O or
+input mutation; load/save policy remains engine-owned. SQLite replacement is not
+atomic with Git, worker processes, or remote effects. Shallow replacement does
+not make nested state immutable, and a store revision alone is not authority to
+repeat an external effect.
 
 Terminal service failures have a separate lifetime from workflow runtime state.
 When a hosted service escapes its service boundary unexpectedly,

@@ -157,13 +157,12 @@ through this channel.
 
 ## Trust and execution boundary
 
-Mandatory kernel-enforced agent confinement is explicitly deferred to TASK-152.
-The experimental launcher and kernel-isolation tests have been removed. TASK-151
-uses the existing trusted-agent model: worker instructions, OpenCode directory
+Analysis uses the trusted-agent model: worker instructions, OpenCode directory
 permissions and supervised cgroup lifetime containment. A cgroup is a process
 lifetime boundary, not filesystem or credential isolation. An agent with general
-shell access as the service UID may reach other resources. This implementation
-does not claim OS-enforced denial of Git, credentials or privileged IPC.
+shell access as the service UID may reach other resources. Kernel-enforced
+filesystem confinement, including Landlock, is not enforced. There is no
+OS-enforced denial of Git, credentials or privileged IPC.
 
 `EvidenceWorkspace.prepare` creates a fresh private evidence directory outside
 repository ancestry. It contains only the manifest, not a checkout or `.git`.

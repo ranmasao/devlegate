@@ -5,8 +5,7 @@ OpenCode process, a local model endpoint, and LSP protocol orchestration.
 The small Node hook tests remain mandatory in CI.
 
 Use a disposable workspace and configuration, not a Devlegate execution
-workspace. The following describes the local acceptance run with OpenCode
-1.19.5, Python 3.12.3, and Node 24.21.0:
+workspace. Record the OpenCode, Python, and Node versions used for each run:
 
 1. Start a Python stdlib HTTP server implementing an OpenAI-compatible
    streaming chat completion. On the first request with tools, return a
@@ -42,13 +41,10 @@ workspace. The following describes the local acceptance run with OpenCode
    serialize `state.metadata.diagnostics` as compact UTF-8 JSON to check the
    65,536-byte limit.
 
-Observed on the stated versions: five LSP publications contained 5,000
-diagnostics; the baseline diagnostic map was 2,184,651 bytes and the largest
-of six JSONL events was 2,220,729 bytes. The transport rejected that event.
-The filtered map was 65,536 bytes and the largest of six events was 101,651
-bytes; transport succeeded. The 35,339-byte agent-visible tool output was
-identical, included LSP errors, and was present in the model's next request.
-These numbers depend on temporary path lengths and OpenCode version.
+Require the filtered transport to succeed within both limits. The agent-visible
+tool output must remain byte-identical, include LSP errors, and appear in the
+model's next request. Record baseline and filtered diagnostic-map sizes and
+largest JSONL event sizes; these vary with paths and OpenCode versions.
 
 For distribution verification, build using `python -m build --outdir DIST`,
 install the resulting wheel and sdist into separate clean virtual environments,
@@ -56,5 +52,5 @@ and compare `importlib.resources.files("devlegate").joinpath(
 "diagnostics_plugin.mjs").read_bytes()` with the source resource. Intercept
 the worker's `_run_opencode` call and compare those bytes with the generated
 `OPENCODE_CONFIG_DIR/plugins/diagnostics.js` before the temporary directory is
-removed. Both installation forms produced identical 3,124-byte resources and
-worker plugin files in the local acceptance run.
+removed. Require identical source, installed resource, and generated worker
+plugin bytes for both installation forms.

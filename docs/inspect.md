@@ -1,9 +1,9 @@
 # Read-only object inspection
 
 ```sh
-devlegate inspect ticket TASK-132 --json
+devlegate inspect ticket <ticket-id> --json
 devlegate inspect execution <exact-execution-id> --json
-devlegate inspect workspace TASK-132 --json
+devlegate inspect workspace <ticket-id> --json
 devlegate inspect service --json
 ```
 
