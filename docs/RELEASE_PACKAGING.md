@@ -153,11 +153,11 @@ For a disposable target installation, mount the artifacts and smoke script:
 docker run --rm -v "$PWD/dist:/packages:ro" \
   -v "$PWD/tests/native_package_smoke.sh:/smoke.sh:ro" \
   archlinux:base sh /smoke.sh arch \
-  /packages/devlegate-0.5.7.dev0-1-x86_64.pkg.tar.zst
+  /packages/devlegate-0.5.7-1-x86_64.pkg.tar.zst
 docker run --rm -v "$PWD/dist:/packages:ro" \
   -v "$PWD/tests/native_package_smoke.sh:/smoke.sh:ro" \
   debian:12 sh /smoke.sh debian \
-  /packages/devlegate_0.5.7.dev0_amd64.deb
+  /packages/devlegate_0.5.7_amd64.deb
 ```
 
 The script checks native metadata (`pacman -Qip` / `dpkg-deb -f`), dependency

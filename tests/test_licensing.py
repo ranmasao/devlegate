@@ -88,7 +88,8 @@ def test_required_legal_files_and_version_exist() -> None:
     assert (ROOT / "LICENSING.md").is_file()
     assert (ROOT / "NOTICE").is_file()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert metadata["project"]["version"] == "0.5.7.dev0"
+    assert metadata["project"]["version"] == "0.5.7"
+    assert metadata["project"]["requires-python"] == ">=3.12"
     assert __version__ == metadata["project"]["version"]
     assert metadata["project"]["license"] == "EUPL-1.2 AND CC0-1.0 AND MIT"
     assert metadata["project"]["license-files"] == [
@@ -192,6 +193,8 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
         names = set(archive.namelist())
         dist_info = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(archive.read(dist_info).decode("utf-8"))
+        assert metadata["Version"] == __version__
+        assert metadata["Requires-Python"] == ">=3.12"
         expected_license_files = {
             "LICENSE",
             "NOTICE",
