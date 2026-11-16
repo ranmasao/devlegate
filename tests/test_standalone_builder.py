@@ -184,6 +184,20 @@ def test_cached_input_does_not_publish_failed_download(tmp_path, monkeypatch):
     assert not destination.exists()
 
 
+def test_cached_input_rejects_mismatched_download(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    destination = tmp_path / "input.bin"
+    digest = hashlib.sha256(b"pinned input").hexdigest()
+    monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
+
+    with pytest.raises(BUILDER.BuildError, match="sha256 mismatch"):
+        BUILDER.cached_input(
+            "input.bin", digest, destination, lambda path: path.write_bytes(b"wrong")
+        )
+    assert not (cache / digest).exists()
+    assert not destination.exists()
+
+
 def test_standalone_assets_use_cached_pbs_and_scie_jump(tmp_path, monkeypatch):
     cache = tmp_path / "cache"
     monkeypatch.setenv("DEVLEGATE_STANDALONE_INPUT_CACHE", str(cache))
@@ -416,7 +430,60 @@ def _science_binary(tmp_path):
     return tools / BUILDER.SCIENCE_ASSET
 
 
-def test_standalone_assets_match_pinned_science_reference_mirror(
+# Independent protocol reference for Science 0.21.0 / PBS 20260901 / CPython
+# 3.12.14. These are literal release identities, not builder-generated metadata.
+# Size is the byte length of the SHA-256-verified release archive. A pin update
+# requires deliberate review of this reference as well as the production pins.
+PBS_REFERENCE = {
+    "digest": {
+        "fingerprint": (
+            "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
+        ),
+        "size": 34143368,
+    },
+    "file_type": "tar.gz",
+    "name": (
+        "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    ),
+    "rel_path": "download/20260901/"
+    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "version": "3.12.14",
+}
+JUMP_REFERENCE_SHA256 = (
+    "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7e2d0"
+)
+
+
+def _assert_pinned_mirror(assets):
+    assert BUILDER.SCIENCE_VERSION == "0.21.0"
+    assert BUILDER.SCIENCE_SHA256 == (
+        "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
+    )
+    assert BUILDER.PBS_SHA256 == PBS_REFERENCE["digest"]["fingerprint"]
+    provider = assets / "providers" / "PythonBuildStandalone"
+    metadata = (
+        provider / "download/20260901/distributions-3.12.14-install_only_stripped.json"
+    )
+    assert json.loads(metadata.read_text()) == {
+        "base_url": "https://github.com/astral-sh/python-build-standalone/releases",
+        "release": "20260901",
+        "assets": [PBS_REFERENCE],
+    }
+    archive = provider / PBS_REFERENCE["rel_path"]
+    assert archive.stat().st_size == PBS_REFERENCE["digest"]["size"]
+    BUILDER.verify_file(archive, PBS_REFERENCE["digest"]["fingerprint"])
+    assert BUILDER.SCIE_JUMP_VERSION == "1.13.0"
+    assert BUILDER.SCIE_JUMP_ASSET == "scie-jump-gnu-linux-x86_64"
+    assert BUILDER.SCIE_JUMP_SHA256 == JUMP_REFERENCE_SHA256
+    jump = assets / "jump/download/v1.13.0/scie-jump-gnu-linux-x86_64"
+    BUILDER.verify_file(jump, JUMP_REFERENCE_SHA256)
+    assert subprocess.run(
+        [str(jump), "--version"], check=True, capture_output=True, text=True
+    ).stdout.strip() == "1.13.0"
+
+
+def _audit_live_pinned_science_reference_mirror(
     tmp_path, monkeypatch
 ):
     _prepare_standalone_cache(tmp_path, monkeypatch)
@@ -425,6 +492,8 @@ def test_standalone_assets_match_pinned_science_reference_mirror(
     BUILDER.run(
         [
             str(science),
+            "--cache-dir",
+            str(tmp_path / "live-science-cache"),
             "download",
             "scie-jump",
             "--version",
@@ -435,6 +504,8 @@ def test_standalone_assets_match_pinned_science_reference_mirror(
     BUILDER.run(
         [
             str(science),
+            "--cache-dir",
+            str(tmp_path / "live-science-cache"),
             "download",
             "provider",
             BUILDER.PBS_PROVIDER,
@@ -482,23 +553,63 @@ def test_standalone_assets_match_pinned_science_reference_mirror(
     ).read_bytes()
 
 
+# Optional compliance audit, collected ONLY on explicit operator request:
+# DEVLEGATE_LIVE_SCIENCE_AUDIT=1 ./dev test tests/test_standalone_builder.py \
+#     -k live_pinned_science_reference_mirror
+# Live upstream errors propagate as failures; routine CI uses the literal
+# reference and real Science --base-url conformance below instead.
+if os.environ.get("DEVLEGATE_LIVE_SCIENCE_AUDIT") == "1":
+    test_live_pinned_science_reference_mirror = (
+        _audit_live_pinned_science_reference_mirror
+    )
+
+
+@pytest.mark.parametrize("damage", [None, "metadata", "archive", "size"])
+def test_standalone_assets_match_pinned_science_reference_mirror(
+    tmp_path, monkeypatch, damage
+):
+    _check_science_mirror_under_denial(tmp_path, monkeypatch, damage, canonical=True)
+
+
 def test_pinned_science_consumes_standalone_mirror_under_denial(tmp_path, monkeypatch):
+    _check_science_mirror_under_denial(tmp_path, monkeypatch)
+
+
+def _check_science_mirror_under_denial(
+    tmp_path, monkeypatch, damage=None, *, canonical=False
+):
     _prepare_standalone_cache(tmp_path, monkeypatch)
     science = _science_binary(tmp_path)
     assets = Path(
         BUILDER.materialize_standalone_assets(tmp_path / "actual").removeprefix("file://")
     )
+    if canonical:
+        _assert_pinned_mirror(assets)
+    provider = (
+        assets / "providers" / BUILDER.PBS_PROVIDER / "download" / BUILDER.PBS_RELEASE
+    )
+    if damage == "metadata":
+        metadata = provider / "distributions-3.12.14-install_only_stripped.json"
+        content = json.loads(metadata.read_text())
+        del content["assets"][0]["digest"]
+        metadata.write_text(json.dumps(content))
+    elif damage == "archive":
+        # Keep size unchanged so Science must check the SHA-256, not just length.
+        with (provider / BUILDER.PBS_ARCHIVE).open("r+b") as archive:
+            archive.write(b"corrupt")
+    elif damage == "size":
+        (provider / BUILDER.PBS_ARCHIVE).write_bytes(b"corrupted pinned archive")
     output = tmp_path / "provider-output"
     requests = []
 
     class UpstreamDenied(BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append(self.path)
-            self.send_error(503, "upstream access is forbidden in this test")
+            self.send_error(403, "upstream access is forbidden in this test")
 
         def do_CONNECT(self):
             requests.append(self.path)
-            self.send_error(503, "upstream access is forbidden in this test")
+            self.send_error(403, "upstream access is forbidden in this test")
 
         def log_message(self, _format, *_args):
             pass
@@ -512,9 +623,11 @@ def test_pinned_science_consumes_standalone_mirror_under_denial(tmp_path, monkey
             monkeypatch.setenv(variable, denial_url)
         monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
         with BUILDER.serve_asset_mirror(assets.as_uri()) as mirror:
-            BUILDER.run(
+            result = subprocess.run(
                 [
                     str(science),
+                    "--cache-dir",
+                    str(tmp_path / "fresh-science-cache"),
                     "download",
                     "provider",
                     BUILDER.PBS_PROVIDER,
@@ -529,8 +642,22 @@ def test_pinned_science_consumes_standalone_mirror_under_denial(tmp_path, monkey
                     "--base-url",
                     f"{mirror}/providers/{BUILDER.PBS_PROVIDER}",
                     str(output),
-                ]
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
+        if damage:
+            assert result.returncode != 0, result.stdout
+            expected_error = {
+                "metadata": "digest",
+                "archive": "expected sha256 digest",
+                "size": "unexpected size",
+            }[damage]
+            assert expected_error in result.stderr.lower(), result.stderr
+            assert requests == []
+            return
+        assert result.returncode == 0, result.stderr
         downloaded = (
             output
             / "providers"
@@ -544,6 +671,8 @@ def test_pinned_science_consumes_standalone_mirror_under_denial(tmp_path, monkey
         assert requests == []
     finally:
         denial.shutdown()
+        thread.join()
+        denial.server_close()
 
 
 def test_scie_command_pins_runtime_inputs(tmp_path):
