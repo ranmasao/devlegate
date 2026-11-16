@@ -1,0 +1,38 @@
+{
+  "code_base_head": "2c2ed1f9427baa7fe334a433ce9aa725a943100c",
+  "conclusion": "blocked",
+  "control_head": "847ae483c50724c06406f6050fd08903ef524f1b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-169",
+  "execution_id": "682bf4479e78449987857a11d302f155",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-169",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must publish the implementation checkpoint and provide its exact SHA and hosted CI result; worker-owned commit/push operations are prohibited."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain passing hosted CI for the exact Devlegate-published checkpoint."
+  ],
+  "report_artifact": "executions/TASK-169/682bf4479e78449987857a11d302f155.md",
+  "report_sha256": "a12b12877c181aa26b7a7162656939bf884ad987d27cc2b10b15cc573d5be222",
+  "resource_generation": "1a27f56dd9d5dc7fc36111e33e609481e35be0bc87a9fb5ea27214d897fc0f51",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-169",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must publish the implementation checkpoint and provide its exact SHA and hosted CI result; worker-owned commit/push operations are prohibited."
+    ],
+    "remaining": [
+      "Obtain passing hosted CI for the exact Devlegate-published checkpoint."
+    ],
+    "report": "Local validation passed: Python 3.12 tomllib assertions for stable version and unchanged >=3.12 requirement; shell syntax and final native-package paths; existing metadata/licensing, distribution-boundary, CLI parser, Arch, Debian, and standalone-package checks (181 tests across the focused suite and final Debian rerun); Ruff and git diff --check. The normal setuptools build metadata and CLI version equality are covered without adding runtime derivation logic or dependencies. Remaining .dev0 references are independent synthetic test inputs. Release-owner handoff: choose the actual release date, prove the final clean/tagged source and rerun the exact-SHA gate, build and validate intended artifacts including Debian/Arch native and host-installation evidence, publish only authorized GitHub assets under the existing policy, and merge/open the next development branch only after release acceptance. No release packaging or host-installation proof is claimed.",
+    "summary": "Set canonical project metadata and the existing CLI version constant to stable 0.5.7, and updated native smoke examples to final-version filenames. Updated version assertions and source-coupled Debian fixtures while preserving the Unreleased changelog heading and release asset policy."
+  },
+  "workspace_head": "7034823dd47811e55eeefd820e70621b1756d429"
+}
