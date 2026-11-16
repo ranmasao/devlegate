@@ -1,0 +1,30 @@
+{
+  "code_base_head": "8fe23c7ecb0d80a5cde7b21fbf05ae338e0503af",
+  "conclusion": "completed",
+  "control_head": "c1b7bbf4da4d6324cb8836208081e2e05d2b3378",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-171",
+  "execution_id": "70414a50244f4a60b6ce946b78dd9637",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-171",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-171/70414a50244f4a60b6ce946b78dd9637.md",
+  "report_sha256": "7e0051d0694bbbd95cc8984d3a8541d8a69fe2ea133ad00fbf629e4b5048d2a2",
+  "resource_generation": "570964da7f094a1e6538e0e8aed2322bc91a49d62847f3a3eff8ed31033aa8e5",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-171",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Compared coverage with maintained command, recovery, abandonment and distribution docs, implementation, templates and regression tests. Local git diff --check and Markdown/reference checks passed; only CHANGELOG.md changed, and the preamble and all history starting at 0.5.6 are byte-identical. The 0.5.7 section remains Unreleased, with stable version and full-source asset policy unchanged. Release operator handoff: add the actual date when authorizing publication; final clean/tagged source package proof and hosted post-integration CI for the exact Devlegate-published checkpoint remain separate operator gates, not locally established results.",
+    "summary": "Refined only the 0.5.7 changelog into concise, past-tense product-facing notes, consolidating recovery and cleanup details while preserving material release coverage. Moved the new abandoned workflow state into Added and retained its operator setup requirement."
+  },
+  "workspace_head": "0c97ca80d0efa6160f563acecd3124b5c6587a9d"
+}
