@@ -1,0 +1,38 @@
+{
+  "code_base_head": "99fec169753c79c270491bf914083ceecdbe7ac5",
+  "conclusion": "blocked",
+  "control_head": "307c7667f86628e0960c246f9efead7c8b3a557c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-164",
+  "execution_id": "2ce7f3c570a94f5f81ffd6bc8b5eeab9",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-164",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must checkpoint and publish these implementation changes, then run and verify hosted GitHub CI for that exact checkpoint; the worker contract prohibits performing those Git lifecycle operations."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain passing hosted GitHub CI for the exact implementation checkpoint through the normal Devlegate lifecycle."
+  ],
+  "report_artifact": "executions/TASK-164/2ce7f3c570a94f5f81ffd6bc8b5eeab9.md",
+  "report_sha256": "83b8f0f3293f5200a765c5fe22659b2b686bf962ec41a6e96b9505c3ed3a4d93",
+  "resource_generation": "432bc7346ab633dfd874eacc1d59a19d7db3dc1d2c4acdc83306909d06ee508f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-164",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must checkpoint and publish these implementation changes, then run and verify hosted GitHub CI for that exact checkpoint; the worker contract prohibits performing those Git lifecycle operations."
+    ],
+    "remaining": [
+      "Obtain passing hosted GitHub CI for the exact implementation checkpoint through the normal Devlegate lifecycle."
+    ],
+    "report": "Implementation and local validation are finished. The configured full coverage run passed with 2264 tests passed and 2 skipped, reporting 80% combined statement/branch coverage. After improving the uncertain-effect diagnostic and adding two owner-level interruption cases, focused coverage validation passed all 66 selected tests. Ruff and whitespace checks passed. Exact-checkpoint hosted CI remains an external acceptance gate because this worker cannot commit or push. Changes are limited to product source, regression tests, and docs/resource-identity.md; no installed operator runtime or private control-plane state was accessed or modified.",
+    "summary": "Rework retries now select the exact admitted resource predecessor before inherited review preparation progress, preserving dirty WIP and review context without repeating predecessor publication. Added exact-generation intent replay, predecessor worker and resource proof checks, interruption regressions, and operator recovery diagnostics."
+  },
+  "workspace_head": "048b84d13206852ddebe479258c188f8d04e74e8"
+}
