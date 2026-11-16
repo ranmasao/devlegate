@@ -1,0 +1,38 @@
+{
+  "code_base_head": "4f36d77938d81358993fcd297f501f6c132343fc",
+  "conclusion": "blocked",
+  "control_head": "6648fa1767606829f582af29a387a3965a2a058a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-166",
+  "execution_id": "3a804672d482483b98b3cee6c3906819",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-166",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must commit and publish this documentation checkpoint, then obtain hosted CI results for that exact SHA; the worker contract prohibits the Git lifecycle operations needed to create that checkpoint."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain successful hosted CI for the exact documentation checkpoint SHA after Devlegate commits and publishes the changes."
+  ],
+  "report_artifact": "executions/TASK-166/3a804672d482483b98b3cee6c3906819.md",
+  "report_sha256": "daf27562d0fa9606f057047fb26a1629779a50591ef45e3c2537ea3e572b9580",
+  "resource_generation": "9fec773fe8d4d3683e408c9282b5aee969990451e03db12efe4392ace05e7ab4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-166",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must commit and publish this documentation checkpoint, then obtain hosted CI results for that exact SHA; the worker contract prohibits the Git lifecycle operations needed to create that checkpoint."
+    ],
+    "remaining": [
+      "Obtain successful hosted CI for the exact documentation checkpoint SHA after Devlegate commits and publishes the changes."
+    ],
+    "report": "Only CHANGELOG.md changed. Evidence was reconstructed from v0.5.6 ancestry through integrated HEAD 4f36d77938d81358993fcd297f501f6c132343fc and checked against current source, maintained docs, and tests, excluding reverted continuation work and unshipped Change Explorer/Landlock functionality. Local validation passed: 237 focused tests across agent protocols, worker prompts, CLI parsing, output, and log reading; Ruff; git diff --check; and Markdown/reference checks across 21 maintained root/docs files and 42 local references. Older release entries are byte-identical; the new section is ASCII-only and contains no historical ticket IDs or artifact links. Hosted CI cannot validate uncommitted working-tree edits. Separate human release finalization remains with the release owner: normalize version declarations, collect final exact-source packaging and target-installation evidence under existing publication policy, authorize the release date, and create the Git tag/publication. No release readiness decision is made by this worker.",
+    "summary": "Expanded the 0.5.7 Unreleased changelog into source-backed Added, Changed, Fixed, and Removed outcomes covering execution recovery, inspect/reset/workspace operations, review and abandonment workflows, role contracts, Git authority, diagnostics, and packaging support. Preserved older release entries and distinguished new functionality from hardening of existing capabilities."
+  },
+  "workspace_head": "2c2ed1f9427baa7fe334a433ce9aa725a943100c"
+}
