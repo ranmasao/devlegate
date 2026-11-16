@@ -61,9 +61,26 @@ disposition: rework
 -->
 ```
 
-Put focused, actionable feedback after the header. Never modify or delete a
-published review artifact. A later rejected execution gets a new artifact named
-for that execution; do not concatenate old feedback into the current artifact.
+Put focused, actionable REWORK feedback after the header, distinguishing:
+
+1. **Primary acceptance-blocking outcome and next action.** Identify the most
+   important unresolved outcome required by the canonical ticket, its concrete
+   implementation boundary, and a suggested next verifiable action toward it.
+2. **Mandatory dependent checks.** Identify required regressions and other
+   verification that depend on or establish that outcome, and order other
+   mandatory findings by dependency and priority.
+3. **Optional/non-blocking improvements.** Label these explicitly so diagnostic,
+   test, or housekeeping polish cannot displace the blocking work. A reproducing
+   test, safety precondition, or design investigation may itself be the necessary
+   next action; do not require unsafe implementation-first work.
+
+These priorities do not waive any canonical acceptance criterion or permit unsafe
+partial acceptance. Review the whole ticket independently; do not quietly broaden
+its specification or create additional hardening tickets.
+
+Never modify or delete a published review artifact. A later rejected execution
+gets a new artifact named for that execution; do not concatenate old feedback
+into the current artifact.
 If canonical requirements truly need amendment, stop ordinary review and request
 an explicit guarded Architect specification revision instead.
 

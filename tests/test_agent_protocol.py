@@ -2,7 +2,9 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import hashlib
+import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -152,7 +154,84 @@ def test_rendered_role_contracts_keep_completion_and_review_authority_separate(
     assert "does not excuse\nunmet requirements" in reviewer
 
 
-def test_managed_template_upgrade_refuses_customized_source(tmp_path, monkeypatch):
+def test_reviewer_priorities_and_repository_artifacts_agree(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    relative = "skills/reviewer/SKILL.md.tmpl"
+    packaged = (packaged_template_root() / relative).read_bytes()
+    managed = root / ".devlegate/templates" / relative
+    assert managed.read_bytes() == packaged
+    receipt = json.loads(
+        (root / ".devlegate/templates/.devlegate-defaults.json").read_text()
+    )
+    assert receipt["sources"][relative] == hashlib.sha256(packaged).hexdigest()
+
+    repository_context = RenderContext(
+        "devlegate/control", "kanban/backlog", "kanban/todo", "kanban/review",
+        "kanban/done", "release/0.5.7",
+    )
+    initialize_project(tmp_path, repository_context)
+    generated = (tmp_path / "skills/reviewer/SKILL.md").read_bytes()
+    assert (root / "skills/reviewer/SKILL.md").read_bytes() == generated
+    reviewer = generated.decode()
+    for instruction in (
+        "Primary acceptance-blocking outcome and next action",
+        "concrete\n   implementation boundary",
+        "suggested next verifiable action",
+        "Mandatory dependent checks",
+        "order other\n   mandatory findings by dependency and priority",
+        "Optional/non-blocking improvements",
+        "polish cannot displace the blocking work",
+        "do not require unsafe implementation-first work",
+        "do not waive any canonical acceptance criterion",
+        "Review the whole ticket independently",
+        "do not quietly broaden\nits specification",
+        "reviews/T/<execution-id>.md",
+        "Never modify or delete a published review artifact",
+        "current feedback is injected into\nthe worker prompt by Devlegate",
+    ):
+        assert instruction in reviewer
+
+
+def test_priority_contract_managed_upgrade_is_read_only_until_applied(
+    tmp_path, monkeypatch
+):
+    current = packaged_template_root()
+    previous = tmp_path / "previous-package"
+    shutil.copytree(current, previous)
+    source = previous / "skills/reviewer/SKILL.md.tmpl"
+    content = source.read_text()
+    start = content.index("Put focused, actionable REWORK feedback")
+    end = content.index("Never modify or delete a published review artifact")
+    source.write_text(content[:start] + "Put focused feedback here.\n" + content[end:])
+    monkeypatch.setattr(
+        "devlegate.agent_protocol.packaged_template_root", lambda: previous
+    )
+    project = tmp_path / "project"
+    initialize_project(project, context())
+    paths = [
+        project / ".devlegate/templates/skills/reviewer/SKILL.md.tmpl",
+        project / ".devlegate/templates/.devlegate-defaults.json",
+        project / "skills/reviewer/SKILL.md",
+    ]
+    before = [path.read_bytes() for path in paths]
+    monkeypatch.setattr(
+        "devlegate.agent_protocol.packaged_template_root", lambda: current
+    )
+    with pytest.raises(AgentProtocolError, match="have a packaged update"):
+        upgrade_project_templates(project, context(), check=True)
+    assert [path.read_bytes() for path in paths] == before
+    assert upgrade_project_templates(project, context()) == (2, 1, 1)
+    expected_source = current / "skills/reviewer/SKILL.md.tmpl"
+    assert paths[0].read_bytes() == expected_source.read_bytes()
+    assert "Primary acceptance-blocking outcome" in paths[2].read_text()
+    assert upgrade_project_templates(project, context(), check=True) == (2, 0, 0)
+    assert render_project(project, context(), check=True) == (2, 0)
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_managed_template_upgrade_refuses_customized_source(
+    tmp_path, monkeypatch, check
+):
     initialize_project(tmp_path, context())
     local = tmp_path / ".devlegate/templates/skills/reviewer/SKILL.md.tmpl"
     local.write_text(local.read_text() + "\nPROJECT OVERRIDE\n")
@@ -164,8 +243,11 @@ def test_managed_template_upgrade_refuses_customized_source(tmp_path, monkeypatc
         "devlegate.agent_protocol.packaged_template_root", lambda: packaged
     )
 
+    paths = [path for path in tmp_path.rglob("*") if path.is_file()]
+    before = {path: path.read_bytes() for path in paths}
     with pytest.raises(AgentProtocolError, match="customized; no files were changed"):
-        upgrade_project_templates(tmp_path, context())
+        upgrade_project_templates(tmp_path, context(), check=check)
+    assert {path: path.read_bytes() for path in paths} == before
     assert "PROJECT OVERRIDE" in local.read_text()
     assert "UPGRADED PROTOCOL" not in local.read_text()
 

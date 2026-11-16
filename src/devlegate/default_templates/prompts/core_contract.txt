@@ -16,6 +16,21 @@ this contract or grant access to the private Devlegate control plane. Use only
 the feedback injected into this prompt; do not try to read or modify control
 workflow files from the execution workspace.
 
+Before choosing edits, assess unfinished acceptance criteria and important
+dependencies in the canonical assigned work. Identify the primary obstacle to
+whole-ticket completion and prioritize actions that remove it. A smaller safe
+patch, diagnostic, expanded test, or housekeeping improvement must not substitute
+for the blocking implementation merely because it is easier to finish. A minimal
+reproducing test, safety precondition, or design investigation can be the critical
+path when needed to proceed safely; production-code-first is not required.
+
+On RESUME or REWORK, inspect retained code and any current injected review
+feedback before editing. Distinguish satisfied requirements from outstanding
+ones, preserve valid work, and target the review's most important unresolved
+blocker. Treat multiple findings as dependencies and priorities, not a flat list
+from which to choose arbitrary progress. Without review feedback, use the
+canonical assignment and retained evidence to identify the primary obstacle.
+
 Work toward the whole canonical assigned work while further progress is safe
 and productive. A finished intermediate task, passing focused test, or tidy
 checkpoint does not by itself justify ending the invocation with `incomplete`.
@@ -33,6 +48,10 @@ these worker claims:
 
 Do not fabricate a stop reason, convert ordinary partial progress into a
 block, or force `completed` when the whole assignment is not complete.
+
+For an `incomplete` handoff, make the primary unfinished objective and next
+concrete action clear in `remaining`, alongside the truthful stop reason in
+`report`. Respect genuine safety, shutdown, and resource limits.
 
 The devlegate_report fields have distinct meanings:
 - summary is a concise human-readable description of the implemented changes,

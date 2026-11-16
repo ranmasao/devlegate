@@ -45,6 +45,44 @@ of Done schema. The Reviewer template now requires independent assessment of the
 complete canonical assignment and cumulative evidence for the exact checkpoint,
 regardless of the worker claim.
 
+### Distinct Work-Prioritization Gap
+
+TASK-087 addressed when to stop and what to claim. It did not explicitly direct
+which unfinished requirement to tackle first. Across nine TASK-145 executions,
+some useful iterations improved an XFAIL-only test or auxiliary candidate cleanup
+while the main scheduler continuation / durable Git swap remained unimplemented.
+The decisive rework feedback identified one primary objective, a concrete
+implementation boundary, and dependent validations. These are observations, not
+an A/B demonstration that a prompt change eliminates extra sessions; the past
+evidence and termination policy remain unchanged.
+
+The shared worker contract now requires assessment of outstanding acceptance
+criteria and dependencies before choosing edits, prioritizing the primary
+obstacle to whole-ticket completion. RESUME and REWORK inspect retained code and
+only current injected feedback, preserve valid work, and distinguish satisfied
+requirements from unresolved blockers. FRESH and feedback-free RESUME use the
+canonical assignment and available evidence. A reproducing test, safety
+precondition, or design investigation can be the critical path; this is not a
+production-code-first rule. A necessary `incomplete` handoff identifies the primary
+unfinished objective and next concrete action in `remaining`, with the real stop
+reason in `report`, respecting genuine safety, shutdown, and resource limits.
+
+Reviewer REWORK feedback distinguishes the primary acceptance-blocking outcome,
+its implementation boundary and next verifiable action, mandatory dependent
+checks, and optional/non-blocking improvements. This ordering does not waive any
+criterion, permit unsafe partial acceptance, broaden the specification, or create
+hardening tickets. Execution-scoped immutable review artifacts and worker,
+Reviewer, and Architect authority boundaries are unchanged.
+
+For a TASK-145-like scenario, assume scheduler continuation and the durable Git
+swap are missing but an XFAIL-only diagnostic test could be polished immediately.
+The priority is the missing continuation/swap implementation and its dependent
+recovery/swap regressions, not a locally complete diagnostic-only patch. If a
+minimal reproduction or safety investigation is needed to establish a safe swap
+boundary, that is a valid first action. Optional diagnostic polish must not
+replace the blocking outcome. This is a normative example, not a retrospective
+rewrite of TASK-145 or a prediction of actual model choices.
+
 ## Authority Matrix
 
 | Responsibility | Deterministic control plane | Semantic role judgment |
@@ -85,6 +123,14 @@ fenced feedback, worker termination scenarios, and managed Architect and Reviewe
 template upgrades. The policy remains prose evaluated by workers and reviewers;
 there is no automatic reviewer or worker-outcome enforcement.
 
+Critical-path regressions assert delivered contract bytes across FRESH, RESUME,
+and REWORK, verbatim fenced current-feedback provenance, Reviewer priorities,
+source/render consistency, and refusal to overwrite customized managed sources.
+The TASK-145-like fixture makes the expected priority distinction concrete. These
+deterministic assertions establish what is delivered, not which action an LLM
+will choose. No persistent plan, per-criterion state, or semantic enforcement is
+introduced.
+
 After integration, install the 0.5.7 build on the host for Devlegate and, separately,
 on the host for rslab2. Stop or checkpoint each service through its normal operator
 procedure, run `devlegate upgrade-templates --check`, then
@@ -99,6 +145,12 @@ admitted executions; existing artifacts retain their original prompt.
 1. Sample otherwise-similar real tickets after rollout and compare worker claims,
    reviewer findings, tool calls, token/cache use, and work re-read overhead.
    Treat this as observational evaluation, not an A/B claim about TASK-108.
+   For work prioritization, use a bounded sample of comparable multi-requirement
+   rework cases. Record the outstanding primary blocker, whether the next action
+   addressed it or a necessary dependency, optional-polish detours, and eventual
+   whole-ticket acceptance. Account for retained code, feedback specificity,
+   environment, and model differences; do not infer causality from session counts
+   or require an artificial A/B exercise.
 2. Have Architects split recurrently broad tickets before admission; do not add
    criterion IDs or persistent per-criterion state unless evidence shows they are
    needed.

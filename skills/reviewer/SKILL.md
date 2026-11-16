@@ -13,6 +13,11 @@ context and are not part of the Devlegate protocol.
 
 ## Review Input
 
+For a `devlegate.abandonment` request, use the abandonment-specific protocol
+below. It has no implementation branch, checkpoint to integrate, or product
+merge authorization. The following ordinary review rules apply to
+`devlegate.ticket` implementations.
+
 For ticket T under `kanban/review`, inspect:
 
 1. The canonical ticket specification on `devlegate/control`.
@@ -58,9 +63,26 @@ disposition: rework
 -->
 ```
 
-Put focused, actionable feedback after the header. Never modify or delete a
-published review artifact. A later rejected execution gets a new artifact named
-for that execution; do not concatenate old feedback into the current artifact.
+Put focused, actionable REWORK feedback after the header, distinguishing:
+
+1. **Primary acceptance-blocking outcome and next action.** Identify the most
+   important unresolved outcome required by the canonical ticket, its concrete
+   implementation boundary, and a suggested next verifiable action toward it.
+2. **Mandatory dependent checks.** Identify required regressions and other
+   verification that depend on or establish that outcome, and order other
+   mandatory findings by dependency and priority.
+3. **Optional/non-blocking improvements.** Label these explicitly so diagnostic,
+   test, or housekeeping polish cannot displace the blocking work. A reproducing
+   test, safety precondition, or design investigation may itself be the necessary
+   next action; do not require unsafe implementation-first work.
+
+These priorities do not waive any canonical acceptance criterion or permit unsafe
+partial acceptance. Review the whole ticket independently; do not quietly broaden
+its specification or create additional hardening tickets.
+
+Never modify or delete a published review artifact. A later rejected execution
+gets a new artifact named for that execution; do not concatenate old feedback
+into the current artifact.
 If canonical requirements truly need amendment, stop ordinary review and request
 an explicit guarded Architect specification revision instead.
 
@@ -85,3 +107,41 @@ implementation done, treat WorkerClaim as authoritative validation, or create a 
 hardening ticket for ordinary review failure. Do not tell workers to use `git show`
 or otherwise read the private control worktree; current feedback is injected into
 the worker prompt by Devlegate.
+
+## Abandonment Request Review
+
+Independently inspect the request and target specifications, the exact analysis
+ExecutionReport and adjacent `.md` proposal under `executions/<request>/<execution>`.
+Read the `.manifest.json` evidence index and `.json` source binding under
+`abandonment-proposals/<request>/<execution>`. Verify
+the admitted blobs, source control HEAD, manifest identity/digest, per-execution
+checkpoints and review decisions. Check that the substantive proposal explains
+the reason, every execution/review outcome, meaningful changes and research,
+integrated versus discarded work, unfinished work, gaps and future conclusions.
+Do not treat a completed analyst claim or a single original-to-final diff as
+independent acceptance or cumulative ticket contribution.
+
+Publish `reviews/<request>/<execution>.md` with this exact distinct header and
+your independent findings. Take identities from the verified publication:
+
+```text
+<!-- devlegate-abandonment-review-v1
+ticket: <request id>
+execution: <32-lowercase-hex analysis execution id>
+control: <admitted source control HEAD>
+publication: <analysis publication commit>
+manifest: <manifest id>
+proposal: <proposed report SHA-256, or none if no proposed report exists>
+disposition: accept
+-->
+```
+
+Use `accept` only for an independently sufficient completed analysis. In the same
+control commit, move the unchanged request from `kanban/review` to
+`kanban/accepted`. For rejection, incomplete or failed analysis,
+use `rework` and move it to `kanban/todo` instead. Include only the
+review and request move in this commit; preserve the request blob byte-for-byte.
+Never alter the target, publish the terminal abandonment report, dispose of
+resources or merge product code yourself. Devlegate alone performs the atomic
+terminal transition and separately guarded cleanup. Existing reports/reviews
+are immutable; another analysis generation requires another independent review.
