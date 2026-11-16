@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a55320e9bb08a7315e65fc10daf9763bd058e059",
+  "conclusion": "incomplete",
+  "control_head": "a70e1a4270535b26394b6b49b66737e0f339a054",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-107",
+  "execution_id": "6b41e480180e415dbeb8d485994b3adf",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-107",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run hosted exact-SHA CI on the new owner-created checkpoint.",
+    "Build and validate wheel, sdist, full-source, and applicable canonical release artifacts against that exact checkpoint; record final manifests and SHA-256 digests and confirm removed reports are absent.",
+    "Obtain final curator signoff on the revised release tree and coordinate the release checklist."
+  ],
+  "report_artifact": "executions/TASK-107/6b41e480180e415dbeb8d485994b3adf.md",
+  "report_sha256": "a61588e312e1a6be03a43c103be2b12d84f634f31a4d3eb97f78377e2578362a",
+  "resource_generation": "955d04b742c36d7cddc4e3083969837e9b6e717ac05f44f5365176f786bee570",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-107",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run hosted exact-SHA CI on the new owner-created checkpoint.",
+      "Build and validate wheel, sdist, full-source, and applicable canonical release artifacts against that exact checkpoint; record final manifests and SHA-256 digests and confirm removed reports are absent.",
+      "Obtain final curator signoff on the revised release tree and coordinate the release checklist."
+    ],
+    "report": "The bounded implementation delta is complete: one historical report deletion and six maintained Markdown edits, with no executable code, production behavior, build metadata, or workflow/control changes. The working tree began at 10a77c3f57c103864f08bb51e8f2c0083031a2c1, whose tree matches the reviewed d64f388b3919a0b48ccd5ee1abde7e2ac2abe35e cleanup. Classification retained the other current docs/test contracts and manual reproduction resources; no ambiguous additional report was found. Focused distribution/full-source/licensing/standalone/Debian tests: 118 passed. Ruff and git diff --check passed. A one-shot product reference/link/shell/package check covered all 19 removed reports, verified no remaining references or concrete historical ticket IDs in retained docs/tests, and verified legal-file and template payload identity. Noncanonical working-tree PEP 517 wheel and sdist built successfully; manifests and digest sidecars are in /tmp/opencode/task107-python-artifacts/. Wheel SHA-256: ebe32277a90fbcf247615966fa02e72907cbcb979a33fe4736a62cb27cfbf1e4. Sdist SHA-256: 564248a4e007e2f5de49af8ffd85e5482524bdcbc89dd2123b0530bc7547f978. These are not final exact-commit release proofs. This invocation must end for Devlegate to create/publish the new checkpoint: the worker contract prohibits commit/push and Git lifecycle operations, so the required new exact-SHA hosted CI and clean-source canonical release builds cannot be completed against the uncommitted edits here. No ExecutionReport artifacts were written.",
+    "summary": "Removed the curator-approved obsolete focused test audit and replaced its inbound reference with maintained semantic placement guidance. Trimmed historical investigation and removed-test ledgers from the retained test-boundary contract, corrected shell examples, clarified IPC replay versus fresh CLI requests, and repaired table-layout prose."
+  },
+  "workspace_head": "4f36d77938d81358993fcd297f501f6c132343fc"
+}
