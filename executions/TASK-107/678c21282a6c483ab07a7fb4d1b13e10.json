@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a55320e9bb08a7315e65fc10daf9763bd058e059",
+  "conclusion": "incomplete",
+  "control_head": "082e6d946bbe93de435aac9b442e4991e0fe2336",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-107",
+  "execution_id": "678c21282a6c483ab07a7fb4d1b13e10",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-107",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Devlegate must checkpoint and publish the cleaned source, then run hosted CI against that exact new SHA; existing CI on a55320e9 does not validate this delta.",
+    "Build canonical wheel, sdist, full-source and applicable release artifacts from the cleaned checkpoint, record their exact SHA-256 digests/member inventories, and recheck removed versus required contents.",
+    "Obtain independent review of the actual cleanup delta and post-checkpoint evidence, including owner confirmation that release scope remains frozen."
+  ],
+  "report_artifact": "executions/TASK-107/678c21282a6c483ab07a7fb4d1b13e10.md",
+  "report_sha256": "4d4c8cb2379ebc0e944831152ec7e6c83f68682834a5b4a21e37caaf0a822b9c",
+  "resource_generation": "b08200d4aef725d534413d984b3886556fd480e8fcd1cab2a834d8ea23ff7a13",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-107",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Devlegate must checkpoint and publish the cleaned source, then run hosted CI against that exact new SHA; existing CI on a55320e9 does not validate this delta.",
+      "Build canonical wheel, sdist, full-source and applicable release artifacts from the cleaned checkpoint, record their exact SHA-256 digests/member inventories, and recheck removed versus required contents.",
+      "Obtain independent review of the actual cleanup delta and post-checkpoint evidence, including owner confirmation that release scope remains frozen."
+    ],
+    "report": "Implementation and available local validation are finished. The invocation must hand off because the worker contract reserves checkpoint/publication and integration to Devlegate; consequently there is no cleaned commit SHA available for hosted exact-SHA CI or canonical clean-checkpoint release builds. No private control files were accessed; release freeze authorization comes from the injected curator review. HEAD and release/0.5.7 remain a55320e9bb08a7315e65fc10daf9763bd058e059; verified merge-base with release/0.5.6 is d8420085dedb9b58a282d504fe39e905c84bdc14. Rechecked 31 added non-Python files, 23 modified files, no renames, and no changes to the three baseline guidance files named in the ticket. Focused protocol/prompt/plugin/distribution/licensing/native-format tests: 204 passed, 1 skipped. Ruff and git diff --check passed. One-shot source checks found no concrete TASK-number IDs or historical ticket links in retained Markdown, no dangling references to removed reports in tracked source, and valid retained relative file/heading links. No executable source, tests, templates, packaging inputs or licensing files were changed. Historical Git ancestry remains untouched. Cleaned worktree payload SHA256 (sorted path plus per-file digest, including pinned vendor source): 6fa83d47c7818e34a71ee1ccd3fa339aff5637e617225d3f0f5512f212792cd2. Binary git diff SHA256: 0bcf95b1b9fdd38acc35179ab10173861b5f25bd9ce0d631f4ccca0aa16b5468. Non-release previews built from a clean materialized copy of current working files are under .venv/task107-7y07f2b8/artifacts with member inventories: wheel aa09ca6c1a84eef8d06c9df428724763ab8b1d3b4eef3fcb9d5018553664f258 (85 members); sdist d9d80ea2ae5b6d5606a88a815eba7c6caf9f1455631ab59cd6b24ba6892cfc42 (194 members); full-source content preview 19dc7327dd5f813b710188dd42b1b3171ad7e410375224b58c59b8357676169c (324 members, deliberately not a commit-bound SOURCE-MANIFEST release archive). All exclude the 18 deleted reports. Full-source preview retains required docs and distribution/test inputs; wheel resources, including all packaged templates/prompts and diagnostics_plugin.mjs, match source bytes. Licenses and distribution integration boundaries passed. Repeatable local check scripts are ignored under .venv/task107_validate.py and .venv/task107_anchors.py, not product additions.",
+    "summary": "Removed 18 curator-approved historical research and audit reports while retaining all 13 added maintained documentation, configuration, runtime, and test/distribution assets. Replaced historical ticket references and retrospective prose with current contracts, preserved the reproducible diagnostics acceptance procedure and rendering algorithm, and consolidated missing current facts into maintained architecture and operations documentation."
+  },
+  "workspace_head": "d64f388b3919a0b48ccd5ee1abde7e2ac2abe35e"
+}
