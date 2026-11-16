@@ -59,9 +59,11 @@ changes to the worker.
    classification by default. Pagination must be deterministic for unchanged
    comparison inputs, without hiding changed paths on later pages.
 3. `diff(from, to, path, cursor?)`: exact, bounded unified text diff for
-   **exactly one required regular file path** per call. `path` must be an
-   explicit repository-relative file path (not a directory, glob, wildcard,
-   path list, absolute path, or arbitrary Git pathspec). No unscoped or
+   **exactly one required file path** per call. `path` must be an explicit
+   repository-relative file path (not a directory, glob, wildcard, path list,
+   absolute path, or arbitrary Git pathspec). For symlinks, compare link text
+   without dereferencing; for submodules, expose a factual inventory change
+   without traversing history or presenting a text patch. No unscoped or
    multi-file diff API exists. Split a large file diff into honest, bounded
    response pages/hunk segments with unambiguous progress and continuation;
    a segment need not be an independently applicable patch. Never build an
