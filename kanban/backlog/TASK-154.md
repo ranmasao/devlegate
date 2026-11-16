@@ -62,8 +62,8 @@ changes to the worker.
    **exactly one required file path** per call. `path` must be an explicit
    repository-relative file path (not a directory, glob, wildcard, path list,
    absolute path, or arbitrary Git pathspec). For symlinks, compare link text
-   without dereferencing; for submodules, expose a factual inventory change
-   without traversing history or presenting a text patch. No unscoped or
+   without dereferencing; for submodules, return a bounded structural change
+   summary with explicit `SUBMODULE_CONTENT_UNAVAILABLE`, never a nested patch. No unscoped or
    multi-file diff API exists. Split a large file diff into honest, bounded
    response pages/hunk segments with unambiguous progress and continuation;
    a segment need not be an independently applicable patch. Never build an
@@ -85,6 +85,77 @@ changes to the worker.
   unsafe mutable worktree must not become an execution authorization just
   because the tool can list some of its files.
 
+## Submodules — parent-repository structural view
+
+A submodule is one gitlink entry in the superproject, not an ordinary directory
+to traverse. The gitlink points to a commit in the independently versioned
+submodule, while `.gitmodules` is a separate tracked **text file**. Never
+follow nested Git history or execute fetch, init, update, hooks, checkout,
+textconv or other effects in the nested repository. No nested content patch,
+remote URL, Git object ID or arbitrary nested Git ref is exposed to Worker.
+
+### Parent-level changes
+
+- **Added/removed gitlink:** one `changes()` entry for the submodule path,
+  `kind=submodule`, `change=added|deleted`; `diff(path)` returns a bounded
+  structural summary, not nested file additions/deletions.
+- **Pinned revision updated:** one `modified` entry with
+  `pointer_changed=true`, without exposing either commit hash. A changed
+  gitlink does not imply that every internal file changed.
+- **Moved or replaced:** `renamed` with old/new paths only when bounded,
+  trustworthy rename evidence exists; otherwise separate deletion and
+  addition. A gitlink changed into a regular file, symlink or directory (or
+  vice versa) is a type replacement, not an internal file diff. Never infer
+  rename merely from matching URLs, names or sizes.
+- **`.gitmodules` changed:** report it independently as an ordinary text
+  file, subject to the same one-file diff limits. A path/URL/config edit in
+  `.gitmodules` does not by itself prove a gitlink addition, deletion, move
+  or pointer change. Do not automatically expose configured remote URLs
+  as submodule metadata or contact the remote.
+
+### WORKTREE and incomplete state
+
+- Separately observe (a) the **superproject-recorded pointer** (which may
+  have a pending staged update), (b) the initialized submodule checkout's
+  commit relative to that pointer, and (c) dirty tracked/untracked contents
+  inside the submodule. The worker still sees no separate `INDEX` revision:
+  report factual pointer-change and shallow checkout-status flags rather than
+  flattening disagreeing states into a fabricated single revision.
+- A changed recorded gitlink is a normal pointer delta. Even when the gitlink
+  is unchanged, `changes(..., WORKTREE)` may return one
+  `kind=submodule, worktree_only=true` entry for proven checkout drift or
+  nested dirtiness. This is **not** a checkpointed superproject code delta.
+  Do not show nested `submodule/path/file` entries or classify an unknown
+  dirty state as clean. Bounded probing may return `unknown` if computing
+  nested status would exceed the established budget.
+- Uninitialized, absent or unobservable checkout does not mean the tracked
+  gitlink was deleted. Report `not_initialized` / `unavailable` without
+  mutating anything. Similarly, an untracked nested Git directory is not
+  automatically a newly added submodule until a parent gitlink records it.
+  Do not descend into tracked submodule boundaries during untracked scanning.
+- State prominently in the returned status/tool guidance that **uncommitted
+  edits inside a submodule are NOT preserved by a normal checkpoint of the
+  superproject**. This read-only tool cannot stage, save, adopt or recover
+  them. Unknown checkout identity, foreign path, locks or uncertain process
+  ownership fail closed; no attempt to fix these states is permitted.
+
+### One-path diff and agent guidance
+
+- `diff(from, to, submodule_path)` returns only the structural summary
+  (add/remove/move/type/pointer and shallow WORKTREE status where provable)
+  and the explicit `SUBMODULE_CONTENT_UNAVAILABLE` status. It never calls
+  Git's recursive submodule diff mode or returns a misleading empty patch.
+  `BINARY_DIFF_UNAVAILABLE` is reserved for binary files, not gitlinks.
+- `diff()` for a path **inside** a tracked submodule is rejected: one-path
+  comparison is scoped to superproject entries. An explicit `.gitmodules`
+  diff is permitted as an ordinary file diff, with standard access/size
+  limits.
+- Tool descriptions must tell agents that submodule pointer/status changes
+  are visible but nested content diffs are not, `.gitmodules` is separate,
+  and dirty nested files have not been saved by the parent checkpoint.
+  All structural results consume normal response budgets and computation
+  limits, with no special unlimited submodule scanning.
+
 ## Oversized, binary, and nonregular files
 - **File size**, **size of the resulting patch**, and **computational cost**
   are independent. Enforce service-owned bounded computation (including
@@ -104,8 +175,8 @@ changes to the worker.
   database/model inspection belongs to separate specialized tools.
 - Distinguish regular text, binary or unknown, symlinks and submodules.
   Inspect symlink targets as link text only (never follow the symlink);
-  expose submodule changes without traversing their history. Do not
-  classify solely by extension. A tracked Git LFS pointer is not proof
+  expose submodule changes structurally without traversing their history,
+  as specified in the submodule contract. Do not classify solely by extension. A tracked Git LFS pointer is not proof
   that the referenced external asset has been read.
 - If a text comparison cannot be completed within the work budget, report
   unavailable or incomplete explicitly; do not claim a truncated patch
@@ -234,7 +305,10 @@ target advancement/rebase, squash, non-ancestor retained checkpoint, unrelated
 commits, staged/unstaged/untracked and ignored files, failed and zero-delta
 checkpoint sessions, oversized text/very long lines, large files with small
 diffs, changed equal-size binaries, unchanged historical binaries, symlinks,
-submodules, unknown (not zero) statistics, stale paged WORKTREE observations,
+submodules (gitlink add/delete/update, move/type change, independent
+`.gitmodules` edits, staged pointer versus checkout, dirty/uninitialized state,
+no nested file traversal, and explicit unavailable content), unknown (not zero)
+statistics, stale paged WORKTREE observations,
 computation/output limits and tool-access limits. Assert no Git/execution identities leak and tool reads cannot stage, retry or
   authorize a worker. Additionally test that `diff` rejects absent path,
   multi-file requests, wildcards, directories, absolute/traversal paths,
