@@ -1,0 +1,38 @@
+{
+  "code_base_head": "7034823dd47811e55eeefd820e70621b1756d429",
+  "conclusion": "blocked",
+  "control_head": "469c02b0ec435fc0ff561135dbb2e53cc929a14f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-170",
+  "execution_id": "ef3995dc031542719d7ad66fd39acf0a",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-170",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Devlegate must publish the implementation checkpoint and obtain the configured GitHub Actions CI result for that exact SHA; Git lifecycle and publication are outside the worker contract."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run the configured hosted CI on the exact SHA containing these edits after Devlegate publishes the checkpoint."
+  ],
+  "report_artifact": "executions/TASK-170/ef3995dc031542719d7ad66fd39acf0a.md",
+  "report_sha256": "580cc83f361b213d2fea70292de0969f25500efc3e7f136ea4fd2cde3422fd74",
+  "resource_generation": "c9830bbcb87ac976c8b18a5ca9c458b445f1dd50045fcb8f7a0005071e0232b0",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-170",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Devlegate must publish the implementation checkpoint and obtain the configured GitHub Actions CI result for that exact SHA; Git lifecycle and publication are outside the worker contract."
+    ],
+    "remaining": [
+      "Run the configured hosted CI on the exact SHA containing these edits after Devlegate publishes the checkpoint."
+    ],
+    "report": "Inspected the frozen starting HEAD 7034823dd47811e55eeefd820e70621b1756d429. Proven synchronization defect: recover acknowledges admission before dispatch, _save_state clears operator_recovery before publication, and _run_polling releases operator ownership before status_view refreshes the snapshot. Deterministic assertions reproduce old blocked plan/status both while normalization has completed with the owner active and after release before publication; fresh publication becomes run-worker only on successful recovery. The hosted failure's specific reason cannot be reconstructed from the supplied output because it was not retained. The test now uses bounded LiveService.wait_for and requires matching plan/status, exact pending execution identity, preparing projection, and running service. Startup coordination resubmits only the exact explicit busy/not-admitted response; all other rejection responses fail. No runtime or release files changed. Representative recovery/CLI/IPC validation passed 351 tests. Final repeated live run passed 12 instances with -n 4 --dist=worksteal, concurrent with full coverage validation. Full local ./dev coverage -n 4 --dist=worksteal -x --tb=short completed with 2280 passed and 2 skipped; aggregation emitted one coverage data-file warning but exited successfully and wrote coverage.json. Ruff and git diff --check passed. An earlier full coverage attempt hit the 20-minute tool timeout; the final full run completed in 21 minutes after correcting a test field-name error exposed by retained diagnostics. Hosted validation cannot include uncommitted workspace edits until Devlegate publishes them.",
+    "summary": "Corrected the live recovery regression test to wait for coherent owner-published plan/status instead of treating SQLite normalization as a publication barrier, with retained action/reason diagnostics. Added deterministic coverage for admission, active and released stale-publication windows, settled recovery, genuine dirty-workspace refusal, and persistent blocked, unavailable, or incoherent views."
+  },
+  "workspace_head": "8fe23c7ecb0d80a5cde7b21fbf05ae338e0503af"
+}
