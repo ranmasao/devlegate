@@ -1,0 +1,30 @@
+{
+  "code_base_head": "0c97ca80d0efa6160f563acecd3124b5c6587a9d",
+  "conclusion": "completed",
+  "control_head": "27c1cc62997b3bee304c1feac51a4f46b44ef21c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-172",
+  "execution_id": "abc2c968f542499f9154a56ed9eb3585",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-172",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-172/abc2c968f542499f9154a56ed9eb3585.md",
+  "report_sha256": "cbb2f2185414776d2987adb94f9af502b79a6529ae6dcc9daec3f4e8ddd00894",
+  "resource_generation": "3baa8477b868edc770ef3707ff07d406728102a0bd1c4a0ab518d24964965f09",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-172",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Only tests/test_ticket_source.py changed. Inspected isolated real-Git fixtures, tools.ticket_source.git/resolve, and ResourceBinding filter preflight: production refuses effective configured filters before status, whereas the snapshot's real status call emits nondeterministic filter subprocess diagnostics. Shared unchanged() and all production calls remain unchanged. Focused parallel suite: 284 passed, 1 skipped across ticket-source, Git, Git-state, resource-binding, and clean-preview tests. Both real-filter cases passed in 10 consecutive pytest -n 4 --dist=worksteal runs. Ruff check src tests tools and git diff --check passed. Validation used a temporary Python 3.12 environment; PYTHONPATH was set for subprocess importability. A broad Ruff check of '.' additionally encountered existing vendored packaging lint violations outside the implementation scope. Published exact-worker-SHA hosted CI and separate post-integration release/0.5.7 push CI were not performed; those gates require Devlegate-owned Git lifecycle and integration.",
+    "summary": "Scoped the active project-filter negative-path test to compare refs, status exit code/stdout, index bytes, and durable binding records without comparing volatile filter stderr. Added deterministic coverage for stderr-only differences and changes to each stable invariant, preserving real clean/process filters and the existing UnprovenResource refusal assertion."
+  },
+  "workspace_head": "800a21e1aa52db00c36929f309adc927c1bdd78a"
+}
