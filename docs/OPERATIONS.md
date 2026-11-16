@@ -226,20 +226,30 @@ operational output rather than machine-readable documents.
 An admission timeout is a coordination wait, not a maximum response time. A
 request still queued at expiry is removed and reported not admitted. A published
 admission result is returned; a claimed request without a published result has
-an unknown outcome and is not cancelled. Retry the same request ID and semantics
-after service availability, or repeat the same `reset <ticket-id>` command for
-reset. Matching receipts coalesce admission; they do not prove completion of
-later effects. Missing receipts do not prove absence of an effect: drop and force
+an unknown outcome and is not cancelled.
+
+At the low-level IPC boundary, a client that retains the original request ID and
+semantics can replay that identity after service availability. Matching receipts
+coalesce admission; they do not prove completion of later effects. Most mutable
+stock CLI commands generate request IDs automatically, so repeating a CLI
+invocation is a new request, not a same-ID replay. After an uncertain result,
+inspect current status and the exact ticket/execution before choosing an explicit
+follow-up. A new invocation can request additional effects and is not an
+exactly-once guarantee. For reset-specific replay, follow the
+[reset contract](reset.md).
+
+Missing receipts do not prove absence of an effect: drop and force
 retry can persist Git evidence first. SQLite write uncertainty requires restart;
 transport loss and unverified remote results also require fresh evidence rather
 than an assumption of exactly-once effects.
 
-Use explicit commands when an operation needs operator intent:
+Use explicit commands when an operation needs operator intent. Set `TICKET_ID`
+to the ticket's exact ID, then choose the appropriate command:
 
 ```sh
-devlegate retry <ticket-id>
-devlegate drop <ticket-id>
-devlegate reconcile <ticket-id>
+devlegate retry "$TICKET_ID"
+devlegate drop "$TICKET_ID"
+devlegate reconcile "$TICKET_ID"
 ```
 
 `retry` requests a new attempt after a failed execution. `drop` retires a

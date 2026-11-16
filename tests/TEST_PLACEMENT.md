@@ -3,8 +3,9 @@
 Choose the narrowest semantic domain that proves the behavior. Do not choose a
 file merely because it imports the implementation being changed. Keep the
 cheapest useful proof, but a cheaper layer never replaces a required stronger
-layer; use `TEST_BOUNDARIES.md` for that decision and
-`FOCUSED_TEST_AUDIT.md` for the rationale.
+layer. Use [Test Boundaries](TEST_BOUNDARIES.md) to identify the required proof
+layer, then select the semantic domain below. Keep cross-layer tests when their
+process, transport, or recovery boundary is part of the claim.
 
 ## Domains
 
@@ -39,7 +40,7 @@ layer; use `TEST_BOUNDARIES.md` for that decision and
 - Launcher, namespace/platform boundaries, terminal, and log reader: `test_launcher.py`, `test_namespace_isolation.py`, `test_platform_boundary.py`, `test_terminal.py`, `test_log_reader.py`
 - Output, standalone packaging, source, diagnostics, tickets, and coverage: `test_output.py`, `test_standalone_builder.py`, `test_standalone_package.py`, `test_full_source.py`, `test_service_diagnostics.py`, `test_tickets.py`, `test_coverage.py`
 
-The former mixed modules are now `_cli_support.py`, `_control_support.py`,
+Shared setup lives in `_cli_support.py`, `_control_support.py`,
 `_daemon_support.py`, and `_ipc_support.py`. Worker and project semantic modules
 also use `_worker_support.py` and `_project_support.py` for reusable setup. These
 support modules own fixtures/helpers only; semantic test functions physically

@@ -32,7 +32,7 @@ bounded heuristic, not an optimal solver. At most 256 reductions after a coarse
 proportional reduction and 256 exchange rounds are performed. Each exchange
 round evaluates at most N squared candidates, each scanning all cells, so very
 large grids can still cost more than ordinary status tables. Candidate cell
-heights are cached. This is not a fixed runtime guarantee.
+heights are cached; the iteration bounds do not impose a fixed runtime limit.
 
 Display width counts characters with a nonzero Unicode combining class as zero,
 East Asian wide/fullwidth characters as two, and all others as one. This is a

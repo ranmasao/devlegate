@@ -52,9 +52,8 @@ remain where a transport or mutation order is itself the contract.
 
 ## Suite Map
 
-This audit classifies 17 maintained test families, 8 major production
-invariant families, 8 recovery evidence families, and 7 concurrency families.
-The counts are grouping counts, not test-case counts.
+The map groups tests by their proof boundary. Use pytest collection for the
+current test-case inventory; this map does not prescribe fixed suite counts.
 
 | Test family/file | Layer | What it proves | Boundary caution |
 | --- | --- | --- | --- |
@@ -172,27 +171,21 @@ separate client against a live owner, it does not prove service topology.
 exception. `test_real_service_*` is the convention for full production service
 topology and is currently truthful.
 
-## Compatibility And Direct Seams
+## Supported Paths And Direct Seams
 
-The architecture reachability audit traced these seams through production code.
-The classifications below describe the current supported paths; historical
-compatibility seams are listed only where their removal explains surviving
-coverage.
+The paths below distinguish production entry points from direct semantic test
+seams. Direct construction is useful for narrow regression tests but does not
+establish independent service topology.
 
 | Symbol/path | Reachability | Classification | Evidence |
 | --- | --- | --- | --- |
 | `ServiceEngine` | `cli.main()` constructs it for persistent service modes through `_service_engine`; `run_service()` hosts it; IPC dispatch receives it | KEEP - canonical current path | `src/devlegate/cli.py`, `src/devlegate/daemon.py`, `src/devlegate/service.py` |
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
-| `Application` | No production references remain; the former `_service_engine()` substitution branch was retired | REMOVE - unsupported runtime injection seam | Replaced by direct `ServiceEngine` construction in `src/devlegate/cli.py` |
-| `DevlegateApplication` | No production, test, package export, or documentation contract was found | REMOVE - compatibility residue | `src/devlegate/application.py` deleted; no supported 0.5 import contract |
 | `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
 | `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` canonical `status_view()` / `plan_view()` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
 | `ServiceEngine.retry()` / `reconcile_update_base()` / `reconcile_resume()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py`; owner command handling routes through the corresponding owned methods |
-| `runtime.Devlegate` alias | No supported callers or documented contract | REMOVED in 0.5.2 - obsolete alias | `src/devlegate/runtime.py` no longer defines the alias |
-| `ServiceEngine.status()` / `plan()` | No supported callers; canonical views are `status_view()` and `plan_view()` | REMOVED in 0.5.2 - obsolete spellings | `src/devlegate/runtime.py`, `src/devlegate/cli.py` |
-| Historical helper reexports from `devlegate.cli` | Tests now import runtime-owned helpers directly; `_git` remains a current CLI dependency | REMOVED in 0.5.2 - private test compatibility | `tests/test_cli_common.py`, `tests/test_terminal.py`, `tests/test_worker_protocol.py` |
 
 ### Construction Map
 
@@ -212,7 +205,7 @@ deterministic crash points before calling the real `run_service()` host. It is
 not a production construction path. Test fixtures construct engines directly
 for semantic or IPC proof and are likewise not production paths.
 
-### Mutation Authority Audit
+### Mutation Authority
 
 The production mutable path is:
 
@@ -223,15 +216,12 @@ CLI retry/reconcile -> Unix IPC -> dispatch_mutation
   -> _save_state and other runtime mutations
 ```
 
-`RuntimeStore` writes occur inside `ServiceEngine` methods. No source path was
-found where the CLI client writes runtime state directly or where IPC handlers
-execute mutable work instead of submitting it. `ServiceEngine.retry()` and
-`reconcile_update_base()` remain direct engine semantics and are not obsolete:
-they are owner-side algorithms and useful lower-layer regression seams. No
-production mutable bypass was found.
+`RuntimeStore` writes occur inside `ServiceEngine` methods. CLI clients must not
+write runtime state directly, and IPC handlers submit mutable work to the owner
+instead of executing it. `ServiceEngine.retry()` and `reconcile_update_base()`
+are owner-side algorithms and useful lower-layer regression seams.
 
-The following tests exercise current bootstrap, semantic, or IPC seams and
-remain valid after the architecture cleanup:
+The following tests exercise bootstrap, semantic, or IPC seams:
 
 - `test_operational_cli_constructs_service_engine_directly` checks the canonical
   runtime construction contract.
@@ -244,20 +234,12 @@ remain valid after the architecture cleanup:
 - Runtime-owned private helpers and methods in the control and daemon semantic
   modules, plus `test_worker_protocol.py`, are direct semantic seams.
 
-These tests are not production topology proof. The production reachability
-audit above now resolves `Devlegate`, `ServiceEngine`, and the persistent
-service host.
-Application injection is retired; direct tests still do not become topology
-proof.
+These tests are not production topology proof. Independent service and CLI
+processes are required for that claim.
 
-## Cleanup Candidates
+## Required Proof
 
-The compatibility cleanup removed four compatibility-only tests and retargeted
-three tests to the canonical engine seam. The uncalled direct loop and signal
-helper seams were also removed; remaining direct engine tests use
-`tests/runtime_helpers.py`.
-
-### KEEP - Unique Proof
+### Unique Boundaries
 
 - All `test_real_service_*` tests covering SIGKILL, restart, real socket
   authority, worker PID identity, CLI/service separation, or persisted process
@@ -267,7 +249,7 @@ helper seams were also removed; remaining direct engine tests use
   distinct from subprocess failures.
 - Recovery and concurrency matrix documents plus their exact assertions.
 
-### KEEP - Intentional Cross-Layer Duplication
+### Intentional Cross-Layer Duplication
 
 - Direct engine admission/recovery plus IPC owner-thread plus LiveService retry
   and reconciliation families.
@@ -276,67 +258,30 @@ helper seams were also removed; remaining direct engine tests use
 - Direct receipt/idempotency tests plus IPC receipt tests plus real concurrent
   and restart receipt tests.
 
-### Obsolete Architecture/Path
-
-None carried forward. The reachability audit retired the unsupported
-Application injection seam, uncalled direct loop, and signal helper seams.
-
-### Redundant Or Compatibility-Only
-
-None remaining from the I2 candidate groups. The fake-engine rendering and
-`cli_daemon` routing tests were retained because they protect distinct cheap
+Fake-engine rendering and `cli_daemon` routing tests protect distinct cheap
 formatting, error-translation, and IPC-boundary behavior.
 
-### Removed Tests And Replacements
+### Client Lifetime And Uncertain Delivery
 
-| Removed test | Removed contract | Surviving proof/reason |
-| --- | --- | --- |
-| `test_operational_cli_dispatches_run_through_application` | Historical Application substitution during service startup | `test_operational_cli_constructs_service_engine_directly` proves the canonical construction; real-service tests prove runtime behavior |
-| `test_all_operational_cli_commands_use_service_engine` | Broad fake-engine construction table that overlapped dedicated command tests | Dedicated foreground construction, canonical once construction, bootstrap tests, and IPC-only CLI tests cover the actual contracts |
-| `test_service_engine_is_the_only_runtime_authority` | Application/Devlegate/ServiceEngine alias identity assertion | Direct `ServiceEngine` construction and owner-thread/real-service authority tests prove behavior rather than retired alias identity |
-| `test_application_import_does_not_import_cli` | Import-direction check for the deleted `devlegate.application` module | No supported module remains; package entrypoint/import tests and canonical source imports cover current import direction |
-
-Tests retargeted rather than removed:
-
-- `test_application_status_and_plan_return_immutable_views` is now
-  `test_service_engine_status_and_plan_return_immutable_views` and uses the
-  canonical engine.
-- `test_cli_status_and_plan_render_fake_application_without_runtime` is now
-  `test_cli_status_and_plan_render_fake_engine_without_runtime`; it retains
-  unique rendering coverage without the retired Application seam.
-- `test_retry_refuses_without_daemon_without_constructing_application` is now
-  `test_retry_refuses_without_daemon_without_constructing_engine`; it still
-  proves retry refuses before any engine construction.
-
-### GAP - Missing Proof
-
-None remaining for the audited 0.5 service-boundary claims.
-
-The former GAP 1 is resolved by
-`test_real_service_admitted_retry_outlives_cli_process`: a real CLI receives
-the admission ACK and exits, then the same live service and the same genuinely
-started long-running worker remain active. This proves normal acknowledged
+`test_real_service_admitted_retry_outlives_cli_process` proves that a real CLI
+receives the admission ACK and exits, then the same live service and the same
+genuinely started long-running worker remain active. This proves normal acknowledged
 client lifetime separation, not arbitrary client crash timing.
 
-The former GAP 2 is resolved by
-`test_real_service_crash_during_mutable_response_reports_uncertain_delivery`:
-The test-only `DEVLEGATE_TEST_CRASH_POINT=receipt_after_save` setting proves the owner saved
-an accepted retry
-receipt before SIGKILL, and the real CLI's same-ID replay reports uncertain
-delivery and directs the user to inspect status before retrying.
+`test_real_service_crash_during_mutable_response_reports_uncertain_delivery`
+uses the test-only `DEVLEGATE_TEST_CRASH_POINT=receipt_after_save` setting to
+prove the owner saved an accepted retry receipt before SIGKILL. The real CLI's
+same-ID replay reports uncertain delivery and directs the user to inspect status
+before retrying.
 
-### UNCLEAR
-
-None remaining for the audited 0.5 service-boundary claims.
-
-Decision: an abnormal CLI SIGKILL after admission is not a separate release
+An abnormal CLI SIGKILL after admission is not a separate release
 invariant. The required invariant is that acknowledged client lifetime does
 not own service lifetime, proven by the normal CLI exit test. Loss before a
 mutable acknowledgement is the uncertain-delivery boundary, proven by the
-real service crash test. A third exact-instruction CLI kill would not establish
-a distinct 0.5 semantic contract.
+real service crash test. A separate exact-instruction CLI kill does not establish
+a distinct semantic contract.
 
-## Current Audit Rules
+## Test Review Rules
 
 Before removing a test, identify its invariant, actual boundary, and failure
 mode. A same-scenario test is not a replacement unless it crosses a materially

@@ -132,10 +132,10 @@ must satisfy the same clean-worktree rules as the default checkout. This is
 useful for intentionally packaging another worktree or source tree.
 
 For local dogfooding before product integration, select a ticket in the invoking
-Devlegate project:
+Devlegate project. Set `TICKET_ID` to the ticket's exact ID before running:
 
 ```sh
-./dev package arch --ticket <ticket-id>
+./dev package arch --ticket "$TICKET_ID"
 ```
 
 `--ticket ID` also works with the other package targets. It conflicts with an

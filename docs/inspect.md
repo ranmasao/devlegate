@@ -1,9 +1,12 @@
 # Read-only object inspection
 
+Set `TICKET_ID` to the ticket's exact ID and `EXECUTION_ID` to the full execution
+ID before running the corresponding command:
+
 ```sh
-devlegate inspect ticket <ticket-id> --json
-devlegate inspect execution <exact-execution-id> --json
-devlegate inspect workspace <ticket-id> --json
+devlegate inspect ticket "$TICKET_ID" --json
+devlegate inspect execution "$EXECUTION_ID" --json
+devlegate inspect workspace "$TICKET_ID" --json
 devlegate inspect service --json
 ```
 
