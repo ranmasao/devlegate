@@ -35,7 +35,7 @@ registration, branch, common directory, and administrative directory; a matching
 HEAD in another repository is insufficient. Execution entries identify report blobs and
 publications, complete report contents, review/checkpoint attribution where
 available, independent generation intent, receipt/operation evidence hashes and
-filesystem identities, and the TASK-150 `ResourceProof`. Current inventory
+filesystem identities, and the `ResourceProof`. Current inventory
 reports the configured path, registration, HEAD, dirty/locked/submodule state,
 local ref value, symbolic target, administrative conflicts, and upstream
 `observed`/`absent`/`unavailable` with the exact observed SHA when present.

@@ -77,11 +77,9 @@ remote read that also writes local objects and tracking refs.
 | Control, normal | `fetch --prune origin/control`, resolve remote and HEAD, ancestry checks, `merge --ff-only origin/control`, then resolve HEAD | No retry | Control sync may complete normally |
 | Control, interrupted | Same commands through interrupted control `merge` | No merge retry in the product transport or WAL path | Propagate interruption; a later fresh control sync must establish its own admission |
 
-The eliminated invocation is the former generic control/product callback retry
-of `merge --ff-only <tracking-ref>`. The only newly added Git invocations are
-the product target resolution before mutation and the post-interruption
-branch, worktree-root, status, HEAD, and target observations. They are local
-proofs, not effects. The product retry, when authorized, invokes the exact
+Product target resolution before mutation and post-interruption branch,
+worktree-root, status, HEAD, and target observations are local proofs, not
+effects. The product retry, when authorized, invokes the exact
 admitted commit object once; it cannot follow a tracking ref advanced from B
 to C. The control path has no retry invocation: its interrupted merge is
 propagated, and the next fresh sync re-observes and performs one normal merge.

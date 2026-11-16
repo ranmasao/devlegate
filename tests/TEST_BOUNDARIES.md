@@ -35,11 +35,10 @@ read-only command. This keeps recovery coverage sensitive to missing evidence,
 missing reproof, or an unauthorized mutation without tying it to incidental
 implementation traces.
 
-The recovery trace audit rewrote the prior-generation workspace test's total
-Git-call/read-only-call snapshots and the control-lineage full command trace.
-Those tests now use evidence state, required proof probes, write allowlists,
-and safety-critical order. Exact command assertions remain in `test_git.py`
-for the Git adapter's public command construction, and effect-only sequences
+Workspace-generation and control-lineage tests use evidence state, required
+proof probes, write allowlists, and safety-critical order. Exact command
+assertions in `test_git.py` cover
+the Git adapter's public command construction, and effect-only sequences
 remain where a transport or mutation order is itself the contract.
 
 ### Taxonomy

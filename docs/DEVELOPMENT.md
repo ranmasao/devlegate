@@ -135,7 +135,7 @@ For local dogfooding before product integration, select a ticket in the invoking
 Devlegate project:
 
 ```sh
-./dev package arch --ticket TASK-089
+./dev package arch --ticket <ticket-id>
 ```
 
 `--ticket ID` also works with the other package targets. It conflicts with an
@@ -225,14 +225,9 @@ executions. `./dev package` itself uses the invoking checkout's `.venv` and
 `tools/build_distribution.py`, so installing a Debian package does not update
 that command.
 
-The supplied TASK-089 and TASK-155 historical omissions do not, by themselves,
-identify their producing executable. The current source's normal producer sets
-the token; recovery previously checked execution metadata without comparing the
-generation, which allowed deficient pending reports through that gate. Tests
-exercise actual owner publications, crash replay and retirement. Attributing
-those historical omissions specifically to version skew still requires the
-producing service's independently recorded installed-artifact identity; neither
-the current installed version nor a checkpoint trailer establishes it.
+Attributing a missing generation token to version skew requires the producing
+service's independently recorded installed-artifact identity. Neither the
+current installed version nor a checkpoint trailer establishes that identity.
 
 `--keep-work` preserves the new temporary workspace on both success and
 failure. Its exact path is written to the build log and printed for
