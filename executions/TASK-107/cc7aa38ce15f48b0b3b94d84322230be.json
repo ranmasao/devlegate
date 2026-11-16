@@ -1,0 +1,44 @@
+{
+  "code_base_head": "a55320e9bb08a7315e65fc10daf9763bd058e059",
+  "conclusion": "incomplete",
+  "control_head": "9dc9df3f1fdf909984533285de229f92935cab17",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-107",
+  "execution_id": "cc7aa38ce15f48b0b3b94d84322230be",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-107",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Does the curator approve the deletion/retention table and embedded-section cleanup presented in the final response?",
+    "Has the 0.5.7 implementation scope been frozen, and can the release curator confirm that no current-release ticket still consumes the proposed artifacts? TASK-073 and TASK-165 are treated as deferred, nonblocking work."
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Obtain curator approval for the proposed 18 file removals, 13 retentions, and bounded embedded-section cleanup, with confirmation that 0.5.7 scope is frozen and current-release tickets no longer require the artifacts.",
+    "After approval, preserve historical source coordinates and durable TASK-165 facts in maintained documentation, migrate the identified operational and architecture contracts, and apply only approved deletions and section edits.",
+    "Recheck repository references, build and inspect wheel/sdist and relevant release archive contents, run focused documentation/package tests and Ruff, and obtain exact-checkpoint CI evidence before packaging/tagging."
+  ],
+  "report_artifact": "executions/TASK-107/cc7aa38ce15f48b0b3b94d84322230be.md",
+  "report_sha256": "af9c9a5ea295a8bde2322d0e7b17b84b86bbb44e1b79fd5647a37a53d7124b25",
+  "resource_generation": "91bc17412a0d5238b71cfc0d8552044a8d354a04f0a32ebe3245c1abaee45734",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-107",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [
+      "Does the curator approve the deletion/retention table and embedded-section cleanup presented in the final response?",
+      "Has the 0.5.7 implementation scope been frozen, and can the release curator confirm that no current-release ticket still consumes the proposed artifacts? TASK-073 and TASK-165 are treated as deferred, nonblocking work."
+    ],
+    "remaining": [
+      "Obtain curator approval for the proposed 18 file removals, 13 retentions, and bounded embedded-section cleanup, with confirmation that 0.5.7 scope is frozen and current-release tickets no longer require the artifacts.",
+      "After approval, preserve historical source coordinates and durable TASK-165 facts in maintained documentation, migrate the identified operational and architecture contracts, and apply only approved deletions and section edits.",
+      "Recheck repository references, build and inspect wheel/sdist and relevant release archive contents, run focused documentation/package tests and Ruff, and obtain exact-checkpoint CI evidence before packaging/tagging."
+    ],
+    "report": "Stopping at the required pre-deletion curator approval gate: no approval or implementation-freeze confirmation was supplied. No repository files were changed or deleted. The inspected checkpoint is a55320e9bb08a7315e65fc10daf9763bd058e059; its merge-base with release/0.5.6 is d8420085dedb9b58a282d504fe39e905c84bdc14. Inventory: 31 added and 23 modified non-Python files, with no detected moved/deleted files. References to the proposed removal set occur only within that set in accessible product files; private ticket/control records were not accessed. Builds, Ruff and exact-checkpoint CI remain post-approval validation, not claimed as passed.",
+    "summary": "Inventoried release changes against the verified 0.5.6 baseline and prepared a bounded proposal covering all added non-Python files, modified documentation, durable-knowledge migration, references, and packaging inputs."
+  },
+  "workspace_head": "a55320e9bb08a7315e65fc10daf9763bd058e059"
+}
