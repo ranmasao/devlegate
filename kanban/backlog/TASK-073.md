@@ -1,8 +1,44 @@
 ---
 "type": "devlegate.ticket"
 "title": "STORY acceptance gate: isolate Git implementation from ServiceEngine"
-"depends_on": ["TASK-071", "TASK-072", "TASK-078", "TASK-079", "TASK-080", "TASK-081"]
+"depends_on": ["TASK-071", "TASK-072", "TASK-078", "TASK-079", "TASK-080", "TASK-081", "TASK-165"]
 ---
+
+## Current scheduling decision — 2026-11-16: carry final acceptance to next iteration
+
+**The curator explicitly defers closure of this Git architectural story beyond
+Devlegate 0.5.7.** Keep TASK-073 in `backlog`; it is not a 0.5.7 release
+blocker. The prior 2026-10-16 audit, its review matrix, and 2026-10-26
+supplemental observations are immutable historical evidence, **not a
+current-HEAD acceptance decision**. Subsequent integration, recovery, reset,
+worktree retirement and other changes invalidate any assumption that old
+source locations, findings or Git command counts remain current.
+
+**New dependency: TASK-165 — repeat the Git architecture/effect audit against
+the then-current integrated product HEAD.** TASK-165 must reach `done`
+before TASK-073 may be scheduled. Its independent, verifiable audit evidence
+is an input to this story gate, not automatically a pass or a substitute for
+human approval. Avoid running the entire audit a second time in TASK-073:
+verify TASK-165's exact audited SHA, completeness and trustworthy findings;
+check for intervening relevant product changes and request a refreshed audit
+if the evidence is stale. A FAIL/UNKNOWN finding is allowed in an honest
+TASK-165 audit result, but cannot silently satisfy the corresponding
+TASK-073 acceptance criterion.
+
+TASK-073 remains a **final curator decision gate**. For criteria 1–8 below,
+use the current independent audit's complete evidence and targeted checks to
+record PASS/FAIL/UNKNOWN, residual architectural risks, and precisely scoped
+follow-up fixes if necessary. Only explicit curator `APPROVE` can close the
+story. Do not auto-promote this ticket to `todo` when the new audit finishes,
+self-approve, infer acceptance from CI or schedule a broad Git refactor under
+the guise of auditing. Previous admission/review generations are historical
+and must not be amended or reused.
+
+TASK-107 release hygiene can proceed for 0.5.7 independently of this
+deferred story, after the release implementation scope is frozen and with
+curator-approved artifact decisions. Retain historical Git provenance needed
+for later audits; temporary audit documents need not be shipped merely to
+keep the deferred story open.
 
 ## Purpose: parent story and final curator acceptance
 

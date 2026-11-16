@@ -7,7 +7,7 @@
 Before the final 0.5.7 release, identify and remove temporary design/audit/research artifacts added since the release branch began, while retaining user-facing documentation, tests, templates, and required release evidence. This is release hygiene, not permission to delete all non-Python files.
 
 ## Timing
-Execute **after** implementation/decomposition and Git story review, but **before** release packaging/tag. Do not queue early while other tickets still use these artifacts. Coordinate with release checklist.
+Execute **after the 0.5.7 implementation scope is frozen**, but **before** release packaging/tag. TASK-073's final Git story acceptance and the new dependent TASK-165 audit have been explicitly deferred to the next development iteration; neither blocks 0.5.7 cleanup or release. Do not queue early while current-release tickets still use these artifacts. Coordinate with the release checklist. Preserve reachable historical provenance and any durable facts needed for TASK-165, without shipping temporary research files just because the audit is deferred.
 
 ## Inventory
 Use `release/0.5.6` as the verified direct ancestry baseline of `release/0.5.7` (merge-base `d8420085dedb9b58a282d504fe39e905c84bdc14`). Use `git diff --name-status --diff-filter=A BASE...release/0.5.7` and a separate inventory of modified non-Python files. Include Markdown, JSON, YAML, templates, text and config, not just `*.md`; distinguish added from modified and moved files.
