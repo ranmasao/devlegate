@@ -1,0 +1,30 @@
+{
+  "code_base_head": "0c97ca80d0efa6160f563acecd3124b5c6587a9d",
+  "conclusion": "completed",
+  "control_head": "d079333389b8749cb32df021ca48014f1d4159ad",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-173",
+  "execution_id": "9e6f6160f4a849f69933b1e4b6feaeac",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-173",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-173/9e6f6160f4a849f69933b1e4b6feaeac.md",
+  "report_sha256": "321e277db53754bbb0ce42bb73dbe5ac0afceb62f05bf1a32640f672ecc74e72",
+  "resource_generation": "090c7dcdcf1fd25843598cd0a914dbfdb9b142d82359ac1e413d896131357196",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-173",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Implementation is confined to tests/test_standalone_builder.py. Focused standalone builder and packaging validation passed (98 tests), configured Ruff passed, and git diff --check passed. The live audit is collected only with DEVLEGATE_LIVE_SCIENCE_AUDIT=1 and propagates upstream failures; its explicit collection was verified. ./dev coverage -n 4 --dist=worksteal exceeded local timeouts, most recently 600 seconds at approximately 52%, without reported failures before termination. Complete hosted exact-SHA CI, independent review, and post-integration release/0.5.7 validation are Devlegate-owned and were not performed by this worker.",
+    "summary": "Replaced the mandatory live Science reference comparison with fixed pinned metadata assertions and real Science local-mirror conformance under upstream HTTP 403 denial. Added malformed-metadata, archive-integrity, and mismatched-download negative coverage, and retained the live reference comparison as an explicitly opt-in audit."
+  },
+  "workspace_head": "d427b243373cabfd755839f25937e9ec1243260c"
+}
