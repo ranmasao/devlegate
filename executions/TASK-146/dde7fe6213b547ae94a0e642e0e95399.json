@@ -1,0 +1,30 @@
+{
+  "code_base_head": "048b84d13206852ddebe479258c188f8d04e74e8",
+  "conclusion": "completed",
+  "control_head": "bb210f3b8848d411eb4c1f88a3c90c1450ff8a57",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-146",
+  "execution_id": "dde7fe6213b547ae94a0e642e0e95399",
+  "execution_path": "/home/daniil/.local/state/devlegate/worktrees/2f443efe79478660fa4d54e59e782ae3f8a11020982baa99654263fae7acd23a/work/TASK-146",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-146/dde7fe6213b547ae94a0e642e0e95399.md",
+  "report_sha256": "87d2c6125530f5ae3b9e839df67ef71194159cfb0777021f299abcc39ca460b0",
+  "resource_generation": "91fae2e701adc0f414fe4e2e11b60fbfccab811f281c9bbe79c6397c7d6ed49f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-146",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused prompt/protocol tests passed (58 tests). The full configured coverage command, ./dev coverage -n 4 --dist=worksteal --tb=short, completed with 2274 passed and 2 skipped; ./dev lint and git diff --check passed. Earlier full-suite attempts exceeded command timeouts; the final full coverage run completed successfully. Existing outcome semantics, feedback provenance, lifecycle boundaries, runtime reload behavior, and customization-conflict handling remain intact.",
+    "summary": "Added critical-path prioritization and actionable incomplete handoffs to the shared worker contract, and structured Reviewer REWORK feedback around the primary acceptance blocker, dependent checks, and optional improvements. Refreshed managed and rendered Reviewer artifacts through the existing machinery, extended deterministic prompt/protocol regressions, and documented the prioritization gap and bounded observational evaluation guidance."
+  },
+  "workspace_head": "a55320e9bb08a7315e65fc10daf9763bd058e059"
+}
