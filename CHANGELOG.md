@@ -7,22 +7,97 @@ release are not separate product changes.
 
 ## 0.5.7 (Unreleased)
 
-Development is underway on `release/0.5.7`. Changes will be recorded here as
-features and fixes are integrated; no release date has been scheduled.
+Generation-bound execution recovery, operator inspection and reset, reviewed
+abandonment, and clearer diagnostics and development packaging.
 
 ### Added
 
-- Added provenance-bound curator review feedback to REWORK worker prompts,
-  private exact-prompt diagnostics, and safe managed role-template upgrades.
+- Added read-only `devlegate inspect ticket|execution|workspace|service` views
+  through the running service owner, exposing committed specifications,
+  execution/review history, workspace identity, and explicit evidence gaps.
+- Added `devlegate reset <ticket-id>` to cancel an owned active worker, retire
+  its exact resource generation, and queue the unchanged ticket for a fresh
+  execution against current product HEAD. Durable progress survives restart and
+  lost acknowledgements; reports, reviews, and committed code evidence remain.
+- Added automatic retirement of proven done-ticket execution worktrees and refs,
+  plus `devlegate workspace ls` and bounded `workspace prune` preview/apply
+  commands. Cleanup requires independent generation and published integration
+  evidence, retains audit history, and reports blocked or partial outcomes.
+- Added reviewed abandonment requests with bounded, manifest-backed evidence
+  analysis, immutable proposals, independent curator review, terminal publication,
+  and generation-guarded resource retirement without product integration.
+  `devlegate abandonment-recover` handles uncertain analyst ownership and
+  publication conflicts through explicit owner admission.
+- Added private exact-prompt diagnostics with content digests and service-log
+  records for prompt persistence and successful stdin delivery. Added
+  `devlegate upgrade-templates` and its read-only `--check` mode to update known
+  unmodified managed role templates while refusing customized conflicts.
+- Added `./dev package <target> --ticket <ticket-id>` for local dogfooding from
+  a verified current worktree snapshot or latest attributable retained checkpoint.
+  It requires the service to be stopped, preserves original execution resources,
+  and records source-generation and artifact provenance separately from releases.
+
+### Changed
+
+- Bound newly admitted execution resources to independently recorded generations
+  and publication/handoff receipts. Matching paths, branch names, or checkpoint
+  SHAs alone no longer establish ownership for continuation or retirement;
+  historical unbound resources are retained.
+- Strengthened worker, Architect, and Reviewer contracts around whole-ticket
+  acceptance, critical-path priorities, retained work and injected feedback, and
+  truthful completed/incomplete/blocked claims. Workers own implementation and
+  semantic claims; Devlegate owns Git lifecycle and workflow publication.
+- Added the non-runnable `abandoned` workflow state, which never satisfies
+  dependencies. Existing projects must explicitly publish the configured
+  `ABANDONED_PATH` directory before readiness checks pass; new control histories
+  include it at bootstrap.
+- Made CLI tables terminal-width-aware with multiline cells and stable redirected
+  output. Log commands now use `--tail`/`-t` or `--all`, with optional execution
+  marker suppression; ticket tails share one budget across ordered executions.
+- Made `./dev setup` initialize and synchronize recursive submodules to recorded
+  pins, refusing unsafe local changes or divergent commits. Existing Debian and
+  Arch package builders and validators now share explicit Git, glibc, and GCC
+  unwind runtime dependency declarations.
 
 ### Fixed
 
-- Preserved admitted review feedback across restart and resume, rejected stale
-  or malformed review bindings before worker launch, and kept canonical ticket
-  specifications unchanged.
-- Removed the bundled review-protocol migration and all pre-v1 review fallbacks.
-  Every rejected execution now requires an immutable, attributed review artifact
-  co-published with its disposition; historical marker files are inert.
+- Delivered immutable, attributed curator feedback to rework workers without
+  changing canonical ticket specifications, preserving the binding across restart
+  and resume and rejecting missing, changed, stale, or malformed review evidence.
+- Recovered interrupted rework through the exact admitted resource-generation
+  handoff, retaining dirty tracked and untracked progress without duplicate
+  predecessor publication or a second generation admission. Uncertain worker
+  ownership and altered lineage continue to block launch.
+- Allowed proven compatible control descendants and clean product advancement
+  during execution to proceed through lifecycle replay and accepted integration,
+  preserving admitted provenance. Conflicts, changed ticket meaning, and
+  unproven publication remain explicit recovery blockers.
+- Hardened Git observation and effects: validate exact remote ref identities,
+  distinguish absence from observation errors without localized diagnostic
+  parsing, enforce owner/shutdown checks, pin evidence without overwriting refs,
+  and guard publication and deletion with expected-old comparisons or leases.
+- Prevented concurrent state saves from losing forced-stop manual-retry intent
+  and restored the durable execution base after exceptional reconciliation exits.
+  Operator admission timeouts now distinguish requests removed before admission
+  from claimed requests whose outcome is unknown.
+- Kept superseded failed executions in history without presenting them as current
+  failures, while preserving unrelated failures during another ticket's worker.
+  Cleanup status and service journals expose inventory freshness, refusals, and
+  independently observed retirement outcomes; historical scans use an idle cadence.
+- Kept log follow bound to the selected ticket or execution, ignoring unrelated
+  malformed reports. Execution follow ends at its durable report; ticket follow
+  continues through later attempts and accepted integration until done.
+- Bounded redundant OpenCode LSP diagnostic metadata for touched files to 64 KiB
+  without disabling LSP or changing agent-visible tool output.
+- Fixed initial control bootstrap with absent refs and added a capability-proven
+  orphan-worktree fallback for Git versions before 2.42. Packaging failures now
+  retain visible CLI diagnostics, including when output is redirected.
+
+### Removed
+
+- Removed pre-v1 feedback-free review fallbacks. Rework requires an immutable,
+  attributed review artifact co-published with its disposition; historical
+  review-protocol marker files no longer change admission behavior.
 
 ## 0.5.6 -- 2026-10-13
 
