@@ -5990,11 +5990,45 @@ class ServiceEngine:
             binding = ResourceBinding(manager, intent)
         else:
             raise ExecutionWorkspaceError("invalid resource admission intent")
+        if (
+            intent["execution_id"] != self._state.get("execution_id")
+            or intent["base"] != base_head
+            or intent["control"] != self._state.get("execution_control_head")
+        ):
+            raise ExecutionWorkspaceError(
+                "resource intent differs from execution lineage"
+            )
+        previous = binding.intent.get("predecessor_execution")
+        predecessor = None
+        if isinstance(previous, str):
+            predecessor = ResourceBinding.for_execution(manager, previous)
+            # A fresh execution's empty worker identity says nothing about the
+            # preceding worker. Reuse the independent retirement/absence boundary.
+            try:
+                predecessor.require_worker_retirement()
+            except UnprovenResource:
+                receipt = predecessor.operation_receipt("worker")
+                identity = _worker_identity_from_value(
+                    receipt.get("identity"), previous
+                )
+                if identity is None or self._workers.observe(identity) != "absent":
+                    raise ExecutionWorkspaceError(
+                        "retry predecessor worker absence is unproven; "
+                        "preserve the worktree and resolve worker ownership"
+                    ) from None
         if binding.intent_pending():
-            if self._execution_remote_head(manager.branch) is not None:
+            if self._execution_remote_head(manager.branch) != intent["prior_remote"]:
                 raise ExecutionWorkspaceError("upstream changed before intent replay")
             binding.record_intent()
-        if isinstance(rework, dict):
+        if predecessor is not None:
+            # Review origin is immutable context, not this generation's progress.
+            # An admitted resource predecessor names the last worker generation,
+            # which may be much newer than the reviewed execution.
+            manager._validate_branch(base_head)
+            workspace = binding.prepare_handoff(
+                predecessor, remote_head=self._execution_remote_head(manager.branch),
+            )
+        elif isinstance(rework, dict):
             previous_base = rework.get("previous_base_head")
             previous_checkpoint = rework.get("previous_report_checkpoint")
             previous_execution = rework.get("previous_execution_id")
@@ -6064,17 +6098,9 @@ class ServiceEngine:
                 manager, workspace, previous_execution, previous_checkpoint
             )
         else:
-            previous = binding.intent.get("predecessor_execution")
-            if isinstance(previous, str):
-                manager._validate_branch(base_head)
-                workspace = binding.prepare_handoff(
-                    ResourceBinding.for_execution(manager, previous),
-                    remote_head=self._execution_remote_head(manager.branch),
-                )
-            else:
-                workspace = binding.prepare(
-                    remote_head=self._execution_remote_head(manager.branch)
-                )
+            workspace = binding.prepare(
+                remote_head=self._execution_remote_head(manager.branch)
+            )
         current_control = self._resolve_commit_runtime(self.control_worktree, "HEAD")
         if current_control != plan.control.local_head:
             self._adopt_validated_control_descendant(

@@ -258,6 +258,93 @@ def test_explicit_retry_handoff_requires_independent_predecessor(resources):
     assert run_git(workspace.path, "rev-parse", "HEAD").stdout.strip() == workspace.head
 
 
+def retry_binding(previous):
+    binding = ResourceBinding.plan(
+        previous.manager, execution_id="retry-two", base=str(previous.intent["base"]),
+        control=str(previous.intent["control"]),
+        ticket_blob=str(previous.intent["ticket_blob"]), remote="origin",
+        remote_head=None,
+    )
+    binding.intent.update({
+        "predecessor_execution": previous.intent["execution_id"],
+        "predecessor_generation": previous.intent["generation"],
+    })
+    return binding
+
+
+@pytest.mark.parametrize("boundary", ["handoff-intent", "marker", "receipt"])
+def test_retry_handoff_interruption_requires_independent_creation_receipt(
+    resources, monkeypatch, boundary,
+):
+    import devlegate.resource_binding as module
+
+    previous = resources
+    workspace = previous.prepare(remote_head=None)
+    (workspace.path / "source").write_text("tracked WIP\n")
+    (workspace.path / "untracked").write_text("untracked WIP\n")
+    binding = retry_binding(previous)
+    binding.record_intent()
+    write = module._write_once
+
+    def crash(path, value):
+        write(path, value)
+        if path.name == {
+            "handoff-intent": "handoff-intent.json",
+            "marker": "devlegate-generation.json", "receipt": "receipt.json",
+        }[boundary]:
+            raise OSError("injected handoff crash")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_write_once", crash)
+        with pytest.raises(OSError, match="injected"):
+            binding.prepare_handoff(previous, remote_head=None)
+    before = snapshot(previous.manager.root.parent)
+    for _ in range(2):
+        restarted = ResourceBinding.for_execution(previous.manager, "retry-two")
+        if boundary == "receipt":
+            reused = restarted.prepare_handoff(previous, remote_head=None)
+            assert reused.head == workspace.head
+        else:
+            with pytest.raises(ExecutionWorkspaceError, match="operator recovery"):
+                restarted.prepare_handoff(previous, remote_head=None)
+        assert snapshot(previous.manager.root.parent) == before
+
+
+@pytest.mark.parametrize("change", [
+    "nonce", "execution", "inode", "local-head", "remote-head", "unsettled",
+    "forged-receipt", "stale-handoff",
+])
+def test_retry_handoff_rejects_foreign_or_uncertain_evidence(resources, change):
+    previous = resources
+    workspace = previous.prepare(remote_head=None)
+    binding = retry_binding(previous)
+    if change == "nonce":
+        binding.intent["predecessor_generation"] = "f" * 64
+    elif change == "execution":
+        binding.intent["predecessor_execution"] = "foreign-execution"
+    binding.record_intent()
+    if change == "inode":
+        previous.manager.path.rename(previous.manager.path.with_name("preserved"))
+        previous.manager.path.mkdir()
+    elif change == "local-head":
+        run_git(workspace.path, "commit", "--allow-empty", "-m", "foreign")
+    elif change == "unsettled":
+        previous.begin_operation("worker", {"start": workspace.head})
+    elif change == "forged-receipt":
+        # Matching SHA and JSON do not confer the missing inode witnesses.
+        (binding.directory / "receipt.json").write_bytes(
+            (previous.directory / "receipt.json").read_bytes()
+        )
+    elif change == "stale-handoff":
+        (binding.directory / "handoff-intent.json").write_text('{}\n')
+    before = snapshot(previous.manager.root.parent)
+    with pytest.raises((ExecutionWorkspaceError, OSError)):
+        binding.prepare_handoff(
+            previous, remote_head=workspace.head if change == "remote-head" else None,
+        )
+    assert snapshot(previous.manager.root.parent) == before
+
+
 def test_archived_worktree_reports_and_evidence_refs_are_untouched(resources):
     binding = resources
     repo = binding.manager.repo

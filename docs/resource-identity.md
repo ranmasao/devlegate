@@ -59,11 +59,16 @@ existing effects without exact independent receipts block. A lost marker or
 receipt is never regenerated from SQLite or from matching Git history.
 The one pre-effect exception is an admission interrupted before the independent
 intent directory exists. Its already committed SQLite token can finish the WAL
-write only when recorded and current worktree, registration, local ref and
-upstream ref are all absent. A partial evidence directory, an existing ref even
-at the expected SHA, or any creation reservation blocks that replay. The proof
-API continues to report missing independent evidence until the owner finishes
-this step; the read path never repairs it.
+write when recorded and current worktree, registration, local ref and upstream
+ref are all absent. An explicitly admitted retry can also finish that write
+against its exact independently proved predecessor generation: the recorded
+registration and HEAD must still match, filesystem witnesses must validate, and
+the upstream must match both admission and predecessor publication receipts.
+The owner separately proves prior worker retirement or observes the independently
+receipted process identity as absent. A partial evidence directory, an unrelated
+existing ref even at the expected SHA, or any creation reservation blocks replay.
+The proof API continues to report missing independent evidence until the owner
+finishes this step; the read path never repairs it.
 
 Worker, checkpoint and publication attempts have independent, exclusive intent
 and receipt files. Missing/partial receipts, an attempted operation with unknown
@@ -95,6 +100,59 @@ marker and creation receipt rather than inheriting its predecessor's identity.
 Reviewed zero-delta executions whose resources were ordinarily retired have no
 resources to hand off. Rework creates new reserved resources with a fresh token,
 even if the base, ticket branch and checkout path are identical.
+
+### Reviewed origin versus retry preparation
+
+`rework_provenance` preserves the reviewed execution, reviewed checkpoint and
+curator feedback. These describe the review origin across every subsequent
+worker attempt. Its `preparation_stage` describes the initial reviewed rework
+preparation; an inherited `remote_predecessor_installed` does not establish that
+a newly admitted resource generation has been prepared.
+
+Preparation selects the operation from the current independent admission:
+
+- With `predecessor_execution` and `predecessor_generation`, use
+  `ResourceBinding.prepare_handoff()` for that exact most recent resource owner.
+  Do not retire the reviewed worktree again, reset to its checkpoint, or repeat
+  reviewed predecessor/evidence publication. Dirty tracked and untracked WIP
+  stays in the same worktree with unchanged committed history.
+- Without an admitted resource predecessor, use the strict reviewed rework
+  preparation protocol. The reviewed execution is not an implicit retry owner.
+  Its clean checkpoint, review binding and remote evidence remain required.
+
+The independent generation journal, not the inherited review stage, determines
+whether a retry is pending, prepared, or uncertain:
+
+| Interruption boundary | Restart behavior |
+| --- | --- |
+| SQLite admission, before independent intent | Replay the same execution/token only against absent resources or the exact proved retry predecessor, with observed upstream and worker absence. |
+| Independent intent, before handoff effect | Prove admission, predecessor token, filesystem witnesses, HEAD, registration, upstream receipts and worker absence; perform the admitted handoff. |
+| `handoff-intent.json`, before creation receipt | Effect is uncertain. Block, retain WIP and evidence, and require operator investigation. A matching HEAD or marker does not complete the receipt. |
+| Creation receipt, before launch | Validate the settled generation and handoff evidence; reuse the same execution/token without repeating publication. |
+| Worker launch | Use the existing independent launch receipt and process-lifetime recovery boundary. A live/indeterminate worker blocks another launch. Proven process loss may authorize a new retry execution/token; preparation interruption alone may not. |
+
+A boot-ID mismatch is an observed process-absence fact. It does not create a
+normal supervisor retirement receipt. In particular, `worker_identity=None` in
+the new pending execution is not evidence about the old worker. Every retry
+preparation rechecks the predecessor's independent retirement receipt or its
+independently recorded process identity through the existing supervisor observer.
+
+Operator diagnostics `interrupted retry handoff has no receipt` and
+`creation effect is uncertain: receipt missing` mean **stop and preserve the
+worktree and bindings**. Inspect the exact execution/token,
+predecessor relationship, independent intent/receipt files, process identity,
+filesystem witnesses, local HEAD and freshly observed upstream. Do not delete a
+dirty worktree, invent retirement/creation receipts, or admit another generation
+to bypass uncertainty. The incident's untouched pending intent requires no
+SQLite correction: the corrected owner replays that existing admission through
+the handoff path. A partial evidence directory or unreceipted handoff effect is
+a different condition and is not repaired by this routing correction.
+
+No historical state migration or operator mutation script is needed for that
+untouched-intent case. Already integrated/archived resources must be left alone.
+Deploying the integrated fix and retiring a temporary bootstrap executable is a
+separate operator action. Compare runtime source provenance; package version
+alone does not identify the bootstrap's code.
 
 Checkpoint and publication retain the same generation. They require fresh
 identity observations in addition to the existing exact-HEAD, cleanliness,

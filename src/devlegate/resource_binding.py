@@ -319,7 +319,11 @@ class ResourceBinding:
         if (self.directory / "receipt.json").exists():
             return False
         if any(path.name != "intent.json" for path in self.directory.iterdir()):
-            raise UnprovenResource("creation effect is uncertain: receipt missing")
+            raise UnprovenResource(
+                "creation effect is uncertain: receipt missing; preserve the "
+                "worktree and independent evidence for operator recovery; "
+                "do not admit another generation"
+            )
         if (
             self.manager.path.exists() != self.intent["prior_path_exists"]
             or resolve_ref_commit(
@@ -336,11 +340,31 @@ class ResourceBinding:
     def intent_pending(self) -> bool:
         """SQLite intent can precede its independent WAL, never any Git effect.
 
-        Only an absent evidence directory and wholly absent resources permit
-        finishing that ordering step. A partial directory or any resource blocks.
+        An absent evidence directory permits finishing that ordering step only
+        for wholly absent resources or the exact independently proved retry
+        predecessor. A partial directory always blocks. The owner must separately
+        prove predecessor worker absence before recording or handing off intent.
         """
         _safe_path(self.directory)
         _safe_path(self.manager.path)
+        if not self.directory.exists() and isinstance(
+            self.intent.get("predecessor_execution"), str
+        ):
+            predecessor = ResourceBinding.for_execution(
+                self.manager, str(self.intent["predecessor_execution"])
+            )
+            self._validate_handoff_predecessor(predecessor)
+            workspace = predecessor.require_local(clean=False)
+            if (
+                workspace.head != self.intent["prior_local"]
+                or self.manager.path.exists() != self.intent["prior_path_exists"]
+                or self.manager._registrations().get(self.manager.path.resolve())
+                != self.intent["prior_registration"]
+            ):
+                raise ExecutionWorkspaceError(
+                    "retry preconditions changed before independent intent replay"
+                )
+            return True
         return (
             not self.directory.exists()
             and self.intent["prior_local"] is None
@@ -798,10 +822,24 @@ class ResourceBinding:
     ) -> ExecutionWorkspace:
         """Rebind proven resources only after the owner admits an explicit retry."""
         self._validate_intent()
+        self._validate_handoff_predecessor(predecessor)
+        if remote_head != self.latest_remote(self.intent["prior_remote"]):
+            raise ExecutionWorkspaceError("retry upstream differs from admission")
         if (self.directory / "receipt.json").exists():
+            if _read(self.directory / "handoff-intent.json") != {
+                "generation": self.intent["generation"],
+                "predecessor": predecessor.intent["generation"],
+            }:
+                raise ExecutionWorkspaceError("retry handoff evidence differs")
             return self.require_local(clean=False)
         if (self.directory / "handoff-intent.json").exists():
-            raise ExecutionWorkspaceError("interrupted retry handoff has no receipt")
+            raise UnprovenResource(
+                "interrupted retry handoff has no receipt; preserve the worktree "
+                "and independent evidence for operator recovery; do not retry "
+                "with another generation"
+            )
+        if not self.creation_pending():
+            raise ExecutionWorkspaceError("retry creation is not pending")
         descriptor = os.open(
             self.manager.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
@@ -835,6 +873,29 @@ class ResourceBinding:
             return dataclasses.replace(workspace, base_head=str(self.intent["base"]))
         finally:
             os.close(descriptor)
+
+    def _validate_handoff_predecessor(self, predecessor: ResourceBinding) -> None:
+        predecessor._validate_intent()
+        if (
+            self.intent.get("predecessor_execution")
+            != predecessor.intent["execution_id"]
+            or self.intent.get("predecessor_generation")
+            != predecessor.intent["generation"]
+            or self.intent["execution_id"] == predecessor.intent["execution_id"]
+            or self.intent["generation"] == predecessor.intent["generation"]
+            or any(
+                self.intent[key] != predecessor.intent[key]
+                for key in (
+                    "ticket_id", "common", "path", "ref", "remote",
+                    "remote_ref", "remote_urls", "push_urls",
+                )
+            )
+        ):
+            raise ExecutionWorkspaceError("explicit retry predecessor identity differs")
+        if self.intent["prior_remote"] != predecessor.latest_remote(
+            predecessor.intent["prior_remote"]
+        ):
+            raise ExecutionWorkspaceError("retry predecessor upstream receipt differs")
 
     def _admin(self) -> Path:
         result = self.manager._runner(
