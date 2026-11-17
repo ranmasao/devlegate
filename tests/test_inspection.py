@@ -433,6 +433,7 @@ def test_execution_render_real_observation(owner, monkeypatch, columns, tty):
         {"commit": f"{i:040x}", "blob": f"{i + 1:040x}", "text": "old"}
         for i in range(100)
     ]
+    obs["history"]["large-history"][50]["blob"] = None
     text = _render_execution_inspection(view)
     assert obs["id"] in text
     assert obs["checkpoint"]["head"] in text
@@ -441,7 +442,12 @@ def test_execution_render_real_observation(owner, monkeypatch, columns, tty):
     assert "Review state: proved" in text and "Decision: accepted" in text
     assert "review line one\nreview line two" in text
     assert "Generation state: observed" in text and "Current local: proved" in text
-    assert f"{99:040x}" in text
+    history = text.split("  Artifact: large-history\n", 1)[1]
+    assert "Versions: 100" in history
+    assert "Deleted versions: 1" in history
+    assert "Older versions omitted: 97 (full versions in --json/--yaml)" in history
+    assert f"{2:040x}" in history and f"{99:040x}" not in history
+    assert len(history.splitlines()) <= 10
     # Long paths and identities stay intact even when they exceed the width.
     assert all(len(line) <= columns or any(len(word) > columns - 25
                                            for word in line.split())
@@ -450,9 +456,14 @@ def test_execution_render_real_observation(owner, monkeypatch, columns, tty):
 
 def test_execution_cli_human_and_machine_views(owner, monkeypatch, capsys):
     import devlegate.cli as cli
+    from devlegate._vendor import nanoyaml
 
     identifier = owner._state["execution_id"]
     view = inspect_object(owner, "execution", identifier)
+    view["observation"]["history"]["large-history"] = [
+        {"commit": f"{i:040x}", "blob": None if i == 50 else f"{i + 1:040x}",
+         "text": "historical text"} for i in range(100)
+    ]
     monkeypatch.setattr(cli, "request", lambda *_a, **_kw: view)
     monkeypatch.setattr(sys, "argv", ["devlegate", "inspect", "execution", identifier])
     assert cli.main() == 0
@@ -464,6 +475,11 @@ def test_execution_cli_human_and_machine_views(owner, monkeypatch, capsys):
     ])
     assert cli.main() == 0
     assert json.loads(capsys.readouterr().out) == view
+    monkeypatch.setattr(sys, "argv", [
+        "devlegate", "inspect", "execution", identifier, "--yaml",
+    ])
+    assert cli.main() == 0
+    assert nanoyaml.loads(capsys.readouterr().out) == view
 
 
 def test_execution_render_proved_review(owner):

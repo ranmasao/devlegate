@@ -567,11 +567,23 @@ def _render_execution_inspection(result: dict) -> str:
     else:
         for path, versions in history.items():
             field("Artifact", path)
-            if not versions:
-                field("Versions", "none")
-            for version in versions:
+            field("Versions", len(versions))
+            deleted = sum(
+                version.get("blob", "unknown") is None for version in versions
+            )
+            unknown = sum("blob" not in version for version in versions)
+            if deleted:
+                field("Deleted versions", deleted)
+            if unknown:
+                field("Versions with unknown blob", unknown)
+            for version in versions[:3]:
                 field("Commit", version.get("commit"))
-                field("Blob", version.get("blob") or "deleted")
+                blob = version.get("blob", "unknown")
+                field("Blob", "deleted" if blob is None else blob)
+            omitted = max(0, len(versions) - 3)
+            if omitted:
+                field("Older versions omitted",
+                      f"{omitted} (full versions in --json/--yaml)")
     return "\n".join(lines)
 
 
