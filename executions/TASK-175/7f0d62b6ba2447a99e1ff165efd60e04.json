@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a206027a3a8768330df20b14c9ce174c1aeee84a",
+  "conclusion": "completed",
+  "control_head": "d6fcd1da3b964aac4186ac455992e8f6b97c853e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-175",
+  "execution_id": "7f0d62b6ba2447a99e1ff165efd60e04",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-175",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "1bf5b42959e0646b4a8a8047ef310fd55b458d6d6aa339a15a0e277813f6ce09",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-175",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Integrated observed scheduler decisions into execution and workflow status, qualifying stopped-service and lifecycle precedence while identifying selected tickets in context. Expanded textual coverage for execution, recovery, workflow selection, and lifecycle scenarios."
+  },
+  "workspace_head": "9db4063570f0d2f72b407303f0786f4f643acb4a"
+}
