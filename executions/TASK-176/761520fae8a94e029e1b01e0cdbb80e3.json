@@ -1,0 +1,36 @@
+{
+  "code_base_head": "9db4063570f0d2f72b407303f0786f4f643acb4a",
+  "conclusion": "incomplete",
+  "control_head": "ecf4965f006b6382e788a89354cbcabefb42be9a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-176",
+  "execution_id": "761520fae8a94e029e1b01e0cdbb80e3",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-176",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the full CLI topology regression run and investigate any failures; the 300-second run timed out after 66 tests.",
+    "Run hosted CI against the exact SHA containing these changes after Devlegate creates and publishes it."
+  ],
+  "report_artifact": "executions/TASK-176/761520fae8a94e029e1b01e0cdbb80e3.md",
+  "report_sha256": "0e799c61a703194cdf427bb983d58f4b5070c5b9fc0239d6db11bcf24c6bb8e3",
+  "resource_generation": "95fe2a2ea684434d1fc3d70eccfbfa970d42e8ce2c8d7ba9aee7148836c3cc1f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-176",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the full CLI topology regression run and investigate any failures; the 300-second run timed out after 66 tests.",
+      "Run hosted CI against the exact SHA containing these changes after Devlegate creates and publishes it."
+    ],
+    "report": "The topology suite exceeded the available 300-second command timeout. The required hosted exact-SHA CI cannot run on the uncommitted workspace; Git lifecycle and publication belong to Devlegate.",
+    "summary": "Removed the public plan command, read-only IPC endpoint, and unused plan-only views while preserving scheduler decisions in status. Updated status-focused safety, IPC, CLI, and concurrency coverage and documentation."
+  },
+  "workspace_head": "071a296d954bcdf29fe0b10466a8099fd12c935f"
+}
