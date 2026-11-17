@@ -174,6 +174,12 @@ def test_execution_evidence_gaps(owner, change):
             assert any("exact historical feedback" in (version["text"] or "")
                        for version in view["observation"]["history"]
                        [f"reviews/T-1/{identifier}.md"])
+            from devlegate.cli import _render_execution_inspection
+
+            rendered = _render_execution_inspection(view)
+            assert "Review state: deleted" in rendered
+            assert "historical immutable review disappeared" in rendered
+            assert "Blob: deleted" in rendered
     assert snapshot(owner.repo.parent) == before
 
 
@@ -190,6 +196,13 @@ def test_unbound_execution_still_has_immutable_checkpoint(owner):
     assert view["observation"]["provenance_state"] == "proved"
     assert view["observation"]["independent_generation"]["state"] == "unproven"
     assert view["blockers"]
+    from devlegate.cli import _render_execution_inspection
+
+    text = _render_execution_inspection(view)
+    assert "Publication provenance: proved" in text
+    assert "Generation state: unproven" in text
+    assert "Current local: unknown" in text
+    assert "independent generation unproven:" in text
     assert snapshot(owner.repo.parent) == before
 
 
@@ -395,7 +408,88 @@ def test_latest_report_is_not_current_independent_generation(owner):
     assert latest["latest_execution"] == "latest"
     assert latest["independent_generation"]["state"] == "unproven"
     assert historical["checkpoint"]["head"] == latest["checkpoint"]["head"]
+    from devlegate.cli import _render_execution_inspection
+
+    text = _render_execution_inspection({"observation": historical, "blockers": []})
+    assert "Execution chronology: historical" in text
+    assert "Current local: proved" in text
+    assert "not current local proof" in text
     assert snapshot(owner.repo.parent) == before
+
+
+@pytest.mark.parametrize("columns", [80, 120])
+@pytest.mark.parametrize("tty", [True, False])
+def test_execution_render_real_observation(owner, monkeypatch, columns, tty):
+    from devlegate.cli import _render_execution_inspection
+
+    monkeypatch.setenv("COLUMNS", str(columns))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+    view = inspect_object(owner, "execution", owner._state["execution_id"])
+    obs = view["observation"]
+    obs["report"]["worker_claim"]["summary"] = "first line\nsecond line"
+    obs["review"] = {"state": "proved", "decision": "accepted",
+                     "text": "review line one\nreview line two"}
+    obs["history"]["large-history"] = [
+        {"commit": f"{i:040x}", "blob": f"{i + 1:040x}", "text": "old"}
+        for i in range(100)
+    ]
+    text = _render_execution_inspection(view)
+    assert obs["id"] in text
+    assert obs["checkpoint"]["head"] in text
+    assert "Conclusion: completed" in text
+    assert "first line\nsecond line" in text
+    assert "Review state: proved" in text and "Decision: accepted" in text
+    assert "review line one\nreview line two" in text
+    assert "Generation state: observed" in text and "Current local: proved" in text
+    assert f"{99:040x}" in text
+    # Long paths and identities stay intact even when they exceed the width.
+    assert all(len(line) <= columns or any(len(word) > columns - 25
+                                           for word in line.split())
+               for line in text.splitlines())
+
+
+def test_execution_cli_human_and_machine_views(owner, monkeypatch, capsys):
+    import devlegate.cli as cli
+
+    identifier = owner._state["execution_id"]
+    view = inspect_object(owner, "execution", identifier)
+    monkeypatch.setattr(cli, "request", lambda *_a, **_kw: view)
+    monkeypatch.setattr(sys, "argv", ["devlegate", "inspect", "execution", identifier])
+    assert cli.main() == 0
+    text = capsys.readouterr().out
+    assert "Execution inspection" in text and identifier in text
+    assert "Publication provenance: proved" in text
+    monkeypatch.setattr(sys, "argv", [
+        "devlegate", "inspect", "execution", identifier, "--json",
+    ])
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out) == view
+
+
+def test_execution_render_proved_review(owner):
+    from devlegate.cli import _render_execution_inspection
+
+    identifier = owner._state["execution_id"]
+    initial = inspect_object(owner, "execution", identifier)["observation"]
+    control = owner.control_worktree
+    path = control / f"reviews/T-1/{identifier}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"<!-- devlegate-review-v1\nticket: T-1\nexecution: {identifier}\n"
+        f"checkpoint: {initial['checkpoint']['head']}\n"
+        f"control: {initial['checkpoint']['control_head']}\n"
+        "disposition: rework\n-->\nFirst finding\nSecond finding\n"
+    )
+    (control / owner.review_path / "T-1.md").rename(
+        control / owner.todo_path / "T-1.md"
+    )
+    git(control, "add", ".")
+    git(control, "commit", "-m", "review fixture")
+    view = inspect_object(owner, "execution", identifier)
+    assert view["observation"]["review"]["state"] == "proved"
+    text = _render_execution_inspection(view)
+    assert "Review state: proved" in text and "Decision: rework" in text
+    assert "First finding\nSecond finding" in text
 
 
 @pytest.mark.parametrize("kind", ["ticket", "execution", "workspace", "service"])

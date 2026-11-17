@@ -443,6 +443,138 @@ def _render_ticket_inspection(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_execution_inspection(result: dict) -> str:
+    """Present the exact report and distinguish historical from local evidence."""
+    def mapping(value):
+        return value if isinstance(value, dict) else {}
+
+    observation = mapping(result.get("observation"))
+    report = mapping(observation.get("report"))
+    claim = mapping(report.get("worker_claim"))
+    checkpoint = mapping(observation.get("checkpoint"))
+    artifact = mapping(checkpoint.get("artifact"))
+    review = mapping(observation.get("review"))
+    generation = mapping(observation.get("independent_generation"))
+    lines = ["Execution inspection"]
+    width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+
+    def safe(value):
+        return "".join(c if c.isprintable() or c == "\n" else f"\\u{ord(c):04x}"
+                       for c in str(value))
+
+    def field(label, value):
+        if value is None:
+            value = "unavailable"
+        elif isinstance(value, bool):
+            value = "yes" if value else "no"
+        text = safe(value)
+        wrap_width = width // 2 if any(
+            unicodedata.east_asian_width(c) in "WF" for c in text
+        ) else width
+        for part in text.split("\n"):
+            lines.extend(textwrap.wrap(
+                part, width=wrap_width, initial_indent=f"  {label}: ",
+                subsequent_indent="    ", break_long_words=False,
+                break_on_hyphens=False, replace_whitespace=False,
+            ) or [f"  {label}: "])
+
+    def section(title):
+        lines.extend(["", title])
+
+    def block(title, value):
+        section(title)
+        lines.append(safe(value) if value is not None else "unavailable")
+
+    def items(label, values):
+        if values is None:
+            field(label, None)
+        elif not values:
+            field(label, "none")
+        else:
+            for item in values:
+                field(label, item)
+
+    section("Identity and publication")
+    for label, value in (("Execution ID", observation.get("id")),
+                         ("Ticket ID", observation.get("ticket_id")),
+                         ("Execution chronology", observation.get("latest_execution")),
+                         ("Report path", observation.get("path")),
+                         ("Report blob", observation.get("blob")),
+                         ("Publication", observation.get("publication")),
+                         ("Publication provenance",
+                          observation.get("provenance_state")),
+                         ("Observed control HEAD", observation.get("control_head"))):
+        field(label, value)
+
+    section("Worker conclusion")
+    for label, value in (("Conclusion", report.get("conclusion")),
+                         ("Reason", report.get("reason")),
+                         ("Worker outcome", claim.get("outcome")),
+                         ("Process started", report.get("process_started")),
+                         ("Return code", report.get("process_returncode")),
+                         ("Transport error", report.get("transport_error") or "none"),
+                         ("Egress error", report.get("egress_error") or "none")):
+        field(label, value)
+    items("Remaining", report.get("remaining"))
+    items("Question", report.get("questions"))
+    block("Worker summary", claim.get("summary"))
+
+    section("Checkpoint (recorded in report; not current local proof)")
+    for label, value in (("Workspace HEAD", checkpoint.get("head")),
+                         ("Base HEAD", checkpoint.get("base_head")),
+                         ("Admission control HEAD", checkpoint.get("control_head")),
+                         ("Execution branch", report.get("execution_branch")),
+                         ("Execution path", report.get("execution_path")),
+                         ("Artifact state", artifact.get(
+                             "state", "missing" if report.get("report_artifact")
+                             else "absent")),
+                         ("Artifact path", artifact.get("path")),
+                         ("Artifact blob", artifact.get("blob")),
+                         ("Report SHA-256", report.get("report_sha256"))):
+        field(label, value)
+
+    section("Review decision (committed evidence)")
+    for label, value in (("Review state", review.get("state")),
+                         ("Decision", review.get("decision")),
+                         ("Review path", review.get("path")),
+                         ("Review blob", review.get("blob")),
+                         ("Review publication", review.get("publication"))):
+        field(label, value)
+    if review.get("text") is not None:
+        block("Reviewer text (current committed blob)", review["text"])
+
+    section("Independent generation and current local identity")
+    for label, key in (("Generation state", "state"), ("Generation", "generation"),
+                       ("Current local", "current_local"),
+                       ("Current local HEAD", "current_head"),
+                       ("Checkpoint matches current", "checkpoint_matches_current")):
+        field(label, generation.get(key))
+
+    section("Blockers")
+    items("Blocker", result.get("blockers"))
+    if artifact.get("text") is not None:
+        block("Worker report (committed artifact)", artifact["text"])
+    elif claim.get("report") is not None:
+        block("Worker report (recorded in report; artifact unavailable)",
+              claim["report"])
+
+    section("Historical artifact versions (newest first; details in --json/--yaml)")
+    history = observation.get("history")
+    if history is None:
+        field("History", None)
+    elif not history:
+        field("History", "none")
+    else:
+        for path, versions in history.items():
+            field("Artifact", path)
+            if not versions:
+                field("Versions", "none")
+            for version in versions:
+                field("Commit", version.get("commit"))
+                field("Blob", version.get("blob") or "deleted")
+    return "\n".join(lines)
+
+
 def _render_service_inspection(result: dict) -> str:
     """Render only service facts, keeping publication and request time distinct."""
     def mapping(value):
@@ -516,6 +648,9 @@ def _inspect_daemon(env_file: Path, args) -> int:
         text = _render_service_inspection(result)
     elif args.object_type == "ticket" and isinstance(result.get("observation"), dict):
         text = _render_ticket_inspection(result)
+    elif (args.object_type == "execution"
+          and isinstance(result.get("observation"), dict)):
+        text = _render_execution_inspection(result)
     else:
         rows = [(key, json.dumps(value, sort_keys=True))
                 for key, value in result.items()]
