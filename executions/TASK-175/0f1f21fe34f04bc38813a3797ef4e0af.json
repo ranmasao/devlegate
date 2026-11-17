@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a206027a3a8768330df20b14c9ce174c1aeee84a",
+  "conclusion": "completed",
+  "control_head": "8ea34ef56bff4c9961166569f0d7079204bfdfcf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-175",
+  "execution_id": "0f1f21fe34f04bc38813a3797ef4e0af",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-175",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "618863ce35c422a0736505681533331b051be98983ea5063b6b7f13cbb9fa2d6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-175",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Integrated the observed scheduler decision into human-readable status alongside execution and lifecycle precedence, with selected-ticket and bound-resume details. Added status rendering coverage across service, execution, recovery, and terminal-width scenarios."
+  },
+  "workspace_head": "a63d1517512a68e6aed1c4ee2a36f7fae0d18afa"
+}
