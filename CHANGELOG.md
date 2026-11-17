@@ -5,7 +5,7 @@ the current release back to the first working release. Each entry describes
 behavior shipped by that release; implementation steps superseded before a
 release are not separate product changes.
 
-## 0.5.7 (Unreleased)
+## 0.5.7 -- 2026-11-17
 
 Safer execution recovery, operator inspection and reset, reviewed abandonment,
 and clearer diagnostics and development packaging.
