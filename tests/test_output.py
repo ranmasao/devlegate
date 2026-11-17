@@ -305,7 +305,7 @@ def test_non_empty_eligible_remains_visible():
             "runnable",
             "run-worker",
             "deterministic runnable ticket selection",
-            "Bound resume",
+            "bound resume: no",
         ),
         (
             "blocked",
@@ -321,7 +321,7 @@ def test_non_empty_eligible_remains_visible():
             "blocked",
             "persisted worker ownership is matching-live; "
             "startup reconciliation is blocked",
-            "Live execution takes precedence",
+            "While the current execution continues",
         ),
         (
             "recovery",
@@ -340,13 +340,17 @@ def test_non_empty_eligible_remains_visible():
             "stopping",
             "run-worker",
             "deterministic runnable ticket selection",
-            "Service stop takes precedence",
+            "service stop taking precedence",
         ),
         (
             "restarting",
             "run-worker",
             "deterministic runnable ticket selection",
-            "Service restart takes precedence",
+            "service restart taking precedence",
+        ),
+        (
+            "retained", "run-worker", "resume persisted bound execution",
+            "recovery-required",
         ),
     ],
 )
@@ -356,18 +360,18 @@ def test_status_scheduler_decision_in_context(
     monkeypatch.setattr("sys.stdout.isatty", lambda: columns is not None)
     if columns is not None:
         monkeypatch.setenv("COLUMNS", str(columns))
-    bound = case in {"bound", "active", "recovery", "unverified"}
+    bound = case in {"bound", "active", "recovery", "unverified", "retained"}
     phase = "agent_pending" if case == "bound" else "agent_running" if bound else "idle"
-    stage = "worker-running" if case in {"active", "recovery"} else None
+    stage = "worker-running" if case in {"active", "recovery", "retained"} else None
     snapshot = _execution_snapshot(phase, stage, ticket="LAB-1" if bound else None)
-    selected = case in {"runnable", "bound", "stopping", "restarting"}
+    selected = case in {"runnable", "bound", "stopping", "restarting", "retained"}
     plan = ExecutionPlan(
         action,
         reason,
         "LAB-1" if selected else None,
         "Implement scheduling" if selected else None,
         "todo" if selected else None,
-        case == "bound",
+        case in {"bound", "retained"},
     )
     snapshot = dataclasses.replace(
         snapshot,
@@ -393,7 +397,9 @@ def test_status_scheduler_decision_in_context(
         else None
     )
     service = (
-        "stopped" if case in {"idle", "runnable", "missing", "recovery"} else "running"
+        "stopped"
+        if case in {"idle", "runnable", "missing", "recovery", "retained"}
+        else "running"
     )
     intent = {"stopping": "stop", "restarting": "restart"}.get(case)
     metadata = {
@@ -407,15 +413,26 @@ def test_status_scheduler_decision_in_context(
         service_metadata=metadata if service == "running" else None,
     )
 
-    assert "Scheduler decision (observed)" in output
+    assert "Scheduler decision (observed)" not in output
+    assert "Repositories" in output and "Workflow" in output
     assert action in output
-    assert expected in output
+    normalized = " ".join(output.split())
+    assert expected in normalized
+    assert "see active execution above" not in output
+    assert "see blocked tickets below" not in output
     if selected:
         assert output.count("LAB-1") == 1
     if case == "bound":
-        assert "yes" in output
+        assert "bound resume: yes" in normalized
     if case == "runnable":
-        assert "not a scheduled launch" in output
+        assert "If the service were started" in output
+        assert "scheduler selection" in output
+    if case == "active":
+        assert "running" in output and "recovery-required" not in output
+        assert "idle" not in output
+    if case == "retained":
+        assert "If the service were started" in output
+        assert "bound resume: yes" in normalized
     if columns is not None:
         assert max(map(len, output.splitlines())) <= columns
 
@@ -432,8 +449,50 @@ def test_scheduler_ticket_reuses_blocked_workflow_entry():
     output = _render_status_text(
         snapshot, "stopped", _execution_projection(snapshot, None)
     )
-    assert "see blocked tickets below" in output
+    assert "see blocked tickets below" not in output
+    assert "scheduler selection, review" in output
+    assert "ticket awaits review" in output
     assert output.count("LAB-2") == 2  # Ticket and the structured blocking reason.
+
+
+@pytest.mark.parametrize("section", ["review", "accepted"])
+def test_scheduler_selection_is_identified_within_workflow_section(section):
+    snapshot = _execution_snapshot("idle", None, ticket=None)
+    snapshot = dataclasses.replace(
+        snapshot,
+        plan=ExecutionPlan(
+            "blocked", "workflow requires attention", "LAB-2", "Work", section
+        ),
+        **{section: (("LAB-2", "Work"), ("LAB-3", "Other work"))},
+    )
+    output = _render_status_text(
+        snapshot, "running", _execution_projection(snapshot, None)
+    )
+
+    assert output.count("LAB-2") == 1
+    assert "Work (scheduler selection" in output
+    assert "Other work (scheduler selection" not in output
+    assert output.index(section.title()) < output.index("workflow requires attention")
+
+
+@pytest.mark.parametrize("intent", ["stop", "restart"])
+def test_active_worker_lifecycle_takes_precedence_over_admission(intent):
+    snapshot = _execution_snapshot("agent_running", "worker-running")
+    evidence = {
+        "ticket_id": "LAB-1", "execution_id": "exec-1", "stage": "worker-running",
+        "ownership": "current-service", "identity_state": "matching-live",
+    }
+    output = _render_status_text(
+        snapshot, "running", _execution_projection(snapshot, evidence, "running"),
+        service_metadata={
+            "version": "unknown",
+            "lifecycle": {"intent": intent, "workers": {"active": 1}},
+        },
+    )
+
+    assert f"will {intent} at checkpoint" in output
+    assert f"service {intent} taking precedence" in output
+    assert "running" in output and output.count("LAB-1") == 1
 
 
 def test_machine_eligible_excludes_bound_ticket():

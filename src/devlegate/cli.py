@@ -2015,39 +2015,71 @@ def _render_status_text(
                 )
             )
     plan = snapshot.plan
-    scheduler_rows = [("Action", plan.action), ("Reason", plan.reason)]
-    if plan.ticket_id is not None:
-        if (
-            plan.ticket_id == execution.get("ticket_id")
-            and execution["state"] != "idle"
+    lifecycle = service_metadata.get("lifecycle") if service_metadata else None
+    intent = lifecycle.get("intent") if isinstance(lifecycle, dict) else None
+    if service_state != "running":
+        prefix = "If the service were started, the observed scheduler decision"
+    elif intent in {"stop", "restart"}:
+        prefix = (
+            f"With service {intent} taking precedence, the observed scheduler decision"
+        )
+    elif execution["state"] in {"running", "starting", "finalizing"}:
+        prefix = (
+            "While the current execution continues, the observed scheduler decision"
+        )
+    else:
+        prefix = "Observed scheduler decision"
+    decision = f"{prefix}: {plan.action} — {plan.reason}"
+    if plan.ticket_id is not None and (plan.action == "run-worker" or plan.bound):
+        decision += f" (bound resume: {'yes' if plan.bound else 'no'})"
+
+    active_ticket = execution["state"] != "idle" and plan.ticket_id == execution.get(
+        "ticket_id"
+    )
+    workflow_section = None
+    if plan.ticket_id is not None and not active_ticket:
+        for name, entries in (
+            ("eligible", snapshot.eligible),
+            ("blocked", snapshot.blocked),
+            ("review", snapshot.review),
+            ("accepted", snapshot.accepted),
         ):
-            ticket = "see active execution above"
-        elif any(plan.ticket_id == item[0] for item in snapshot.blocked):
-            ticket = "see blocked tickets below"
-        elif any(plan.ticket_id == item[0] for item in snapshot.review):
-            ticket = "see review tickets below"
-        elif any(plan.ticket_id == item[0] for item in snapshot.accepted):
-            ticket = "see accepted tickets below"
-        else:
+            if any(item[0] == plan.ticket_id for item in entries):
+                workflow_section = name
+                break
+        if workflow_section is None:
             ticket = plan.ticket_id
             if plan.ticket_title:
                 ticket += f" · {plan.ticket_title}"
             if plan.ticket_state:
                 ticket += f" ({plan.ticket_state})"
-        scheduler_rows.append(("Ticket", ticket))
-        if plan.action == "run-worker" or plan.bound:
-            scheduler_rows.append(("Bound resume", "yes" if plan.bound else "no"))
-    lines.extend(["", render_table("Scheduler decision (observed)", scheduler_rows)])
-    lifecycle = service_metadata.get("lifecycle") if service_metadata else None
-    intent = lifecycle.get("intent") if isinstance(lifecycle, dict) else None
-    if service_state == "running" and intent in {"stop", "restart"}:
-        lines.append(f"Service {intent} takes precedence over this decision.")
-    elif execution["state"] in {"running", "starting", "finalizing"}:
-        lines.append("Live execution takes precedence over this admission decision.")
-    elif service_state != "running":
+            decision += f"; selected ticket: {ticket}"
+    if active_ticket:
+        decision += "; selected ticket is the current execution"
+
+    def mark_selected(ticket_id: str, title: str) -> str:
+        if ticket_id != plan.ticket_id or active_ticket:
+            return title
+        state = f", {plan.ticket_state}" if plan.ticket_state else ""
+        return f"{title} (scheduler selection{state})"
+
+    def append_decision() -> None:
         lines.append(
-            "The service is not running; this decision is not a scheduled launch."
+            textwrap.fill(
+                decision,
+                width=(
+                    max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+                    if sys.stdout.isatty() else 10000
+                ),
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
         )
+
+    if workflow_section is None:
+        if execution["state"] == "idle":
+            lines.append("")
+        append_decision()
     if snapshot.lifecycle_integration is not None:
         ticket_id, state = snapshot.lifecycle_integration
         lines.extend(
@@ -2104,9 +2136,13 @@ def _render_status_text(
             ),
         ]
     )
-    eligible = tuple(item for item in snapshot.eligible if item[0] != plan.ticket_id)
+    eligible = tuple(
+        (ticket, mark_selected(ticket, title)) for ticket, title in snapshot.eligible
+    )
     if eligible:
         lines.extend(["", render_grid("Eligible", ("Ticket", "Title"), eligible)])
+        if workflow_section == "eligible":
+            append_decision()
     if snapshot.blocked:
         lines.extend(
             [
@@ -2117,7 +2153,7 @@ def _render_status_text(
                     tuple(
                         (
                             ticket_id,
-                            title,
+                            mark_selected(ticket_id, title),
                             _blocked_reason_text(reason),
                         )
                         for ticket_id, title, reason in snapshot.blocked
@@ -2125,12 +2161,23 @@ def _render_status_text(
                 ),
             ]
         )
+        if workflow_section == "blocked":
+            append_decision()
     if snapshot.review:
-        lines.extend(["", render_grid("Review", ("Ticket", "Title"), snapshot.review)])
-    if snapshot.accepted:
-        lines.extend(
-            ["", render_grid("Accepted", ("Ticket", "Title"), snapshot.accepted)]
+        rows = tuple(
+            (ticket, mark_selected(ticket, title)) for ticket, title in snapshot.review
         )
+        lines.extend(["", render_grid("Review", ("Ticket", "Title"), rows)])
+        if workflow_section == "review":
+            append_decision()
+    if snapshot.accepted:
+        rows = tuple(
+            (ticket, mark_selected(ticket, title))
+            for ticket, title in snapshot.accepted
+        )
+        lines.extend(["", render_grid("Accepted", ("Ticket", "Title"), rows)])
+        if workflow_section == "accepted":
+            append_decision()
     if snapshot.failed_executions:
         lines.extend(
             [
