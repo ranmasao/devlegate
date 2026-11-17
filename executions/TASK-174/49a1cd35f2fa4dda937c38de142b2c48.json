@@ -1,0 +1,30 @@
+{
+  "code_base_head": "65a0de4230f8e90bc6e71d9e3aab7848bb4610f6",
+  "conclusion": "completed",
+  "control_head": "90f52ac8f1f386ea89abf7025b1db9afd6de40ef",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-174",
+  "execution_id": "49a1cd35f2fa4dda937c38de142b2c48",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-174",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "0b6c27719ab478f10afa0fd66cad380da5cf04c9cd03dbbc09d4ad4290b79a26",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-174",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated the shared worker contract to require proportionate focused tests, final Ruff and whitespace checks, and independent exact-checkpoint hosted CI. Added directive-wide prompt regression coverage and clarified development validation guidance."
+  },
+  "workspace_head": "38ea7fffc15e9aa7e0abb7e95e4a9a636a663a73"
+}
