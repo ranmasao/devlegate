@@ -49,7 +49,8 @@ Run setup before the other commands.
 ./dev test [args...]
 ```
 
-Runs pytest. Extra arguments are passed directly to pytest.
+Runs pytest. Extra arguments are passed directly to pytest, allowing focused node
+IDs or semantic test files; without arguments it runs the full suite.
 
 ```sh
 ./dev test-parallel
@@ -68,6 +69,14 @@ Runs Ruff over `src`, `tests`, and `tools`. Extra arguments are passed to Ruff.
 ```
 
 Runs the serial test suite and lint checks, returning a failure if either fails.
+
+For worker iterations, select focused tests by behavioral domain and proof
+boundary, including stronger tests for process, IPC, durable state, or recovery
+changes. Before a worker claims completion, its final focused tests, `./dev lint`,
+and `git diff --check` must pass. Avoid repeating an unchanged full local suite
+just to reproduce CI. Local tests are a cheap defect filter, not complete
+regression proof: hosted exact-checkpoint CI runs the complete configured suite
+with coverage and lint and is required for independent review and integration.
 
 ```sh
 ./dev coverage
