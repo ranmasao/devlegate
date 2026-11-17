@@ -13,6 +13,7 @@ from devlegate.output import render_grid, render_table
 from devlegate.runtime import (
     BlockedReason,
     ExecutionPlan,
+    FailedExecution,
     GitObservation,
     StatusSnapshot,
 )
@@ -37,8 +38,14 @@ def _execution_snapshot(phase, stage, *, ticket="LAB-1", execution_id="exec-1"):
         True,
         observation,
         None,
-        (("backlog", 0), ("todo", 0), ("review", 0), ("accepted", 0), ("done", 0),
-         ("abandoned", 0)),
+        (
+            ("backlog", 0),
+            ("todo", 0),
+            ("review", 0),
+            ("accepted", 0),
+            ("done", 0),
+            ("abandoned", 0),
+        ),
         (),
         (),
         (),
@@ -287,6 +294,146 @@ def test_non_empty_eligible_remains_visible():
 
     assert "Eligible" in output
     assert "LAB-2" in output
+
+
+@pytest.mark.parametrize("columns", [80, 120, None])
+@pytest.mark.parametrize(
+    ("case", "action", "reason", "expected"),
+    [
+        ("idle", "none", "no runnable tickets", "no runnable tickets"),
+        (
+            "runnable",
+            "run-worker",
+            "deterministic runnable ticket selection",
+            "Bound resume",
+        ),
+        (
+            "blocked",
+            "blocked",
+            "review is required before scheduling",
+            "review is required",
+        ),
+        ("bound", "run-worker", "resume persisted bound execution", "preparing"),
+        ("unverified", "blocked", "ownership is unknown", "unverified"),
+        ("failed", "none", "no runnable tickets", "Failed executions"),
+        (
+            "active",
+            "blocked",
+            "persisted worker ownership is matching-live; "
+            "startup reconciliation is blocked",
+            "Live execution takes precedence",
+        ),
+        (
+            "recovery",
+            "blocked",
+            "interrupted execution has ambiguous outcome; "
+            "explicit operator handling is required",
+            "recovery-required",
+        ),
+        (
+            "missing",
+            "blocked",
+            "control worktree is missing",
+            "control worktree is missing",
+        ),
+        (
+            "stopping",
+            "run-worker",
+            "deterministic runnable ticket selection",
+            "Service stop takes precedence",
+        ),
+        (
+            "restarting",
+            "run-worker",
+            "deterministic runnable ticket selection",
+            "Service restart takes precedence",
+        ),
+    ],
+)
+def test_status_scheduler_decision_in_context(
+    monkeypatch, columns, case, action, reason, expected
+):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: columns is not None)
+    if columns is not None:
+        monkeypatch.setenv("COLUMNS", str(columns))
+    bound = case in {"bound", "active", "recovery", "unverified"}
+    phase = "agent_pending" if case == "bound" else "agent_running" if bound else "idle"
+    stage = "worker-running" if case in {"active", "recovery"} else None
+    snapshot = _execution_snapshot(phase, stage, ticket="LAB-1" if bound else None)
+    selected = case in {"runnable", "bound", "stopping", "restarting"}
+    plan = ExecutionPlan(
+        action,
+        reason,
+        "LAB-1" if selected else None,
+        "Implement scheduling" if selected else None,
+        "todo" if selected else None,
+        case == "bound",
+    )
+    snapshot = dataclasses.replace(
+        snapshot,
+        plan=plan,
+        control=None if case == "missing" else snapshot.code,
+        bound_ticket_title="Implement scheduling" if bound else None,
+        eligible=(("LAB-1", "Implement scheduling"),) if selected and not bound else (),
+        execution_id=None if case == "unverified" else snapshot.execution_id,
+        failed_executions=(
+            (FailedExecution("LAB-3", "Failed work", "worker failed", True),)
+            if case == "failed" else ()
+        ),
+    )
+    evidence = (
+        {
+            "ticket_id": "LAB-1",
+            "execution_id": "exec-1",
+            "stage": stage,
+            "ownership": "current-service",
+            "identity_state": "matching-live",
+        }
+        if case == "active"
+        else None
+    )
+    service = (
+        "stopped" if case in {"idle", "runnable", "missing", "recovery"} else "running"
+    )
+    intent = {"stopping": "stop", "restarting": "restart"}.get(case)
+    metadata = {
+        "version": "unknown",
+        "lifecycle": {"intent": intent, "workers": {"active": 0}},
+    }
+    output = _render_status_text(
+        snapshot,
+        service,
+        _execution_projection(snapshot, evidence, service),
+        service_metadata=metadata if service == "running" else None,
+    )
+
+    assert "Scheduler decision (observed)" in output
+    assert action in output
+    assert expected in output
+    if selected:
+        assert output.count("LAB-1") == 1
+    if case == "bound":
+        assert "yes" in output
+    if case == "runnable":
+        assert "not a scheduled launch" in output
+    if columns is not None:
+        assert max(map(len, output.splitlines())) <= columns
+
+
+def test_scheduler_ticket_reuses_blocked_workflow_entry():
+    snapshot = _execution_snapshot("idle", None, ticket=None)
+    snapshot = dataclasses.replace(
+        snapshot,
+        plan=ExecutionPlan(
+            "blocked", "ticket awaits review", "LAB-2", "Work", "review"
+        ),
+        blocked=(("LAB-2", "Work", BlockedReason("review", ticket_id="LAB-2")),),
+    )
+    output = _render_status_text(
+        snapshot, "stopped", _execution_projection(snapshot, None)
+    )
+    assert "see blocked tickets below" in output
+    assert output.count("LAB-2") == 2  # Ticket and the structured blocking reason.
 
 
 def test_machine_eligible_excludes_bound_ticket():
