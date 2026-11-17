@@ -1,0 +1,30 @@
+{
+  "code_base_head": "bec6024ff0fa1e5080f061519e7f7bfd9e62b883",
+  "conclusion": "completed",
+  "control_head": "78d8c00daf9cd3e1ffde0e7221dc92eae77eb2e3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-179",
+  "execution_id": "82549f15be66490892656db45beb6767",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-179",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "779fcb251ae092ec298640c6da4008186e14a8f6a64e32e07f5fbf1e0f1ce8b8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-179",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Bounded the human artifact-history view to three newest versions per artifact, with total and omitted counts and visibility into deleted or unknown blobs. Preserved complete history in JSON and YAML and updated the focused regression coverage."
+  },
+  "workspace_head": "a1377157695c166eda8e47d9b6a3d36879c7b279"
+}
