@@ -208,6 +208,34 @@ def test_real_git_fixture_ignores_host_filters(
     assert unchanged(binding) == before
 
 
+def filter_policy_state(snapshot):
+    # A deliberately failing real filter can emit variable subprocess stderr.
+    # Only that diagnostic side-channel is excluded from the immutability proof.
+    refs, status, index, records = snapshot
+    return refs, status[:2], index, records
+
+
+@pytest.mark.parametrize(("position", "value", "equal"), [
+    pytest.param(1, (0, "", "different filter diagnostic"), True, id="stderr"),
+    pytest.param(0, "changed refs", False, id="refs"),
+    pytest.param(2, b"changed index", False, id="index"),
+    pytest.param(3, {"receipt.json": b"changed receipt"}, False, id="records"),
+    pytest.param(1, (1, "", "filter diagnostic"), False, id="status_returncode"),
+    pytest.param(1, (0, " M source.py\n", "filter diagnostic"), False,
+                 id="status_stdout"),
+])
+def test_filter_policy_state_compares_all_invariants_except_stderr(
+    position, value, equal,
+):
+    before = (
+        "original refs", (0, "", "filter diagnostic"),
+        b"original index", {"receipt.json": b"original receipt"},
+    )
+    after = list(before)
+    after[position] = value
+    assert (filter_policy_state(after) == filter_policy_state(before)) == equal
+
+
 @pytest.mark.parametrize("driver", ["clean", "process"])
 def test_project_filter_policy_still_fails_closed(ticket, driver):
     binding = ticket[-1]
@@ -221,7 +249,7 @@ def test_project_filter_policy_still_fails_closed(ticket, driver):
     before = unchanged(binding)
     with pytest.raises(UnprovenResource, match="active Git clean/process filter"):
         select(ticket)
-    assert unchanged(binding) == before
+    assert filter_policy_state(unchanged(binding)) == filter_policy_state(before)
 
 
 def test_clean_ticket_dispatches_selected_legacy_toolchain(ticket, tmp_path):
