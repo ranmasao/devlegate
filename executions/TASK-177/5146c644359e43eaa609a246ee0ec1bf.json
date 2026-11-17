@@ -1,0 +1,36 @@
+{
+  "code_base_head": "071a296d954bcdf29fe0b10466a8099fd12c935f",
+  "conclusion": "incomplete",
+  "control_head": "d845f33cc47c52e3c815d5f023b7a8f9a84e63c6",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-177",
+  "execution_id": "5146c644359e43eaa609a246ee0ec1bf",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-177",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Arrange an independent review of actual rendered service inspection samples, including the 80- and 120-column cases.",
+    "Run hosted CI after the changes are integrated into the normal review workflow."
+  ],
+  "report_artifact": "executions/TASK-177/5146c644359e43eaa609a246ee0ec1bf.md",
+  "report_sha256": "264dbc7bade6ac45bbc7624f611edcb7cede38158204e6a2e764851910457f70",
+  "resource_generation": "100ef7fbb0c604ce86677082a7cf8a9d9f5af60be202ebf3d6da7b8ad902971c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-177",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Arrange an independent review of actual rendered service inspection samples, including the 80- and 120-column cases.",
+      "Run hosted CI after the changes are integrated into the normal review workflow."
+    ],
+    "report": "The required independent review and hosted CI cannot be performed within this implementation-only invocation; delegation and Git lifecycle operations are outside its authority.",
+    "summary": "Implemented a dedicated service inspection view with request-time identity and lifecycle separated from published runtime diagnostics. Unpublished diagnostics are represented explicitly, and service rendering and documentation cover incomplete data and long Unicode values."
+  },
+  "workspace_head": "ef6fd496f3bcf03727182f1cde8125179e8dd40d"
+}
