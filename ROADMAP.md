@@ -5,7 +5,7 @@ not release history; see [CHANGELOG.md](CHANGELOG.md) for that. The categories
 below are directional and undated unless explicitly stated otherwise.
 
 The active development line for the next maintenance iteration is
-`release/0.5.7`. The published `v0.5.6` tag remains the stable release
+`release/0.5.8`. The published `v0.5.7` tag remains the stable release
 baseline. The current architecture and operator guides describe implemented
 recovery and workspace retirement; the directions below describe future work.
 
