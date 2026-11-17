@@ -1,0 +1,30 @@
+{
+  "code_base_head": "65a0de4230f8e90bc6e71d9e3aab7848bb4610f6",
+  "conclusion": "completed",
+  "control_head": "41b282072df97e3df8f3fc810a7ee19d2b7ff38d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-174",
+  "execution_id": "9759ef3e84fd4ea180b757445277c4fd",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-174",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "de48bbf44a98ea325bc4609fab40c4ba7a104524ee38399cb0a1dfa683d45c20",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-174",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced the verbatim validation-policy regression with a concise check that every directive receives the same core contract and required validation command anchors. Preserved the worker policy and development guidance."
+  },
+  "workspace_head": "a206027a3a8768330df20b14c9ce174c1aeee84a"
+}
