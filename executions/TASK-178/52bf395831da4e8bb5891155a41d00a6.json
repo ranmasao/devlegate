@@ -1,0 +1,34 @@
+{
+  "code_base_head": "ef6fd496f3bcf03727182f1cde8125179e8dd40d",
+  "conclusion": "blocked",
+  "control_head": "27bd765cb5d443574bfa566343709378ded65a87",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-178",
+  "execution_id": "52bf395831da4e8bb5891155a41d00a6",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-178",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate run the required hosted exact-checkpoint CI for these changes?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "290af62818ebfad5bb32dad8d2d5c889078275ff9490ceef449f64f90f0a18b4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-178",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate run the required hosted exact-checkpoint CI for these changes?"
+    ],
+    "remaining": [],
+    "report": null,
+    "summary": "Replaced generic ticket inspection output with a structured human-readable view of committed ticket data, dependencies, blockers, provenance, history, and ticket text. Preserved structured output and documented the presentation."
+  },
+  "workspace_head": "bec6024ff0fa1e5080f061519e7f7bfd9e62b883"
+}
