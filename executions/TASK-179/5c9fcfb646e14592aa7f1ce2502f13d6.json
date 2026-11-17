@@ -1,0 +1,30 @@
+{
+  "code_base_head": "bec6024ff0fa1e5080f061519e7f7bfd9e62b883",
+  "conclusion": "completed",
+  "control_head": "45eb219483341cc38dc49c342076f88e8734193f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-179",
+  "execution_id": "5c9fcfb646e14592aa7f1ce2502f13d6",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-179",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "7c5c80c6e2aa665e04bcfcd09235c115fb505f6fc383d1ebff0a43f506d120e6",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-179",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented a readable execution inspection view separating worker conclusions, checkpoint provenance, review decisions, independently observed local identity, blockers, and historical artifact versions. Added coverage for real execution and review evidence, missing or deleted proof, historical executions, terminal widths, and machine-readable output."
+  },
+  "workspace_head": "5be3f59eed3219fcff78be56e364fb0a173142c8"
+}
