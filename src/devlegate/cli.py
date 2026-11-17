@@ -2014,6 +2014,40 @@ def _render_status_text(
                     else "operator verification required"
                 )
             )
+    plan = snapshot.plan
+    scheduler_rows = [("Action", plan.action), ("Reason", plan.reason)]
+    if plan.ticket_id is not None:
+        if (
+            plan.ticket_id == execution.get("ticket_id")
+            and execution["state"] != "idle"
+        ):
+            ticket = "see active execution above"
+        elif any(plan.ticket_id == item[0] for item in snapshot.blocked):
+            ticket = "see blocked tickets below"
+        elif any(plan.ticket_id == item[0] for item in snapshot.review):
+            ticket = "see review tickets below"
+        elif any(plan.ticket_id == item[0] for item in snapshot.accepted):
+            ticket = "see accepted tickets below"
+        else:
+            ticket = plan.ticket_id
+            if plan.ticket_title:
+                ticket += f" · {plan.ticket_title}"
+            if plan.ticket_state:
+                ticket += f" ({plan.ticket_state})"
+        scheduler_rows.append(("Ticket", ticket))
+        if plan.action == "run-worker" or plan.bound:
+            scheduler_rows.append(("Bound resume", "yes" if plan.bound else "no"))
+    lines.extend(["", render_table("Scheduler decision (observed)", scheduler_rows)])
+    lifecycle = service_metadata.get("lifecycle") if service_metadata else None
+    intent = lifecycle.get("intent") if isinstance(lifecycle, dict) else None
+    if service_state == "running" and intent in {"stop", "restart"}:
+        lines.append(f"Service {intent} takes precedence over this decision.")
+    elif execution["state"] in {"running", "starting", "finalizing"}:
+        lines.append("Live execution takes precedence over this admission decision.")
+    elif service_state != "running":
+        lines.append(
+            "The service is not running; this decision is not a scheduled launch."
+        )
     if snapshot.lifecycle_integration is not None:
         ticket_id, state = snapshot.lifecycle_integration
         lines.extend(
@@ -2070,10 +2104,9 @@ def _render_status_text(
             ),
         ]
     )
-    if snapshot.eligible:
-        lines.extend(
-            ["", render_grid("Eligible", ("Ticket", "Title"), snapshot.eligible)]
-        )
+    eligible = tuple(item for item in snapshot.eligible if item[0] != plan.ticket_id)
+    if eligible:
+        lines.extend(["", render_grid("Eligible", ("Ticket", "Title"), eligible)])
     if snapshot.blocked:
         lines.extend(
             [
@@ -2664,6 +2697,7 @@ def build_parser() -> argparse.ArgumentParser:
         "ticket", help="read all execution logs for one ticket"
     )
     ticket_logs_parser.add_argument("ticket_id", metavar="TICKET")
+
     def log_tail(value: str) -> int:
         try:
             count = int(value)
