@@ -10,8 +10,8 @@ devlegate inspect workspace "$TICKET_ID" --json
 devlegate inspect service --json
 ```
 
-The object type selects a versioned schema. Normal `--json`, `--yaml`, and table
-output conventions apply. All four commands use read-only IPC to the existing
+The object type selects a versioned schema. Normal `--json` and `--yaml` output
+conventions apply. All four commands use read-only IPC to the existing
 service owner. An unavailable or busy owner is an explicit error; inspection
 does not start a service, launch a worker, or refresh the published status view.
 IPC `inspect` accepts exactly `object_type` and `object_id`; service uses a null
@@ -33,6 +33,13 @@ contains the immutable blob and text, parsed metadata, dependency graph nodes
 dependencies and ambiguous nodes are explicit blockers. Working-tree edits do
 not replace committed ticket content. This view reads committed evidence only
 and does not require local workspace or remote availability.
+
+The human view separates the current committed ticket and its text from control
+HEAD and path history. It summarizes direct dependencies and their committed
+evidence, and reports graph-wide blockers; the complete graph remains available
+in JSON and YAML. Path history lists commits affecting the ticket paths, not
+necessarily verified state transitions. Long ticket text is shown separately,
+with terminal control characters escaped.
 
 ## Execution
 

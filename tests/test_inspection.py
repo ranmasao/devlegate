@@ -453,7 +453,59 @@ def test_missing_dependency_stays_visible(owner):
     view = inspect_object(owner, "ticket", "T-1")
     assert view["observation"]["depends_on"] == ["missing"]
     assert "missing dependency: T-1 -> missing" in view["blockers"]
+    from devlegate.cli import _render_ticket_inspection
+
+    rendered = _render_ticket_inspection(view)
+    assert "Direct dependency: missing" in rendered
+    assert "missing dependency: T-1 -> missing" in rendered
     assert snapshot(owner.repo.parent) == before
+
+
+@pytest.mark.parametrize("columns", [80, 120])
+def test_ticket_render_evidence_and_long_text(monkeypatch, columns):
+    from devlegate.cli import _render_ticket_inspection
+
+    monkeypatch.setenv("COLUMNS", str(columns))
+    body = "---\ntitle: café 界\n---\n\nLong ticket body\nsecond line\n"
+    entry = {"state": "todo", "path": "tickets/todo/T-2.md", "blob": "a" * 40,
+             "depends_on": ["missing"]}
+    view = {"observation": {
+        "id": "T-1", "title": "café 界", "type": "task", "state": "review",
+        "path": "tickets/review/T-1.md", "blob": "b" * 40, "text": body,
+        "depends_on": ["T-2"], "dependency_graph": {"T-2": [entry, entry]},
+        "provenance": {"control_head": "c" * 40, "history": ["d" * 40]},
+    }, "blockers": ["ambiguous dependency graph ticket: T-2"]}
+    text = _render_ticket_inspection(view)
+    assert text.index("Current committed ticket") < text.index("Dependencies")
+    assert text.index("Blockers") < text.index("Control provenance")
+    assert text.index("Ticket path history") < text.index("Ticket text")
+    assert text.endswith(body)
+    assert "café 界" in text and "\\u" not in text
+    assert text.count("tickets/todo/T-2.md") == 2
+    assert "ambiguous dependency graph ticket: T-2" in text
+    assert all(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
+                   for c in line) <= columns for line in text.splitlines())
+
+
+def test_ticket_render_unavailable_evidence():
+    from devlegate.cli import _render_ticket_inspection
+
+    text = _render_ticket_inspection({"observation": {}})
+    assert "Graph: unavailable" in text
+    assert "Blockers: unavailable" in text
+    assert "History: unavailable" in text
+    assert "Ticket text (current committed blob)\nunavailable" in text
+
+
+def test_ticket_render_escapes_terminal_controls():
+    from devlegate.cli import _render_ticket_inspection
+
+    text = _render_ticket_inspection({"observation": {
+        "title": "café\x1b[2J", "text": "body\n\x1b[31mred\n",
+    }})
+    assert "café\\u001b[2J" in text
+    assert "body\n\\u001b[31mred\n" in text
+    assert "\x1b" not in text
 
 
 @pytest.mark.parametrize(

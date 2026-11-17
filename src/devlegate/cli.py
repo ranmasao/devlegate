@@ -342,6 +342,107 @@ def _workspace_daemon(env_file: Path, args) -> int:
     return 0
 
 
+def _render_ticket_inspection(result: dict) -> str:
+    """Present committed ticket evidence without treating history as current state."""
+    observation = result.get("observation") or {}
+    width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+    lines = ["Ticket inspection", "", "Current committed ticket"]
+
+    def safe(text):
+        return "".join(c if c.isprintable() or c in "\n\t" else f"\\u{ord(c):04x}"
+                       for c in text)
+
+    def field(label, value, indent="  "):
+        text = safe("unavailable" if value is None else str(value))
+        # Preserve identifiers and paths as contiguous, copyable tokens. Wide
+        # Unicode gets a conservative width; unusually long tokens may overflow.
+        wrap_width = width // 2 if any(
+            unicodedata.east_asian_width(c) in "WF" for c in text
+        ) else width
+        for part in text.splitlines() or [""]:
+            lines.extend(textwrap.wrap(
+                part, width=wrap_width, initial_indent=f"{indent}{label}: ",
+                subsequent_indent=indent + "  ", break_long_words=False,
+                break_on_hyphens=False, replace_whitespace=False,
+            ) or [f"{indent}{label}: "])
+
+    for label, key in (("ID", "id"), ("Title", "title"), ("Type", "type"),
+                       ("State", "state"), ("Path", "path"), ("Blob", "blob")):
+        field(label, observation.get(key))
+
+    lines.extend(["", "Dependencies (committed graph)"])
+    dependencies = observation.get("depends_on")
+    if dependencies is None:
+        field("Direct dependencies", None)
+    elif not dependencies:
+        field("Direct dependencies", "none")
+    else:
+        for dependency in dependencies:
+            field("Direct dependency", dependency)
+    graph = observation.get("dependency_graph")
+    if graph is None:
+        field("Graph", None)
+    elif not graph:
+        field("Graph", "empty")
+    else:
+        # The graph covers the whole repository. Show evidence for the direct
+        # dependencies here; global inconsistencies remain visible as blockers.
+        for node in dependencies or []:
+            entries = graph.get(node, [])
+            field("Ticket", node)
+            if not entries:
+                field("Evidence", "unavailable", "    ")
+            for entry in entries:
+                for label, key in (("State", "state"), ("Path", "path"),
+                                   ("Blob", "blob")):
+                    field(label, entry.get(key), "    ")
+                deps = entry.get("depends_on")
+                if deps is None:
+                    field("Depends on", None, "    ")
+                elif not deps:
+                    field("Depends on", "none", "    ")
+                else:
+                    for dep in deps:
+                        field("Depends on", dep, "    ")
+
+    lines.extend(["", "Blockers (graph evidence)"])
+    blockers = result.get("blockers")
+    if blockers is None:
+        field("Blockers", None)
+    elif not blockers:
+        field("Blockers", "none")
+    else:
+        for blocker in blockers:
+            field("Blocker", blocker)
+
+    provenance = observation.get("provenance") or {}
+    lines.extend(["", "Control provenance"])
+    field("Control HEAD", provenance.get("control_head"))
+    lines.extend(["", "Ticket path history (commits; newest first)"])
+    history = provenance.get("history")
+    if history is None:
+        field("History", None)
+    elif not history:
+        field("History", "none")
+    else:
+        for commit in history:
+            field("Commit", commit)
+
+    reset = observation.get("reset")
+    if isinstance(reset, dict):
+        lines.extend(["", "Reset operation (runtime observation)"])
+        for label, key in (("Accepted", "accepted"), ("Ticket ID", "ticket_id"),
+                           ("Operation ID", "operation_id"), ("Status", "status"),
+                           ("Stage", "stage"), ("Reason", "reason"),
+                           ("Fresh execution ID", "fresh_execution_id")):
+            field(label, reset.get(key))
+
+    lines.extend(["", "Ticket text (current committed blob)"])
+    lines.append(safe(observation.get("text") if observation.get("text") is not None
+                      else "unavailable"))
+    return "\n".join(lines)
+
+
 def _render_service_inspection(result: dict) -> str:
     """Render only service facts, keeping publication and request time distinct."""
     def mapping(value):
@@ -413,6 +514,8 @@ def _inspect_daemon(env_file: Path, args) -> int:
         raise DevlegateError(str(error)) from error
     if args.object_type == "service":
         text = _render_service_inspection(result)
+    elif args.object_type == "ticket" and isinstance(result.get("observation"), dict):
+        text = _render_ticket_inspection(result)
     else:
         rows = [(key, json.dumps(value, sort_keys=True))
                 for key, value in result.items()]
