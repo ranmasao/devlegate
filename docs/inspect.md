@@ -69,6 +69,10 @@ diagnostic status snapshot are returned. No runtime database dump, environment,
 private owner state, or new status observation is added. Diagnostics describe
 the owner's last publication; owner/lifecycle identity is observed at request
 handling. An unpublished diagnostic snapshot is explicitly unavailable.
+The human view selects service identity, lifecycle, worker count and runtime
+phase/stage; it labels published diagnostics as potentially stale rather than
+repeating the project status. JSON and YAML retain the complete v1 snapshot,
+with `diagnostic_snapshot: null` when no status has been published.
 
 ## Read-only boundary
 

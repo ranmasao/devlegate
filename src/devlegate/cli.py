@@ -13,6 +13,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -341,6 +342,66 @@ def _workspace_daemon(env_file: Path, args) -> int:
     return 0
 
 
+def _render_service_inspection(result: dict) -> str:
+    """Render only service facts, keeping publication and request time distinct."""
+    def mapping(value):
+        return value if isinstance(value, dict) else {}
+
+    def value(data, key, *, null="none"):
+        if key not in data:
+            return "unavailable"
+        item = data[key]
+        if item is None:
+            return null
+        if isinstance(item, bool):
+            return "yes" if item else "no"
+        if isinstance(item, (str, int)):
+            return str(item)
+        return "unavailable"
+
+    observation = mapping(result.get("observation"))
+    owner = mapping(observation.get("owner"))
+    lifecycle = mapping(owner.get("lifecycle"))
+    workers = mapping(lifecycle.get("workers"))
+    snapshot = observation.get("diagnostic_snapshot")
+    lines = ["Service inspection", "", "Owner (observed at request)"]
+    width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+
+    def field(label, text):
+        # Escape terminal controls while preserving printable Unicode.
+        text = "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in text)
+        # textwrap counts code points, while wide terminal characters occupy two
+        # columns. A conservative width keeps even unbroken CJK tokens within it.
+        wrap_width = (width // 2 if any(
+            unicodedata.east_asian_width(c) in "WF" for c in text
+        ) else width)
+        lines.extend(textwrap.wrap(
+            text, width=wrap_width, initial_indent=f"  {label}: ",
+            subsequent_indent="    ", break_long_words=True,
+            break_on_hyphens=False,
+        ) or [f"  {label}: "])
+
+    for label, key in (("Service", "service"), ("Version", "version"),
+                       ("PID", "pid"), ("Instance ID", "instance_id"),
+                       ("Protocol version", "protocol_version")):
+        field(label, value(owner, key, null="unavailable"))
+    lines.extend(["", "Lifecycle (observed at request)"])
+    for label, data, key in (("Phase", lifecycle, "phase"),
+                             ("Ready", lifecycle, "ready"),
+                             ("Intent", lifecycle, "intent"),
+                             ("Forced", lifecycle, "force"),
+                             ("Active workers", workers, "active")):
+        field(label, value(data, key, null="unavailable"))
+    lines.extend(["", "Published diagnostics (last publication; may be stale)"])
+    if not isinstance(snapshot, dict):
+        field("Snapshot", "unavailable")
+    else:
+        execution = mapping(snapshot.get("execution"))
+        field("Runtime phase", value(execution, "phase", null="unavailable"))
+        field("Execution stage", value(execution, "stage"))
+    return "\n".join(lines)
+
+
 def _inspect_daemon(env_file: Path, args) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
@@ -350,10 +411,13 @@ def _inspect_daemon(env_file: Path, args) -> int:
         })
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
-    rows = [(key, json.dumps(value, sort_keys=True))
-            for key, value in result.items()]
-    emit(result, args.output_format,
-         render_grid("Read-only inspection", ("Field", "Observation"), rows))
+    if args.object_type == "service":
+        text = _render_service_inspection(result)
+    else:
+        rows = [(key, json.dumps(value, sort_keys=True))
+                for key, value in result.items()]
+        text = render_grid("Read-only inspection", ("Field", "Observation"), rows)
+    emit(result, args.output_format, text)
     return 0
 
 

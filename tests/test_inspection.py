@@ -6,6 +6,7 @@
 import json
 import sys
 import threading
+import unicodedata
 
 import pytest
 from _control_support import git
@@ -309,6 +310,60 @@ def test_unavailable_service_never_constructs_runtime(owner, monkeypatch, capsys
     monkeypatch.setattr(sys, "argv", ["devlegate", "inspect", "service", "--json"])
     assert cli.main() == 1
     assert "service unavailable" in capsys.readouterr().err
+
+
+def test_service_unpublished_diagnostics(owner):
+    owner._published_status_snapshot = None
+    view = inspect_object(owner, "service", None)
+    assert view["observation"]["diagnostic_snapshot"] is None
+    from devlegate.cli import _render_service_inspection
+
+    text = _render_service_inspection(view)
+    assert "Snapshot: unavailable" in text
+    assert "Owner (observed at request)" in text
+
+
+@pytest.mark.parametrize("columns", [80, 120])
+def test_service_render_real_snapshot_and_lifecycle(owner, monkeypatch, columns):
+    from devlegate.cli import _render_service_inspection
+
+    monkeypatch.setenv("COLUMNS", str(columns))
+    owner.status_view()
+    view = inspect_object(owner, "service", None)
+    observation = view["observation"]
+    observation["owner"]["instance_id"] = "界" * 16 + "x" * 150
+    observation["owner"]["lifecycle"].update(
+        phase="draining", intent="stop", ready=False, force=True,
+        workers={"active": 2, "identity": "SECRET-WORKER"},
+    )
+    observation["diagnostic_snapshot"]["execution"].update(
+        phase="old-phase", stage=None, bound_ticket="SECRET-TICKET",
+    )
+    text = _render_service_inspection(view)
+    assert "Phase: draining" in text
+    assert "Intent: stop" in text
+    assert "Ready: no" in text
+    assert "Active workers: 2" in text
+    assert "Runtime phase: old-phase" in text
+    assert "Execution stage: none" in text
+    assert "may be stale" in text
+    assert "SECRET" not in text
+    assert all(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
+                   for c in line) <= columns for line in text.splitlines())
+
+
+def test_service_render_incomplete_fields():
+    from devlegate.cli import _render_service_inspection
+
+    text = _render_service_inspection({"observation": {
+        "owner": {"lifecycle": {"intent": "none"}},
+        "diagnostic_snapshot": {"execution": {}},
+    }})
+    assert "Ready: unavailable" in text
+    assert "Intent: none" in text
+    assert "Active workers: unavailable" in text
+    assert "Runtime phase: unavailable" in text
+    assert "Execution stage: unavailable" in text
 
 
 def test_latest_report_is_not_current_independent_generation(owner):

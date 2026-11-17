@@ -78,7 +78,7 @@ class ExecutionObservation(TypedDict):
 
 class ServiceObservation(TypedDict):
     owner: dict
-    diagnostic_snapshot: dict
+    diagnostic_snapshot: dict | None
 
 
 def validate_identity(object_type: str, object_id: str | None) -> None:
@@ -342,10 +342,17 @@ def inspect_object(owner, object_type: ObjectType, object_id: str | None) -> dic
         return inspect_clean(owner, object_id)
     if object_type == "service":
         from devlegate.ipc_server import _service_identity
+        from devlegate.runtime import DevlegateError
 
+        try:
+            diagnostics = owner.published_status_payload()
+        except DevlegateError as error:
+            if str(error) != "service status view is not ready":
+                raise
+            diagnostics = None
         observation = {
             "owner": _service_identity(owner),
-            "diagnostic_snapshot": owner.published_status_payload(),
+            "diagnostic_snapshot": diagnostics,
         }
         blockers = []
     else:
