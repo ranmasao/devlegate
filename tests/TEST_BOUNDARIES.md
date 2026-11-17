@@ -90,7 +90,7 @@ current test-case inventory; this map does not prescribe fixed suite counts.
 | --- | --- | --- | --- | --- |
 | Service engine is the sole mutable runtime owner | Direct state/admission and `serve()` tests in the control, daemon, and CLI semantic modules | `test_retry_submission_runs_on_service_owner_thread`; reconcile owner-thread test | Real retry/reconcile CLI tests and recovery receipt tests | KEEP; intentional defense in depth |
 | CLI mutable commands do not construct a mutable engine or write state | CLI monkeypatch tests around `retry`, `reconcile`, and no-service failure | `test_ipc_owner.py` owner handoff tests | `test_real_service_process_executes_retry_from_real_cli`, `test_real_service_process_executes_reconciliation_from_real_cli` | KEEP across layers |
-| Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, service view tests | IPC view/decoder and many-client tests | `test_run_hosts_real_ipc_status_and_plan_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
+| Read-only views are stable and do not mutate canonical state | `test_service_snapshot.py`, `test_snapshot.py`, service view tests | IPC view/decoder and many-client tests | `test_foreground_hosts_real_ipc_status_until_stopped`, live-worker observer tests | KEEP; read-only representation and topology are different claims |
 | Matching/stale state is not mutation authority | Direct admission and validation tests in the control semantic modules | Same-ID/distinct-ID/stale request owner tests | `test_real_service_stale_status_cannot_authorize_second_retry` | KEEP cross-layer |
 | Mutable request IDs are idempotent and collision-safe | Direct receipt/state tests | `test_retry_request_receipt_coalesces_duplicates_and_survives_restart`, reconcile equivalent | Real same-ID and receipt-restart tests | KEEP; failure modes differ by boundary |
 | Concurrent mutation is serialized and cannot duplicate work | Direct admission/retry semantics | Owner-thread and concurrent IPC tests | Real concurrent retry tests and observer-during-retry tests | KEEP cross-layer |
@@ -122,7 +122,7 @@ test driver, not a substitute engine.
 | --- | --- | --- | --- |
 | Idle restart is inert; merge pending observes before effect | `test_real_service_sigkill_restarts_without_mutation`, `test_real_service_merge_pending_restart_is_observe_first` | Subprocess | SIGKILL, same SQLite/Git/worktrees, durable state and HEAD assertions |
 | Graceful stop/restart drains active workers and proves readiness | `test_checkpoint_failure_during_lifecycle_drain_has_no_completion_boundary` | Subprocess | `test_real_service_graceful_lifecycle_waits_for_active_worker`, `test_bare_cli_restart_waits_for_ready_replacement` |
-| `worker-launch` remains fail closed | `test_real_service_worker_launch_restart_stays_fail_closed` | Subprocess | Crash after stage persistence; status/plan ambiguity and no rerun |
+| `worker-launch` remains fail closed | `test_real_service_worker_launch_restart_stays_fail_closed` | Subprocess | Crash after stage persistence; status plan ambiguity and no rerun |
 | Matching live worker is not signaled or duplicated | `test_real_service_matching_live_worker_restart_does_not_duplicate` | Subprocess | Worker PID marker matches persisted identity; restart preserves one attempt |
 | Absent worker uses explicit RESUME | `test_real_service_absent_worker_uses_process_loss_resume` | Subprocess | Kill service and worker; new identity and second attempt are proven |
 | Post-worker lost result requires RESUME and never fabricates a report | `test_real_service_post_worker_loss_requires_resume` | Subprocess | Crash after worker loss; new execution/report and review state |
@@ -167,7 +167,7 @@ families are bootstrap/component evidence, not service-topology evidence:
 `invoke()` starts a short-lived CLI subprocess, which is useful for command
 boundary and filesystem effects. Unless it starts a persistent service and uses a
 separate client against a live owner, it does not prove service topology.
-`test_foreground_hosts_real_ipc_status_and_plan_until_stopped` is the explicit runtime
+`test_foreground_hosts_real_ipc_status_until_stopped` is the explicit runtime
 exception. `test_real_service_*` is the convention for full production service
 topology and is currently truthful.
 
@@ -183,7 +183,7 @@ establish independent service topology.
 | `Devlegate` | `cli.main()` constructs it for `init`, `render`, `check`, and `control`; it supplies bootstrap/presentation behavior | KEEP - supported bootstrap/internal semantic surface | `src/devlegate/cli.py:359`, `src/devlegate/cli.py:493-500` |
 | `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
-| `devlegate status` / `plan` | Tries IPC first and uses a read-only guarded `ServiceEngine` canonical `status_view()` / `plan_view()` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py:58-94` |
+| `devlegate status` | Tries IPC first and uses a read-only guarded `ServiceEngine` canonical `status_view()` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py` |
 | `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
 | `ServiceEngine.retry()` / `reconcile_update_base()` / `reconcile_resume()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py`; owner command handling routes through the corresponding owned methods |
 
@@ -193,7 +193,7 @@ establish independent service topology.
 python -m devlegate / console script
   -> cli.main()
      -> init/render/check/control -> Devlegate(read_only=True)
-     -> status/plan -> IPC, or guarded read-only ServiceEngine fallback
+     -> status -> IPC, or guarded read-only ServiceEngine fallback
      -> retry/reconcile -> IPC client only
       -> devlegate -> background launcher -> devlegate foreground
       -> foreground/once -> ServiceEngine -> run_service() -> UnixIPCServer + ServiceEngine.serve()
@@ -229,7 +229,7 @@ The following tests exercise bootstrap, semantic, or IPC seams:
   foreground host construction contract.
 - `test_service_engine_status_and_plan_return_immutable_views` checks the
   canonical engine view contract.
-- `test_cli_status_and_plan_render_fake_engine_without_runtime` checks cheap
+- `test_cli_status_renders_fake_engine_without_runtime` checks cheap
   rendering without claiming production topology.
 - Runtime-owned private helpers and methods in the control and daemon semantic
   modules, plus `test_worker_protocol.py`, are direct semantic seams.

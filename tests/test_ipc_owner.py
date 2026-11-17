@@ -366,8 +366,8 @@ def test_resolving_resume_recovers_on_fresh_owner_and_fences_plan(
 
     restarted = ServiceEngine(config)
     assert restarted._state["reconciliation"]["status"] == "resolving"
-    assert restarted.plan_view().action == "blocked"
-    assert "recovery in progress" in restarted.plan_view().reason
+    assert restarted.status_view().plan.action == "blocked"
+    assert "recovery in progress" in restarted.status_view().plan.reason
     monkeypatch.setattr(
         restarted._workers,
         "run",
@@ -432,7 +432,7 @@ def test_published_reads_do_not_observe_repository_during_owner_iteration(
         raise DevlegateError("IPC read performed repository observation")
 
     monkeypatch.setattr(engine, "run_iteration", run_iteration)
-    for method in ("status_view", "plan_view", "retry_candidates_view"):
+    for method in ("status_view", "retry_candidates_view"):
         monkeypatch.setattr(
             engine,
             method,
@@ -451,7 +451,7 @@ def test_published_reads_do_not_observe_repository_during_owner_iteration(
         assert started.wait(2)
         responses = [
             request(engine.ipc_socket_path, f"read-{method}", method)
-            for method in ("status", "plan", "retry-candidates")
+            for method in ("status", "retry-candidates")
         ]
         assert all(response.ok for response in responses)
     finally:

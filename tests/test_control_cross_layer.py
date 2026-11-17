@@ -14,9 +14,9 @@ def test_product_workflow_copy_fails_closed(tmp_path):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     (working / "kanban/todo").mkdir(parents=True)
-    result = invoke(working, "plan", "--json", config=config)
-    assert result.returncode == 0
-    assert "product checkout" in json.loads(result.stdout)["reason"]
+    result = invoke(working, "status", "--json", config=config)
+    assert result.returncode == 1
+    assert "product checkout" in json.loads(result.stdout)["plan"]["reason"]
 
 def test_unrelated_local_parent_blocks_lifecycle_reset(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)

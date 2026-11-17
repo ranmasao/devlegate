@@ -18,7 +18,7 @@ F3 identity and idempotency semantics.
 | Concurrent situation | Required behavior |
 | --- | --- |
 | Idle or incomplete client A; client B connects | B completes without waiting for A |
-| Many status, plan, and ping clients | Responses are structurally valid; no durable state or Git ref changes |
+| Many status and ping clients | Responses are structurally valid; no durable state or Git ref changes |
 | Status during live worker | Observation remains available; worker ownership and attempt count do not change |
 | Status during owner retry | Observation remains available while the owner executes the retry |
 | Same request ID and same retry semantics | Both clients receive the same admission result; one receipt and one execution |

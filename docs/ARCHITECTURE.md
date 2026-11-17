@@ -331,8 +331,8 @@ may leave no service diagnostic and are not assigned a cause by absence.
 ## IPC And CLI Clients
 
 The service exposes a project-specific local Unix IPC endpoint derived from the
-runtime identity. `status` and `plan` use the service-owned view when the
-service is active. When no service authority exists, those commands can take a
+runtime identity. `status` uses the service-owned view when the
+service is active. When no service authority exists, it can take a
 guarded read-only observation directly.
 
 If service authority exists but IPC cannot safely be used, the client fails

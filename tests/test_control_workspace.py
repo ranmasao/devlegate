@@ -3984,11 +3984,11 @@ def test_execution_path_conflict_fails_closed(tmp_path):
     assert (expected / "do-not-delete").read_text() == "foreign\n"
 
 
-def test_read_only_plan_does_not_materialize_execution_workspace(tmp_path):
+def test_read_only_status_does_not_materialize_execution_workspace(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
 
-    result = invoke(working, "plan", "--json", config=config)
+    result = invoke(working, "status", "--json", config=config)
 
     assert result.returncode == 0
     assert not list((state / "worktrees").glob("*/work/*"))
@@ -4306,7 +4306,7 @@ def test_worktree_creation_race_reobserves_exact_valid_topology(tmp_path, monkey
 
 @pytest.mark.parametrize(
     "command",
-    [("status",), ("status", "--json"), ("plan",), ("plan", "--json"), ("check",)],
+    [("status",), ("status", "--json"), ("status", "--yaml"), ("check",)],
 )
 def test_read_only_commands_do_not_materialize_or_rebind_execution(command, tmp_path):
     working, config, state = control_fixture(tmp_path)
@@ -4337,7 +4337,7 @@ def test_pending_workspace_plan_is_reusable_only_for_exact_binding(
     workspace = manager.prepare(base)
     _persist_pending_execution(devlegate, state, workspace, base, "current")
 
-    plan = devlegate.plan_view()
+    plan = devlegate.status_view().plan
 
     assert plan.action == "run-worker"
     assert plan.bound is True
@@ -4369,7 +4369,7 @@ def test_unattributable_pending_branch_is_unsafe_and_untouched(tmp_path, monkeyp
     workspace = manager
     _persist_pending_execution(devlegate, state, workspace, base, "current")
 
-    plan = devlegate.plan_view()
+    plan = devlegate.status_view().plan
 
     assert plan.action == "blocked"
     assert "unsafe" in plan.reason
@@ -4427,8 +4427,8 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
         lambda: (git(control, "rev-parse", "HEAD").stdout.strip(),) * 2,
     )
 
-    assert devlegate.plan_view().action == "blocked"
-    assert "recoverable" in devlegate.plan_view().reason
+    assert devlegate.status_view().plan.action == "blocked"
+    assert "recoverable" in devlegate.status_view().plan.reason
     assert [
         report.workspace_head for report in ExecutionReportStore(control).list("T-1")
     ] == [old_head]
@@ -4466,7 +4466,7 @@ def test_prior_generation_is_repaired_with_evidence_and_same_execution_id(
     monkeypatch.setattr(execution_workspace_module, "_git", observe_effect)
     devlegate._repair_bound_execution_workspace()
     recovery_commands = tuple(commands)
-    assert devlegate.plan_view().action == "run-worker"
+    assert devlegate.status_view().plan.action == "run-worker"
     assert effects.index("evidence") < effects.index("branch")
     assert effects.index("evidence") < effects.index("evidence-reproved")
     assert effects.index("evidence-reproved") < effects.index("branch")
@@ -4628,8 +4628,8 @@ def test_pending_workspace_with_wrong_registered_worktree_is_not_runnable(
     inspection = devlegate._inspect_bound_execution_workspace(devlegate._state)
 
     assert inspection.classification == "UNSAFE"
-    assert devlegate.plan_view().action == "blocked"
-    assert "unsafe" in devlegate.plan_view().reason
+    assert devlegate.status_view().plan.action == "blocked"
+    assert "unsafe" in devlegate.status_view().plan.reason
 
 
 def test_automatic_repair_refuses_branch_drift_before_cas(tmp_path, monkeypatch):
@@ -4684,4 +4684,4 @@ def test_automatic_repair_refuses_branch_drift_before_cas(tmp_path, monkeypatch)
     with pytest.raises(DevlegateError, match="changed"):
         devlegate._repair_bound_execution_workspace()
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == new_base
-    assert devlegate.plan_view().action == "blocked"
+    assert devlegate.status_view().plan.action == "blocked"

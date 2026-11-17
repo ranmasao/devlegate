@@ -62,8 +62,6 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
         result = engine.published_status_payload()
         result["service"] = _service_identity(engine)
         return result
-    if request.method == "plan":
-        return engine.published_plan_view().as_dict()
     if request.method == "retry-candidates":
         return {"candidates": list(engine.published_retry_candidates_view())}
     if request.method == "drop-candidates":

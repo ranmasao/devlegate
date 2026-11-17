@@ -78,7 +78,7 @@ def test_many_read_only_clients_overlap_without_mutating_runtime(
             futures = [
                 pool.submit(call, "status", f"status-{index}") for index in range(3)
             ]
-            futures.append(pool.submit(call, "plan", "plan-1"))
+            futures.append(pool.submit(call, "status", "status-3"))
             futures.append(pool.submit(call, "ping", "ping-1"))
             start.set()
             responses = [future.result(timeout=5) for future in futures]

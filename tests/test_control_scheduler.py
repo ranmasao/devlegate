@@ -11,9 +11,9 @@ from _control_support import *  # noqa: F403,F405
 def test_control_init_is_explicit_idempotent_and_nested_observation(tmp_path):
     working, config, state = control_fixture(tmp_path)
 
-    missing = invoke(working, "plan", "--json", config=config)
-    assert missing.returncode == 0
-    assert json.loads(missing.stdout)["action"] == "blocked"
+    missing = invoke(working, "status", "--json", config=config)
+    assert missing.returncode == 1
+    assert json.loads(missing.stdout)["plan"]["action"] == "blocked"
     assert not (state / "worktrees").exists()
 
     initialized = invoke(working, "control", "init", config=config)
@@ -23,8 +23,8 @@ def test_control_init_is_explicit_idempotent_and_nested_observation(tmp_path):
     assert (control / "kanban/todo/T-1.md").is_file()
     assert invoke(working, "control", "init", config=config).returncode == 0
 
-    planned = invoke(working, "plan", "--json", config=config)
-    payload = json.loads(planned.stdout)
+    planned = invoke(working, "status", "--json", config=config)
+    payload = json.loads(planned.stdout)["plan"]
     assert payload["observation"]["code"]["branch"] == "main"
     assert payload["observation"]["control"]["branch"] == "devlegate/control"
     assert payload["ticket"] is not None, payload
@@ -87,7 +87,9 @@ def test_control_init_bootstraps_empty_orphan_control_plane(tmp_path):
     assert git(working, "rev-parse", "HEAD").stdout.strip() == product_head
     assert not git(working, "status", "--porcelain").stdout
     assert (
-        json.loads(invoke(working, "plan", "--json", config=config).stdout)["action"]
+        json.loads(invoke(working, "status", "--json", config=config).stdout)["plan"][
+            "action"
+        ]
         == "none"
     )
     assert invoke(working, "check", config=config).returncode == 0
@@ -175,11 +177,11 @@ def test_historical_review_protocol_marker_is_inert_and_upgrade_command_is_absen
     git(control, "commit", "-m", "historical marker modification")
     git(control, "push", "origin", "devlegate/control")
 
-    planned = invoke(working, "plan", "--json", config=config)
+    planned = invoke(working, "status", "--json", config=config)
     removed = invoke(working, "control", "upgrade-review-protocol", config=config)
 
     assert planned.returncode == 0, planned.stderr
-    assert json.loads(planned.stdout)["action"] == "run-worker"
+    assert json.loads(planned.stdout)["plan"]["action"] == "run-worker"
     assert removed.returncode == 2
     assert "unknown command 'upgrade-review-protocol'" in removed.stderr
 
@@ -210,13 +212,17 @@ def test_dependency_state_change_on_control_changes_plan(tmp_path, monkeypatch):
     )
     git(control, "add", ".")
     git(control, "commit", "-m", "add dependency workflow")
-    blocked = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    blocked = json.loads(invoke(working, "status", "--json", config=config).stdout)[
+        "plan"
+    ]
     assert blocked["action"] == "none"
 
     (control / "kanban/review/D-1.md").rename(control / "kanban/done/D-1.md")
     git(control, "add", ".")
     git(control, "commit", "-m", "complete dependency")
-    runnable = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    runnable = json.loads(invoke(working, "status", "--json", config=config).stdout)[
+        "plan"
+    ]
     assert runnable["action"] == "run-worker"
     assert runnable["ticket"]["id"] == "T-1"
     snapshot = Devlegate(config).status_view()
@@ -501,9 +507,9 @@ def test_runtime_rejects_foreign_control_checkout(tmp_path):
     git(working, "worktree", "remove", "--force", control)
     control.mkdir(parents=True)
     git(control, "init", "-b", "devlegate/control")
-    result = invoke(working, "plan", "--json", config=config)
-    assert result.returncode == 0
-    assert "registered Git worktree" in json.loads(result.stdout)["reason"]
+    result = invoke(working, "status", "--json", config=config)
+    assert result.returncode == 1
+    assert "registered Git worktree" in json.loads(result.stdout)["plan"]["reason"]
     shutil.rmtree(control)
 
 def test_check_is_read_only_and_missing_control_does_not_create_state(tmp_path):
@@ -592,7 +598,7 @@ def test_independent_ticket_remains_blocked_by_review_barrier(tmp_path, monkeypa
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
 
     assert run_test_iteration(devlegate) == 0
-    plan = devlegate.plan_view()
+    plan = devlegate.status_view().plan
     assert calls == ["T-1"]
     assert plan.action == "none"
     assert "waiting for review" in plan.reason
@@ -664,7 +670,9 @@ def test_review_and_accepted_states_enforce_serial_planning(tmp_path, monkeypatc
     git(control, "commit", "-m", "send ticket to review")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
 
-    review = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    review = json.loads(invoke(working, "status", "--json", config=config).stdout)[
+        "plan"
+    ]
     assert review["action"] == "none"
     assert "waiting for review" in review["reason"]
     review_status = Devlegate(config).status_view()
@@ -677,7 +685,9 @@ def test_review_and_accepted_states_enforce_serial_planning(tmp_path, monkeypatc
     git(control, "add", "-A")
     git(control, "commit", "-m", "accept ticket")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
-    accepted = json.loads(invoke(working, "plan", "--json", config=config).stdout)
+    accepted = json.loads(invoke(working, "status", "--json", config=config).stdout)[
+        "plan"
+    ]
     assert accepted["action"] == "integrate"
     assert accepted["ticket"]["id"] == "T-1"
     accepted_status = Devlegate(config).status_view()
@@ -768,7 +778,7 @@ def test_bound_pending_generation_adopts_safe_control_descendant(
         execution_path=str(execution_path),
     )
 
-    plan = devlegate.plan_view()
+    plan = devlegate.status_view().plan
     assert plan.action == "run-worker", plan.reason
 
     result = invoke(working, "--once", config=config)
@@ -928,7 +938,7 @@ def test_unbound_preworker_state_cannot_adopt_product_descendant(
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     devlegate = Devlegate(config)
-    admitted = devlegate.plan_view()
+    admitted = devlegate.status_view().plan
     assert admitted.ticket_id == "T-1"
     assert admitted.code is not None
     assert admitted.control is not None
@@ -967,7 +977,7 @@ def test_unbound_preworker_state_cannot_adopt_product_descendant(
     descendant = git(publisher, "rev-parse", "HEAD").stdout.strip()
     assert git(working, "fetch", "origin", "main").returncode == 0
     advanced = replace(
-        devlegate.plan_view(),
+        devlegate.status_view().plan,
         code=devlegate._git_observation(working, devlegate.remote_branch),
     )
     assert advanced.code is not None
@@ -983,7 +993,7 @@ def test_unbound_preworker_state_cannot_adopt_product_descendant(
     assert not manager.path.exists()
 
     restarted = Devlegate(config)
-    replay = restarted.plan_view()
+    replay = restarted.status_view().plan
     with pytest.raises(ExecutionWorkspaceError, match="no resource generation intent"):
         restarted._prepare_execution_workspace(replay)
 

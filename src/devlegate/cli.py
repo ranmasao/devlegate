@@ -35,7 +35,6 @@ from devlegate.ipc_client import (
     IPCClientError,
     decode_drop_ack,
     decode_drop_candidates,
-    decode_plan,
     decode_reconcile_ack,
     decode_reconcile_control_ack,
     decode_reconcile_resume_ack,
@@ -69,7 +68,6 @@ from devlegate.project_registry import (
 from devlegate.runtime import (
     BlockedReason,
     DevlegateError,
-    ExecutionPlan,
     StatusSnapshot,
     WorkflowBlockedError,
     _git,
@@ -115,7 +113,7 @@ def _service_engine(
 
 @dataclasses.dataclass(frozen=True)
 class ReadOnlyView:
-    value: StatusSnapshot | ExecutionPlan
+    value: StatusSnapshot
     service_state: str
     live_execution: dict[str, object] | None = None
     service_failure: dict[str, object] | None = None
@@ -144,7 +142,7 @@ def _service_metadata(response: dict[str, object]) -> dict[str, object]:
     return metadata
 
 
-def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
+def _read_only_view(env_file: Path) -> ReadOnlyView:
     try:
         locator = RuntimeLocator.from_env(env_file)
     except RuntimeLocatorError as error:
@@ -153,7 +151,7 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
     response: dict[str, object] | None = None
     ipc_error: IPCClientError | None = None
     try:
-        response = request(locator.socket_path, method)
+        response = request(locator.socket_path, "status")
     except IPCClientError as error:
         ipc_error = error
 
@@ -165,11 +163,7 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
                 repository=locator.repo,
                 read_only=True,
             )
-            if method == "status":
-                view = engine.status_view
-            else:
-                view = engine.plan_view
-            value = view()
+            value = engine.status_view()
             diagnostic, corrupt = read_service_failure(locator)
             failure = (
                 {
@@ -189,9 +183,7 @@ def _read_only_view(env_file: Path, method: str) -> ReadOnlyView:
             raise DevlegateError(str(error)) from ipc_error
         assert response is not None
         try:
-            value = (
-                decode_status(response) if method == "status" else decode_plan(response)
-            )
+            value = decode_status(response)
             live_execution = response.get("live_execution")
             if not isinstance(live_execution, dict):
                 live_execution = None
@@ -2222,32 +2214,6 @@ def _render_status_text(
     return "\n".join(lines)
 
 
-def _render_plan_text(plan: ExecutionPlan) -> str:
-    lines = [
-        f"Devlegate {__version__}",
-        "",
-        "Execution plan:",
-        f"Plan: {plan.action} · {plan.reason}",
-    ]
-    if plan.ticket_id is not None:
-        lines.append(f"Ticket: {plan.ticket_id} · {plan.ticket_title}")
-        lines.append(f"Ticket state: {plan.ticket_state}")
-    if plan.code:
-        lines.append(
-            f"Code: {plan.code.branch or '<detached>'} @ "
-            f"{_short_hash(plan.code.local_head)}"
-        )
-    if plan.control:
-        lines.append(
-            f"Control: {plan.control.branch or '<detached>'} @ "
-            f"{_short_hash(plan.control.local_head)}"
-        )
-    else:
-        lines.append("Control: missing")
-    lines.append(f"Bound: {'yes' if plan.bound else 'no'}")
-    return "\n".join(lines)
-
-
 def _render_check_text(result: dict[str, object]) -> str:
     lines = [
         f"Devlegate {__version__} preflight",
@@ -2483,7 +2449,6 @@ class DevlegateArgumentParser(ConciseArgumentParser):
                 ("host", "install or remove per-user host policy"),
                 ("logs", "read service or execution logs"),
                 ("status", "show current workflow status"),
-                ("plan", "show the next workflow plan"),
             ),
         ),
         (
@@ -2557,16 +2522,6 @@ class Devlegate(ServiceEngine):
             )
         )
         return 1 if snapshot.plan.action == "blocked" else 0
-
-    def plan(self, json_output: bool = False) -> int:
-        plan = self.plan_view()
-        print(
-            json.dumps(plan.as_dict(), indent=2, sort_keys=True)
-            if json_output
-            else _render_plan_text(plan)
-        )
-        return 0
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = DevlegateArgumentParser(
@@ -2690,21 +2645,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Validate project setup without running a worker.",
     )
     add_output_arguments(check_parser)
-    for name in ("status", "plan"):
-        command_parser = commands.add_parser(
-            name,
-            help=(
-                "show current workflow status"
-                if name == "status"
-                else "show the next workflow plan"
-            ),
-            description=(
-                "Show the current workflow status."
-                if name == "status"
-                else "Show what Devlegate plans to do next."
-            ),
-        )
-        add_output_arguments(command_parser)
+    status_parser = commands.add_parser(
+        "status",
+        help="show current workflow status",
+        description="Show the current workflow status.",
+    )
+    add_output_arguments(status_parser)
     service_parser = commands.add_parser(
         "service",
         help="manage an explicitly registered external service",
@@ -3251,7 +3197,7 @@ def main() -> int:
             )
             return 0
         if args.command == "status":
-            view = _read_only_view(env_file, "status")
+            view = _read_only_view(env_file)
             snapshot = view.value
             assert isinstance(snapshot, StatusSnapshot)
             execution = _execution_projection(
@@ -3305,12 +3251,6 @@ def main() -> int:
                 )
                 else 0
             )
-        if args.command == "plan":
-            view = _read_only_view(env_file, "plan")
-            plan = view.value
-            assert isinstance(plan, ExecutionPlan)
-            emit(plan.as_dict(), args.output_format, _render_plan_text(plan))
-            return 0
         if args.command == "check":
             result, check_result = devlegate.check_result()
             emit(

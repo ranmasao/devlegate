@@ -3370,7 +3370,7 @@ def test_legacy_operator_recovery_does_not_invent_generation_for_worker_launch(
         devlegate, state, workspace, new_base, "current", start_head=old_head
     )
     devlegate._save_state("agent_pending", execution_remote_head=old_head)
-    assert devlegate.plan_view().action == "blocked"
+    assert devlegate.status_view().plan.action == "blocked"
 
     devlegate._recover_unsafe_bound_execution_workspace("T-1", "current", old_head)
 
@@ -3378,7 +3378,7 @@ def test_legacy_operator_recovery_does_not_invent_generation_for_worker_launch(
     assert devlegate._state["execution_remote_head"] == new_base
     assert "execution_stage" not in devlegate._state
     assert "execution_start_head" not in devlegate._state
-    assert devlegate.plan_view().action == "run-worker"
+    assert devlegate.status_view().plan.action == "run-worker"
 
     worker_ids = []
 
@@ -3467,7 +3467,7 @@ def test_operator_recovery_replays_local_pin_before_remote_evidence(
         assert remote_evidence == observed
         assert restarted._state["execution_id"] == "current"
         assert "operator_recovery" not in restarted._state
-        assert restarted.plan_view().action == "run-worker"
+        assert restarted.status_view().plan.action == "run-worker"
 
 
 def test_operator_recovery_replays_after_local_reconstruction_boundary(
@@ -3515,7 +3515,7 @@ def test_operator_recovery_replays_after_local_reconstruction_boundary(
     assert run_test_iteration(restarted) == 0
     assert restarted._state["phase"] == "agent_pending"
     assert "operator_recovery" not in restarted._state
-    assert restarted.plan_view().action == "run-worker"
+    assert restarted.status_view().plan.action == "run-worker"
 
 @pytest.mark.parametrize(
     ("ticket_id", "execution_id", "observed_head", "expected_error"),
@@ -3776,25 +3776,22 @@ def _wait_for_published_recovery(service):
     latest = {}
 
     def resumed():
-        for command in ("status", "plan"):
-            result = service.cli(command, "--json")
-            latest[command] = {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
+        result = service.cli("status", "--json")
+        latest["status"] = {
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
         try:
             status = json.loads(latest["status"]["stdout"])
-            plan = json.loads(latest["plan"]["stdout"])
-        except (ValueError, TypeError):
+            plan = status["plan"]
+        except (ValueError, TypeError, KeyError):
             return False
         return (
             latest["status"]["returncode"] in {0, 1}
-            and latest["plan"]["returncode"] == 0
             and plan.get("action") == "run-worker"
             and plan.get("bound") is True
             and (plan.get("ticket") or {}).get("id") == "T-1"
-            and status.get("plan") == plan
             and status.get("execution", {}).get("phase") == "agent_pending"
             and status["execution"].get("execution_id") == "current"
             and status["execution"].get("bound_ticket") == "T-1"
@@ -3832,7 +3829,7 @@ def test_published_recovery_wait_requires_coherent_admission(outcome):
                 return subprocess.CompletedProcess(
                     [], 1, "", "service plan view is not ready"
                 )
-            value = plan if command == "plan" else {
+            value = {
                 "plan": blocked if outcome == "incoherent" else plan,
                 "execution": {
                     "phase": "agent_pending",
@@ -3898,11 +3895,7 @@ def test_live_service_keeps_unsafe_recovery_authority_reachable(tmp_path, monkey
         assert status_payload["execution"]["phase"] == "agent_pending"
         assert status_payload["service"]["state"] == "running"
         assert status_payload["execution"]["state"] == "recovery-required"
-        blocked_plan = service.cli("plan", "--json")
-        assert blocked_plan.returncode in {0, 1}
-        assert json.loads(blocked_plan.stdout)["action"] == "blocked", (
-            blocked_plan.stdout
-        )
+        assert status_payload["plan"]["action"] == "blocked", status.stdout
         recovered = None
 
         def admit_recovery():
@@ -3974,7 +3967,6 @@ def test_recovery_owner_publishes_after_admission_and_release(
 
     def assert_old_view(boundary):
         before = state_payload(state)
-        assert devlegate.published_plan_view() == old_plan
         assert devlegate.published_status_payload()["plan"] == old_plan.as_dict()
         assert state_payload(state) == before  # Published reads never repair.
         boundaries.append(boundary)
@@ -4008,20 +4000,19 @@ def test_recovery_owner_publishes_after_admission_and_release(
         devlegate._workers, "run", lambda *_a, **_kw: pytest.fail("premature worker")
     )
     assert devlegate._run_polling(once=True) == (1 if refused else 0)
-    plan = devlegate.published_plan_view()
-    assert devlegate.published_status_payload()["plan"] == plan.as_dict()
+    plan = devlegate.published_status_payload()["plan"]
     assert boundaries == (
         ["admitted", "released-before-publication"] if refused else
         ["admitted", "normalized-but-active", "released-before-publication"]
     )
     if refused:
-        assert plan.action == "blocked", plan
+        assert plan["action"] == "blocked", plan
         assert "not clean" in devlegate._iteration_diagnostic
         assert (workspace.path / "unowned.txt").read_text() == "must survive\n"
         assert devlegate._state.get("operator_recovery") is not None
         assert devlegate._state["execution_start_head"] == "f" * 40
     else:
-        assert plan.action == "run-worker", plan
+        assert plan["action"] == "run-worker", plan
         assert "operator_recovery" not in devlegate._state
     assert devlegate._state["execution_id"] == "current"
     assert devlegate._state["phase"] == "agent_pending"

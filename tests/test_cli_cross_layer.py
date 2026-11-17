@@ -121,7 +121,7 @@ def test_removed_service_flags_are_rejected(old, monkeypatch, capsys):
     assert error.value.code == 2
 
 def test_removed_top_level_forms_are_rejected(git_fixture):
-    for args in (("run",), ("daemon",), ("--check",)):
+    for args in (("run",), ("daemon",), ("--check",), ("plan",)):
         result = invoke(git_fixture, *args)
         assert result.returncode == 2
 
@@ -130,8 +130,9 @@ def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture)
     config = git_fixture["config"]
     config.write_text(f"REMOTE_BRANCH=main\nSTATE_DIR={state}\n")
     before = git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip()
-    result = invoke(git_fixture, "plan", "--json", env_file=config)
-    assert result.returncode == 0
+    result = invoke(git_fixture, "status", "--json", env_file=config)
+    assert result.returncode in {0, 1}
+    assert "plan" in json.loads(result.stdout)
     assert not list(state.glob("*.sqlite3"))
     assert (
         git(git_fixture["working"], "rev-parse", "origin/main").stdout.strip() == before
@@ -139,7 +140,7 @@ def test_read_only_commands_do_not_create_runtime_database_or_fetch(git_fixture)
 
 @pytest.mark.parametrize("unrelated_git", [False, True])
 @pytest.mark.parametrize("selector", ["alias", "env"])
-@pytest.mark.parametrize("command", ["status", "plan"])
+@pytest.mark.parametrize("command", ["status"])
 def test_registered_read_only_commands_ignore_caller_cwd(
     git_fixture, unrelated_git, selector, command
 ):
@@ -192,7 +193,7 @@ def test_service_engine_status_and_plan_return_immutable_views(
     application = ServiceEngine(git_fixture["config"], read_only=True)
 
     status = application.status_view()
-    plan = application.plan_view()
+    plan = status.plan
 
     assert status.plan == plan
     assert status.code.local_head
@@ -380,10 +381,9 @@ def test_live_accepted_integration_window_precedes_dependent_scheduling(
             == pending["checkpoint"]
         )
 
-        plan = engine.published_plan_view()
         snapshot = engine._published_status_snapshot
         assert snapshot is not None
-        assert plan.action == "none"
+        assert engine.published_status_payload()["plan"]["action"] == "none"
         assert snapshot.eligible == ()
         assert snapshot.blocked == (
             (
@@ -440,9 +440,7 @@ def test_status_table_and_machine_formats_share_service_state(monkeypatch, capsy
     )
     monkeypatch.setattr(
         "devlegate.cli._read_only_view",
-        lambda _env, method: ReadOnlyView(
-            plan if method == "plan" else snapshot, "running"
-        ),
+        lambda _env: ReadOnlyView(snapshot, "running"),
     )
     monkeypatch.setattr(
         "devlegate.cli._project_target",
@@ -472,9 +470,7 @@ def test_status_table_and_machine_formats_share_service_state(monkeypatch, capsy
     assert yaml_value == json_value
     assert json_value["service"] == {"state": "running"}
 
-    monkeypatch.setattr(sys, "argv", ["devlegate", "plan", "--yaml"])
-    assert main() == 0
-    assert nanoyaml.loads(capsys.readouterr().out)["action"] == "none"
+    assert yaml_value["plan"] == plan.as_dict()
 
 def test_missing_control_blocks_without_product_mutation(git_fixture):
     control = git_fixture["control"]
@@ -488,8 +484,8 @@ def test_missing_control_blocks_without_product_mutation(git_fixture):
 def test_product_workflow_copy_fails_closed(git_fixture):
     assert invoke(git_fixture, "control", "init").returncode == 0
     (git_fixture["working"] / "kanban/todo").mkdir(parents=True)
-    result = invoke(git_fixture, "plan", "--json")
-    assert "product checkout" in json.loads(result.stdout)["reason"]
+    result = invoke(git_fixture, "status", "--json")
+    assert "product checkout" in json.loads(result.stdout)["plan"]["reason"]
 
 def test_run_once_persists_idle_and_control_head(git_fixture):
     publish_control(git_fixture, "ticket", {"kanban/todo/T-1.md": ticket()})
@@ -573,14 +569,14 @@ def test_plan_selects_deterministic_ticket_from_control(git_fixture):
             "kanban/todo/ED-17.md": ticket("Earlier"),
         },
     )
-    payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
+    payload = json.loads(invoke(git_fixture, "status", "--json").stdout)["plan"]
     assert payload["action"] == "run-worker"
     assert payload["ticket"]["id"] == "ED-17"
     assert payload["observation"]["control"]["branch"] == "devlegate/control"
 
 def test_ticket_validation_and_dependency_blockers(git_fixture):
     publish_control(git_fixture, "invalid", {"kanban/todo/ED-1.md": "not a ticket\n"})
-    payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
+    payload = json.loads(invoke(git_fixture, "status", "--json").stdout)["plan"]
     assert payload["action"] == "blocked"
     assert "invalid ticket" in payload["reason"]
 
@@ -596,13 +592,13 @@ def test_missing_dependency_is_blocked(git_fixture):
             "kanban/todo/ED-2.md": ticket("Waiting", depends=["ED-404"]),
         },
     )
-    payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
+    payload = json.loads(invoke(git_fixture, "status", "--json").stdout)["plan"]
     assert payload["action"] == "blocked"
     assert "missing dependency" in payload["reason"]
 
 def test_dirty_control_worktree_is_refused(git_fixture):
     (git_fixture["control"] / "dirty.txt").write_text("dirty\n")
-    payload = json.loads(invoke(git_fixture, "plan", "--json").stdout)
+    payload = json.loads(invoke(git_fixture, "status", "--json").stdout)["plan"]
     assert payload["action"] == "blocked"
     assert "dirty" in payload["reason"]
 

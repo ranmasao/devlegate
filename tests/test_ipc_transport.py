@@ -49,7 +49,7 @@ def test_daemon_owns_socket_under_state_dir_and_removes_it(
     assert observed == [True]
     assert not engine.ipc_socket_path.exists()
 
-def test_ping_status_and_plan_work_over_unix_socket(running_server):
+def test_ping_and_status_work_and_plan_is_rejected_over_unix_socket(running_server):
     engine, _state, _server = running_server
     path = engine.ipc_socket_path
 
@@ -69,7 +69,9 @@ def test_ping_status_and_plan_work_over_unix_socket(running_server):
         **engine.status_view().as_dict(),
         "service": ping.result,
     }
-    assert plan.ok and plan.result == engine.plan_view().as_dict()
+    assert status.result["plan"] == engine.status_view().plan.as_dict()
+    assert not plan.ok
+    assert plan.error["code"] == "unknown_method"
 
 def test_reconcile_resume_routes_over_live_unix_socket(running_server):
     engine, _state, server = running_server

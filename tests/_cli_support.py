@@ -192,7 +192,6 @@ def cli_daemon(git_fixture, monkeypatch):
     authority = engine._lock()
     engine.ensure_hosted_views()
     engine.published_status_payload = lambda: engine.status_view().as_dict()
-    engine.published_plan_view = engine.plan_view
     retry_candidates = engine.retry_candidates_view
     engine.published_retry_candidates_view = retry_candidates
     drop_candidates = engine.drop_candidates_view

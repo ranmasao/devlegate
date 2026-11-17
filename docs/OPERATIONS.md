@@ -154,7 +154,6 @@ Inspect or control a service with these commands:
 
 ```sh
 devlegate status
-devlegate plan
 devlegate stop
 devlegate restart
 devlegate @my-project service status --supervisor systemd
@@ -215,10 +214,11 @@ Machine-readable output is available where supported:
 
 ```sh
 devlegate status --json
-devlegate plan --yaml
+devlegate status --yaml
 ```
 
-`--json` and `--yaml` are mutually exclusive. Service and worker streams remain
+Status includes the scheduler's complete plan in both formats. `--json` and
+`--yaml` are mutually exclusive. Service and worker streams remain
 operational output rather than machine-readable documents.
 
 ## Recovery And Lifecycle

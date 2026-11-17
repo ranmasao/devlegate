@@ -1044,13 +1044,6 @@ class ServiceEngine:
             result["live_execution"] = dict(live_execution)
         return result
 
-    def published_plan_view(self) -> ExecutionPlan:
-        with self._snapshot_lock:
-            snapshot = self._published_status_snapshot
-        if snapshot is None:
-            raise DevlegateError("service plan view is not ready")
-        return snapshot.plan
-
     def published_retry_candidates_view(self) -> tuple[dict[str, str], ...]:
         with self._snapshot_lock:
             if self._published_status_snapshot is None:
@@ -13191,39 +13184,6 @@ class ServiceEngine:
             "rendered": rendered,
             "check": check,
         }
-
-    def plan_view(self) -> ExecutionPlan:
-        """Collect the current read-only scheduling decision."""
-        for _attempt in range(3):
-            try:
-                snapshot = self._collect_status_attempt(allow_workflow_blocked=True)
-                break
-            except SnapshotChanged:
-                continue
-        else:
-            with self._snapshot_lock:
-                snapshot = self._published_status_snapshot
-            if snapshot is None:
-                raise DevlegateError(
-                    "project state changed while execution plan was being collected"
-                )
-            return snapshot.plan
-        blocked_reason = (
-            snapshot.plan.reason if snapshot.plan.action == "blocked" else None
-        )
-        worker_running = self.service_snapshot().worker_running
-        lifecycle = (
-            "worker" if worker_running else ("blocked" if blocked_reason else "ready")
-        )
-        if worker_running:
-            blocked_reason = None
-        self._publish_service_snapshot(
-            lifecycle=lifecycle,
-            product=snapshot.code,
-            control=snapshot.control,
-            blocked_reason=blocked_reason,
-        )
-        return snapshot.plan
 
     def check_result(
         self, *, emit_output: bool = False

@@ -851,9 +851,8 @@ def test_real_service_sigkill_restarts_without_mutation(git_fixture, monkeypatch
         service.kill()
         service.restart()
         status = service.cli("status", "--json")
-        plan = service.cli("plan", "--json")
         assert status.returncode == 0, status.stderr
-        assert plan.returncode == 0, plan.stderr
+        assert "action" in json.loads(status.stdout)["plan"]
         after = _disk_state(config)
         before["workspace_cleanup"].pop("observed_at_unix", None)
         after["workspace_cleanup"].pop("observed_at_unix", None)
@@ -924,28 +923,12 @@ def test_real_service_many_observers_succeed_while_worker_runs(
             timeout=30,
         )
         identity = _disk_state(config)["worker_identity"]
-        responses = _parallel_service_requests(
-            service, ["status", "status", "plan", "status", "plan"]
-        )
-        statuses = [
-            response
-            for response, method in zip(
-                responses, ["status", "status", "plan", "status", "plan"]
-            )
-            if method == "status"
-        ]
-        plans = [
-            response
-            for response, method in zip(
-                responses, ["status", "status", "plan", "status", "plan"]
-            )
-            if method == "plan"
-        ]
+        statuses = _parallel_service_requests(service, ["status"] * 5)
         assert all(
             status["execution"]["phase"] in {"idle", "agent_running"}
             for status in statuses
         )
-        assert all(isinstance(plan["action"], str) for plan in plans)
+        assert all(isinstance(status["plan"]["action"], str) for status in statuses)
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         _kill_worker_identity(identity)
@@ -1059,10 +1042,9 @@ def test_real_service_worker_launch_restart_stays_fail_closed(git_fixture, monke
             lambda: _disk_state(config).get("execution_stage") == "worker-launch"
         )
         status = service.cli("status", "--json")
-        plan = service.cli("plan", "--json")
         assert status.returncode == 1
         assert json.loads(status.stdout)["execution"]["phase"] == "agent_running"
-        assert "ambiguous outcome" in json.loads(plan.stdout)["reason"]
+        assert "ambiguous outcome" in json.loads(status.stdout)["plan"]["reason"]
         assert not attempts.exists()
     finally:
         service.stop()
@@ -1232,16 +1214,16 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         assert attempts.read_text().splitlines() == ["attempt", "attempt"]
 
         def review_barrier_plan_is_stable():
-            response = service.cli("plan", "--json")
+            response = service.cli("status", "--json")
             if response.returncode:
                 return False
             try:
-                return json.loads(response.stdout).get("action") == "none"
+                return json.loads(response.stdout)["plan"].get("action") == "none"
             except json.JSONDecodeError:
                 return False
 
         service.wait_for(review_barrier_plan_is_stable, timeout=30)
-        plan = json.loads(service.cli("plan", "--json").stdout)
+        plan = json.loads(service.cli("status", "--json").stdout)["plan"]
         assert plan["action"] == "none"
         assert "waiting for review" in plan["reason"]
 

@@ -329,11 +329,11 @@ def test_status_uses_daemon_ipc_without_fallback(
         if key not in {"execution", "service"}:
             assert payload[key] == value
 
-def test_plan_uses_daemon_ipc_without_fallback(
+def test_status_plan_uses_daemon_ipc_without_fallback(
     cli_daemon, git_fixture, monkeypatch, capsys
 ):
     config = _short_runtime_config(git_fixture)
-    expected = cli_daemon.plan_view().as_dict()
+    expected = cli_daemon.status_view().plan.as_dict()
     monkeypatch.setattr(
         "devlegate.cli._service_engine",
         lambda *_args, **_kwargs: pytest.fail("direct fallback used"),
@@ -341,11 +341,11 @@ def test_plan_uses_daemon_ipc_without_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "--env", str(config), "plan", "--json"],
+        ["devlegate", "--env", str(config), "status", "--json"],
     )
 
-    assert main() == 0
-    assert json.loads(capsys.readouterr().out) == expected
+    assert main() == (1 if expected["action"] == "blocked" else 0)
+    assert json.loads(capsys.readouterr().out)["plan"] == expected
 
 def test_blocked_dependency_status_uses_daemon_semantics(
     cli_daemon, git_fixture, monkeypatch, capsys
@@ -948,7 +948,7 @@ def test_daemon_protocol_error_is_not_bypassed(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "--env", str(config), "plan"],
+        ["devlegate", "--env", str(config), "status"],
     )
 
     assert main() == 1
@@ -1028,17 +1028,17 @@ def test_stale_socket_without_authority_uses_guarded_fallback(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["devlegate", "--env", str(config), "plan", "--json"],
+        ["devlegate", "--env", str(config), "status", "--json"],
     )
 
     try:
-        assert main() == 0
-        assert json.loads(capsys.readouterr().out)["action"] == "blocked"
+        assert main() == 1
+        assert json.loads(capsys.readouterr().out)["plan"]["action"] == "blocked"
         assert endpoint.exists()
     finally:
         endpoint.unlink(missing_ok=True)
 
-@pytest.mark.parametrize("command", ["status", "plan"])
+@pytest.mark.parametrize("command", ["status"])
 def test_explicit_project_works_from_subdirectory_without_daemon(
     git_fixture, monkeypatch, capsys, command
 ):
@@ -1055,7 +1055,7 @@ def test_explicit_project_works_from_subdirectory_without_daemon(
     assert main() in (0, 1)
     assert "run devlegate from repository root" not in capsys.readouterr().err
 
-@pytest.mark.parametrize("command", ["status", "plan"])
+@pytest.mark.parametrize("command", ["status"])
 def test_explicit_project_works_from_subdirectory_with_daemon(
     cli_daemon, git_fixture, monkeypatch, capsys, command
 ):
@@ -1076,7 +1076,7 @@ def test_explicit_project_works_from_subdirectory_with_daemon(
     assert main() in (0, 1)
     assert "run devlegate from repository root" not in capsys.readouterr().err
 
-def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(
+def test_foreground_hosts_real_ipc_status_until_stopped(
     git_fixture, monkeypatch
 ):
     monkeypatch.chdir(git_fixture["working"])
@@ -1085,11 +1085,9 @@ def test_foreground_hosts_real_ipc_status_and_plan_until_stopped(
     )
     with LiveService(git_fixture["working"], git_fixture["config"]) as service:
         status = service.cli("status", "--json")
-        plan = service.cli("plan", "--json")
         assert status.returncode == 0, status.stderr
-        assert plan.returncode == 0, plan.stderr
         assert json.loads(status.stdout)["execution"]["phase"] == "idle"
-        assert "action" in json.loads(plan.stdout)
+        assert "action" in json.loads(status.stdout)["plan"]
         assert service.process is not None
         assert service.process.poll() is None
     assert service.stdout.count("---< D E V L E G A T E >---") == 1
@@ -1115,7 +1113,7 @@ def test_real_service_observers_succeed_during_owner_retry(git_fixture, monkeypa
             ),
             timeout=30,
         )
-        responses = _parallel_service_requests(service, ["status", "plan", "status"])
+        responses = _parallel_service_requests(service, ["status"] * 3)
         assert all(isinstance(response, dict) for response in responses)
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:

@@ -120,7 +120,6 @@ def test_help_and_parser_expose_phase1_commands(monkeypatch, capsys):
         "start",
         "stop",
         "status",
-        "plan",
         "init",
         "render",
         "check",
@@ -256,10 +255,6 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
         (
             ["status", "--help"],
             ["Show the current workflow status.", "emit machine-readable JSON"],
-        ),
-        (
-            ["plan", "--help"],
-            ["Show what Devlegate plans to do next.", "emit machine-readable JSON"],
         ),
         (
             ["retry", "--help"],
@@ -681,7 +676,7 @@ def test_status_handles_service_version_metadata(
     assert f"Service version: {expected_version}" in output
     assert ("Warning: the running service uses a different" in output) is warning
 
-def test_cli_status_and_plan_render_fake_engine_without_runtime(
+def test_cli_status_renders_fake_engine_without_runtime(
     git_fixture, monkeypatch, capsys
 ):
     observation = GitObservation(
@@ -711,9 +706,6 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
         def status_view(self):
             return snapshot
 
-        def plan_view(self):
-            return plan
-
     monkeypatch.setattr("devlegate.cli._service_engine", FakeServiceEngine)
     monkeypatch.chdir(git_fixture["working"])
     monkeypatch.setattr(
@@ -737,16 +729,19 @@ def test_cli_status_and_plan_render_fake_engine_without_runtime(
         "argv",
         ["devlegate", "--env", str(git_fixture["config"]), "plan"],
     )
-    assert main() == 0
-    assert "Execution plan:" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    capsys.readouterr()
 
     monkeypatch.setattr(
         sys,
         "argv",
         ["devlegate", "--env", str(git_fixture["config"]), "plan", "--json"],
     )
-    assert main() == 0
-    assert json.loads(capsys.readouterr().out)["action"] == "none"
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
 
 def test_control_init_rejects_wrong_branch(git_fixture):
     assert invoke(git_fixture, "control", "init").returncode == 0

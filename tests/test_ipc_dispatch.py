@@ -117,21 +117,15 @@ def test_clean_status_is_removed(running_server):
         dispatch_read_only(engine, _request("clean-status"))
 
 def test_dispatch_uses_service_views_without_persistence_access():
-    class View:
-        def as_dict(self):
-            return {"view": True}
-
     class FakeEngine:
         def published_status_payload(self):
             return {"view": True}
 
-        def published_plan_view(self):
-            return View()
-
     status = dispatch_read_only(FakeEngine(), _request("status"))
     assert status["view"] is True
     assert status["service"]["service"] == "devlegate"
-    assert dispatch_read_only(FakeEngine(), _request("plan")) == {"view": True}
+    with pytest.raises(IPCProtocolError, match="unsupported method"):
+        dispatch_read_only(FakeEngine(), _request("plan"))
 
 def test_status_ipc_keeps_raw_worker_identity_private():
     class View:
