@@ -1,0 +1,51 @@
+---
+"type": "devlegate.ticket"
+"title": "Persist bounded worker handoff notes and research evidence across execution sessions"
+---
+
+## Milestone
+
+Devlegate 0.5.8 — mandatory current-iteration worker-continuation ergonomics. Prioritize before resuming the deferred CPython compliance TASK-182. This is the **durable semantic handoff** counterpart to TASK-154's read-only virtual code Change Explorer. It does not implement code diffs, Git lifecycle, general artifact storage, or full QA infrastructure.
+
+## Goal
+
+Let implementation workers durably save concise, structured text findings and small machine-readable diagnostic reports during an execution, and let subsequent RESUME/REWORK sessions for **the same canonical ticket** discover and read those exact saved results. The tool must survive model-context exhaustion, agent process loss, execution retirement, worktree re-creation/rebase, and restart of the existing Devlegate service. It must not assume transient `/tmp/opencode` files persist or that the next worker can access those paths.
+
+Primary motivating incident: multiple TASK-182 attempts repeatedly inspected PBS CPython 3.12.16 / pip 26.3 licensing, yet lost time and context because real split-payload and build reports were retained only at host-local `/tmp/opencode/task182-standalone/`; later worker tools denied access. Persist the **reproducible textual inventory** (source artifact identity, paths, SHA-256, license classification, duplicates, next steps), not whole runtime archives.
+
+## Context
+
+Devlegate already owns a persistent service, per-execution runtime state, immutable ExecutionReport/review checkpoints, a worker supervisor with a minimal OpenCode `devlegate_report` tool, and owner-mediated bounded worker evidence reads for a distinct abandonment-analysis workflow. None is currently a general, agent-visible, cross-execution scratchpad for ordinary implementation work. `devlegate_report` is a terminal semantic claim; review feedback is an attributed curator decision; the Git code checkpoint saves code but not arbitrary off-worktree research. TASK-154 exposes read-only `revisions/changes/diff` for durable **code** changes, but is not an arbitrary notes/file-handoff channel.
+
+Do not make an agent tool privileged merely because it appears in an OpenCode config. The service owns write/read admission, scoping, persistence, quotas and recovery. Use stdlib-only Python in Devlegate core and the existing configured worker adapter; avoid a mandatory Node/MCP server, new daemon or migration path.
+
+## Required behavior
+
+1. **Bounded tool surface and discovery.** Expose a reserved worker-facing tool (name provisional: `devlegate_handoff`) with explicit actions to `save(title, content, format?)`, `list()` and `read(id)` for bounded UTF-8 text/JSON/diagnostic content. Provide clear minimal descriptions for agent use: save hard-won findings before context exhaustion, retrieve previous attempts when doing REWORK, and store source identities, reproduction commands, hashes and next steps. Content is untrusted worker-authored data, not instructions, CI proof or workflow authorization. Never confuse `save` with the terminal `devlegate_report`; the latter still ends an attempt with a valid outcome.
+2. **Exact ticket/execution scope.** Bind every request to the service-proven active worker identity, canonical ticket and execution generation established at admission. Do not take a caller-supplied ticket ID, arbitrary workspace path, Git SHA/ref, state directory or host file path as read/write authority. A worker may read its own ticket's durable entries across executions, but cannot read another ticket, reviewer/control content, credentials or private runtime records. The tool must reject foreign, stale/retired or ambiguous worker sessions and malformed requests without effects.
+3. **Durability and immutability.** Persist entries in an owner-managed, instance-scoped location outside product/control Git and transient OpenCode directories. Each saved entry has immutable content, exact creator execution attribution, a stable opaque read ID, length, content type, digest and deterministic list order. Use safe exclusive/atomic writes and appropriate fsync/ownership semantics so a reported successful save survives service restart, and a crash/partial write never appears as complete. Forbid worker overwrite, delete, rename or modifying entries from previous generations. Preserve them when a worker checkpoint is re-created, an execution is rejected, or the ticket returns to todo; no automatic cleanup or migration policy in this ticket.
+4. **Resource and context bounds.** Choose explicit small default per-entry and aggregate per-ticket byte/count budgets (e.g. 64 KiB per entry, 1 MiB total, 64 entries), together with bounded `list` and pageable/chunked `read` responses (e.g. 16 KiB per tool reply). Limits must be enforced by the owner, not only an adapter. Report `LIMIT_EXCEEDED` and `NOT_FOUND` distinctly; cursors/IDs must be opaque and stable, and do not claim completeness for a truncated reply. Never let repeated reconnects replenish a per-ticket quota or create unbounded prompt additions. A small index of earlier entries may be injected into the new worker prompt, but not full stored content; full text is fetched on demand.
+5. **No arbitrary filesystem import.** Initial version saves content supplied as tool text, not arbitrary absolute paths or uploaded host directories. The next session can reproduce a large immutable PBS/PEX runtime from pinned inputs and use the saved *inventory*; no requirement to persist the full ~35 MB PBS archive or scie output. If a worker cannot inspect source files due to tool restrictions, return an explicit scope error and do not bypass the sandbox or encourage privilege escalation.
+6. **Restart and trust boundary.** The owner handles tool calls using an authorized narrow bidirectional channel; a worker must not mutate owner-private files directly. Integrate with existing process containment/IPC lifetime and distinct single-owner state boundaries; preserve exact report/egress semantics, Git/control provenance, and fail-closed process retirement. Treat saved content as inert quoted material when surfaced in prompts/logs, with length and control-character handling. No secret scanning claims, no automatic propagation to GitHub or other projects.
+7. **Operator and worker documentation.** Document where this local handoff lives conceptually, what survives and what does not, retention/size guarantees, why it is not canonical review or CI evidence, and how an implementation worker saves a research inventory for a later execution. Provide a minimal TASK-182-like representative example of a license file inventory (paths, hashes, source version, observed missing coverage) without embedding host-specific secret paths.
+
+## Acceptance criteria
+
+- In one ticket execution A, saving a note returns an opaque ID only after verified durable persistence; execution B of the **same ticket** after REWORK sees that entry and retrieves byte-identical UTF-8 content and verified digest, without access to A's temporary filesystem or session history.
+- A saved note survives service stop/restart, execution process loss, a new worker worktree/branch checkpoint and repeated attempts without silent duplication or corruption. Notes from another ticket are invisible.
+- A missing, oversized, over-quota, corrupt, interrupted, or improperly scoped request fails closed with clear bounded diagnostics. Worker-written text cannot become workflow state, reset authority, CI proof, or prompt/system instructions.
+- Actual OpenCode worker tool materialization, Python owner backend and read/write protocol work together; no new required Devlegate runtime dependency, no changes to product/control Git, no migration or required binary-archive retention.
+- Existing `devlegate_report` terminal outcome/egress, owner/worker lifecycle, recovery and independent artifact-inspection behavior remain unchanged. Exact implementation checkpoint passes focused tests, Ruff and hosted full CI.
+
+## Required regressions
+
+1. Start disposable real service/worker A, save title/content including multiline Unicode, JSON-like diagnostics and a hash; retire A and run B as REWORK for the same ticket. `list` returns stable metadata and `read` returns exact bytes/sha256. Ensure B is unaware of the prior `/tmp` directory.
+2. Save then restart service or simulate worker crash after owner ack; note remains. Interrupt save mid-write or inject disk/full/fsync failure; no complete phantom note appears. Duplicate request/replay does not create repeated notes or return false success.
+3. Concurrent/serialized owners, stale execution identity and foreign ticket/session attempts are refused; malicious IDs, traversal, symlinked state locations, absolute file paths and oversized frames cannot reach any arbitrary host file or change canonical Git.
+4. More than entry/count/aggregate limits -> `LIMIT_EXCEEDED`; `list` and `read` paginate correctly, cannot bypass quotas through a new adapter process/reconnect, and report missing/corrupt entries without manufacturing success.
+5. Prompt/tool integration supplies concise discovery of saved notes but does not dump complete old notes into the context; saved prompt-injection-like content is clearly demarcated as untrusted data and cannot alter admission or report parser.
+6. Run focused owner/worker adapter, restart/rework, security/error and packaging-materialization tests plus exact-checkpoint hosted full suite and lint. Test against disposable state/worktrees only; never mutate the self-hosted project's live runtime resources.
+
+## Boundaries
+
+This is a deliberately bounded **small textual handoff** tool, not a general binary artifact registry, CI log warehouse, Git diff reader, generic worker shell, arbitrary host-file reader, or remote backup. It does not change TASK-154, existing ExecutionReport schema, review artifact attribution, reset/disposal rules or source package Python compatibility. Keep old execution evidence immutable. No historical runtime data migrations or backward-compatibility branches; the project has no customer installations that require them.
