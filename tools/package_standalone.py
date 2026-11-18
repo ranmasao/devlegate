@@ -23,9 +23,9 @@ MANIFEST_SCHEMA = "devlegate.standalone-compliance.v1"
 TARGET = "linux-x86_64"
 LIBC = "glibc"
 PBS_ARCHIVE = (
-    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    "cpython-3.12.16+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 )
-PBS_SHA256 = "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
+PBS_SHA256 = "6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39"
 PEX_VERSION = "2.103.2"
 PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_WHEEL_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"
@@ -37,8 +37,8 @@ SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
 PBS_PROVIDER = "PythonBuildStandalone"
-PBS_RELEASE = "20260901"
-PBS_PYTHON_VERSION = "3.12.14"
+PBS_RELEASE = "20261110"
+PBS_PYTHON_VERSION = "3.12.16"
 EXPECTED_REPRODUCIBILITY_SCOPE = (
     "byte-reproducible on the tested Linux x86_64 build environment "
     "from the pinned immutable inputs"
