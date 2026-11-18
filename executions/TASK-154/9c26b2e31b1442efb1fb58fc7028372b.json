@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "01d1d567b52dba6931638e17d88ccc99d919473e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "9c26b2e31b1442efb1fb58fc7028372b",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Prove retained checkpoint lineage, including legacy reports and rebases, and expose accurate revision inventories for resumed executions.",
+    "Connect changes and diff through the authorized channel with durable per-execution response metering and actual adapter invocation coverage.",
+    "Implement bounded WORKTREE observations, stale cursors, submodule and symlink handling, and oversized/binary comparison behavior required by the ticket.",
+    "Complete disposable service and actual OpenCode integration tests, full project checks, and the required isolated installed-artifact dogfooding before acceptance."
+  ],
+  "report_artifact": "executions/TASK-154/9c26b2e31b1442efb1fb58fc7028372b.md",
+  "report_sha256": "ca23c37ae922a2b1a6e09cd2b737bc902e1e84bf38402ca5283e8bc0f095ba79",
+  "resource_generation": "1839ff96765075e1896adb63f2879d2ab71cf0174947feaf0a1e9455a3860100",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Prove retained checkpoint lineage, including legacy reports and rebases, and expose accurate revision inventories for resumed executions.",
+      "Connect changes and diff through the authorized channel with durable per-execution response metering and actual adapter invocation coverage.",
+      "Implement bounded WORKTREE observations, stale cursors, submodule and symlink handling, and oversized/binary comparison behavior required by the ticket.",
+      "Complete disposable service and actual OpenCode integration tests, full project checks, and the required isolated installed-artifact dogfooding before acceptance."
+    ],
+    "report": "The broader provenance, comparison, and durable metering implementation remains unfinished in this invocation. Focused tests and Ruff passed; the full test run exceeded the available command timeout.",
+    "summary": "Added an owner-polled, execution-bound revisions tool with workspace and request checks, fail-closed unavailable history, and supervisor tool materialization. Added socket authorization and supervisor integration coverage."
+  },
+  "workspace_head": "06a117d265fa80db008bfba647dc03e5cffd80b7"
+}
