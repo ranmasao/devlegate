@@ -1,0 +1,1 @@
+The execution's available resources were insufficient to complete and safely validate the integrated owner/worker implementation. The retained immutable explorer remains unconnected and WORKTREE is unavailable; the page-size change is only a dependency toward the required vertical slice.
