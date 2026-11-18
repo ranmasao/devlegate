@@ -88,13 +88,13 @@ def progress_stage(
 PEX_VERSION = "2.103.2"
 TARGET = "linux-x86_64"
 PBS_PROVIDER = "PythonBuildStandalone"
-PBS_RELEASE = "20260901"
-PBS_PYTHON_VERSION = "3.12.14"
+PBS_RELEASE = "20261110"
+PBS_PYTHON_VERSION = "3.12.16"
 PBS_ARCHIVE = (
-    "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    "cpython-3.12.16+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 )
 PBS_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
-PBS_SHA256 = "72748da13197c1fb161e3afeef20a6a385ff24f2165e6e2758e47008e7faba4c"
+PBS_SHA256 = "6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39"
 SCIENCE_VERSION = "0.21.0"
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
