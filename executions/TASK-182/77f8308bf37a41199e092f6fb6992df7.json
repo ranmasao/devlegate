@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "f68765b9b3e110de397066f5f2eb3a5a30f92f77",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-182",
+  "execution_id": "77f8308bf37a41199e092f6fb6992df7",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-182",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Reconcile the actual PBS CPython and pip 26.3 vendored license files with committed compliance snapshots, manifest records, independent digest assertions, and notices; audit the resulting inventory against the split payload.",
+    "Build and prove fresh reproducible A/B standalone artifacts from the final checkpoint, validate standalone and Arch packages, and independently inspect a real Debian package using dpkg-deb.",
+    "Run focused checks, ./dev lint, and exact-checkpoint hosted full CI and Ruff after the compliance changes."
+  ],
+  "report_artifact": "executions/TASK-182/77f8308bf37a41199e092f6fb6992df7.md",
+  "report_sha256": "01165147d3d198261a5bfc8e64725b70767eb6442fc3a0933e4c69865a33f8c9",
+  "resource_generation": "f32ab79b98a9f62f510e1ffe581771e2c505c97c3048423cb91fc8a6ddd30148",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-182",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Reconcile the actual PBS CPython and pip 26.3 vendored license files with committed compliance snapshots, manifest records, independent digest assertions, and notices; audit the resulting inventory against the split payload.",
+      "Build and prove fresh reproducible A/B standalone artifacts from the final checkpoint, validate standalone and Arch packages, and independently inspect a real Debian package using dpkg-deb.",
+      "Run focused checks, ./dev lint, and exact-checkpoint hosted full CI and Ruff after the compliance changes."
+    ],
+    "report": "The license reconciliation is not yet implemented. The host lacks dpkg-deb and the repository virtual environment needed for ./dev lint; the final hosted run requires a Devlegate-owned checkpoint. The earlier checkpoint's hosted run completed successfully, but does not validate these changes.",
+    "summary": "Documented ELF and native dependency observations from the extracted CPython 3.12.16 payload and identified missing CPython and pip 26.3 license coverage in the compliance inventory."
+  },
+  "workspace_head": "0f468cd5a8a7c85ada2c8ef855a17f33c3f1a61f"
+}
