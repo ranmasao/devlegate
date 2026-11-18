@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 
+from devlegate.change_channel import RevisionChannel, revisions_tool
 from devlegate.evidence_channel import EvidenceSocket
 from devlegate.evidence_worker import (
     EvidenceWorkspace,
@@ -730,6 +731,7 @@ class WorkerSupervisor:
         prompt_delivered_handler: Callable[[], None] | None = None,
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
+        revisions: RevisionChannel | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -742,6 +744,8 @@ class WorkerSupervisor:
                 raise WorkerSupervisionError("evidence worker channel binding differs")
         elif not isinstance(workspace, ExecutionWorkspace) or evidence is not None:
             raise TypeError("worker workspace/channel type differs")
+        if revisions is not None and not isinstance(workspace, ExecutionWorkspace):
+            raise TypeError("revision channel requires an execution workspace")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
         execution_path = workspace.path.resolve()
@@ -793,6 +797,10 @@ export default tool({
             assert isinstance(workspace, EvidenceWorkspace)
             (tool_dir / "devlegate_evidence_read.ts").write_text(
                 evidence_tool(evidence.path, workspace.manifest_id)
+            )
+        if revisions is not None:
+            (tool_dir / "revisions.ts").write_text(
+                revisions_tool(revisions.path, revisions.token)
             )
         config = {
             "$schema": "https://opencode.ai/config.json",
@@ -853,7 +861,11 @@ export default tool({
                 worker_started_handler=mark_worker_started,
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
-                owner_poll=evidence.poll if evidence is not None else owner_poll,
+                owner_poll=(
+                    evidence.poll if evidence is not None else
+                    (lambda: (owner_poll and owner_poll(), revisions.poll()))
+                    if revisions is not None else owner_poll
+                ),
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:
