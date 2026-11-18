@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "27273fc7edffee71c79313eca6511762956751df",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "4203e1218416400cb5f0b89a7743e070",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect a scoped owner-side Change Explorer channel to the active execution and managed workspace, materialize the three OpenCode tools, and derive checkpoint history from proven owner-held records.",
+    "Implement verified WORKTREE observations, submodule handling, bounded large-file diffs, stable cursors, and durable per-execution response metering.",
+    "Add end-to-end authorization, restart, pagination, computation-limit, and filesystem tests; run focused and full project checks."
+  ],
+  "report_artifact": "executions/TASK-154/4203e1218416400cb5f0b89a7743e070.md",
+  "report_sha256": "4ae4ce30f20a5607ec53719d16cca1e52f710985683b12c3e0878aea26abcb1f",
+  "resource_generation": "80a0ea09efe61e7c0248b03a9c4444658d598118a162b8d36a59e2fed10d6bef",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect a scoped owner-side Change Explorer channel to the active execution and managed workspace, materialize the three OpenCode tools, and derive checkpoint history from proven owner-held records.",
+      "Implement verified WORKTREE observations, submodule handling, bounded large-file diffs, stable cursors, and durable per-execution response metering.",
+      "Add end-to-end authorization, restart, pagination, computation-limit, and filesystem tests; run focused and full project checks."
+    ],
+    "report": "The integration requires coordinated changes across execution supervision, provenance, IPC, and durable metering; the available execution context was insufficient to implement and verify those changes safely. The existing immutable explorer remains disconnected and does not satisfy the ticket.",
+    "summary": "Investigated the existing worker supervision, live-execution proof, evidence channel, checkpoint provenance, and runtime persistence boundaries for the Change Explorer integration. No implementation files were changed."
+  },
+  "workspace_head": "86a8cbf4e6c4b5395b9d3d4a7332589b00c17f35"
+}
