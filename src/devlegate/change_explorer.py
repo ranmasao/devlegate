@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-"""Bounded, immutable-tree observations for the owner-side Change Explorer.
+"""Bounded tree observations for the owner-side Change Explorer.
 
 This component is not an authorization boundary or a worker tool. Its caller
-must supply a proven namespace and an authorized repository. WORKTREE requires
-a separately verified snapshot and is deliberately unavailable here.
+must supply a proven namespace and an authorized repository.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ import json
 import os
 import re
 import selectors
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -28,11 +28,17 @@ _TREE_LIMIT = 2 * 1024 * 1024
 _FILE_LIMIT = 32 * 1024
 _LINE_LIMIT = 4096
 _PAGE_LIMIT = 8 * 1024
+_WORKTREE_LIMIT = 16 * 1024 * 1024
 
 
 def _serialized_size(value: object) -> int:
     """Count the complete JSON response, including escaped metadata."""
     return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode())
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
 
 
 class ObservationError(Exception):
@@ -96,6 +102,8 @@ class ImmutableExplorer:
         if len(secret) < 32:
             raise ValueError("cursor secret must contain at least 32 bytes")
         self._repo, self._revisions, self._secret = repo, revisions, secret
+        self._worktree_blobs: dict[str, bytes] = {}
+        self._observation = ""
 
     def revisions(self) -> dict[str, object]:
         return self._revisions.inventory()
@@ -105,9 +113,112 @@ class ImmutableExplorer:
             a, b = self._revisions.comparison(before, after)
         except (RevisionUnavailable, TypeError) as error:
             raise ObservationError("REVISION_UNAVAILABLE") from error
-        if a.identity is None or b.identity is None:
+        self._worktree_blobs = {}
+        worktree = (self._worktree()
+                    if a.identity is None or b.identity is None else None)
+        if worktree is not None and worktree != self._worktree():
             raise ObservationError("WORKTREE_UNAVAILABLE")
-        return self._tree(a.identity), self._tree(b.identity)
+        trees = (self._tree(a.identity) if a.identity else worktree,
+                 self._tree(b.identity) if b.identity else worktree)
+        self._observation = hmac.new(
+            self._secret, repr(trees).encode(), hashlib.sha256
+        ).hexdigest()
+        return trees
+
+    def _worktree(self) -> dict[str, tuple[str, str]]:
+        """Read bounded parent entries without traversing symlinks or gitlinks."""
+        index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT)
+        others = _git(self._repo, "ls-files", "--others", "--exclude-standard",
+                      "-z", limit=_TREE_LIMIT)
+        entries: dict[str, tuple[str, str] | None] = {}
+        try:
+            for record in index.split(b"\0"):
+                if not record:
+                    continue
+                meta, raw_path = record.split(b"\t", 1)
+                mode, obj, stage = meta.decode("ascii").split(" ")
+                path = _path(raw_path.decode("utf-8"))
+                if stage != "0" or mode not in {"100644", "100755", "120000", "160000"}:
+                    raise ObservationError("WORKTREE_UNAVAILABLE")
+                entries[path] = (mode, obj)
+            for raw_path in others.split(b"\0"):
+                if raw_path and not raw_path.endswith(b"/"):
+                    entries.setdefault(_path(raw_path.decode("utf-8")), None)
+        except (ValueError, UnicodeError) as error:
+            raise ObservationError("WORKTREE_UNAVAILABLE") from error
+        result = {}
+        total = 0
+        deadline = time.monotonic() + 3
+        root = os.open(self._repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for path, indexed in sorted(entries.items()):
+                if time.monotonic() >= deadline:
+                    raise ObservationError("TOO_EXPENSIVE")
+                if indexed and indexed[0] == "160000":
+                    result[path] = indexed
+                    continue
+                directory = os.dup(root)
+                try:
+                    parts = path.split("/")
+                    for part in parts[:-1]:
+                        child = os.open(
+                            part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory,
+                        )
+                        os.close(directory)
+                        directory = child
+                    try:
+                        info = os.stat(parts[-1], dir_fd=directory,
+                                       follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    if stat.S_ISLNK(info.st_mode):
+                        data = os.fsencode(os.readlink(parts[-1], dir_fd=directory))
+                        current = os.stat(parts[-1], dir_fd=directory,
+                                          follow_symlinks=False)
+                        if _file_identity(info) != _file_identity(current):
+                            raise ObservationError("WORKTREE_UNAVAILABLE")
+                        mode = "120000"
+                    elif stat.S_ISREG(info.st_mode):
+                        if info.st_size > _WORKTREE_LIMIT - total:
+                            raise ObservationError("TOO_EXPENSIVE")
+                        fd = os.open(
+                            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                            dir_fd=directory,
+                        )
+                        try:
+                            opened = os.fstat(fd)
+                            if (not stat.S_ISREG(opened.st_mode)
+                                    or _file_identity(opened) != _file_identity(info)):
+                                raise ObservationError("WORKTREE_UNAVAILABLE")
+                            with os.fdopen(fd, "rb", closefd=False) as stream:
+                                data = stream.read(_WORKTREE_LIMIT - total + 1)
+                            if _file_identity(os.fstat(fd)) != _file_identity(opened):
+                                raise ObservationError("WORKTREE_UNAVAILABLE")
+                        finally:
+                            os.close(fd)
+                        mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
+                    else:
+                        raise ObservationError("WORKTREE_UNAVAILABLE")
+                    total += len(data)
+                    if total > _WORKTREE_LIMIT:
+                        raise ObservationError("TOO_EXPENSIVE")
+                    base = self._revisions.resolve("BASE").identity
+                    algorithm = hashlib.sha256 if len(base) == 64 else hashlib.sha1
+                    obj = algorithm(
+                        b"blob " + str(len(data)).encode() + b"\0" + data
+                    ).hexdigest()
+                    result[path] = (mode, obj)
+                    self._worktree_blobs[obj] = data
+                except FileNotFoundError:
+                    continue
+                except OSError as error:
+                    raise ObservationError("WORKTREE_UNAVAILABLE") from error
+                finally:
+                    os.close(directory)
+        finally:
+            os.close(root)
+        return result
 
     def _tree(self, identity: str) -> dict[str, tuple[str, str]]:
         if not _OBJECT.fullmatch(identity):
@@ -134,8 +245,10 @@ class ImmutableExplorer:
 
     def _cursor(self, operation: str, before: str, after: str, path: str,
                 offset: int) -> str:
-        payload = json.dumps([operation, before, after, path, offset],
-                             separators=(",", ":"), ensure_ascii=True).encode()
+        payload = json.dumps(
+            [operation, before, after, path, offset, self._observation],
+            separators=(",", ":"), ensure_ascii=True,
+        ).encode()
         tag = self._cursor_tag(payload, before, after)
         return payload.hex() + "." + tag
 
@@ -144,8 +257,6 @@ class ImmutableExplorer:
             a, b = self._revisions.comparison(before, after)
         except (RevisionUnavailable, TypeError) as error:
             raise ObservationError("REVISION_UNAVAILABLE") from error
-        if a.identity is None or b.identity is None:
-            raise ObservationError("WORKTREE_UNAVAILABLE")
         binding = json.dumps([a.identity, b.identity]).encode()
         return hmac.new(
             self._secret, binding + b"\0" + payload, hashlib.sha256
@@ -163,19 +274,25 @@ class ImmutableExplorer:
             expected = self._cursor_tag(payload, before, after)
             if not hmac.compare_digest(tag, expected):
                 raise ValueError
-            op, a, b, p, offset = json.loads(payload)
+            op, a, b, p, offset, observation = json.loads(payload)
             if (op, a, b, p) != (operation, before, after, path):
                 raise ValueError
             if type(offset) is not int or offset <= 0:
                 raise ValueError
+            if observation != self._observation:
+                raise ObservationError("STALE_CURSOR")
             return offset
         except (ValueError, TypeError, UnicodeError) as error:
             raise ObservationError("INVALID_CURSOR") from error
 
     def changes(self, before: str, after: str, cursor: str | None = None) -> dict:
-        offset = self._offset(cursor, "changes", before, after, "")
         a, b = self._trees(before, after)
-        paths = sorted(p for p in a.keys() | b.keys() if a.get(p) != b.get(p))
+        offset = self._offset(cursor, "changes", before, after, "")
+        mutable = "WORKTREE" in (before, after)
+        paths = sorted(p for p in a.keys() | b.keys()
+                       if a.get(p) != b.get(p) or (mutable and any(
+                           entry and entry[0] == "160000"
+                           for entry in (a.get(p), b.get(p)))))
         if offset > len(paths):
             raise ObservationError("INVALID_CURSOR")
         records = []
@@ -191,6 +308,14 @@ class ImmutableExplorer:
                       "added_lines": None, "deleted_lines": None}
             if old and new and (old[0] == "160000" or new[0] == "160000"):
                 record["pointer_changed"] = old[1] != new[1]
+            if mutable and any(entry and entry[0] == "160000" for entry in (old, new)):
+                record["checkout_status"] = "unknown"
+                if old == new:
+                    record["change"] = "unknown"
+                record["guidance"] = (
+                    "Uncommitted submodule edits are not preserved by a "
+                    "superproject checkpoint."
+                )
             candidate = records + [record]
             end = offset + len(candidate)
             more = end < len(paths)
@@ -211,8 +336,8 @@ class ImmutableExplorer:
     def diff(self, before: str, after: str, path: str,
              cursor: str | None = None) -> dict:
         path = _path(path)
-        offset = self._offset(cursor, "diff", before, after, path)
         a, b = self._trees(before, after)
+        offset = self._offset(cursor, "diff", before, after, path)
         if any(path.startswith(p + "/") for p, entry in (a | b).items()
                if entry[0] == "160000"):
             raise ObservationError("INVALID_PATH")
@@ -220,10 +345,13 @@ class ImmutableExplorer:
         if old is None and new is None:
             raise ObservationError("INVALID_PATH")
         if any(entry and entry[0] == "160000" for entry in (old, new)):
-            return {"status": "SUBMODULE_CONTENT_UNAVAILABLE", "complete": True,
-                    "has_more": False, "pointer_changed": old != new,
-                    "guidance": "Uncommitted submodule edits are not preserved "
-                    "by a superproject checkpoint."}
+            result = {"status": "SUBMODULE_CONTENT_UNAVAILABLE", "complete": True,
+                      "has_more": False, "pointer_changed": old != new,
+                      "guidance": "Uncommitted submodule edits are not preserved "
+                      "by a superproject checkpoint."}
+            if "WORKTREE" in (before, after):
+                result["checkout_status"] = "unknown"
+            return result
         if old and new and old[0] != new[0] and "120000" in (old[0], new[0]):
             raise ObservationError("TYPE_CHANGE_UNAVAILABLE")
         contents = []
@@ -231,10 +359,14 @@ class ImmutableExplorer:
             if entry is None:
                 contents.append("")
                 continue
-            size = _git(self._repo, "cat-file", "-s", entry[1], limit=128)
-            if int(size) > _FILE_LIMIT:
+            data = self._worktree_blobs.get(entry[1])
+            if data is None:
+                size = _git(self._repo, "cat-file", "-s", entry[1], limit=128)
+                if int(size) > _FILE_LIMIT:
+                    raise ObservationError("TOO_LARGE")
+                data = _git(self._repo, "cat-file", "blob", entry[1], limit=_FILE_LIMIT)
+            if len(data) > _FILE_LIMIT:
                 raise ObservationError("TOO_LARGE")
-            data = _git(self._repo, "cat-file", "blob", entry[1], limit=_FILE_LIMIT)
             if b"\x00" in data:
                 raise ObservationError("BINARY_DIFF_UNAVAILABLE")
             try:
