@@ -10,8 +10,8 @@ This module deliberately does not discover history or expose object identities.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 
 class RevisionUnavailable(ValueError):
