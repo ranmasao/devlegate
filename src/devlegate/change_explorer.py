@@ -27,6 +27,12 @@ _OBJECT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _TREE_LIMIT = 2 * 1024 * 1024
 _FILE_LIMIT = 32 * 1024
 _LINE_LIMIT = 4096
+_PAGE_LIMIT = 8 * 1024
+
+
+def _serialized_size(value: object) -> int:
+    """Count the complete JSON response, including escaped metadata."""
+    return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode())
 
 
 class ObservationError(Exception):
@@ -185,7 +191,17 @@ class ImmutableExplorer:
                       "added_lines": None, "deleted_lines": None}
             if old and new and (old[0] == "160000" or new[0] == "160000"):
                 record["pointer_changed"] = old[1] != new[1]
-            records.append(record)
+            candidate = records + [record]
+            end = offset + len(candidate)
+            more = end < len(paths)
+            response = {"status": "OK", "records": candidate, "complete": not more,
+                        "has_more": more, "next_cursor": self._cursor(
+                            "changes", before, after, "", end) if more else None}
+            if _serialized_size(response) > _PAGE_LIMIT:
+                break
+            records = candidate
+        if not records and offset < len(paths):
+            raise ObservationError("TOO_LARGE")
         end = offset + len(records)
         more = end < len(paths)
         return {"status": "OK", "records": records, "complete": not more,
@@ -245,7 +261,12 @@ class ImmutableExplorer:
         page = []
         while offset + len(page) < len(lines) and len(page) < 120:
             candidate = page + [lines[offset + len(page)]]
-            if len(json.dumps(candidate, ensure_ascii=True).encode()) > 6000:
+            end = offset + len(candidate)
+            more = end < len(lines)
+            response = {"status": "OK", "lines": candidate, "complete": not more,
+                        "has_more": more, "next_cursor": self._cursor(
+                            "diff", before, after, path, end) if more else None}
+            if _serialized_size(response) > _PAGE_LIMIT:
                 break
             page = candidate
         if not page and offset < len(lines):
